@@ -1,10 +1,26 @@
 {
   "schema_version": 3,
-  "release_version": "1.5.4",
+  "release_version": "1.5.6",
   "host": "codex",
   "stamp": ".codex/.bridgeforge_codex_version",
   "contract_target": ".codex/managed-skeleton.json",
   "assets": [
+    {
+      "id": "root.gitattributes",
+      "source": "templates/.gitattributes",
+      "target": ".gitattributes",
+      "strategy": "merge",
+      "merge_policy": "git-attributes-default-lf",
+      "current_sha256": "sha256:d60f352d0db1404c70afb4bb8b2ca3fd1c610572aa40720e8a0b7baa7885418c",
+      "merge_validation": {
+        "format": "git-attributes-default-lf-v1",
+        "required": {
+          "pattern": "*",
+          "text": "auto",
+          "eol": "lf"
+        }
+      }
+    },
     {
       "id": "root.agents",
       "source": "templates/AGENTS.md",
@@ -580,14 +596,14 @@
       "source": "templates/scripts/current_baseline.py",
       "target": ".codex/scripts/current_baseline.py",
       "strategy": "whole",
-      "current_sha256": "sha256:a94f50bb5252a33bdc8e66e0757c09a14babc04cccf90e231dba5ba1dedeaee9"
+      "current_sha256": "sha256:86c1648f0c7142e2eb0fafec62f36c1dbc160d8efd4c746c1a3eb38115105a22"
     },
     {
       "id": "codex.script.codex-git-sync",
       "source": "templates/scripts/codex_git_sync.py",
       "target": ".codex/scripts/codex_git_sync.py",
       "strategy": "whole",
-      "current_sha256": "sha256:176822fd0539b35d3edea83f4b543fbd284265421917c8ba704457eabf024ea6"
+      "current_sha256": "sha256:b6ba0ba93e14761cfb7bd6edb85ece6400779e786d68f24530f1d1bbd285a568"
     },
     {
       "id": "codex.script.hook-config-policy",
@@ -657,7 +673,7 @@
       "source": "templates/scripts/version_release.py",
       "target": ".codex/scripts/version_release.py",
       "strategy": "whole",
-      "current_sha256": "sha256:b13380735a4bb5b06d30539107649f9edfbfa88d6c83bb1d150ec313e4eadbe4"
+      "current_sha256": "sha256:8ce45137fb6c9c81c60c84175aca0cc545e3b782c3c32b15a63519ace48c6e5d"
     }
   ],
   "baseline_model": "current-only"

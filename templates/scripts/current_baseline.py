@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import re
 import subprocess
 import sys
@@ -23,6 +24,13 @@ MINIMUM_CURRENT_BASELINE = (1, 4, 31)
 MANAGED_HOOK_PREFIX = "bridgeforge-codex.project-hook.v1:"
 FACTORY_MANIFEST = "bridgeforge-codex-manifest.json"
 FACTORY_MANIFEST_REMOTE = "https://github.com/freakybridge/BridgeForgeCodex.git"
+GIT_ATTRIBUTES_DEFAULT_LF_POLICY = "git-attributes-default-lf"
+GIT_ATTRIBUTES_DEFAULT_LF_PROBES = (
+    "BRIDGEFORGE_DEFAULT_EOL_PROBE",
+    "nested/BRIDGEFORGE_DEFAULT_EOL_PROBE",
+    ".codex/BRIDGEFORGE_DEFAULT_EOL_PROBE.py",
+    "doc/BRIDGEFORGE_DEFAULT_EOL_PROBE.md",
+)
 FACTORY_WITNESSES = (
     "templates/managed-skeleton.json",
     "skills/bridgeforge-codex/SKILL.md",
@@ -81,6 +89,88 @@ def _git_bytes(payload: bytes) -> bytes:
 
 def _sha(payload: bytes) -> str:
     return "sha256:" + hashlib.sha256(_git_bytes(payload)).hexdigest()
+
+
+def _gitattributes_default_state(payload: bytes) -> tuple[str | None, str | None]:
+    try:
+        payload.decode("utf-8-sig")
+    except UnicodeDecodeError as exc:
+        raise BaselineError(".gitattributes is not valid UTF-8") from exc
+    with tempfile.TemporaryDirectory(prefix="bridgeforge-gitattributes-") as raw:
+        root = Path(raw)
+        (root / ".gitattributes").write_bytes(payload)
+        global_attributes = root / "global-attributes"
+        global_attributes.write_bytes(b"")
+        initialized = subprocess.run(
+            ["git", "init", "-q"],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if initialized.returncode != 0:
+            raise BaselineError(
+                "cannot initialize isolated Git attributes validation: "
+                + (initialized.stderr or initialized.stdout).strip()
+            )
+        environment = os.environ.copy()
+        environment["GIT_ATTR_NOSYSTEM"] = "1"
+        checked = subprocess.run(
+            [
+                "git",
+                "-c",
+                f"core.attributesFile={global_attributes.as_posix()}",
+                "check-attr",
+                "text",
+                "eol",
+                "--",
+                *GIT_ATTRIBUTES_DEFAULT_LF_PROBES,
+            ],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            env=environment,
+            check=False,
+        )
+        if checked.returncode != 0:
+            raise BaselineError(
+                "cannot evaluate .gitattributes with Git: "
+                + (checked.stderr or checked.stdout).strip()
+            )
+    states = {
+        probe: {"text": None, "eol": None}
+        for probe in GIT_ATTRIBUTES_DEFAULT_LF_PROBES
+    }
+    for line in checked.stdout.splitlines():
+        fields = line.rsplit(": ", 2)
+        if len(fields) != 3 or fields[0] not in states:
+            raise BaselineError("Git returned an invalid .gitattributes evaluation")
+        path, attribute, value = fields
+        if attribute in states[path]:
+            states[path][attribute] = None if value == "unspecified" else value
+    text_values = {state["text"] for state in states.values()}
+    eol_values = {state["eol"] for state in states.values()}
+    text_state = next(iter(text_values)) if len(text_values) == 1 else "mixed"
+    eol_state = next(iter(eol_values)) if len(eol_values) == 1 else "mixed"
+    return text_state, eol_state
+
+
+def _verify_gitattributes_default_lf(payload: bytes) -> None:
+    if _gitattributes_default_state(payload) != ("auto", "lf"):
+        raise BaselineError(".gitattributes default LF policy is missing or overridden")
+
+
+def _gitattributes_project_payload(payload: bytes) -> bytes:
+    lines = _git_bytes(payload).splitlines(keepends=True)
+    project_lines: list[bytes] = []
+    for line in lines:
+        fields = re.split(br"[ \t]+", line.strip())
+        if fields == [b"*", b"text=auto", b"eol=lf"]:
+            continue
+        project_lines.append(line)
+    return b"".join(project_lines)
 
 
 def _canonical_sha(value: Any) -> str:
@@ -379,7 +469,17 @@ def load_contract(path: Path) -> dict[str, Any]:
                 or HASH_RE.fullmatch(str(region.get("current_sha256"))) is None
             ):
                 raise BaselineError(f"asset {asset_id} region ownership is invalid")
-        if strategy == "merge" and asset.get("merge_policy") != "codex-hooks":
+        if strategy == "merge" and asset.get("merge_policy") == GIT_ATTRIBUTES_DEFAULT_LF_POLICY:
+            validation = asset.get("merge_validation")
+            if (
+                not isinstance(validation, dict)
+                or validation.get("format") != "git-attributes-default-lf-v1"
+                or validation.get("required") != {
+                    "pattern": "*", "text": "auto", "eol": "lf"
+                }
+            ):
+                raise BaselineError(f"asset {asset_id} has no default LF merge projection")
+        elif strategy == "merge" and asset.get("merge_policy") != "codex-hooks":
             validation = asset.get("merge_validation")
             if (
                 not isinstance(validation, dict)
@@ -753,6 +853,16 @@ def ownership_projection(
         outside = _without_marker_blocks(payload, [(region["begin"], region["end"])])
         return OwnershipProjection(_sha(block), _sha(outside))
     if strategy == "merge":
+        if asset.get("merge_policy") == GIT_ATTRIBUTES_DEFAULT_LF_POLICY:
+            public = (
+                asset["merge_validation"]["required"]
+                if _gitattributes_default_state(payload) == ("auto", "lf")
+                else {}
+            )
+            return OwnershipProjection(
+                _canonical_sha(public),
+                _sha(_gitattributes_project_payload(payload)),
+            )
         document = _json_payload(payload, str(asset.get("target", "managed JSON")))
         if asset.get("merge_policy") == "codex-hooks":
             public, project = _hooks_ownership_views(document)
@@ -803,6 +913,9 @@ def verify_contract_payload(
             raise BaselineError("managed whole asset drifted")
         return
     if strategy == "merge":
+        if asset.get("merge_policy") == GIT_ATTRIBUTES_DEFAULT_LF_POLICY:
+            _verify_gitattributes_default_lf(payload)
+            return
         document = _json_payload(payload, str(asset.get("target", "managed JSON")))
         if asset.get("merge_policy") == "codex-hooks":
             _verify_hooks_document(document, asset)
@@ -957,6 +1070,8 @@ def _verify_source_contract(
     if asset.get("strategy") == "merge":
         if asset.get("merge_policy") == "codex-hooks":
             _verify_hooks(source, asset)
+        elif asset.get("merge_policy") == GIT_ATTRIBUTES_DEFAULT_LF_POLICY:
+            _verify_gitattributes_default_lf(payload)
         else:
             _deep_subset(
                 asset["merge_validation"]["required"],
@@ -1053,6 +1168,8 @@ def verify_current_baseline(
         elif strategy == "merge":
             if asset.get("merge_policy") == "codex-hooks":
                 _verify_hooks(target, asset, source)
+            elif asset.get("merge_policy") == GIT_ATTRIBUTES_DEFAULT_LF_POLICY:
+                _verify_gitattributes_default_lf(target.read_bytes())
             elif source is not None:
                 _deep_subset(_json_object(source), _json_object(target), str(asset["target"]))
             else:

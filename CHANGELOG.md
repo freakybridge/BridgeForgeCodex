@@ -15,6 +15,18 @@
 
 > **追溯说明**：v0.1.0 - v0.7.0 基于 git log 历史回溯标记，**git tag 仅从 v0.8.0 开始打**。早期未启用版本号管理是 setup_agent 自打脸问题（要求下游用但自己没用），v0.8.0 修补。
 
+## [1.5.6] - 2026-08-27
+
+### Fixed
+
+- [product][repo][meta] 修复行尾假变更触发业务发布
+
+## [1.5.5] - 2026-08-27
+
+### Fixed
+
+- [product][repo][meta] 修复 Windows `core.autocrlf` 下骨架 no-op 被误判为业务发布：下游新增可保留项目例外的默认 LF 策略，project-sync 以 GitHub 等价 LF 字节下发受管文本并跳过相同字节写入，repo-local `git-sync` 对空真实差异设置双重 no-op 硬闸；新增真实 bare remote 全链路回归，确保不提升业务版本、不追加 CHANGELOG、不创建提交。
+
 ## [1.5.4] - 2026-08-26
 
 ### Fixed

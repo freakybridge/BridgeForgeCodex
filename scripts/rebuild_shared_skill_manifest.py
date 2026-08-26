@@ -301,6 +301,20 @@ def render_managed_contract(
             managed.pop("current_projection_sha256", None)
         if asset.get("merge_policy") == "codex-hooks":
             asset["merge_validation"] = _hooks_validation(source.read_bytes())
+        elif asset.get("merge_policy") == "git-attributes-default-lf":
+            policy = git_blob_bytes(source).decode("utf-8-sig").strip()
+            if policy != "* text=auto eol=lf":
+                raise ValueError(
+                    f"managed .gitattributes source is invalid: {asset_id}"
+                )
+            asset["merge_validation"] = {
+                "format": "git-attributes-default-lf-v1",
+                "required": {
+                    "pattern": "*",
+                    "text": "auto",
+                    "eol": "lf",
+                },
+            }
         elif asset.get("strategy") == "merge":
             try:
                 required = _loads_json(source.read_text(encoding="utf-8-sig"))

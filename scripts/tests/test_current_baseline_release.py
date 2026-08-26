@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import importlib.util
 import json
 import shutil
@@ -30,6 +31,10 @@ CURRENT = sys.modules["current_baseline"]
 SYNC = load_module(
     "bridgeforge_release_project_sync",
     ROOT / "scripts" / "bridgeforge_codex_project_sync.py",
+)
+GIT_SYNC = load_module(
+    "bridgeforge_release_git_sync",
+    SCRIPT_DIR / "codex_git_sync.py",
 )
 
 
@@ -370,6 +375,54 @@ class CurrentReleaseTests(unittest.TestCase):
             )[0]
             self.assertEqual(classification, "mixed")
 
+    def test_contract_transition_adopts_default_lf_without_claiming_project_rules(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            project = Path(raw)
+            plan = SYNC.build_plan(project, ROOT, "init")
+            SYNC.apply_plan(plan, plan_fingerprint=plan.aggregate_fingerprint)
+            attributes_path = project / ".gitattributes"
+            contract_path = project / ".codex" / "managed-skeleton.json"
+            stamp_path = project / ".codex" / ".bridgeforge_codex_version"
+            current_contract = contract_path.read_bytes()
+            current_stamp = stamp_path.read_bytes()
+
+            old_contract = json.loads(current_contract.decode("utf-8"))
+            old_contract["release_version"] = previous_supported_semver(
+                old_contract["release_version"]
+            )
+            old_contract["assets"] = [
+                item
+                for item in old_contract["assets"]
+                if item["id"] != "root.gitattributes"
+            ]
+            project_rules = b"*.bat text eol=crlf\r\n"
+            attributes_path.write_bytes(project_rules)
+            contract_path.write_text(
+                json.dumps(old_contract, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            stamp_path.write_text(
+                old_contract["release_version"] + "\n",
+                encoding="utf-8",
+            )
+            commit_baseline(project)
+
+            attributes_path.write_bytes(b"* text=auto eol=lf\r\n" + project_rules)
+            contract_path.write_bytes(current_contract)
+            stamp_path.write_bytes(current_stamp)
+            skeleton_paths = {
+                ".gitattributes",
+                ".codex/managed-skeleton.json",
+                ".codex/.bridgeforge_codex_version",
+            }
+
+            classification = RELEASE.evaluate_release_transition(
+                project,
+                changed_paths=skeleton_paths,
+            )[0]
+
+            self.assertEqual(classification, "skeleton-only")
+
     def test_head_contract_parser_rejects_ambiguous_assets(self) -> None:
         scenarios = (
             (b'{"assets": [], "assets": []}', "duplicate key"),
@@ -691,6 +744,199 @@ class CurrentReleaseTests(unittest.TestCase):
                 {".codex/hooks/requirements_check.py"},
             )
             self.assertIsNone(release_plan)
+
+    def test_empty_changed_paths_do_not_create_a_business_release(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            project = Path(raw)
+            version = project / "VERSION"
+            changelog = project / "CHANGELOG.md"
+            version.write_text("2.3.4\n", encoding="utf-8")
+            changelog.write_text("# Changelog\n", encoding="utf-8")
+
+            release_plan = RELEASE.build_release_plan(
+                project,
+                "not a conventional commit",
+                set(),
+            )
+
+            self.assertIsNone(release_plan)
+            self.assertEqual(version.read_text(encoding="utf-8"), "2.3.4\n")
+            self.assertEqual(changelog.read_text(encoding="utf-8"), "# Changelog\n")
+
+    def test_autocrlf_upgrade_to_default_lf_through_bare_remote(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            base = Path(raw)
+            source = base / "author" / "project"
+            remote = base / "remote.git"
+            checkout = base / "consumer" / "project"
+            source.mkdir(parents=True)
+            checkout.parent.mkdir()
+            initial = SYNC.build_plan(source, ROOT, "init")
+            SYNC.apply_plan(
+                initial,
+                plan_fingerprint=initial.aggregate_fingerprint,
+            )
+            contract_path = source / ".codex" / "managed-skeleton.json"
+            stamp_path = source / ".codex" / ".bridgeforge_codex_version"
+            old_contract = json.loads(contract_path.read_text(encoding="utf-8"))
+            old_contract["release_version"] = previous_supported_semver(
+                old_contract["release_version"]
+            )
+            old_contract["assets"] = [
+                item
+                for item in old_contract["assets"]
+                if item["id"] != "root.gitattributes"
+            ]
+            contract_path.write_text(
+                json.dumps(old_contract, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            stamp_path.write_text(
+                old_contract["release_version"] + "\n",
+                encoding="utf-8",
+            )
+            (source / ".gitattributes").write_bytes(
+                b".githooks/** text eol=lf\n*.bat text eol=crlf\n"
+            )
+            version = source / "VERSION"
+            changelog = source / "CHANGELOG.md"
+            version.write_text("2.3.4\n", encoding="utf-8")
+            changelog.write_text("# Changelog\n", encoding="utf-8")
+            (source / ".gitignore").write_text("__pycache__/\n", encoding="utf-8")
+
+            subprocess.run(["git", "init", "-q", "-b", "main"], cwd=source, check=True)
+            subprocess.run(
+                ["git", "config", "user.name", "BridgeForge Test"],
+                cwd=source,
+                check=True,
+            )
+            subprocess.run(
+                ["git", "config", "user.email", "test@example.invalid"],
+                cwd=source,
+                check=True,
+            )
+            subprocess.run(["git", "add", "-A"], cwd=source, check=True)
+            subprocess.run(
+                ["git", "commit", "-qm", "baseline"],
+                cwd=source,
+                check=True,
+            )
+            subprocess.run(
+                ["git", "init", "--bare", "-q", "-b", "main", str(remote)],
+                check=True,
+            )
+            subprocess.run(
+                ["git", "remote", "add", "origin", str(remote)],
+                cwd=source,
+                check=True,
+            )
+            subprocess.run(
+                ["git", "push", "-qu", "origin", "main"],
+                cwd=source,
+                check=True,
+            )
+            subprocess.run(
+                [
+                    "git", "-c", "core.autocrlf=true", "clone", "-q",
+                    str(remote), str(checkout),
+                ],
+                cwd=base,
+                check=True,
+            )
+            subprocess.run(
+                ["git", "config", "core.autocrlf", "true"],
+                cwd=checkout,
+                check=True,
+            )
+            self.assertIn(
+                b"\r\n",
+                (checkout / ".codex" / ".bridgeforge_codex_version").read_bytes(),
+            )
+            head_before = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=checkout,
+                capture_output=True,
+                text=True,
+                check=True,
+            ).stdout.strip()
+            version_before = (checkout / "VERSION").read_bytes()
+            changelog_before = (checkout / "CHANGELOG.md").read_bytes()
+
+            update = SYNC.build_plan(checkout, ROOT, "update")
+            SYNC.apply_plan(
+                update,
+                plan_fingerprint=update.aggregate_fingerprint,
+            )
+            no_op = SYNC.build_plan(checkout, ROOT, "update")
+            status_before_sync = subprocess.run(
+                ["git", "status", "--porcelain=v1"],
+                cwd=checkout,
+                capture_output=True,
+                text=True,
+                check=True,
+            ).stdout.strip()
+            changed_paths = RELEASE.collect_changed_paths(checkout)
+            classification = RELEASE.evaluate_release_transition(
+                checkout,
+                changed_paths=changed_paths,
+            )[0]
+
+            original_root = GIT_SYNC.REPO_ROOT
+            original_receipt = GIT_SYNC.ADAPTATION_RECEIPT
+            try:
+                GIT_SYNC.REPO_ROOT = checkout
+                GIT_SYNC.ADAPTATION_RECEIPT = (
+                    checkout / ".runtime" / "bridgeforge-codex" /
+                    "explicit-adaptation.json"
+                )
+                return_code = GIT_SYNC.sync(argparse.Namespace(
+                    message="chore: 同步当前骨架",
+                    message_file=None,
+                    remote="origin",
+                    skip_fetch=False,
+                    skip_push=False,
+                ))
+            finally:
+                GIT_SYNC.REPO_ROOT = original_root
+                GIT_SYNC.ADAPTATION_RECEIPT = original_receipt
+
+            status_after_sync = subprocess.run(
+                ["git", "status", "--porcelain=v1"],
+                cwd=checkout,
+                capture_output=True,
+                text=True,
+                check=True,
+            ).stdout.strip()
+            head_after = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=checkout,
+                capture_output=True,
+                text=True,
+                check=True,
+            ).stdout.strip()
+            remote_head = subprocess.run(
+                ["git", "--git-dir", str(remote), "rev-parse", "refs/heads/main"],
+                capture_output=True,
+                text=True,
+                check=True,
+            ).stdout.strip()
+
+            self.assertEqual(no_op.actions, [])
+            self.assertNotEqual(status_before_sync, "")
+            self.assertIn(".gitattributes", changed_paths)
+            self.assertEqual(classification, "skeleton-only")
+            self.assertEqual(return_code, 0)
+            self.assertEqual(status_after_sync, "")
+            self.assertEqual(
+                (checkout / "VERSION").read_bytes(),
+                version_before,
+            )
+            self.assertEqual(
+                (checkout / "CHANGELOG.md").read_bytes(),
+                changelog_before,
+            )
+            self.assertNotEqual(head_after, head_before)
+            self.assertEqual(remote_head, head_after)
 
     def test_semver_and_commit_parsing_remain_current_features(self) -> None:
         info = RELEASE.parse_commit_message(

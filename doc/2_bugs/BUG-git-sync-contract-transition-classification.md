@@ -7,6 +7,10 @@ downstream: D:\Quant\ClaudeBridgeAssist
 factory_head: f82e0b6accaeaece4bf5565125655c2a30022fda
 product_version: 1.4.35
 fix_target: 1.4.37
+regression_observed_at: 2026-08-26
+regression_product_version: 1.5.4
+regression_downstream: D:\Quant\BridgePersonalAssist
+regression_fix_target: 1.5.5
 ---
 
 # BUG：`$git-sync` 无法分类跨 ownership contract 的骨架更新
@@ -259,3 +263,91 @@ classifier 后，`evaluate_release_transition()` 又用当前 asset 同时投影
 transition classifier。当前 contract 始终是唯一安装标准；跨合同旧侧无法证明时统一降级为
 `mixed`，同合同当前基线损坏仍 fail-closed。旧显式适配收据仅作为待退休运行时产物，不再是
 ownership 证明或骨架事实源。
+
+## 2026-08-26 1.5.4 行尾假变更触发业务版本回归
+
+### 本轮预算与授权
+
+- 规模：M。
+- 预算：45 分钟 / 20k 新增 token 估算（平台无可靠计量器）/ 最多 1 个独立审计 agent /
+  最多 2 轮验证。
+- 范围：修复 project-sync 相同字节重复写入、git-sync 空变更发布计划与版本发布第二道硬闸，
+  同步 Template / dogfood / contract / 版本与 CHANGELOG，并增加 Windows 行尾回归。
+- 开工授权：用户于 2026-08-26 在范围计划后明确回复“开始吧”。
+- 范围收敛：用户于 2026-08-27 确认精简方案并明确回复“开始吧”；不做全仓库
+  `renormalize`，只下发默认 LF 规则、保留项目例外并修复假变更判定。
+- 停止点：若必须改变 ownership contract、schema、下游业务代码或 Git 历史，停止并重新确认。
+
+### 结论
+
+BridgeForgeCodex 1.5.4 的常规 current-only Apply 在受管资产内容哈希完全不变时仍重写工作树。
+Windows Git 随后把四个受管文件报告为 modified，并输出 LF/CRLF 转换警告；但 `git diff --stat`
+与 `_changed_paths()` 均为空。repo-local `$git-sync` 只用 `_status()` 判定是否进入提交事务，又把空
+changed-path 集合交给版本分类器，最终误判为 `project-only` 并创建仅含 `VERSION` 与
+`CHANGELOG.md` 的业务发布提交。
+
+这不是下游业务改动，也不是网络、权限、分叉或凭据问题。它直接违反“纯
+`$bridgeforge-codex` 骨架更新不得提升下游业务版本”的产品合同，属于共性骨架缺陷。
+
+### 真实下游证据
+
+- 批次预检时 BridgePersonalAssist 工作区干净，骨架版本已为 1.5.4。
+- 官方 project-sync 计划中三个受管资产的 before / after SHA-256 完全一致；事务 Apply 成功，
+  Apply 后 no-op replan 的 safe、risk、gap、blocker 均为空。
+- Apply 后 `git status --short` 报告骨架戳、hooks 配置、dispatcher 与 managed baseline 为 modified，
+  同时 `git diff --stat` 与 staged diff 均无内容。
+- repo-local `$git-sync` 输出 `version 0.72.7 -> 0.72.8 (project-only)`，并成功推送。
+- 推送提交只修改 `VERSION` 与 `CHANGELOG.md`；四个受管骨架文件没有进入提交，证明触发源是
+  Git 行尾规范化前后的假 dirty，而不是实际骨架或业务语义变化。
+- 批次已在第一个目标后停止；其余三个目标尚未开始。已推送提交保持原样，未 reset、rebase、
+  force push 或人工回退。
+
+### 源码证据
+
+`templates/scripts/codex_git_sync.py::sync()` 以 `bool(_status())` 决定进入 release 事务，但
+`_build_sync_write_plan()` 使用 `_changed_paths()` 的 diff / cached diff / untracked 并集。
+当 porcelain status 非空而规范化 diff 为空时，两项事实发生分裂：事务认为“有改动”，分类器却
+收到空路径集合。`build_release_plan()` 没有把空集合收敛为 no-op，继续生成下游版本和
+CHANGELOG 写入，随后 `git add .` 只暂存这两项自动写入并创建业务发布提交。
+
+### 修复要求
+
+1. `$git-sync` 必须在生成 release plan 前把 Git 的规范化实际差异作为单一事实源；porcelain
+   假 dirty 且无 staged、unstaged、untracked 实际路径时必须收敛为 no-op。
+2. `build_release_plan()` 收到空 changed-path 集合时必须禁止生成业务版本写入，形成第二道硬闸。
+3. project-sync 对 before / after 内容完全一致的资产不得制造可观察工作树漂移；若事务必须重写，
+   终态验证必须刷新 Git index 并证明不会留下假 dirty。
+4. 新增 `core.autocrlf=true` 与 LF/CRLF 工作树回归，覆盖 Apply -> no-op replan -> repo-local
+   `$git-sync` 全链路，并断言不修改下游 `VERSION`、不追加 CHANGELOG、不创建提交。
+5. 修复必须同步 Template、factory dogfood、manifest、VERSION 与 CHANGELOG，并完成真实下游
+   canary；发布后本次四项目批次必须 restart，从第一个目标全部重跑。
+
+### 1.5.5 实施记录
+
+- 新增受管 `.gitattributes` 合并策略，只在现有项目规则之前补充
+  `* text=auto eol=lf`；项目后置的 `.bat`、`.cmd`、`.ps1` 等例外保持原样并继续优先。
+- project-sync 将工厂工作树中的受管文本按 Git blob 等价 LF 字节下发，避免工厂物理
+  CRLF / mixed 行尾污染下游；相同原始字节写入直接跳过。
+- repo-local `git-sync` 在锁内只计算一次真实 changed paths；空集合不生成发布计划，版本发布器
+  同时以空集合 no-op 形成第二道硬闸。
+- ownership transition 对首次纳管 `.gitattributes` 单独比较项目自有规则；只增加默认 LF
+  规则时归类为 `skeleton-only`，项目规则同时变化时仍会进入业务变化路径。
+- 未增加全仓库换行迁移、额外运行时收据或新状态机，也不批量改写下游业务文件。
+
+### 当前边界
+
+- 工厂源码修复与自动回归已落盘，尚未执行工厂 `$git-sync`，因此尚未发布。
+- BridgePersonalAssist 的错误业务版本提交已保存到 GitHub；未经用户另行授权，不回写历史、不
+  删除 CHANGELOG 条目，也不通过补丁提交猜测恢复业务版本。
+- 其余三个下游保持确认时现场，尚未发生本批次写入。
+
+### 1.5.5 发布前验证
+
+- 定向回归：84/84 通过，覆盖 `.gitattributes` 直接覆盖、`**` 覆盖、attribute macro 覆盖、
+  旧合同首次纳管、真实 bare remote fetch / commit / push，以及空真实差异无需提交消息。
+- 完整自动测试：296 项通过，1 项按设计跳过；downstream fixture 3/3 通过。
+- 发布硬闸：manifest `--check`、factory current baseline 1.5.5、skill metadata、instruction source、
+  project structure 与 `git diff --check` 全部 exit 0。
+- 独立审计复核三项原问题均已关闭，未发现新的 Blocker / High / Medium，结论为可发布。
+- 真实下游 canary 必须在 1.5.5 发布后由本次 Batch `restart` 从第一个项目重新执行；完成前不关闭
+  本回归。

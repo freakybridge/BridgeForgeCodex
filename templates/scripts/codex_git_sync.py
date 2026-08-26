@@ -398,11 +398,6 @@ def sync(args: argparse.Namespace) -> int:
     _upstream()
     push_target = _push_target()
     dirty = bool(_status())
-    message = None
-    if dirty:
-        message = _read_message(args)
-        if not message:
-            raise SyncStop("commit message is required when local changes exist", 2)
 
     if not args.skip_fetch:
         _run_git(["fetch", args.remote], timeout=180, label=f"git fetch {args.remote}")
@@ -422,9 +417,11 @@ def sync(args: argparse.Namespace) -> int:
             return 2
 
     if dirty:
-        if not message:
-            raise SyncStop("commit message is required when local changes are staged", 2)
         with _sync_lock():
+            changed_paths = _changed_paths()
+            message = _read_message(args) if changed_paths else ""
+            if changed_paths and not message:
+                raise SyncStop("commit message is required when real changes exist", 2)
             if detect_repository_role(REPO_ROOT).kind != "factory":
                 try:
                     verify_current_baseline(REPO_ROOT)
@@ -433,7 +430,7 @@ def sync(args: argparse.Namespace) -> int:
             obsolete_adaptation_receipt = _read_adaptation_proof()
             plan = _build_sync_write_plan(
                 message,
-                _changed_paths(),
+                changed_paths,
             )
             snapshot = _snapshot_sync_plan(plan)
             expected_index = snapshot.index_bytes

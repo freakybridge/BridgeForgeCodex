@@ -38,6 +38,55 @@ BASELINE = load_module(
 
 
 class CurrentBaselineContractTests(unittest.TestCase):
+    def test_gitattributes_merge_adds_default_lf_and_preserves_exceptions(self) -> None:
+        source = b"* text=auto eol=lf\n"
+        current = b"*.bat text eol=crlf\r\n.githooks/** text eol=lf\r\n"
+
+        merged = SYNC._merge_gitattributes_default_lf(source, current)
+
+        self.assertEqual(
+            merged,
+            b"* text=auto eol=lf\r\n" + current,
+        )
+        self.assertEqual(SYNC._gitattributes_default_state(merged), ("auto", "lf"))
+
+    def test_gitattributes_merge_blocks_project_wide_conflict(self) -> None:
+        conflicts = (
+            b"* text eol=crlf\r\n",
+            b"** text eol=crlf\r\n",
+            b"[attr]windows text eol=crlf\r\n* windows\r\n",
+        )
+        for current in conflicts:
+            with self.subTest(current=current), self.assertRaisesRegex(
+                SYNC.SyncBlocked,
+                "conflict",
+            ):
+                SYNC._merge_gitattributes_default_lf(
+                    b"* text=auto eol=lf\n",
+                    current,
+                )
+            with self.subTest(baseline=current):
+                self.assertNotEqual(
+                    BASELINE._gitattributes_default_state(
+                        b"* text=auto eol=lf\n" + current
+                    ),
+                    ("auto", "lf"),
+                )
+
+    def test_transaction_identical_write_is_a_real_noop(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            target = root / "managed.txt"
+            target.write_bytes(b"unchanged\n")
+            transaction = SYNC._Transaction(root)
+
+            with mock.patch.object(SYNC, "_atomic_write") as atomic_write:
+                transaction.write(target, b"unchanged\n")
+
+            atomic_write.assert_not_called()
+            self.assertEqual(transaction.before, {})
+            self.assertEqual(target.read_bytes(), b"unchanged\n")
+
     def test_contract_is_small_and_contains_no_history_model(self) -> None:
         path = ROOT / "templates" / "managed-skeleton.json"
         contract = json.loads(path.read_text(encoding="utf-8"))

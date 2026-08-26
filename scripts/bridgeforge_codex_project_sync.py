@@ -35,6 +35,13 @@ REQUIRED_PROJECT_MAPS = (
     ("R:project-map:find-doc", ".codex/find-doc.map.md"),
     ("R:project-map:sync-docs", ".codex/sync-docs.map.md"),
 )
+GIT_ATTRIBUTES_DEFAULT_LF_POLICY = "git-attributes-default-lf"
+GIT_ATTRIBUTES_DEFAULT_LF_PROBES = (
+    "BRIDGEFORGE_DEFAULT_EOL_PROBE",
+    "nested/BRIDGEFORGE_DEFAULT_EOL_PROBE",
+    ".codex/BRIDGEFORGE_DEFAULT_EOL_PROBE.py",
+    "doc/BRIDGEFORGE_DEFAULT_EOL_PROBE.md",
+)
 
 
 class SyncBlocked(RuntimeError):
@@ -140,6 +147,95 @@ def _git_blob_bytes(payload: bytes) -> bytes:
     if b"\0" in payload:
         return payload
     return payload.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+
+
+def _gitattributes_default_state(payload: bytes) -> tuple[str | None, str | None]:
+    try:
+        payload.decode("utf-8-sig")
+    except UnicodeDecodeError as exc:
+        raise SyncBlocked(".gitattributes is not valid UTF-8") from exc
+    with tempfile.TemporaryDirectory(prefix="bridgeforge-gitattributes-") as raw:
+        root = Path(raw)
+        (root / ".gitattributes").write_bytes(payload)
+        global_attributes = root / "global-attributes"
+        global_attributes.write_bytes(b"")
+        initialized = subprocess.run(
+            ["git", "init", "-q"],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if initialized.returncode != 0:
+            raise SyncBlocked(
+                "cannot initialize isolated Git attributes validation: "
+                + (initialized.stderr or initialized.stdout).strip()
+            )
+        environment = os.environ.copy()
+        environment["GIT_ATTR_NOSYSTEM"] = "1"
+        checked = subprocess.run(
+            [
+                "git",
+                "-c",
+                f"core.attributesFile={global_attributes.as_posix()}",
+                "check-attr",
+                "text",
+                "eol",
+                "--",
+                *GIT_ATTRIBUTES_DEFAULT_LF_PROBES,
+            ],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            env=environment,
+            check=False,
+        )
+        if checked.returncode != 0:
+            raise SyncBlocked(
+                "cannot evaluate .gitattributes with Git: "
+                + (checked.stderr or checked.stdout).strip()
+            )
+    states = {
+        probe: {"text": None, "eol": None}
+        for probe in GIT_ATTRIBUTES_DEFAULT_LF_PROBES
+    }
+    for line in checked.stdout.splitlines():
+        fields = line.rsplit(": ", 2)
+        if len(fields) != 3 or fields[0] not in states:
+            raise SyncBlocked("Git returned an invalid .gitattributes evaluation")
+        path, attribute, value = fields
+        if attribute in states[path]:
+            states[path][attribute] = None if value == "unspecified" else value
+    text_values = {state["text"] for state in states.values()}
+    eol_values = {state["eol"] for state in states.values()}
+    text_state = next(iter(text_values)) if len(text_values) == 1 else "mixed"
+    eol_state = next(iter(eol_values)) if len(eol_values) == 1 else "mixed"
+    return text_state, eol_state
+
+
+def _merge_gitattributes_default_lf(source: bytes, current: bytes | None) -> bytes:
+    required = ("auto", "lf")
+    canonical = _git_blob_bytes(source)
+    if _gitattributes_default_state(canonical) != required:
+        raise SyncBlocked("trusted .gitattributes source has no default LF policy")
+    if current is None:
+        return canonical
+    if b"\0" in current:
+        raise SyncBlocked(".gitattributes contains binary data")
+    if _gitattributes_default_state(current) == required:
+        return current
+    bom = b"\xef\xbb\xbf" if current.startswith(b"\xef\xbb\xbf") else b""
+    body = current[len(bom):]
+    ending_match = re.search(br"\r\n|\r|\n", body)
+    newline = ending_match.group(0) if ending_match is not None else b"\n"
+    candidate = bom + b"* text=auto eol=lf" + newline + body
+    if _gitattributes_default_state(candidate) != required:
+        raise SyncBlocked(
+            "project-wide .gitattributes rules conflict with the required default LF policy"
+        )
+    return candidate
 
 
 def _sha256_bytes(payload: bytes) -> str:
@@ -262,6 +358,7 @@ def _plain_root(path: Path, label: str) -> Path:
 
 
 def _render_source(payload: bytes, asset: dict[str, Any], project_root: Path) -> bytes:
+    payload = _git_blob_bytes(payload)
     if asset.get("render") != "project-name":
         return payload
     try:
@@ -1118,6 +1215,8 @@ def _desired_payload(
     if strategy == "merge":
         if asset.get("merge_policy") == "codex-hooks":
             return _merge_hooks_current(source, current)
+        if asset.get("merge_policy") == GIT_ATTRIBUTES_DEFAULT_LF_POLICY:
+            return _merge_gitattributes_default_lf(source, current)
         canonical = _loads_json(source.decode("utf-8-sig"))
         local = _loads_json(current.decode("utf-8-sig")) if current is not None else {}
         return json.dumps(
@@ -1836,6 +1935,8 @@ class _Transaction:
             self.before[path] = path.read_bytes() if path.exists() else None
 
     def write(self, path: Path, payload: bytes) -> None:
+        if path.is_file() and path.read_bytes() == payload:
+            return
         self._record(path)
         missing: list[Path] = []
         current = path.parent

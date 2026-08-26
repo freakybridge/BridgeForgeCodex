@@ -61,6 +61,56 @@ class GitSyncTransactionTests(unittest.TestCase):
         self.assertEqual(git(root, "add", "tracked.txt").returncode, 0)
         self.assertEqual(git(root, "commit", "-qm", "base").returncode, 0)
 
+    def test_empty_normalized_change_set_produces_no_release_writes(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            project = Path(raw)
+            (project / "VERSION").write_text("2.3.4\n", encoding="utf-8")
+            (project / "CHANGELOG.md").write_text("# Changelog\n", encoding="utf-8")
+            SYNC.REPO_ROOT = project
+
+            with (
+                mock.patch.object(SYNC, "render_memory_indexes", return_value={}),
+                mock.patch.object(SYNC, "_load_factory_manifest_module", return_value=None),
+            ):
+                plan = SYNC._build_sync_write_plan(
+                    "chore: 同步当前骨架",
+                    set(),
+                )
+
+            self.assertIsNone(plan.release)
+            self.assertEqual(plan.writes, {})
+            self.assertEqual((project / "VERSION").read_text(encoding="utf-8"), "2.3.4\n")
+
+    def test_false_dirty_with_empty_changed_paths_does_not_require_message(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            project = self._repository_with_remote(Path(raw))
+            SYNC.REPO_ROOT = project
+            SYNC.ADAPTATION_RECEIPT = (
+                project / ".runtime" / "bridgeforge-codex" /
+                "explicit-adaptation.json"
+            )
+            args = argparse.Namespace(
+                message=None,
+                message_file=None,
+                remote="origin",
+                skip_fetch=True,
+                skip_push=False,
+            )
+
+            with (
+                mock.patch.object(SYNC, "_status", side_effect=[" M tracked.txt", ""]),
+                mock.patch.object(SYNC, "_changed_paths", return_value=set()),
+                mock.patch.object(SYNC, "_read_message") as read_message,
+                mock.patch.object(SYNC, "verify_current_baseline"),
+                mock.patch.object(SYNC, "render_memory_indexes", return_value={}),
+                mock.patch.object(SYNC, "_load_factory_manifest_module", return_value=None),
+                mock.patch.object(SYNC, "_check_factory_version_worktree"),
+            ):
+                return_code = SYNC.sync(args)
+
+            self.assertEqual(return_code, 0)
+            read_message.assert_not_called()
+
     def _repository_with_remote(self, base: Path) -> Path:
         project = base / "project"
         remote = base / "remote.git"

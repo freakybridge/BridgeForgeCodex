@@ -355,6 +355,26 @@ def evaluate_release_transition(
             project_changed = project_changed or head_asset.get("strategy") != "whole"
             continue
         if head_asset is None:
+            if asset.get("merge_policy") == "git-attributes-default-lf":
+                current_relative = str(asset["target"]).replace("\\", "/")
+                target = repo / Path(current_relative)
+                current = target.read_bytes() if target.is_file() else b""
+                before = _head_payload(repo, current_relative) or b""
+                try:
+                    verify_contract_payload(asset, current, repo)
+                    old_projection = ownership_projection(asset, before, repo)
+                    new_projection = ownership_projection(asset, current, repo)
+                except BaselineError as exc:
+                    raise TransitionBlocked([{
+                        "asset_id": str(asset.get("id", relative)),
+                        "target": current_relative,
+                        "reason": f"default LF policy adoption is invalid: {exc}",
+                    }]) from exc
+                public_changed = True
+                project_changed = project_changed or (
+                    old_projection.project_sha256 != new_projection.project_sha256
+                )
+                continue
             public_changed = public_changed or asset.get("strategy") != "seed"
             project_changed = project_changed or asset.get("strategy") != "whole"
             continue
@@ -621,6 +641,8 @@ def build_release_plan(
     message: str,
     changed_paths: set[str],
 ) -> ReleasePlan | None:
+    if not changed_paths:
+        return None
     info = parse_commit_message(message)
     role = detect_repository_role(repo)
     factory_old_version: str | None = None
