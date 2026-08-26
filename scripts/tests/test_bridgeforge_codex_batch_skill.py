@@ -171,7 +171,7 @@ class BridgeForgeCodexBatchSkillTests(unittest.TestCase):
             },
         )
 
-    def test_plan_and_begin_reject_target_or_factory_drift(self) -> None:
+    def test_plan_rejects_drift_and_begin_defers_target_drift(self) -> None:
         factory = self.make_factory()
         target = self.make_target()
         with mock.patch.object(
@@ -201,13 +201,57 @@ class BridgeForgeCodexBatchSkillTests(unittest.TestCase):
             "_validate_factory_baseline",
             return_value=self.baseline_receipt(),
         ):
-            with self.assertRaisesRegex(BATCH.BatchError, "状态已变化"):
-                BATCH.begin_target(state, str(target))
-        (target / "drift.txt").unlink()
+            self.assertEqual(BATCH.begin_target(state, str(target)), "deferred")
+        deferred = self.load(state)["targets"][0]
+        self.assertEqual(deferred["status"], "deferred")
+        self.assertEqual(deferred["attempts"], [])
+        self.assertEqual(
+            deferred["result"]["problem_signature"],
+            "git:target-snapshot-drift",
+        )
+        active = factory / ".runtime/bridgeforge-codex-batch/active.json"
+        active.unlink()
+        factory_target = self.make_target("factory-drift-target")
+        factory_state = self.start([factory_target], "batch-factory-drift")
         changed = {**self.baseline_receipt(), "fingerprint": "sha256:" + "2" * 64}
         with mock.patch.object(BATCH, "_validate_factory_baseline", return_value=changed):
             with self.assertRaisesRegex(BATCH.BatchError, "变化.*禁止继续"):
-                BATCH.begin_target(state, str(target))
+                BATCH.begin_target(factory_state, str(factory_target))
+
+    def test_begin_drift_at_any_position_defers_and_continues(self) -> None:
+        for drift_index in range(3):
+            with self.subTest(drift_index=drift_index):
+                targets = [
+                    self.make_target(f"position-{drift_index}-{index}")
+                    for index in range(3)
+                ]
+                state = self.start(
+                    targets,
+                    f"batch-position-{drift_index}",
+                )
+                (targets[drift_index] / "drift.txt").write_text(
+                    "drift\n", encoding="utf-8"
+                )
+                for index, target in enumerate(targets):
+                    outcome = BATCH.begin_target(state, str(target))
+                    if index == drift_index:
+                        self.assertEqual(outcome, "deferred")
+                        continue
+                    self.assertEqual(outcome, "running")
+                    BATCH.finish_target(
+                        state,
+                        str(target),
+                        outcome="deferred",
+                        problem_summary="当前分支需要用户决定。",
+                        problem_signature=f"git:position:{drift_index}:{index}",
+                    )
+                drifted = self.load(state)["targets"][drift_index]
+                self.assertEqual(drifted["status"], "deferred")
+                self.assertEqual(drifted["attempts"], [])
+                active = Path(self.load(state)["factory_root"]) / (
+                    ".runtime/bridgeforge-codex-batch/active.json"
+                )
+                active.unlink()
 
     def test_success_is_derived_from_baseline_version_and_git(self) -> None:
         target = self.make_target()
@@ -285,7 +329,9 @@ class BridgeForgeCodexBatchSkillTests(unittest.TestCase):
             "_validate_factory_baseline",
             return_value=self.baseline_receipt(),
         ):
-            with self.assertRaisesRegex(BATCH.BatchError, "重新展示异常计划"):
+            with self.assertRaisesRegex(BATCH.BatchError, "顺序重新确认"):
+                BATCH.refresh_plan(state, str(second))
+            with self.assertRaisesRegex(BATCH.BatchError, "刷新计划并重新确认"):
                 BATCH.begin_target(state, str(first))
             proposal = BATCH.refresh_plan(state, str(first))
             with self.assertRaisesRegex(BATCH.BatchError, "再次变化"):
@@ -299,7 +345,20 @@ class BridgeForgeCodexBatchSkillTests(unittest.TestCase):
                 str(first),
                 proposal["plan_fingerprint"],
             )
+            reconfirmed = self.load(state)["targets"][0]
+            self.assertEqual(reconfirmed["status"], "pending")
+            self.assertIsNone(reconfirmed["result"])
             BATCH.begin_target(state, str(first))
+
+    def test_begin_state_write_failure_preserves_original_state(self) -> None:
+        target = self.make_target()
+        state = self.start([target], "batch-write-failure")
+        original = state.read_bytes()
+        (target / "drift.txt").write_text("drift\n", encoding="utf-8")
+        with mock.patch.object(BATCH, "_write_json", side_effect=OSError("injected")):
+            with self.assertRaisesRegex(OSError, "injected"):
+                BATCH.begin_target(state, str(target))
+        self.assertEqual(state.read_bytes(), original)
 
     def test_only_bridgeforge_signatures_trigger_common_stop(self) -> None:
         first = self.make_target("one")
@@ -338,7 +397,7 @@ class BridgeForgeCodexBatchSkillTests(unittest.TestCase):
             "fingerprint": "sha256:" + "9" * 64,
         }
         with mock.patch.object(BATCH, "inspect_factory", return_value=same):
-            with self.assertRaisesRegex(BATCH.BatchError, "源码和骨架"):
+            with self.assertRaisesRegex(BATCH.BatchError, "对应的工厂修复"):
                 BATCH.restart_batch(state)
         new = {**same, "head": "f" * 40}
         with mock.patch.object(BATCH, "inspect_factory", return_value=new):
@@ -360,6 +419,47 @@ class BridgeForgeCodexBatchSkillTests(unittest.TestCase):
         self.assertEqual(restarted["generation"], 2)
         self.assertTrue(all(item["status"] == "pending" for item in restarted["targets"]))
         self.assertTrue(all(item["result"] is None for item in restarted["targets"]))
+
+    def test_batch_restart_requires_controller_blob_change(self) -> None:
+        target = self.make_target()
+        state = self.start([target], "batch-controller-witness")
+        factory = Path(self.load(state)["factory_root"])
+        bug = factory / "doc/2_bugs/BUG-batch-controller.md"
+        bug.parent.mkdir(parents=True)
+        bug.write_text("# Bug\n", encoding="utf-8")
+        BATCH.confirm_common_problem(
+            state,
+            "bridgeforge:batch-pending-drift-deadlock",
+            str(target),
+            "doc/2_bugs/BUG-batch-controller.md",
+        )
+        blocked = self.load(state)
+
+        (factory / "unrelated.txt").write_text("unrelated\n", encoding="utf-8")
+        unrelated_head = self.commit_all(factory, "unrelated")
+        self.git(factory, "update-ref", "refs/remotes/origin/main", unrelated_head)
+        unrelated = {
+            **blocked["factory_snapshot"],
+            "head": unrelated_head,
+            "origin_main": unrelated_head,
+            "fingerprint": "sha256:" + "8" * 64,
+        }
+        with mock.patch.object(BATCH, "inspect_factory", return_value=unrelated):
+            with self.assertRaisesRegex(BATCH.BatchError, "对应的工厂修复"):
+                BATCH.restart_batch(state)
+
+        witness = factory / BATCH.BATCH_REPAIR_WITNESS
+        witness.write_text("fixed\n", encoding="utf-8")
+        fixed_head = self.commit_all(factory, "controller fix")
+        self.git(factory, "update-ref", "refs/remotes/origin/main", fixed_head)
+        fixed = {
+            **blocked["factory_snapshot"],
+            "head": fixed_head,
+            "origin_main": fixed_head,
+        }
+        with mock.patch.object(BATCH, "inspect_factory", return_value=fixed):
+            BATCH.restart_batch(state)
+        self.assertEqual(self.load(state)["generation"], 2)
 
     def test_explicit_common_rejects_non_bridgeforge_namespace(self) -> None:
         target = self.make_target()

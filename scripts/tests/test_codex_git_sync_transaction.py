@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import importlib.util
+import io
 import os
 import subprocess
 import sys
@@ -224,6 +226,226 @@ class GitSyncTransactionTests(unittest.TestCase):
                 before_status,
             )
 
+    def test_sync_real_rejected_hook_restores_only_transaction_boundary(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            project = self._repository_with_remote(Path(raw))
+            tracked = project / "tracked.txt"
+            tracked.write_text("user change\n", encoding="utf-8")
+            derived = project / "derived.txt"
+            derived.write_text("before\n", encoding="utf-8")
+            self.assertEqual(git(project, "add", "derived.txt").returncode, 0)
+            self.assertEqual(git(project, "commit", "-qm", "derived").returncode, 0)
+            derived_before = derived.read_bytes()
+            tracked.write_text("user change\n", encoding="utf-8")
+            before_status = git(project, "status", "--porcelain=v1").stdout
+            hook = project / ".git" / "hooks" / "pre-commit"
+            hook.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8", newline="\n")
+            os.chmod(hook, 0o755)
+
+            SYNC.REPO_ROOT = project
+            before_identity = SYNC._repository_identity()
+            output = io.StringIO()
+            with mock.patch.object(SYNC, "verify_current_baseline"), \
+                    mock.patch.object(
+                        SYNC,
+                        "_build_sync_write_plan",
+                        return_value=SYNC.SyncWritePlan({derived: b"after\n"}, None),
+                    ), \
+                    mock.patch.object(SYNC, "_check_factory_version_worktree"), \
+                    contextlib.redirect_stdout(output):
+                with self.assertRaisesRegex(SYNC.SyncStop, "git commit failed"):
+                    SYNC.sync(self._args("fix: rejected hook"))
+
+            self.assertEqual(SYNC._repository_identity(), before_identity)
+            self.assertEqual(derived.read_bytes(), derived_before)
+            self.assertEqual(
+                git(project, "status", "--porcelain=v1").stdout,
+                before_status,
+            )
+            receipt = output.getvalue()
+            self.assertIn("original Git index were restored", receipt)
+            self.assertIn("repository identity remained unchanged", receipt)
+
+    def test_sync_simulated_rejected_hook_restores_when_identity_is_stable(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            project = self._repository_with_remote(Path(raw))
+            tracked = project / "tracked.txt"
+            tracked.write_text("user change\n", encoding="utf-8")
+            derived = project / "derived.txt"
+            derived.write_text("before\n", encoding="utf-8")
+            self.assertEqual(git(project, "add", "derived.txt").returncode, 0)
+            self.assertEqual(git(project, "commit", "-qm", "derived").returncode, 0)
+            derived_before = derived.read_bytes()
+            tracked.write_text("user change\n", encoding="utf-8")
+            before_status = git(project, "status", "--porcelain=v1").stdout
+            original_run_git = SYNC._run_git
+
+            def reject_commit(
+                args: list[str],
+                *,
+                timeout: int = 120,
+                label: str | None = None,
+            ):
+                if args[:1] == ["commit"]:
+                    raise SYNC.SyncStop("git commit failed: simulated hook rejection", 1)
+                return original_run_git(args, timeout=timeout, label=label)
+
+            SYNC.REPO_ROOT = project
+            output = io.StringIO()
+            with mock.patch.object(SYNC, "verify_current_baseline"), \
+                    mock.patch.object(
+                        SYNC,
+                        "_build_sync_write_plan",
+                        return_value=SYNC.SyncWritePlan({derived: b"after\n"}, None),
+                    ), \
+                    mock.patch.object(SYNC, "_check_factory_version_worktree"), \
+                    mock.patch.object(SYNC, "_run_git", side_effect=reject_commit), \
+                    contextlib.redirect_stdout(output):
+                with self.assertRaisesRegex(SYNC.SyncStop, "simulated hook rejection"):
+                    SYNC.sync(self._args("fix: simulated rejected hook"))
+
+            self.assertEqual(derived.read_bytes(), derived_before)
+            self.assertEqual(
+                git(project, "status", "--porcelain=v1").stdout,
+                before_status,
+            )
+            self.assertIn("repository identity remained unchanged", output.getvalue())
+
+    def test_hook_core_bare_drift_is_high_severity_and_not_auto_restored(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            project = self._repository_with_remote(Path(raw))
+            tracked = project / "tracked.txt"
+            tracked.write_text("user change\n", encoding="utf-8")
+            derived = project / "derived.txt"
+            derived.write_text("before\n", encoding="utf-8")
+            self.assertEqual(git(project, "add", "derived.txt").returncode, 0)
+            self.assertEqual(git(project, "commit", "-qm", "derived").returncode, 0)
+            tracked.write_text("user change\n", encoding="utf-8")
+            hook = project / ".git" / "hooks" / "pre-commit"
+            hook.write_text(
+                "#!/bin/sh\ngit config core.bare true\nexit 1\n",
+                encoding="utf-8",
+                newline="\n",
+            )
+            os.chmod(hook, 0o755)
+
+            SYNC.REPO_ROOT = project
+            output = io.StringIO()
+            with mock.patch.object(SYNC, "verify_current_baseline"), \
+                    mock.patch.object(
+                        SYNC,
+                        "_build_sync_write_plan",
+                        return_value=SYNC.SyncWritePlan({derived: b"after\n"}, None),
+                    ), \
+                    mock.patch.object(SYNC, "_check_factory_version_worktree"), \
+                    contextlib.redirect_stdout(output):
+                with self.assertRaisesRegex(
+                    SYNC.SyncStop,
+                    "HIGH: repository identity drift detected",
+                ) as captured:
+                    SYNC.sync(self._args("fix: detect core bare drift"))
+
+            self.assertIn("no automatic repository recovery", str(captured.exception))
+            self.assertNotIn("were restored", output.getvalue())
+            self.assertEqual(derived.read_bytes(), b"after\n")
+            config = (project / ".git" / "config").read_text(encoding="utf-8")
+            self.assertIn("bare = true", config)
+
+    def test_hook_common_config_drift_is_detected_without_misleading_receipt(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            project = self._repository_with_remote(Path(raw))
+            tracked = project / "tracked.txt"
+            tracked.write_text("user change\n", encoding="utf-8")
+            derived = project / "derived.txt"
+            derived.write_text("before\n", encoding="utf-8")
+            self.assertEqual(git(project, "add", "derived.txt").returncode, 0)
+            self.assertEqual(git(project, "commit", "-qm", "derived").returncode, 0)
+            tracked.write_text("user change\n", encoding="utf-8")
+            hook = project / ".git" / "hooks" / "pre-commit"
+            hook.write_text(
+                "#!/bin/sh\ngit config bridgeforge.identity-drift true\nexit 1\n",
+                encoding="utf-8",
+                newline="\n",
+            )
+            os.chmod(hook, 0o755)
+
+            SYNC.REPO_ROOT = project
+            output = io.StringIO()
+            with mock.patch.object(SYNC, "verify_current_baseline"), \
+                    mock.patch.object(
+                        SYNC,
+                        "_build_sync_write_plan",
+                        return_value=SYNC.SyncWritePlan({derived: b"after\n"}, None),
+                    ), \
+                    mock.patch.object(SYNC, "_check_factory_version_worktree"), \
+                    contextlib.redirect_stdout(output):
+                with self.assertRaisesRegex(
+                    SYNC.SyncStop,
+                    "changed=common_config_digest",
+                ) as captured:
+                    SYNC.sync(self._args("fix: detect config drift"))
+
+            self.assertIn("no automatic repository recovery", str(captured.exception))
+            self.assertNotIn("were restored", output.getvalue())
+            self.assertEqual(derived.read_bytes(), b"after\n")
+
+    def test_failed_pre_push_hook_identity_drift_is_detected(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            project = self._repository_with_remote(Path(raw))
+            tracked = project / "tracked.txt"
+            tracked.write_text("push change\n", encoding="utf-8")
+            hook = project / ".git" / "hooks" / "pre-push"
+            hook.write_text(
+                "#!/bin/sh\ngit config bridgeforge.pre-push-drift true\nexit 1\n",
+                encoding="utf-8",
+                newline="\n",
+            )
+            os.chmod(hook, 0o755)
+
+            SYNC.REPO_ROOT = project
+            output = io.StringIO()
+            with mock.patch.object(SYNC, "verify_current_baseline"), \
+                    mock.patch.object(
+                        SYNC,
+                        "_build_sync_write_plan",
+                        return_value=SYNC.SyncWritePlan({}, None),
+                    ), \
+                    mock.patch.object(SYNC, "_check_factory_version_worktree"), \
+                    contextlib.redirect_stdout(output):
+                with self.assertRaisesRegex(
+                    SYNC.SyncStop,
+                    "HIGH: repository identity drift detected after "
+                    "git push/pre-push hook",
+                ) as captured:
+                    SYNC.sync(self._args("fix: detect pre-push identity drift"))
+
+            self.assertIn("no automatic repository recovery", str(captured.exception))
+            self.assertNotIn("were restored", output.getvalue())
+            self.assertIn(
+                "pre-push-drift = true",
+                (project / ".git" / "config").read_text(encoding="utf-8"),
+            )
+
+    def test_initial_bare_repository_is_blocked_before_any_write(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            project = self._repository_with_remote(Path(raw))
+            tracked = project / "tracked.txt"
+            tracked.write_text("user change\n", encoding="utf-8")
+            self.assertEqual(git(project, "config", "core.bare", "true").returncode, 0)
+            config_before = (project / ".git" / "config").read_bytes()
+            SYNC.REPO_ROOT = project
+
+            with mock.patch.object(SYNC, "_build_sync_write_plan") as build_plan:
+                with self.assertRaisesRegex(
+                    SYNC.SyncStop,
+                    "core.bare=true",
+                ):
+                    SYNC.sync(self._args("fix: must not start"))
+
+            build_plan.assert_not_called()
+            self.assertEqual(tracked.read_text(encoding="utf-8"), "user change\n")
+            self.assertEqual((project / ".git" / "config").read_bytes(), config_before)
+
     def test_sync_restores_plan_and_index_when_git_add_fails(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             project = self._repository_with_remote(Path(raw))
@@ -363,10 +585,20 @@ class GitSyncTransactionTests(unittest.TestCase):
             SYNC.REPO_ROOT = linked
             plan = SYNC.SyncWritePlan({}, None)
             snapshot = SYNC._snapshot_sync_plan(plan)
+            identity = SYNC._repository_identity()
 
             self.assertTrue(snapshot.index_path.is_file())
             self.assertNotEqual(snapshot.index_path, (project / ".git" / "index").resolve())
             self.assertIn("worktrees", snapshot.index_path.as_posix())
+            self.assertEqual(identity.index_path, os.path.normcase(str(snapshot.index_path)))
+            self.assertEqual(
+                identity.common_dir,
+                os.path.normcase(str((project / ".git").resolve())),
+            )
+            self.assertIn("worktrees", identity.git_dir.replace("\\", "/"))
+            self.assertEqual(identity.symbolic_head, "refs/heads/linked")
+            self.assertFalse(identity.core_bare)
+            self.assertTrue(identity.common_config_digest.startswith("sha256:"))
 
 
 if __name__ == "__main__":

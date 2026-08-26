@@ -149,6 +149,43 @@ def _git_blob_bytes(payload: bytes) -> bytes:
     return payload.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
 
 
+def _isolated_git_environment() -> dict[str, str]:
+    environment = os.environ.copy()
+    dynamic_config_prefixes = ("GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_")
+    extra_local_variables = {
+        "GIT_CONFIG",
+        "GIT_CONFIG_COUNT",
+        "GIT_CONFIG_PARAMETERS",
+        "GIT_QUARANTINE_PATH",
+    }
+    for key in tuple(environment):
+        normalized = key.upper()
+        if normalized in extra_local_variables or normalized.startswith(
+            dynamic_config_prefixes
+        ):
+            environment.pop(key, None)
+    discovered = subprocess.run(
+        ["git", "rev-parse", "--local-env-vars"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        env=environment,
+        check=False,
+    )
+    if discovered.returncode != 0:
+        raise SyncBlocked(
+            "cannot discover repository-local Git environment: "
+            + (discovered.stderr or discovered.stdout).strip()
+        )
+    for name in discovered.stdout.splitlines():
+        name = name.strip()
+        if name.startswith("GIT_"):
+            environment.pop(name, None)
+    environment["GIT_ATTR_NOSYSTEM"] = "1"
+    return environment
+
+
 def _gitattributes_default_state(payload: bytes) -> tuple[str | None, str | None]:
     try:
         payload.decode("utf-8-sig")
@@ -159,11 +196,13 @@ def _gitattributes_default_state(payload: bytes) -> tuple[str | None, str | None
         (root / ".gitattributes").write_bytes(payload)
         global_attributes = root / "global-attributes"
         global_attributes.write_bytes(b"")
+        environment = _isolated_git_environment()
         initialized = subprocess.run(
             ["git", "init", "-q"],
             cwd=root,
             capture_output=True,
             text=True,
+            env=environment,
             check=False,
         )
         if initialized.returncode != 0:
@@ -171,8 +210,6 @@ def _gitattributes_default_state(payload: bytes) -> tuple[str | None, str | None
                 "cannot initialize isolated Git attributes validation: "
                 + (initialized.stderr or initialized.stdout).strip()
             )
-        environment = os.environ.copy()
-        environment["GIT_ATTR_NOSYSTEM"] = "1"
         checked = subprocess.run(
             [
                 "git",

@@ -58,7 +58,8 @@ Skill、文档或其他长期项目清单。同一个工厂同时只允许一个
 common dir 的 worktree 同样分别处理且绝不并行：
 
 1. 运行 `begin --state <state> --target <path>`。每次 `begin` 都重新核对锁定的工厂 HEAD、
-   骨架指纹、干净同步状态和目标现场；发生漂移时零下游写入。
+   骨架指纹、干净同步状态和目标现场；目标现场漂移或暂时不可读时必须原子标记为 deferred、
+   不新增 attempt、零下游写入，并继续处理后续 pending 目标。工厂漂移仍立即阻断整批。
 2. 把主对话工作目录切到该目标，完整执行现有官方 `$bridgeforge-codex`。禁止调用或复制其
    内部 planner/apply 命令。
 3. 骨架升级成功后，在同一目标完整执行项目自己的 `$git-sync`。只能运行该项目
@@ -78,8 +79,9 @@ rebase、merge、删除或丢弃改动，也不授权自动解决冲突。下游
 
 单项目异常不阻断其他项目。先完成其余正常目标，再留在当前对话逐个解决 deferred 项目。
 人工处理导致现场变化后，先运行 `refresh-plan` 生成新计划，用白话展示变化并取得一次异常项目
-确认，再运行 `reconfirm --plan-fingerprint <confirmed-fingerprint>`；随后才能 `begin` 重试并
-再次走完整的 `$bridgeforge-codex` 与 `$git-sync`。禁止静默吸收漂移。
+确认，再运行 `reconfirm --plan-fingerprint <confirmed-fingerprint>`；`reconfirm` 必须把目标恢复为
+pending 并清除旧结果，随后才能 `begin` 重试并再次走完整的 `$bridgeforge-codex` 与 `$git-sync`。
+禁止静默吸收漂移。
 
 内部问题签名只能表示稳定根因类别，禁止包含项目路径、commit、逐文件差异或原始 traceback。
 只有 `bridgeforge:` 命名空间的同一签名出现在两个不同目标时，状态助手才自动停止分发；普通
@@ -92,9 +94,10 @@ Git、网络或凭据问题重复出现也不得判为共性骨架问题。主�
 阻断状态。先用结论式话术说明问题与修复影响，再单独取得修改工厂源码的确认。
 
 完成修复、验证和本仓库 `$git-sync` 后才能运行 `restart`。它必须证明 Bug 文档已进入新的
-factory HEAD、factory HEAD 与骨架 fingerprint 均相对阻断前发生变化、工厂干净且为 `0/0`；
-随后重新预检全部目标、增加 generation，并把包括此前成功项目在内的全部目标从头重跑。
-原 HEAD、原 fingerprint 或未提交 Bug 文档都必须拒绝重启。
+factory HEAD、工厂干净且为 `0/0`，并按问题签名验证对应修复见证：`bridgeforge:batch-*` 必须证明
+批次控制器的 tracked blob 已变化；其他共性骨架问题必须证明骨架 fingerprint 已变化。随后重新
+预检全部目标、增加 generation，并把包括此前成功项目在内的全部目标从头重跑。无新 HEAD、
+对应见证未变化或 Bug 文档未提交都必须拒绝重启。
 
 ## 用户结果
 

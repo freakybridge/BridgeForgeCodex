@@ -26,6 +26,7 @@ FACTORY_WITNESSES = (
     "skills/bridgeforge-codex/SKILL.md",
     "scripts/bridgeforge_codex_project_sync.py",
     ".codex/scripts/current_baseline.py",
+    ".codex/skills/bridgeforge-codex-batch/scripts/batch_control.py",
 )
 TARGET_WITNESSES = (
     ".venv/Scripts/python.exe",
@@ -46,6 +47,14 @@ INTERNAL_TERMS = (
     "execution_status",
     "blockers=",
 )
+BATCH_REPAIR_SIGNATURE_PREFIX = "bridgeforge:batch-"
+BATCH_REPAIR_WITNESS = (
+    ".codex/skills/bridgeforge-codex-batch/scripts/batch_control.py"
+)
+TARGET_DRIFT_SUMMARY = "项目状态在确认后发生变化，已延期并等待重新确认。"
+TARGET_DRIFT_SIGNATURE = "git:target-snapshot-drift"
+TARGET_UNAVAILABLE_SUMMARY = "项目现场暂时无法验证，已延期并等待重新确认。"
+TARGET_UNAVAILABLE_SIGNATURE = "git:target-snapshot-unavailable"
 
 
 class BatchError(RuntimeError):
@@ -726,7 +735,22 @@ def _next_target(state: dict[str, Any]) -> dict[str, Any] | None:
     return None
 
 
-def begin_target(state_path: str | Path, reference: str) -> None:
+def _defer_pending_target(
+    item: dict[str, Any],
+    *,
+    summary: str,
+    signature: str,
+) -> None:
+    item["status"] = "deferred"
+    item["result"] = {
+        "version": None,
+        "github_saved": False,
+        "problem_summary": _problem_summary(summary),
+        "problem_signature": _stable_signature(signature),
+    }
+
+
+def begin_target(state_path: str | Path, reference: str) -> str:
     lexical = Path(os.path.abspath(Path(state_path).expanduser()))
     with _exclusive_lock(_lock_path(lexical)):
         path, state = _load_state_unlocked(lexical)
@@ -739,15 +763,34 @@ def begin_target(state_path: str | Path, reference: str) -> None:
         expected = _next_target(state)
         if expected is None or item["id"] != expected["id"]:
             raise BatchError("必须按确认时的项目顺序处理")
+        if item["status"] != "pending":
+            raise BatchError("异常项目必须先刷新计划并重新确认")
         _assert_factory_locked(state)
-        if _target_snapshot(Path(item["path"])) != item["snapshot"]:
-            raise BatchError("该项目状态已变化，需要重新展示异常计划并确认")
+        try:
+            current_snapshot = _target_snapshot(Path(item["path"]))
+        except (BatchError, OSError, UnicodeError):
+            _defer_pending_target(
+                item,
+                summary=TARGET_UNAVAILABLE_SUMMARY,
+                signature=TARGET_UNAVAILABLE_SIGNATURE,
+            )
+            _write_state(path, state)
+            return "deferred"
+        if current_snapshot != item["snapshot"]:
+            _defer_pending_target(
+                item,
+                summary=TARGET_DRIFT_SUMMARY,
+                signature=TARGET_DRIFT_SIGNATURE,
+            )
+            _write_state(path, state)
+            return "deferred"
         item["status"] = "running"
         item["result"] = None
         item["attempts"].append(
             {"generation": state["generation"], "started_at": _now(), "finished_at": None}
         )
         _write_state(path, state)
+        return "running"
 
 
 def _stable_signature(value: str | None, *, bridgeforge_only: bool = False) -> str | None:
@@ -941,6 +984,9 @@ def refresh_plan(state_path: str | Path, target_reference: str) -> dict[str, Any
         item = _target(state, target_reference)
         if item["status"] != "deferred":
             raise BatchError("只有尚未完成的项目可以重新确认")
+        expected = _next_target(state)
+        if expected is None or item["id"] != expected["id"]:
+            raise BatchError("必须按确认时的项目顺序重新确认异常项目")
         snapshot = _target_snapshot(Path(item["path"]))
         targets = [
             {**candidate, "snapshot": snapshot}
@@ -974,6 +1020,9 @@ def reconfirm_target(
             target["status"] in {"pending", "running"} for target in state["targets"]
         ):
             raise BatchError("异常项目已不满足重新确认条件")
+        expected = _next_target(state)
+        if expected is None or item["id"] != expected["id"]:
+            raise BatchError("必须按确认时的项目顺序重新确认异常项目")
         current = _target_snapshot(Path(item["path"]))
         targets = [
             {**candidate, "snapshot": current}
@@ -987,8 +1036,36 @@ def reconfirm_target(
         if current_fingerprint != plan_fingerprint:
             raise BatchError("异常项目状态已再次变化，需要重新展示并确认")
         item["snapshot"] = current
+        item["status"] = "pending"
+        item["result"] = None
         state["plan_fingerprint"] = current_fingerprint
         _write_state(path, state)
+
+
+def _restart_repair_witness_changed(
+    factory_root: Path,
+    common: dict[str, Any],
+    factory: dict[str, Any],
+) -> bool:
+    blocked_head = common["blocked_factory_head"]
+    if factory["head"] == blocked_head:
+        return False
+    signature = common["signature"]
+    if signature.startswith(BATCH_REPAIR_SIGNATURE_PREFIX):
+        before = _git(
+            factory_root,
+            "rev-parse",
+            f"{blocked_head}:{BATCH_REPAIR_WITNESS}",
+            allow_failure=True,
+        )
+        after = _git(
+            factory_root,
+            "rev-parse",
+            f"{factory['head']}:{BATCH_REPAIR_WITNESS}",
+            allow_failure=True,
+        )
+        return bool(before and after and before != after)
+    return factory["fingerprint"] != common["blocked_factory_fingerprint"]
 
 
 def restart_batch(state_path: str | Path) -> None:
@@ -1000,11 +1077,10 @@ def restart_batch(state_path: str | Path) -> None:
             raise BatchError("只有已关联 Bug 文档的共性问题才能全量重启")
         common = state["common_problem"]
         factory = inspect_factory(state["factory_root"])
-        if (
-            factory["head"] == common["blocked_factory_head"]
-            or factory["fingerprint"] == common["blocked_factory_fingerprint"]
+        if not _restart_repair_witness_changed(
+            Path(state["factory_root"]), common, factory
         ):
-            raise BatchError("工厂源码和骨架均须修复并保存后才能重启")
+            raise BatchError("共性问题对应的工厂修复尚未进入新的 GitHub 版本")
         bug_doc = common["bug_doc"]
         exists = subprocess.run(
             ["git", "cat-file", "-e", f"HEAD:{bug_doc}"],
@@ -1137,8 +1213,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                 )
             )
         elif args.command == "begin":
-            begin_target(args.state, args.target)
-            print("项目已进入处理阶段。")
+            outcome = begin_target(args.state, args.target)
+            if outcome == "deferred":
+                print("项目现场已变化，已安全延期；继续处理后续首次目标。")
+            else:
+                print("项目已进入处理阶段。")
         elif args.command == "finish":
             finish_target(
                 args.state,

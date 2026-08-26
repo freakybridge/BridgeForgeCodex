@@ -12,7 +12,7 @@ delivery_layout: flat
 |---|---|---|
 | `0_architecture/` | 架构与设计依据 | `design/` |
 | `1_delivery/` | 需求确认、计划、验收、协作与专题讨论 | 见下方 topic 索引 |
-| `2_bugs/` | 已知故障及其修复记录 | 24 条故障记录 |
+| `2_bugs/` | 已知故障及其修复记录 | 26 条故障记录 |
 | `3_reference/` | 外部资料与可复用参考实现 | `examples/antifab-deny-hook.py` |
 | `4_archive/` | 已完成或已失效的历史材料 | 既有历史档案；后续按 `delivery/`、`bugs/` 分类归档 |
 
@@ -27,7 +27,7 @@ delivery_layout: flat
 | Topic | 主要记录 |
 |---|---|
 | `hook-utf8-memory-loading` | Windows GBK 环境下由公共 Hook dispatcher 强制 UTF-8，恢复项目 memory 的 SessionStart 加载，并以四个真实下游隔离 worktree 验证（2026-08-26） |
-| `bridgeforge-codex-batch` | BridgeForgeCodex 仓库专属的下游骨架批量升级、Git 同步、异常隔离、共性缺陷回写与全量重跑需求（2026-08-21） |
+| `bridgeforge-codex-batch` | BridgeForgeCodex 仓库专属的下游骨架批量升级、Git 同步、异常隔离与全量重跑；新增 1.5.6 Git 环境污染和 Batch 状态机死锁的修复、真实恢复需求（2026-08-21、2026-08-27） |
 | `bridgeforge-command-clarity`、`bridgeforge-home-layout` | 入口与用户级目录演进 |
 | `bridgeforge-codex-naming-contract` | 用户命令、菜单、聊天显示、GitHub identity 与内部技术标识的分层命名契约（2026-08-17） |
 | `bridgeforge-latency-optimization` | 用户级 sparse canonical fast path、项目 planner 去重、并行终态验证与阶段计时收据（2026-08-15） |
@@ -94,6 +94,8 @@ delivery_layout: flat
 - [`BUG-switch-codex-left-claude-live-dir.md`](2_bugs/BUG-switch-codex-left-claude-live-dir.md)
 - [`BUG-git-sync-sandbox-permission.md`](2_bugs/BUG-git-sync-sandbox-permission.md)
 - [`BUG-git-sync-contract-transition-classification.md`](2_bugs/BUG-git-sync-contract-transition-classification.md)（1.5.5 修复已通过工厂验证与独立审计，等待 Batch restart 的真实下游复验）
+- [`BUG-current-baseline-gitattributes-hook-reinitializes-real-repository.md`](2_bugs/BUG-current-baseline-gitattributes-hook-reinitializes-real-repository.md)（源码与回归已修复，等待发布和 StratusAgent 真实恢复）
+- [`BUG-batch-pending-drift-deadlock.md`](2_bugs/BUG-batch-pending-drift-deadlock.md)（状态机与修复见证已修复，等待发布后重启原批次）
 - [`BUG-bridgeforge-codex-145-end-to-end-acceptance-gaps.md`](2_bugs/BUG-bridgeforge-codex-145-end-to-end-acceptance-gaps.md)
 - [`BUG-hooks-template-stale-context-budget-comment-blocks-downstream-upgrade.md`](2_bugs/BUG-hooks-template-stale-context-budget-comment-blocks-downstream-upgrade.md)
 - [`BUG-shared-skill-manifest-line-endings.md`](2_bugs/BUG-shared-skill-manifest-line-endings.md)

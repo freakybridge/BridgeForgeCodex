@@ -1,6 +1,6 @@
 {
   "schema_version": 3,
-  "release_version": "1.5.6",
+  "release_version": "1.5.7",
   "host": "codex",
   "stamp": ".codex/.bridgeforge_codex_version",
   "contract_target": ".codex/managed-skeleton.json",
@@ -596,14 +596,14 @@
       "source": "templates/scripts/current_baseline.py",
       "target": ".codex/scripts/current_baseline.py",
       "strategy": "whole",
-      "current_sha256": "sha256:86c1648f0c7142e2eb0fafec62f36c1dbc160d8efd4c746c1a3eb38115105a22"
+      "current_sha256": "sha256:7d2f054e682d14fe42ee9f24950eb4a71f82d16a392308f8e3e94e308986ce65"
     },
     {
       "id": "codex.script.codex-git-sync",
       "source": "templates/scripts/codex_git_sync.py",
       "target": ".codex/scripts/codex_git_sync.py",
       "strategy": "whole",
-      "current_sha256": "sha256:b6ba0ba93e14761cfb7bd6edb85ece6400779e786d68f24530f1d1bbd285a568"
+      "current_sha256": "sha256:af80c94a3584be2bc3f707efbbc7738b9a8d03f038003d75c4d4bd3811804de0"
     },
     {
       "id": "codex.script.hook-config-policy",

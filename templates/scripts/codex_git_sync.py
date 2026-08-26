@@ -13,6 +13,7 @@ upstream, stash-pop conflicts, and push races stop for user handling.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import importlib.util
 import json
 import os
@@ -52,6 +53,18 @@ class SyncStop(Exception):
         super().__init__(message)
         self.code = code
 
+
+@dataclass(frozen=True)
+class RepositoryIdentity:
+    inside_work_tree: bool
+    top_level: str
+    git_dir: str
+    common_dir: str
+    index_path: str
+    symbolic_head: str
+    core_bare: bool
+    common_config_digest: str
+
 def _env() -> dict[str, str]:
     env = os.environ.copy()
     env.setdefault("PYTHONUTF8", "1")
@@ -77,6 +90,136 @@ def _run_git(args: list[str], *, timeout: int = 120, label: str | None = None) -
         detail = (result.stderr or result.stdout).strip()
         raise SyncStop(f"{name} failed: {detail}", result.returncode or 1)
     return result
+
+
+def _canonical_path(value: str) -> str:
+    return os.path.normcase(str(Path(value).resolve()))
+
+
+def _common_config_digest(common_dir: str) -> str:
+    config = Path(common_dir) / "config"
+    if not config.is_file():
+        return "missing"
+    return "sha256:" + hashlib.sha256(config.read_bytes()).hexdigest()
+
+
+def _repository_identity() -> RepositoryIdentity:
+    inside_result = _git(["rev-parse", "--is-inside-work-tree"])
+    inside = (
+        inside_result.returncode == 0
+        and inside_result.stdout.strip().casefold() == "true"
+    )
+    bare_result = _git(["config", "--bool", "--get", "core.bare"])
+    if bare_result.returncode == 1:
+        core_bare = False
+    elif bare_result.returncode == 0 and bare_result.stdout.strip().casefold() in {
+        "true",
+        "false",
+    }:
+        core_bare = bare_result.stdout.strip().casefold() == "true"
+    else:
+        detail = (bare_result.stderr or bare_result.stdout).strip()
+        raise SyncStop(
+            "HIGH: repository identity is invalid before writes: "
+            f"cannot read core.bare ({detail})",
+            2,
+        )
+    if not inside or core_bare:
+        detail = (inside_result.stderr or inside_result.stdout).strip()
+        raise SyncStop(
+            "HIGH: repository identity is invalid before writes: "
+            f"inside-work-tree={str(inside).lower()} "
+            f"core.bare={str(core_bare).lower()} detail={detail!r}",
+            2,
+        )
+    top_level = _canonical_path(
+        _run_git(
+            ["rev-parse", "--path-format=absolute", "--show-toplevel"],
+            label="git repository top-level",
+        ).stdout.strip()
+    )
+    expected_top_level = _canonical_path(str(REPO_ROOT))
+    if top_level != expected_top_level:
+        raise SyncStop(
+            "HIGH: repository identity is invalid before writes: "
+            f"top-level={top_level!r}, expected={expected_top_level!r}",
+            2,
+        )
+    git_dir = _canonical_path(
+        _run_git(
+            ["rev-parse", "--absolute-git-dir"],
+            label="git repository directory",
+        ).stdout.strip()
+    )
+    common_dir = _canonical_path(
+        _run_git(
+            ["rev-parse", "--path-format=absolute", "--git-common-dir"],
+            label="git common directory",
+        ).stdout.strip()
+    )
+    index_path = _canonical_path(
+        _run_git(
+            ["rev-parse", "--path-format=absolute", "--git-path", "index"],
+            label="git index identity",
+        ).stdout.strip()
+    )
+    symbolic_head = _run_git(
+        ["symbolic-ref", "-q", "HEAD"],
+        label="git symbolic HEAD",
+    ).stdout.strip()
+    if not symbolic_head.startswith("refs/heads/"):
+        raise SyncStop(
+            "HIGH: repository identity is invalid before writes: "
+            f"symbolic HEAD={symbolic_head!r}",
+            2,
+        )
+    return RepositoryIdentity(
+        inside_work_tree=inside,
+        top_level=top_level,
+        git_dir=git_dir,
+        common_dir=common_dir,
+        index_path=index_path,
+        symbolic_head=symbolic_head,
+        core_bare=core_bare,
+        common_config_digest=_common_config_digest(common_dir),
+    )
+
+
+def _identity_drift_error(
+    expected: RepositoryIdentity,
+    phase: str,
+) -> SyncStop | None:
+    try:
+        current = _repository_identity()
+    except (OSError, SyncStop) as exc:
+        return SyncStop(
+            "HIGH: repository identity drift detected after "
+            f"{phase}; identity could not be revalidated ({exc}); "
+            "no automatic repository recovery was attempted",
+            2,
+        )
+    changed = [
+        name
+        for name in RepositoryIdentity.__dataclass_fields__
+        if getattr(expected, name) != getattr(current, name)
+    ]
+    if not changed:
+        return None
+    return SyncStop(
+        "HIGH: repository identity drift detected after "
+        f"{phase}; changed={','.join(changed)}; "
+        "no automatic repository recovery was attempted",
+        2,
+    )
+
+
+def _assert_repository_identity(
+    expected: RepositoryIdentity,
+    phase: str,
+) -> None:
+    drift = _identity_drift_error(expected, phase)
+    if drift is not None:
+        raise drift
 
 def _status() -> str:
     return _run_git(["status", "--porcelain=v1"], label="git status").stdout.strip()
@@ -394,7 +537,7 @@ def sync(args: argparse.Namespace) -> int:
     if not (REPO_ROOT / ".git").exists():
         raise SyncStop(f"not a git repository: {REPO_ROOT}", 1)
 
-    _run_git(["rev-parse", "--is-inside-work-tree"], label="git rev-parse")
+    initial_identity = _repository_identity()
     _upstream()
     push_target = _push_target()
     dirty = bool(_status())
@@ -415,6 +558,8 @@ def sync(args: argparse.Namespace) -> int:
         if ahead and behind:
             _print_diverged()
             return 2
+
+    _assert_repository_identity(initial_identity, "fetch/pull")
 
     if dirty:
         with _sync_lock():
@@ -437,6 +582,7 @@ def sync(args: argparse.Namespace) -> int:
             expected_index_tree: str | None = None
             committed = False
             try:
+                _assert_repository_identity(initial_identity, "automatic write preparation")
                 _apply_sync_plan(plan)
                 if plan.release is not None:
                     print(
@@ -453,6 +599,7 @@ def sync(args: argparse.Namespace) -> int:
                 if _has_staged_changes():
                     _run_git(["commit", "-m", message], timeout=180, label="git commit")
                     committed = True
+                    _assert_repository_identity(initial_identity, "git commit/hook")
                     if obsolete_adaptation_receipt is not None:
                         ADAPTATION_RECEIPT.unlink()
                         print(
@@ -464,6 +611,9 @@ def sync(args: argparse.Namespace) -> int:
                         _print_diverged()
                         return 2
             except Exception as exc:
+                drift = _identity_drift_error(initial_identity, "automatic write/commit phase")
+                if drift is not None:
+                    raise drift from exc
                 if not committed:
                     _restore_sync_plan(
                         plan,
@@ -472,7 +622,8 @@ def sync(args: argparse.Namespace) -> int:
                         expected_index_tree,
                     )
                     print(
-                        "[git-sync] automatic writes and the original Git index were restored"
+                        "[git-sync] automatic planned file writes and the original "
+                        "Git index were restored; repository identity remained unchanged"
                     )
                 if isinstance(exc, SyncStop):
                     raise
@@ -489,9 +640,16 @@ def sync(args: argparse.Namespace) -> int:
         if args.skip_push:
             print(f"[git-sync] {ahead} local commit(s) ready; push skipped by --skip-push")
         else:
-            _run_git(["push"], timeout=240, label="git push")
+            try:
+                _run_git(["push"], timeout=240, label="git push")
+            except Exception as exc:
+                drift = _identity_drift_error(initial_identity, "git push/pre-push hook")
+                if drift is not None:
+                    raise drift from exc
+                raise
             pushed = True
 
+    _assert_repository_identity(initial_identity, "push/completion")
     final_dirty = _status()
     final_ahead, final_behind = _ahead_behind()
     if final_dirty or final_ahead or final_behind:

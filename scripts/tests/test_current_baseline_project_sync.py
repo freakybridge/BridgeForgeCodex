@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -38,6 +39,229 @@ BASELINE = load_module(
 
 
 class CurrentBaselineContractTests(unittest.TestCase):
+    def _assert_isolated_gitattributes_validation(self, module) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            sentinel = root / "sentinel"
+            sentinel.mkdir()
+            subprocess.run(["git", "init", "-q"], cwd=sentinel, check=True)
+            git_dir = sentinel / ".git"
+            quarantine = sentinel / "quarantine"
+            quarantine.mkdir()
+            config_before = (git_dir / "config").read_bytes()
+            injected = {
+                "GIT_DIR": str(git_dir),
+                "GIT_WORK_TREE": str(sentinel),
+                "GIT_INDEX_FILE": str(git_dir / "sentinel-index"),
+                "GIT_COMMON_DIR": str(git_dir),
+                "GIT_OBJECT_DIRECTORY": str(git_dir / "objects"),
+                "GIT_ALTERNATE_OBJECT_DIRECTORIES": str(git_dir / "objects"),
+                "GIT_QUARANTINE_PATH": str(quarantine),
+                "GIT_CONFIG_COUNT": "1",
+                "GIT_CONFIG_KEY_0": "core.bare",
+                "GIT_CONFIG_VALUE_0": "true",
+                "GIT_CONFIG_PARAMETERS": "invalid-dynamic-config",
+            }
+
+            with mock.patch.dict(os.environ, injected, clear=False):
+                isolated = module._isolated_git_environment()
+                isolated_keys = {key.upper() for key in isolated}
+                local_names = subprocess.run(
+                    ["git", "rev-parse", "--local-env-vars"],
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    check=True,
+                ).stdout.splitlines()
+                self.assertTrue(local_names)
+                self.assertTrue(all(name not in isolated_keys for name in local_names))
+                self.assertNotIn("GIT_QUARANTINE_PATH", isolated_keys)
+                self.assertNotIn("GIT_CONFIG_COUNT", isolated_keys)
+                self.assertFalse(any(
+                    key.startswith(("GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_"))
+                    for key in isolated_keys
+                ))
+                self.assertEqual(isolated["GIT_ATTR_NOSYSTEM"], "1")
+                self.assertEqual(
+                    module._gitattributes_default_state(b"* text=auto eol=lf\n"),
+                    ("auto", "lf"),
+                )
+
+            self.assertEqual((git_dir / "config").read_bytes(), config_before)
+            self.assertFalse((git_dir / "sentinel-index").exists())
+
+    def test_current_baseline_gitattributes_git_environment_is_isolated(self) -> None:
+        self._assert_isolated_gitattributes_validation(BASELINE)
+
+    def test_project_sync_gitattributes_git_environment_is_isolated(self) -> None:
+        self._assert_isolated_gitattributes_validation(SYNC)
+
+    def test_real_precommit_preserves_common_config_in_checkout_and_worktree(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            project = root / "main"
+            project.mkdir()
+            subprocess.run(["git", "init", "-q", "-b", "main"], cwd=project, check=True)
+            subprocess.run(
+                ["git", "config", "user.name", "BridgeForge Test"],
+                cwd=project,
+                check=True,
+            )
+            subprocess.run(
+                ["git", "config", "user.email", "bridgeforge@example.invalid"],
+                cwd=project,
+                check=True,
+            )
+            plan = SYNC.build_plan(project, ROOT, "init")
+            self.assertFalse(plan.blockers)
+            SYNC.apply_plan(plan, plan_fingerprint=plan.aggregate_fingerprint)
+            subprocess.run(
+                [sys.executable, "-m", "venv", "--without-pip", str(project / ".venv")],
+                cwd=project,
+                check=True,
+            )
+            hook = project / ".githooks" / "pre-commit"
+            hook.write_text(
+                hook.read_text(encoding="utf-8").replace(
+                    "# >>> PROJECT_EXTENSION_BEGIN\n",
+                    "# >>> PROJECT_EXTENSION_BEGIN\n"
+                    "[ -n \"$GIT_DIR\" ] || { echo missing-GIT_DIR >&2; exit 2; }\n"
+                    "mkdir -p .runtime\n"
+                    "printf 'seen\\n' >> .runtime/precommit-env-seen.txt\n",
+                    1,
+                ),
+                encoding="utf-8",
+                newline="\n",
+            )
+            (project / ".gitignore").write_text(
+                ".venv/\n.runtime/\n__pycache__/\n*.pyc\n", encoding="utf-8"
+            )
+            (project / "business.txt").write_text("one\n", encoding="utf-8")
+            subprocess.run(
+                ["git", "config", "core.hooksPath", ".githooks"],
+                cwd=project,
+                check=True,
+            )
+            common_config = project / ".git" / "config"
+            config_before = common_config.read_bytes()
+            subprocess.run(["git", "add", "-A"], cwd=project, check=True)
+            commit_environment = {
+                **os.environ,
+                "GIT_DIR": str(project / ".git"),
+                "GIT_COMMON_DIR": str(project / ".git"),
+                "GIT_WORK_TREE": str(project),
+                "GIT_INDEX_FILE": str(project / ".git" / "index"),
+            }
+            committed = subprocess.run(
+                ["git", "commit", "-qm", "baseline"],
+                cwd=project,
+                env=commit_environment,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(
+                committed.returncode,
+                0,
+                committed.stdout + committed.stderr,
+            )
+            self.assertEqual(common_config.read_bytes(), config_before)
+            self.assertEqual(
+                (project / ".runtime" / "precommit-env-seen.txt").read_text(
+                    encoding="utf-8"
+                ),
+                "seen\n",
+            )
+
+            subprocess.run(["git", "branch", "linked"], cwd=project, check=True)
+            linked = root / "linked"
+            subprocess.run(
+                ["git", "worktree", "add", "-q", str(linked), "linked"],
+                cwd=project,
+                check=True,
+            )
+            subprocess.run(
+                [sys.executable, "-m", "venv", "--without-pip", str(linked / ".venv")],
+                cwd=linked,
+                check=True,
+            )
+            linked_config_before = common_config.read_bytes()
+            (linked / "business.txt").write_text("two\n", encoding="utf-8")
+            subprocess.run(["git", "add", "business.txt"], cwd=linked, check=True)
+            linked_git_dir = Path(
+                subprocess.run(
+                    ["git", "rev-parse", "--absolute-git-dir"],
+                    cwd=linked,
+                    text=True,
+                    capture_output=True,
+                    check=True,
+                ).stdout.strip()
+            )
+            linked_commit_environment = {
+                **os.environ,
+                "GIT_DIR": str(linked_git_dir),
+                "GIT_COMMON_DIR": str(project / ".git"),
+                "GIT_WORK_TREE": str(linked),
+                "GIT_INDEX_FILE": str(linked_git_dir / "index"),
+            }
+            linked_commit = subprocess.run(
+                ["git", "commit", "-qm", "linked change"],
+                cwd=linked,
+                env=linked_commit_environment,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(
+                linked_commit.returncode,
+                0,
+                linked_commit.stdout + linked_commit.stderr,
+            )
+            self.assertEqual(common_config.read_bytes(), linked_config_before)
+            self.assertEqual(
+                subprocess.run(
+                    ["git", "config", "--bool", "--get", "core.bare"],
+                    cwd=linked,
+                    text=True,
+                    capture_output=True,
+                    check=True,
+                ).stdout.strip(),
+                "false",
+            )
+            self.assertEqual(
+                subprocess.run(
+                    ["git", "status", "--porcelain=v1"],
+                    cwd=project,
+                    text=True,
+                    capture_output=True,
+                    check=True,
+                ).stdout,
+                "",
+            )
+            self.assertEqual(
+                subprocess.run(
+                    ["git", "status", "--porcelain=v1"],
+                    cwd=linked,
+                    text=True,
+                    capture_output=True,
+                    check=True,
+                ).stdout,
+                "",
+            )
+            self.assertEqual(
+                (linked / ".runtime" / "precommit-env-seen.txt").read_text(
+                    encoding="utf-8"
+                ),
+                "seen\n",
+            )
+
     def test_gitattributes_merge_adds_default_lf_and_preserves_exceptions(self) -> None:
         source = b"* text=auto eol=lf\n"
         current = b"*.bat text eol=crlf\r\n.githooks/** text eol=lf\r\n"
