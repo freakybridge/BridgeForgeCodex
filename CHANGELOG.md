@@ -15,6 +15,18 @@
 
 > **追溯说明**：v0.1.0 - v0.7.0 基于 git log 历史回溯标记，**git tag 仅从 v0.8.0 开始打**。早期未启用版本号管理是 setup_agent 自打脸问题（要求下游用但自己没用），v0.8.0 修补。
 
+## [1.5.4] - 2026-08-26
+
+### Fixed
+
+- [product][repo][meta] 修复 Hook UTF-8 Memory 加载
+
+## [1.5.3] - 2026-08-26
+
+### Fixed
+
+- [product][repo][meta] 强制 Hook dispatcher 的 Python 子步骤使用 UTF-8，避免 Windows GBK 在项目 memory 含 `🔍`、`²` 等字符时阻断 SessionStart 上下文注入。
+
 ## [1.5.2] - 2026-08-22
 
 ### Fixed

@@ -12,7 +12,7 @@ delivery_layout: flat
 |---|---|---|
 | `0_architecture/` | 架构与设计依据 | `design/` |
 | `1_delivery/` | 需求确认、计划、验收、协作与专题讨论 | 见下方 topic 索引 |
-| `2_bugs/` | 已知故障及其修复记录 | 23 条故障记录 |
+| `2_bugs/` | 已知故障及其修复记录 | 24 条故障记录 |
 | `3_reference/` | 外部资料与可复用参考实现 | `examples/antifab-deny-hook.py` |
 | `4_archive/` | 已完成或已失效的历史材料 | 既有历史档案；后续按 `delivery/`、`bugs/` 分类归档 |
 
@@ -26,6 +26,7 @@ delivery_layout: flat
 
 | Topic | 主要记录 |
 |---|---|
+| `hook-utf8-memory-loading` | Windows GBK 环境下由公共 Hook dispatcher 强制 UTF-8，恢复项目 memory 的 SessionStart 加载，并以四个真实下游隔离 worktree 验证（2026-08-26） |
 | `bridgeforge-codex-batch` | BridgeForgeCodex 仓库专属的下游骨架批量升级、Git 同步、异常隔离、共性缺陷回写与全量重跑需求（2026-08-21） |
 | `bridgeforge-command-clarity`、`bridgeforge-home-layout` | 入口与用户级目录演进 |
 | `bridgeforge-codex-naming-contract` | 用户命令、菜单、聊天显示、GitHub identity 与内部技术标识的分层命名契约（2026-08-17） |
@@ -80,6 +81,7 @@ delivery_layout: flat
 
 ## Bug records
 
+- [`BUG-project-memory-sessionstart-gbk-output.md`](2_bugs/BUG-project-memory-sessionstart-gbk-output.md)
 - [`BUG-windows-codex-hooks-open-visible-terminal.md`](2_bugs/BUG-windows-codex-hooks-open-visible-terminal.md)
 - [`BUG-codex-desktop-native-memory-powershell-hook-not-entering-python.md`](2_bugs/BUG-codex-desktop-native-memory-powershell-hook-not-entering-python.md)
 - [`BUG-legacy-head-contract-missing-release-blocks-rebuild.md`](2_bugs/BUG-legacy-head-contract-missing-release-blocks-rebuild.md)

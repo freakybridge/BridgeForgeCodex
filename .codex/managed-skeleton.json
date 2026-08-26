@@ -1,6 +1,6 @@
 {
   "schema_version": 3,
-  "release_version": "1.5.2",
+  "release_version": "1.5.4",
   "host": "codex",
   "stamp": ".codex/.bridgeforge_codex_version",
   "contract_target": ".codex/managed-skeleton.json",
@@ -475,7 +475,7 @@
       "source": "templates/hooks/hook_dispatcher.py",
       "target": ".codex/hooks/hook_dispatcher.py",
       "strategy": "whole",
-      "current_sha256": "sha256:2db861e1581930039f1c32b73210a549981ca439cb0a6ccea32f238334fce48a"
+      "current_sha256": "sha256:9439ccce5bed9972927d4999bd73ab25175e79c960e3e20fbcc7bfeea4eac9b0"
     },
     {
       "id": "codex.hook.memory-dup-check",

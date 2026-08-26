@@ -170,6 +170,9 @@ def _virtual_edit_payloads(payload: dict) -> list[tuple[str, dict, bytes]]:
 
 def _run(relative: str, payload: bytes, *args: str) -> subprocess.CompletedProcess[str]:
     path = HOST_DIR / relative
+    child_env = dict(os.environ)
+    child_env["PYTHONUTF8"] = "1"
+    child_env["PYTHONIOENCODING"] = "utf-8"
     try:
         return subprocess.run(
             [sys.executable, str(path), *args],
@@ -179,6 +182,7 @@ def _run(relative: str, payload: bytes, *args: str) -> subprocess.CompletedProce
             text=True,
             encoding="utf-8",
             errors="replace",
+            env=child_env,
             timeout=60,
             check=False,
         )

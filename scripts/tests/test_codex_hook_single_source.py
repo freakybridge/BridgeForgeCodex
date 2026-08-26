@@ -174,6 +174,47 @@ class HookSingleSourceTest(unittest.TestCase):
         errors = dispatcher.runtime_route_errors(broken_routes)
         self.assertIn("pre-shell runtime target is missing: hooks/not-present.py", errors)
 
+    def test_dispatcher_forces_utf8_for_child_hook_when_parent_utf8_is_disabled(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            hooks = root / ".codex" / "hooks"
+            hooks.mkdir(parents=True)
+            shutil.copy2(
+                TEMPLATE / "hooks" / "hook_dispatcher.py",
+                hooks / "hook_dispatcher.py",
+            )
+            project_python = prepare_dispatcher_runtime(root)
+            (hooks / "test_receipt.py").write_text(
+                "import json,os\n"
+                "context = 'utf8=' + os.environ.get('PYTHONUTF8', '') + "
+                "';io=' + os.environ.get('PYTHONIOENCODING', '') + ';chars=🔍²'\n"
+                "print(json.dumps({'hookSpecificOutput': {"
+                "'hookEventName': 'PostToolUse', 'additionalContext': context}}, "
+                "ensure_ascii=False))\n",
+                encoding="utf-8",
+            )
+            env = dict(os.environ)
+            env["PYTHONUTF8"] = "0"
+            env.pop("PYTHONIOENCODING", None)
+            result = subprocess.run(
+                [str(project_python), str(hooks / "hook_dispatcher.py"), "post-shell"],
+                cwd=root,
+                input=json.dumps({"tool_name": "Bash", "tool_input": {"command": "test"}}),
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                env=env,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            output = json.loads(result.stdout)
+            context = output["hookSpecificOutput"]["additionalContext"]
+            self.assertIn("utf8=1", context)
+            self.assertIn("io=utf-8", context)
+            self.assertIn("chars=🔍²", context)
+            self.assertNotIn("UnicodeEncodeError", result.stderr)
+
     def test_dispatcher_blocks_invalid_project_runtime_before_any_route(self) -> None:
         dispatcher = load_module(
             TEMPLATE / "hooks" / "hook_dispatcher.py",
