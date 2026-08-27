@@ -317,7 +317,7 @@ source: 用户体验反馈 + 只读静态审计
 
 ## 当前方案草案
 
-- [`proposal/README.md`](proposal/README.md)：AGENTS 信息架构、工厂与 Template 第十一版中断候选、嵌套指令、README 公共区、逐条语义合同和可执行机器合同。当前不参与运行时，也不是最终通过版。
+- [`proposal/README.md`](proposal/README.md)：AGENTS 信息架构、工厂与 Template 第十一版候选、根级目录路由、三份工厂嵌套指令、README 公共区、逐条语义合同和可执行机器合同。当前不参与运行时，也不是最终通过版。
 
 ### 2026-08-27 迭代中断进度
 
@@ -325,6 +325,14 @@ source: 用户体验反馈 + 只读静态审计
 - V11 最后发现快速命令子串检查可被尾缀污染；候选修补已写入，但完整验证和双评审均未完成。
 - 用户明确要求停止讨论；不建立 V12，不把当前 proposal 冒充已验收或已安装骨架。
 - 后续若重启，必须先把验收从“找不到任何未来反例”改成固定语义清单、固定反例集、固定独立评审轮次和明确剩余风险。
+
+### 2026-08-28 V11 定向修订
+
+- 用户暂定 V11 为收口基线，并确认采用根级目录读取路由、三个工厂嵌套 `AGENTS.md` 与 Hook/测试硬闸。
+- `scripts/AGENTS.md`、`skills/AGENTS.md` 和 `doc/2_bugs/AGENTS.md` 保留工厂目录专属红线；从项目根启动时由根路由要求主动读取，不冒充 Codex 原生动态加载。
+- `.codex/rules/*.rules` 只用于命令权限，不承载目录语义；当前工厂嵌套内容不原样下发普通下游。
+- 新增确认的产品缺口：StratusAgent 与 CausisRiskSuite 仍保留 Claude 式 `.codex/rules/*.md + paths:`，当前只靠根索引软路由；同步器必须提供逐文件无损迁移，`$summary` 也必须停止生成该旧机制。BridgePersonalAssist 当前没有旧 Rule 目录。
+- 当前修订不代表 V11 已通过独立评审，也不代表真实骨架、下游或 runtime 已安装验证。
 
 ## 已确认设计结论
 

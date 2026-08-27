@@ -74,3 +74,6 @@
 - V11 不是最终通过版。独立评审发现“三条工厂快速命令”仅做子串包含检查，追加无效尾缀仍能通过；已改为逐行精确、唯一、顺序一致的候选合同，但中断前未复跑完整验证，也未完成第二名评审。
 - “持续 debate 直到任何评审都无法再发现新反例”没有可证明的自然终点，不能继续作为有限交付的验收条件。
 - 真实根 `AGENTS.md`、Template、README、Hook、Skill、manifest 和同步器均未被 proposal 替换；本专题只保存问题、候选方案和验证证据。
+- 2026-08-28 后续定向修订采用根级目录读取路由、三个工厂嵌套 `AGENTS.md` 与 Hook/测试硬闸；完整 proposal 验证已复跑通过，但第二名独立评审、真实实施、下游和 runtime 仍未完成。
+- 2026-08-28 后续讨论新增实施范围：迁移下游遗留 `.codex/rules/*.md`，并修正 `$summary 同意验收` 的旧 Markdown `paths:` Rule 生成分支。迁移必须逐文件分类到根/嵌套 `AGENTS.md`、Hook/测试、`.rules` 命令权限或 Memory/文档，禁止整体删除、机械改扩展名或把显式读取索引冒充原生加载。
+- StratusAgent、CausisRiskSuite、BridgePersonalAssist 仅完成只读盘点；未授权下游写入，未完成真实迁移或 runtime 验收。

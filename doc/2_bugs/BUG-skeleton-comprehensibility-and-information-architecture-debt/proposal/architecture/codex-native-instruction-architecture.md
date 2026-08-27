@@ -7,15 +7,18 @@
 ## 运行时加载关系
 
 ```text
-进入项目
+启动 Codex 任务
+  -> 从项目根到任务当前工作目录：一次性建立 AGENTS.md 指令链
   -> 根 AGENTS.md：加载全项目常驻红线
-  -> 进入具体目录：叠加最近的嵌套 AGENTS.md
+  -> 当前工作目录路径上的嵌套 AGENTS.md：按根到近端顺序叠加
   -> 发生工具或生命周期事件：执行对应 Hook
   -> 用户调用 Skill：加载该流程及必要 references
   -> 需要原理、参数或历史：按链接读取 doc
 ```
 
-只有根和嵌套 `AGENTS.md` 是 Codex 原生常驻指令。Markdown `paths:`、普通 JSON 或文档链接不会自动成为运行时指令；禁止把“文件存在”宣称为“Agent 已加载”。
+只有根和当前工作目录路径上的嵌套 `AGENTS.md` 是 Codex 原生常驻指令。任务启动后修改其他目录文件不会动态补载其嵌套指令；Markdown `paths:`、普通 JSON 或文档链接也不会自动成为运行时指令。禁止把“文件存在”宣称为“Agent 已加载”。
+
+为补足从项目根启动时的发现缺口，根 `AGENTS.md` 必须登记嵌套指令，并要求修改登记目录或其子目录前读取从项目根到目标路径上的目录指令。该路由是模型行为红线，不冒充 Codex 原生动态加载；可机器判断的最终结果仍由 Hook、pre-commit 或测试强制。
 
 ## 信息承载合同
 
@@ -29,6 +32,35 @@
 | 根 README 公共区 | 面向人的项目操作说明和入口地图 | 重复维护 `AGENTS.md` 或 Skill 的命令式红线 |
 | `doc/3_reference` | 参数、调试和详细参考 | 冒充自动加载的约束 |
 | Delivery / Bug / archive | 过程、证据、历史和追溯 | 当前运行时唯一事实源 |
+| `.codex/rules/*.rules` | 命令前缀的 allow / prompt / forbidden 执行权限 | 架构、业务、目录语义、SOP 或 Markdown `paths:` |
+
+## 下游旧 Rule 迁移
+
+下游 `.codex/rules/` 必须逐文件分类，禁止按目录整体保留、整体删除或机械改扩展名：
+
+| 遗留内容 | Codex 规范 owner |
+|---|---|
+| 全项目稳定语义红线 | 根 `AGENTS.md` 的项目级专区 |
+| 目录及子目录专属语义红线 | 最近目录的嵌套 `AGENTS.md`，并登记根目录索引 |
+| 可机器判定的安全或一致性结果 | Hook、pre-commit 或测试 |
+| 命令前缀的允许、询问或禁止 | `.codex/rules/*.rules` |
+| 原理、事故、长案例和参数 | Memory、架构或参考文档 |
+
+同步器发现 `.codex/rules/*.md` 时必须将其标为迁移候选，而不是有效的 Codex Rule。计划必须给出来源文件、目标 owner、显式引用迁移和验证门；在内容逐条映射、项目自有差异保留和用户授权完成前禁止删除。迁移完成后，活跃运行面不得再把 Markdown `paths:` 描述为自动加载机制。
+
+现有根 `AGENTS.md` 对旧 Markdown 的显式读取索引只能作为迁移期软路由：它可以提示 Agent 主动读取，但不能证明当次已经读取，也不能替代原生嵌套指令或机器硬闸。
+
+## `$summary` 的长期红线路由
+
+`$summary` 普通模式继续只更新一个当前主 Memory。仅在 `$summary 同意验收` 且知识满足长期稳定红线门槛时，才允许同步运行时约束，并必须先判定作用域：
+
+1. 全项目语义写入根 `AGENTS.md` 项目级专区。
+2. 目录语义写入最近的嵌套 `AGENTS.md`；新建、移动或删除嵌套文件时同步根目录索引。
+3. 可机器判定的结果写入 Hook、pre-commit 或测试。
+4. 只有命令执行权限写入 `.codex/rules/*.rules`。
+5. 原因、事故、案例和方案比较留在 Memory 或文档。
+
+禁止 `$summary` 创建依赖 Markdown `paths:` 自动加载的 Rule，禁止把语义 Markdown 改名为 `.rules`。目标 owner、作用域或写入权限不唯一时必须停止，并用一个问题请求用户裁决。
 
 ## 判断一段内容是否应进入根 AGENTS
 
@@ -54,8 +86,8 @@
 
 - Template 公共区是公共 AGENTS 的产品源；工厂公共区是受校验 dogfood 镜像。
 - README BridgeForge 公共区和 hook signal contract 必须作为受管 Template 资产分发，并在工厂提供可验证镜像。
-- 从项目根执行骨架同步的完整流程以 `$bridgeforge-codex` 为唯一事实源；`scripts/AGENTS.md` 只约束修改同步器源码时的实现不变量。
-- Skill 分发和 Bug 关闭细则分别以 `skills/AGENTS.md`、`doc/2_bugs/AGENTS.md` 为目录级事实源。
+- 从项目根执行骨架同步的完整流程以 `$bridgeforge-codex` 为唯一事实源；修改同步器必须保持的实现与验证红线留在 `scripts/AGENTS.md`，零写和回滚结果由测试强制。
+- 同步器实现、Skill 分发和 Bug 关闭细则分别以 `scripts/AGENTS.md`、`skills/AGENTS.md`、`doc/2_bugs/AGENTS.md` 为工厂目录级事实源；它们不原样下发普通下游。
 - 其他主动流程以对应 `SKILL.md` 为主事实源；根 AGENTS 不维护固定 Skill 名单或阶段表。
 - `skill-routing.json` 只有被真实运行时确定性消费时才能称为运行时契约；否则只能是静态设计数据，禁止由根 AGENTS 隐式依赖。
 
@@ -67,3 +99,5 @@
 4. 公共区变更必须保留项目区字节，并通过历史可信基线与下游 fixture。
 5. 未完成 runtime smoke 和用户试读时，只能宣称静态结构完成，不能宣称可理解性问题已解决。
 6. 嵌套载体必须先安装并证明确定加载，根文件中的旧细则才能删除；禁止先删后补。
+7. 下游旧 `.codex/rules/*.md` 必须先完成逐条 owner 映射、引用迁移和等价验证，再删除旧文件；同步器不得把静默保留冒充迁移完成。
+8. `$summary` 的旧 Markdown Rule 分支必须与共享 Skill、分发清单和安装镜像同轮迁移；只改文档不得宣称修复完成。

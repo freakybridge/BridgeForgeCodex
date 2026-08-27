@@ -47,6 +47,10 @@ def sha(payload: bytes) -> str:
     return "sha256:" + hashlib.sha256(payload).hexdigest()
 
 
+def git_sha(payload: bytes) -> str:
+    return sha(payload.replace(b"\r\n", b"\n").replace(b"\r", b"\n"))
+
+
 def managed_visible_tree_snapshot(root: Path) -> tuple[tuple[str, ...], dict[str, str]]:
     """Snapshot the project-visible transaction target; exclude Git, venv, and caches."""
     directories: list[str] = []
@@ -590,7 +594,7 @@ def emit_hashes() -> None:
             print(f"{item['id']}.current_sha256={by_id[item['id']]['current_sha256']}")
     for entry in overlay["pointer_migrations"]:
         payload = apply_pointer_entry(entry, read_bytes(REPO / entry["target"]))
-        print(f"pointer:{entry['target']}={sha(payload)}")
+        print(f"pointer:{entry['target']}={git_sha(payload)}")
     print(f"skill.candidate_sha256={sha(candidate_skill_payload(overlay))}")
     print(f"candidate.current_baseline_sha256={sha(candidate_baseline_source())}")
     print(f"candidate.project_sync_sha256={sha(candidate_syncer_source())}")
@@ -1043,7 +1047,7 @@ def check_pointer_migrations(overlay: dict) -> None:
     for entry in overlay["pointer_migrations"]:
         target = entry["target"]
         patched[target] = apply_pointer_entry(entry, read_bytes(REPO / target))
-        if sha(patched[target]) != entry["current_sha256"]:
+        if git_sha(patched[target]) != entry["current_sha256"]:
             raise AssertionError(f"pointer candidate hash mismatch: {target}")
         mirror = entry.get("mirror")
         if mirror:
@@ -1082,6 +1086,7 @@ def check_semantic_contract(overlay: dict) -> None:
         "AGENTS.md": REPO / "AGENTS.md",
         "templates/AGENTS.md": REPO / "templates/AGENTS.md",
         "codex-project-operating-guide.md": REPO / "doc/3_reference/codex-project-operating-guide.md",
+        "skills/summary/SKILL.md": REPO / "skills/summary/SKILL.md",
     }
     for label, expected in contract.get("source_files", {}).items():
         if label not in source_paths or sha(read_bytes(source_paths[label])) != expected:

@@ -17,7 +17,7 @@
 
 项目 Skill 位于 `.codex/skills/<name>/SKILL.md`；用户级 Skill 以当前会话提供的可用列表为准。
 
-`.codex/rules/*.rules` 只用于命令执行策略。Markdown 中的 `paths:` 不会让 Codex 自动加载规则，禁止建立或宣称这种隐式机制。
+`.codex/rules/*.rules` 只用于命令执行策略。Markdown 中的 `paths:` 不会让 Codex 自动加载规则；修改“目录级 AGENTS 索引”登记目录或其子目录前，必须读取从项目根到目标路径上的目录指令。
 
 ## 2 交付与证据
 

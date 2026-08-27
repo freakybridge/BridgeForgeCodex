@@ -1,6 +1,6 @@
 # skills 目录指令
 
-本文件只在修改 `skills/**` 通用 Skill 产品源时生效。
+本文件只约束 `skills/**` 通用 Skill 产品源；从项目根启动的任务必须先按根 `AGENTS.md` 的目录索引读取本文件。
 
 ## Skill 分发红线
 
