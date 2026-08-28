@@ -1,0 +1,217 @@
+{
+  "schema_version": 1,
+  "source_files": {
+    "AGENTS.md": "sha256:71b97d01fa32d72bf84e862d896adec515248c1b24a8b868c214f85d6781e706",
+    "templates/AGENTS.md": "sha256:d4aa39102cf7b8357cbbdbd76c35bd4c15b3773a0b01cc2aa61845d0b64446aa",
+    "codex-project-operating-guide.md": "sha256:cc0ee367ae369531d48b69a502bc127d7f246f4d3781cf5f0f7a3713ed5a7d1e",
+    "skills/summary/SKILL.md": "sha256:1a48d3ef77023cdd74f5f4f5acf84cb4e6f24cbc622049f664e9c914d6292dcf"
+  },
+  "items": [
+    {
+      "id": "public-zone-ownership",
+      "source_refs": ["AGENTS.md:4", "templates/AGENTS.md:144", "codex-project-operating-guide.md:5-7"],
+      "targets": [
+        {"path": "template/AGENTS.md", "required_all": ["项目不得直接修改", "项目规则必须写在文末“项目级专区”或对应目录的嵌套 `AGENTS.md`", "本区由项目完全所有，bridgeforge-codex 更新时必须逐字保留"]},
+        {"path": "readme/bridgeforge-public-section.md", "required_all": ["不覆盖、不删除、不重新格式化", "已暂存版本", "暂存后恢复工作树不能绕过检查"]}
+      ]
+    },
+    {
+      "id": "equivalence-and-tracing",
+      "source_refs": ["AGENTS.md:10-11"],
+      "targets": [{"path": "template/AGENTS.md", "section": "## 2 交付与证据", "required_all": ["保持功能、配置、数据链和错误语义等价", "追踪完整调用链、调用方、配置入口、数据链和失败路径"]}]
+    },
+    {
+      "id": "professional-output",
+      "source_refs": ["AGENTS.md:15-20"],
+      "targets": [{"path": "template/AGENTS.md", "section": "## 2 交付与证据", "required_all": ["空泛安抚", "文件、行号和行为风险", "推荐结论、主要取舍、主要风险和适用条件", "已完成、已验证、未验证和剩余风险"], "required_regex": ["执行类任务必须先读上下文、判断风险，再推进到修改或执行、验证和结果汇报"]}]
+    },
+    {
+      "id": "tools-and-evidence",
+      "source_refs": ["AGENTS.md:24-29"],
+      "targets": [{"path": "template/AGENTS.md", "required_all": ["Glob、Grep、Read", "二次验真", "实际命令或收据、验证断言和覆盖场景", "归咎于用户、工具或环境", "立即更正并重新验证"]}]
+    },
+    {
+      "id": "runtime-and-encoding",
+      "source_refs": ["AGENTS.md:30-33", "codex-project-operating-guide.md:15-17"],
+      "targets": [
+        {"path": "template/AGENTS.md", "section": "## 3 环境与安全", "required_all": ["每个项目必须自建 CPython 3.11+ `.venv`", "骨架脚本和 Hook 只能使用当前项目的 `.venv`", "非 ASCII 正文", "可验证的无可见控制台入口", "禁止隐式写入用户级配置"], "required_regex": ["每个项目必须自建 CPython 3\\.11\\+ `\\.venv`；Python 依赖必须安装到其中，禁止全局安装", "禁止隐式写入用户级配置；项目运行必需的关键配置禁止只放在用户目录；依赖清单禁止写本机绝对路径", "必须使用可验证的无可见控制台入口，并保持 stdin、stdout、stderr、退出码和超时语义"]},
+        {"path": "readme/bridgeforge-public-section.md", "section": "### 第一次 clone、换机或重建环境", "required_all": ["`package.json`", "`Cargo.toml`", "`rust-toolchain.toml`", "真实凭据留在版本控制外", "`.venv/Scripts/pip.exe`", "`.venv/bin/pip`"]}
+      ]
+    },
+    {
+      "id": "instruction-routing",
+      "source_refs": ["AGENTS.md:39-47", "AGENTS.md:74-76"],
+      "targets": [
+        {"path": "template/AGENTS.md", "required_all": ["全项目常驻红线", "目录专属红线", "对应 Skill", "Hook、pre-commit 或测试", "Markdown 中的 `paths:` 不会让 Codex 自动加载规则", "`.codex/skills/<name>/SKILL.md"]},
+        {"path": "readme/bridgeforge-public-section.md", "section": "### 指令和说明分别放在哪里", "required_all": ["`$confirm`", "`$develop`", "`$plan`", "`$collab`", "`$debate`", "`$summary`", "`$todo`", "`$find-doc`", "`$archive-scan`", "`$escalate`", "`$snapshot`", "`$resume`", "`$git-sync`"]},
+        {"path": "architecture/codex-native-instruction-architecture.md", "section": "## 下游旧 Rule 迁移", "required_all": ["逐文件分类", "`.codex/rules/*.rules`", "根 `AGENTS.md` 的项目级专区", "最近目录的嵌套 `AGENTS.md`", "标为迁移候选", "禁止删除", "迁移期软路由"]},
+        {"path": "contracts/implementation-patch.md", "section": "## 5. 下游旧 Rule 迁移", "required_all": ["枚举下游 `.codex/rules/**`", "禁止把整个目录视为同一 ownership", "未知或多目标时进入 risk/gap", "最后才删除旧 Markdown", "失败回滚", "项目级 `.rules` 必须原样保留"]}
+      ]
+    },
+    {
+      "id": "summary-native-rule-routing",
+      "source_refs": ["skills/summary/SKILL.md:139-140"],
+      "targets": [
+        {"path": "architecture/codex-native-instruction-architecture.md", "section": "## `$summary` 的长期红线路由", "required_all": ["`$summary 同意验收`", "根 `AGENTS.md` 项目级专区", "最近的嵌套 `AGENTS.md`", "Hook、pre-commit 或测试", "`.codex/rules/*.rules`", "禁止 `$summary` 创建依赖 Markdown `paths:` 自动加载的 Rule", "一个问题请求用户裁决"]},
+        {"path": "contracts/implementation-patch.md", "section": "### 4.2 Summary Skill", "required_all": ["删除“按路径加载的 Rule 必须带 `paths` frontmatter”", "普通模式继续禁止修改 AGENTS", "只有命令前缀的 allow / prompt / forbidden", "共享 Skill manifest", "歧义失败关闭"]}
+      ]
+    },
+    {
+      "id": "new-machine-startup-trigger",
+      "source_refs": ["AGENTS.md:80-86"],
+      "targets": [
+        {"path": "template/AGENTS.md", "required_regex": ["用户提到“换电脑 / 新机 clone / 重装”时，必须先读根 README 的“第一次 clone、换机或重建环境”并按该入口执行"]},
+        {"path": "readme/bridgeforge-public-section.md", "section": "### 第一次 clone、换机或重建环境", "required_all": ["clone 仓库并进入项目根", "按根 `AGENTS.md` 的环境红线建立项目 `.venv`", "从版本控制内的依赖清单安装依赖", "核验项目测试、Git Hook、UTF-8 编码和“项目快速命令”"]}
+      ]
+    },
+    {
+      "id": "version-domains",
+      "source_refs": ["AGENTS.md:49-50", "codex-project-operating-guide.md:21-26"],
+      "targets": [
+        {"path": "template/AGENTS.md", "required_all": ["根 `VERSION` 为唯一事实源", "语言原生清单（manifest）", "骨架版本戳只能由统一同步器修改"], "required_regex": ["项目业务版本以根 `VERSION` 为唯一事实源；语言原生清单（manifest）由项目发布流程同步，禁止用骨架版本戳代替业务版本"]},
+        {"path": "$candidate_skill", "required_all": ["只读 release preflight", "同一 ownership classifier", "动态逐文件 `G*` 清单", "禁止先写新戳"], "required_regex": ["准备报告 ready.*实际修改受管资产.*写戳前运行只读 release preflight.*同一 ownership classifier.*失败时必须回滚.*动态逐文件 `G\\*` 清单.*禁止先写新戳"]}
+      ]
+    },
+    {
+      "id": "memory-model",
+      "source_refs": ["AGENTS.md:54-58"],
+      "targets": [
+        {"path": "template/AGENTS.md", "section": "## 5 协作与项目资料", "required_all": ["`.codex/memory/`", "`~/.codex/memories/`", "派生索引"], "required_regex": ["检索项目 Memory 必须先读 `MEMORY.md`；任务锚或确认卡能唯一定位 topic 时再读该 topic，主索引未命中时才使用 `\\$find-memory`"]},
+        {"path": "readme/bridgeforge-public-section.md", "section": "### 项目 Memory 怎么用", "required_all": ["模块 Memory 记录模块长期怎样工作", "独立目标、独立验收和独立生命周期", "普通子任务留在当前主 Memory", "`MEMORY_COLD.md`", "每次更新一个当前主 Memory"]}
+      ]
+    },
+    {
+      "id": "document-layout",
+      "source_refs": ["AGENTS.md:64-68", "codex-project-operating-guide.md:11"],
+      "targets": [
+        {"path": "template/AGENTS.md", "section": "## 5 协作与项目资料", "required_all": ["禁止删层、跳层、改名、合并、新增同级目录", "散落到项目根与源码目录", "`scripts/tests/**`"], "required_regex": ["`doc/README.md` 的 `delivery_layout` 是交付布局的单一事实源，禁止靠目录猜布局"]},
+        {"path": "readme/bridgeforge-public-section.md", "section": "### 文档怎么放", "required_all": ["`delivery_layout`", "`$archive-scan`"]}
+      ]
+    },
+    {
+      "id": "model-and-agent-routing",
+      "source_refs": ["AGENTS.md:90-95"],
+      "targets": [{"path": "template/AGENTS.md", "required_all": ["模型和思考强度由用户选择", "项目模板不得锁定", "Skill 和子 agent 默认沿用当前会话设置", "主对话负责沟通、确认、授权和最终汇总", "子 agent 只做被分配的阶段", "`$git-sync` 只能运行当前项目自带的同步脚本"]}]
+    },
+    {
+      "id": "clarify-contract",
+      "source_refs": ["AGENTS.md:99-104"],
+      "targets": [{"path": "shared-docs/codex-hook-signals.md", "required_all": ["可选路线、推荐路线和理由", "每满 3 个问题", "超过 6 个问题", "进入 `$develop`", "评估或咨询类任务直接给结论和风险"]}]
+    },
+    {
+      "id": "focus-contract",
+      "source_refs": ["AGENTS.md:110-115"],
+      "targets": [{"path": "shared-docs/codex-hook-signals.md", "section": "## `[focus]`", "required_all": ["`$spinoff`", "`$todo`", "修改范围和理由"], "required_regex": ["方案替换或范围变化时必须说明原方案、现方案和原因；有证据时一并给出"]}]
+    },
+    {
+      "id": "subjective-experience-evidence",
+      "source_refs": ["AGENTS.md:123"],
+      "targets": [{"path": "template/AGENTS.md", "section": "## 4 任务控制与排障", "required_all": ["timer、counter 或 log"], "required_regex": ["主观.*没有稳定复现时禁止猜修；必须一次性收集可观察证据、触发步骤、发生频率和是否能保存现场，再用 timer、counter 或 log 建立基线"]}]
+    },
+    {
+      "id": "unfamiliar-module-research",
+      "source_refs": ["AGENTS.md:127"],
+      "targets": [{"path": "template/AGENTS.md", "section": "## 4 任务控制与排障", "required_regex": ["任务跨两个以上陌生模块时必须先查清模块边界和调用链"]}]
+    },
+    {
+      "id": "bug-failure-escalation",
+      "source_refs": ["AGENTS.md:128-130"],
+      "targets": [{"path": "template/AGENTS.md", "section": "## 4 任务控制与排障", "required_all": ["`$escalate` 或 `$debate`"], "required_regex": ["同一 Bug 每次失败后、再次修改前必须取得一项新量化证据；前三次修改仍失败时，第四次禁止继续试写，必须列出已试方案和未验证假说，并进入 `\\$escalate` 或 `\\$debate`"]}]
+    },
+    {
+      "id": "bug-causal-boundary",
+      "source_refs": ["AGENTS.md:131-132"],
+      "targets": [{"path": "template/AGENTS.md", "section": "## 4 任务控制与排障", "required_regex": ["修 Bug 必须区分事实与假说；根因未确认时标明置信度，禁止先加兜底掩盖问题", "修复前必须确认数据源、用户路径、边界条件和外部副作用；禁止因焦虑跨层连带修改"]}]
+    },
+    {
+      "id": "performance-measurement",
+      "source_refs": ["AGENTS.md:133"],
+      "targets": [{"path": "template/AGENTS.md", "section": "## 4 任务控制与排障", "required_regex": ["性能优化必须先用 timer、counter 或 log 建立基线，修改后按同一方法复测，并移除临时诊断工具"]}]
+    },
+    {
+      "id": "independent-self-audit",
+      "source_refs": ["AGENTS.md:135-137"],
+      "targets": [{"path": "template/AGENTS.md", "section": "## 4 任务控制与排障", "required_all": ["实现者不能独自证明自己的改动正确"], "required_regex": ["审计包含本轮 agent 自己的改动，且用户要求审计、复核需求或找遗漏时，必须启动独立 agent", "普通解释、轻量自查或用户未要求审计时不强制"]}]
+    },
+    {
+      "id": "factory-project-ownership",
+      "source_refs": ["AGENTS.md:144"],
+      "targets": [{"path": "factory/AGENTS.md", "required_all": ["逐字保留，不得覆盖、删除、吸收或重新格式化"]}]
+    },
+    {
+      "id": "factory-propagation-and-release",
+      "source_refs": ["AGENTS.md:148-156"],
+      "targets": [
+        {"path": "factory/AGENTS.md", "required_all": ["传播四问", "dogfood 一致性硬闸", "资产编号（asset id）", "发布前必须通过"]},
+        {"path": "factory/skills/AGENTS.md", "required_all": ["根与 Template `AGENTS.md`"]}
+      ]
+    },
+    {
+      "id": "factory-transaction-result",
+      "source_refs": ["AGENTS.md:157-158"],
+      "targets": [
+        {"path": "factory/AGENTS.md", "section": "### 项目架构红线", "required_regex": ["骨架事务必须在 apply 前重算 safe/risk/gap 计划与聚合指纹；漂移时禁止写入", "失败必须回滚本事务写入；degraded 禁止写入新版本戳", "完整操作合同见本仓库 `skills/bridgeforge-codex/SKILL.md`，根文件不复制操作算法"]},
+        {"path": "$candidate_skill", "required_all": ["gap 必须原样保留", "degraded 必须保留旧版本戳或无戳", "只读 release preflight", "动态逐文件 `G*` 清单"], "required_regex": ["gap 必须原样保留.*degraded.*保留旧版本戳或无戳", "准备报告 ready.*实际修改受管资产.*写戳前运行只读 release preflight.*同一 ownership classifier.*失败时必须回滚.*动态逐文件 `G\\*` 清单.*禁止先写新戳"]},
+        {"path": "factory/scripts/AGENTS.md", "required_all": ["本仓库 `skills/bridgeforge-codex/SKILL.md` 的操作合同"]}
+      ]
+    },
+    {
+      "id": "factory-skill-distribution",
+      "source_refs": ["AGENTS.md:159"],
+      "targets": [{"path": "factory/skills/AGENTS.md", "required_all": ["兼容 manifest", "两份路由表（routing）", "根与 Template `AGENTS.md`"]}]
+    },
+    {
+      "id": "factory-zero-write-entry",
+      "source_refs": ["AGENTS.md:160"],
+      "targets": [
+        {"path": "factory/scripts/AGENTS.md", "required_all": ["`--check` 或 `--dry-run`", "必须零写", "不带 `--apply` 的 plan"], "required_regex": ["所有支持 `--check` 或 `--dry-run` 的工厂命令必须零写"]},
+        {"path": "template/AGENTS.md", "required_all": ["init、adopt 和 update", "`$bridgeforge-codex`", "禁止手工复制"]}
+      ]
+    },
+    {
+      "id": "factory-bug-evidence",
+      "source_refs": ["AGENTS.md:161"],
+      "targets": [{"path": "factory/doc/2_bugs/AGENTS.md", "required_all": ["源码、产品传播、工厂自验证镜像", "真实下游", "运行时（runtime）"]}]
+    },
+    {
+      "id": "factory-release-gates",
+      "source_refs": ["AGENTS.md:162-163"],
+      "targets": [{"path": "factory/AGENTS.md", "required_all": ["发布前必须通过", "未执行真实下游或运行时冒烟（runtime smoke）时，禁止宣称"]}]
+    },
+    {
+      "id": "factory-safety-and-map",
+      "source_refs": ["AGENTS.md:167", "AGENTS.md:171-175", "AGENTS.md:187"],
+      "targets": [{"path": "factory/AGENTS.md", "required_all": ["不得吸收下游业务约束", "用户明确授权的测试 worktree", "项目 Memory 和本仓库配置", "`scripts/AGENTS.md`", "`skills/AGENTS.md`", "`doc/2_bugs/AGENTS.md`", "新增嵌套 `AGENTS.md` 时必须在此登记其适用目录与职责"]}]
+    },
+    {
+      "id": "factory-quick-commands",
+      "source_refs": ["AGENTS.md:177-183"],
+      "targets": [{"path": "factory/AGENTS.md", "section": "### 项目快速命令", "required_raw_lines": [".venv\\Scripts\\python.exe -B -m unittest discover -s scripts/tests -p \"test_*.py\"", ".venv\\Scripts\\python.exe -B scripts/tests/run_downstream_fixture.py", ".venv\\Scripts\\python.exe -B scripts/rebuild_shared_skill_manifest.py --check"]}]
+    },
+    {
+      "id": "template-required-project-content",
+      "source_refs": ["templates/AGENTS.md:148", "templates/AGENTS.md:152", "templates/AGENTS.md:156", "templates/AGENTS.md:160"],
+      "targets": [{"path": "template/AGENTS.md", "required_all": ["### 项目架构红线", "### 项目业务与安全红线", "### 项目目录地图", "### 项目快速命令"], "required_adjacent_comments": [
+        {"heading": "### 项目架构红线", "text": "[必填] 写明本项目稳定的模块职责、依赖方向、数据流、外部副作用和风险/合规边界；填好后删除本注释。"},
+        {"heading": "### 项目业务与安全红线", "text": "[按需] 写本项目特有的业务、数据、安全、风控、合规和外部系统边界；填好后删除本注释。"},
+        {"heading": "### 项目目录地图", "text": "[必填] 写清核心源码、程序入口、配置入口、测试入口和文档入口；填好后删除本注释和所有 `<...>` 占位。"},
+        {"heading": "### 项目快速命令", "text": "[必填] 填写项目真实可运行的初始化、检查、测试、构建和运行命令；填好后删除本注释和所有 `<command>` 占位。"}
+      ]}]
+    },
+    {
+      "id": "template-directory-agents-index",
+      "source_refs": ["templates/AGENTS.md:162-164"],
+      "targets": [{"path": "template/AGENTS.md", "required_all": ["### 目录级 AGENTS 索引", "修改“目录级 AGENTS 索引”登记目录或其子目录前，必须读取从项目根到目标路径上的目录指令"], "required_adjacent_comments": [
+        {"heading": "### 目录级 AGENTS 索引", "text": "[按需] 列出项目自有的嵌套 AGENTS.md 及其适用目录；该索引不替代 Codex 原生层级加载。"}
+      ]}]
+    },
+    {
+      "id": "major-upgrade-spike",
+      "source_refs": ["codex-project-operating-guide.md:30-32"],
+      "targets": [
+        {"path": "template/AGENTS.md", "section": "## 6 版本与升级", "required_all": ["新版依赖和最小代码", "2–4 小时实验", "与现状对比", "只有用户确认体验确实改善后", "禁止先改主项目或 lockfile", "禁止只凭 CHANGELOG"], "required_regex": ["因性能、UI 行为、字体等可感知体验而跨大版本升级依赖时，必须按根 README 在主项目外用新版依赖和最小代码做 2–4 小时实验，并与现状对比；只有用户确认体验确实改善后才能进入全项目升级"]},
+        {"path": "readme/bridgeforge-public-section.md", "section": "### 跨大版本升级先做小实验", "required_all": ["限定 2–4 小时", "使用新版依赖和最小代码", "与当前实现做截图、benchmark 或可复核的体验对比", "放行证据是用户确认目标体验确实改善", "不替代正式迁移、回归测试或用户验收"]}
+      ]
+    }
+  ]
+}

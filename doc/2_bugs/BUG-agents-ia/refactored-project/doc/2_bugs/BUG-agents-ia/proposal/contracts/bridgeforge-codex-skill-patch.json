@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "source": "skills/bridgeforge-codex/SKILL.md",
+  "target": "skills/bridgeforge-codex/SKILL.md",
+  "replacements": [
+    {
+      "from": "- 任一失败必须回滚本事务全部写入，成功后不得保留 before 包；",
+      "to": "- 任一失败必须回滚本事务全部写入，成功后不得保留 before 包；\n- gap 必须原样保留并使结果降级（degraded）；degraded 必须保留旧版本戳或无戳；\n- 准备报告 ready 且实际修改受管资产时，必须在写戳前运行只读 release preflight；它与 `$git-sync` 使用同一 ownership classifier，不得修改业务 `VERSION`、`CHANGELOG.md`、Git index 或历史。失败时必须回滚并生成动态逐文件 `G*` 清单，禁止先写新戳或把提交问题留给用户；"
+    }
+  ],
+  "expected_sha256": "sha256:0df38cb288d0bafadd7920907ad83b87be36002895ea8c77e0aa18b6774bac4b",
+  "reason": "现行 Skill 已经是同步操作顺序的唯一 owner；第十一版只用唯一锚点补回 gap/degraded、release preflight 与动态 G* 语义，不再合入一份重复的文字 delta。"
+}

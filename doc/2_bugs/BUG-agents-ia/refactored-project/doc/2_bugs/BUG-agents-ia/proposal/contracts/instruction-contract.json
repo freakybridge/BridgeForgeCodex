@@ -1,0 +1,182 @@
+{
+  "overlay_schema": 1,
+  "base_contract": "templates/managed-skeleton.json",
+  "candidate_manifest_schema": 3,
+  "candidate_status": "proposal-only",
+  "semantic_contract": "contracts/semantic-contract.json",
+  "skill_contract": "contracts/bridgeforge-codex-skill-patch.json",
+  "candidate_implementation": {
+    "current_baseline_sha256": "sha256:d5f256a0edc25de1c53e77e65d664d9bb304493f6c964940e746079915d0f8ab",
+    "project_sync_sha256": "sha256:62b9df8e8c8490b913ec90e3ef50b9970ab13588c4955e04e369b25111d43311"
+  },
+  "asset_replacements": [
+    {
+      "id": "root.agents",
+      "source": "templates/AGENTS.md",
+      "proposal_source": "template/AGENTS.md",
+      "target": "AGENTS.md",
+      "strategy": "whole",
+      "agents_zones": {
+        "format": "bridgeforge-agents-zones",
+        "public": {
+          "begin": "<!-- BRIDGEFORGE:PUBLIC:BEGIN -->",
+          "end": "<!-- BRIDGEFORGE:PUBLIC:END -->",
+          "current_sha256": "sha256:8ab2bffc6698f9495bb2947d2738acf028bef65abf31c5938afc3dae2893140e"
+        },
+        "project": {
+          "begin": "<!-- BRIDGEFORGE:PROJECT:BEGIN -->",
+          "end": "<!-- BRIDGEFORGE:PROJECT:END -->",
+          "required_headings": [
+            "## 项目级专区",
+            "### 项目架构红线",
+            "### 项目业务与安全红线",
+            "### 项目目录地图",
+            "### 项目快速命令",
+            "### 目录级 AGENTS 索引"
+          ],
+          "required_content_headings": [
+            "### 项目架构红线",
+            "### 项目目录地图",
+            "### 项目快速命令"
+          ]
+        }
+      },
+      "current_sha256": "sha256:96b1a96c4bbee9f2a8a2d67d140bf68932e8c4a280203d11133751cff5a13d34",
+      "render": "project-name"
+    },
+    {
+      "id": "root.readme.bridgeforge-public",
+      "source": "templates/README.bridgeforge-public.md",
+      "proposal_source": "readme/bridgeforge-public-section.md",
+      "target": "README.md",
+      "strategy": "region",
+      "current_sha256": "sha256:85079070bdce712cf91d2f7fa391d709bac5179f6e26da2b00679efe991ae971",
+      "region": {
+        "begin": "<!-- BRIDGEFORGE:README:BEGIN -->",
+        "end": "<!-- BRIDGEFORGE:README:END -->",
+        "missing_marker": "append",
+        "current_sha256": "sha256:85079070bdce712cf91d2f7fa391d709bac5179f6e26da2b00679efe991ae971"
+      }
+    },
+    {
+      "id": "codex.doc.hook-signals",
+      "source": "templates/doc/3_reference/codex-hook-signals.md",
+      "proposal_source": "shared-docs/codex-hook-signals.md",
+      "target": "doc/3_reference/codex-hook-signals.md",
+      "strategy": "whole",
+      "current_sha256": "sha256:5d5c254391762d7eed59d93e7ab787e914de7b37d29f82511d2aa1ae54f2dd51"
+    }
+  ],
+  "generated_sources": [
+    {
+      "id": "codex.hook.instruction-source-check",
+      "source": "templates/hooks/instruction_source_check.py",
+      "mirror": ".codex/hooks/instruction_source_check.py",
+      "generator": "replace-public-required-headings",
+      "current_sha256": "sha256:f4922bd121a52e0957921d501ce9588cb98b9aeb961e78927890c8bd5242911c"
+    }
+  ],
+  "pointer_migrations": [
+    {
+      "target": "templates/hooks/clarify_reminder.py",
+      "mirror": ".codex/hooks/clarify_reminder.py",
+      "current_sha256": "sha256:67b96793e88cbaf0b52927d605ecef3d7fc7a7e4d90580c4d15eb022f48aa365",
+      "replacements": [
+        {"from": "AGENTS.md §4.4", "to": "doc/3_reference/codex-hook-signals.md"},
+        {"from": "AGENTS.md「主动澄清」", "to": "doc/3_reference/codex-hook-signals.md"}
+      ]
+    },
+    {
+      "target": "templates/hooks/focus_reminder.py",
+      "mirror": ".codex/hooks/focus_reminder.py",
+      "current_sha256": "sha256:5f0ad4d1126bd8f532c86741b128ffc0bafa838d356cda2c49620a7f20836271",
+      "replacements": [
+        {"from": "AGENTS.md \"focus 信号约定\"(§9.6)", "to": "doc/3_reference/codex-hook-signals.md"},
+        {"from": "AGENTS.md「任务防漂移」", "to": "doc/3_reference/codex-hook-signals.md"}
+      ]
+    },
+    {
+      "target": "templates/hooks/fallback_smell_check.py",
+      "mirror": ".codex/hooks/fallback_smell_check.py",
+      "current_sha256": "sha256:c2c92fcc90c542a8e81188540d1003f6be0d2a489117bcf30aa692459210af10",
+      "replacements": [
+        {"from": "AGENTS.md §5.2", "to": "AGENTS.md「任务控制与排障」"}
+      ]
+    },
+    {
+      "target": "templates/hooks/test_receipt.py",
+      "mirror": ".codex/hooks/test_receipt.py",
+      "current_sha256": "sha256:5057465699ac12f8bc8142378c9fc88fc824d241b9b8a3ddb5f7c30111b80a6e",
+      "replacements": [
+        {"from": "AGENTS.md §1.3 收据红线", "to": "AGENTS.md「交付与证据」"}
+      ]
+    },
+    {
+      "target": "templates/hooks/requirements_check.py",
+      "mirror": ".codex/hooks/requirements_check.py",
+      "current_sha256": "sha256:798de1af1be7e66734819f770cec00367a575f397d1e058b75e5e53eba5954bb",
+      "replacements": [
+        {"from": "AGENTS.md §1.3", "to": "AGENTS.md「环境与安全」"},
+        {"from": "doc/3_reference/codex-project-operating-guide.md「换机与依赖」", "to": "README.md「第一次 clone、换机或重建环境」"},
+        {"from": "codex-project-operating-guide.md", "to": "README.md"}
+      ]
+    },
+    {
+      "target": "templates/scripts/audit_user_allow.py",
+      "mirror": ".codex/scripts/audit_user_allow.py",
+      "current_sha256": "sha256:7f6b43b9f41cbbc58323c87409026175a4f7386da098d56608775b3997ab4185",
+      "replacements": [
+        {"from": "AGENTS.md §1.3", "to": "AGENTS.md「环境与安全」"},
+        {"from": "doc/3_reference/codex-project-operating-guide.md", "to": "README.md BridgeForge 公共区"}
+      ]
+    },
+    {
+      "target": "doc/README.md",
+      "current_sha256": "sha256:ae229ad3020e1ec1eb8f5a8b4b67d98a4e1f3eb57a5fe176599f460af011c7ab",
+      "replacements": [
+        {"from": "[`codex-project-operating-guide.md`](3_reference/codex-project-operating-guide.md) 与 ", "to": ""}
+      ]
+    },
+    {
+      "target": "doc/0_architecture/design/codex-native-instruction-architecture.md",
+      "current_sha256": "sha256:36f480e04ee374c3113d77bd412552497bc6ec7a79f9218f65fe306c4baed25e",
+      "replacement_source": "architecture/codex-native-instruction-architecture.md"
+    },
+    {
+      "target": "scripts/tests/test_bridgeforge_codex_root_skill.py",
+      "current_sha256": "sha256:45d32ff2c9eb252bac283f1f157180ee9daf89e3f179844319ca340966696e62",
+      "replacements": [
+        {"from": "ROOT / \"doc/3_reference/codex-project-operating-guide.md\"", "to": "ROOT / \"doc/3_reference/codex-hook-signals.md\""},
+        {"from": "            \".codex/.bridgeforge_version\",\n        ):\n            self.assertIn(marker, text)", "to": "            \".codex/.bridgeforge_version\",\n            \"只读 release preflight\",\n            \"同一 ownership classifier\",\n            \"动态逐文件 `G*` 清单\",\n            \"gap 必须原样保留\",\n            \"degraded 必须保留旧版本戳或无戳\",\n        ):\n            self.assertIn(marker, text)"}
+      ]
+    },
+    {
+      "target": "CHANGELOG.md",
+      "current_sha256": "sha256:081332cf45cd714f162dae61e2d57a87e43ab1df255d6a6f03e2411c554919fa",
+      "replacements": [
+        {"from": "语义见 `AGENTS.md §3`", "to": "语义见 `AGENTS.md「项目架构红线」`"}
+      ]
+    },
+    {
+      "target": "doc/0_architecture/design/antifabrication-framework.md",
+      "current_sha256": "sha256:a2ff7a5a5d6b5302271e6b67617a0314a50ed13a09ef87af1e6dcb6e0568ccc2",
+      "replacements": [
+        {"from": "](../../../templates/AGENTS.md) §1.3", "to": "](../../../templates/AGENTS.md)「交付与证据」"}
+      ]
+    },
+    {
+      "target": "doc/1_delivery/bridgeforge-upstream-absorption-modes/requirements_2026-08-15_bridgeforge-upstream-absorption-modes.md",
+      "current_sha256": "sha256:f72781a0c5aaeb100b5105eaf953a791a1f59b5ddfe1aaa2d0c49cfcc808b089",
+      "replacements": [
+        {"from": "项目级 AGENTS.md §7", "to": "AGENTS.md「项目架构红线」"}
+      ]
+    },
+    {
+      "target": "doc/1_delivery/factory-template-dogfood-contract/requirements_2026-08-16_factory-template-dogfood-contract.md",
+      "current_sha256": "sha256:19c4901c241e01f5c074c0909ec8ad53b04dc152b970eb18bdbd67c514c46611",
+      "replacements": [
+        {"from": "AGENTS.md §1.1", "to": "AGENTS.md「项目架构红线」"}
+      ]
+    }
+  ]
+}

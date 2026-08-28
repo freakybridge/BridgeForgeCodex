@@ -1,0 +1,72 @@
+#!/bin/sh
+# >>> BRIDGEFORGE_CODEX_MANAGED_BEGIN
+# bridgeforge current-only pre-commit 闸（严格执行序）：
+#   [baseline] 工作树与 staged index 的公共骨架必须同时匹配当前合同；
+#   [skills] 项目 Skill 树和 metadata 必须满足当前规则；
+#   [memory] 派生索引只读验证，生成与暂存只允许由 git-sync 事务执行。
+#
+# 硬闸原则: 只有明确判出违规才 exit 2; 脚本自身异常一律放行(宁漏不误伤)。
+#   · exit 2 段必须在受管区块内立即退出；项目扩展位于受管区块之后，保留其原有退出码。
+# Project CPython 3.11+ .venv is the only runtime; steady hooks never fall back to PATH.
+find_py() {
+  if [ ! -e .venv ]; then
+    echo "[pre-commit] BLOCKED: project .venv is missing; PATH fallback is forbidden." >&2
+    return 2
+  fi
+  for CANDIDATE in .venv/Scripts/python.exe .venv/bin/python; do
+    if [ -f "$CANDIDATE" ]; then
+      if [ -f .codex/scripts/project_runtime.py ] &&
+         "$CANDIDATE" .codex/scripts/project_runtime.py validate \
+           --project-root . --executable "$CANDIDATE" >/dev/null 2>&1; then
+        echo "$CANDIDATE"; return 0
+      fi
+      echo "[pre-commit] BLOCKED: project .venv must be CPython 3.11+ with a valid project prefix; PATH fallback is forbidden." >&2
+      return 2
+    fi
+  done
+  echo "[pre-commit] BLOCKED: project .venv exists but has no Python interpreter." >&2
+  return 2
+}
+PY="$(find_py)"
+PY_RC=$?
+[ "$PY_RC" = 2 ] && exit 2
+
+run_exit2_hook() {
+  SCRIPT="$1"
+  shift
+  if [ -n "$PY" ] && [ -f "$SCRIPT" ]; then
+    "$PY" "$SCRIPT" "$@"
+    rc=$?
+    [ "$rc" = 2 ] && exit 2
+    return 0
+  fi
+}
+
+# ── [instructions] Codex 原生 AGENTS 指令源硬闸（含 staged 公共区，防 edit+restore 绕过） ──
+run_exit2_hook ".codex/hooks/instruction_source_check.py"
+
+# ── [hooks-source] Codex lifecycle hook 唯一注册源硬闸 ──
+run_exit2_hook ".codex/hooks/config_health_check.py" --strict
+
+# ── [current-baseline] 1.4.31+ 当前公共骨架漂移硬闸 ──
+run_exit2_hook ".codex/scripts/current_baseline.py" --project-root .
+run_exit2_hook ".codex/scripts/current_baseline.py" --project-root . --index
+
+# [encoding] UTF-8 BOM is forbidden in bridgeforge-codex text surfaces.
+run_exit2_hook ".codex/hooks/encoding_check.py" --pre-commit
+
+# ── [layout] doc 五层索引 + scripts/tests 单一测试目录硬闸 ──
+run_exit2_hook ".codex/hooks/project_structure_check.py" --pre-commit
+
+# ── [skills] 通用 skill metadata 闸(硬拦; 下游无 skills/ 则自门控 no-op) ──
+run_exit2_hook ".codex/hooks/skill_metadata_check.py" --pre-commit
+
+# ── [memory] 派生索引只读闸 ──
+run_exit2_hook ".codex/scripts/memory_rebuild_index.py" --check
+# <<< BRIDGEFORGE_CODEX_MANAGED_END
+
+# >>> PROJECT_EXTENSION_BEGIN
+# 工厂自身额外要求产品版本 bump；该闸不下沉到 Template。
+run_exit2_hook ".codex/scripts/factory_version_check.py"
+run_exit2_hook "scripts/rebuild_shared_skill_manifest.py" --check
+# <<< PROJECT_EXTENSION_END

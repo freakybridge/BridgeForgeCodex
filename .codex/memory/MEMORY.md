@@ -2,9 +2,10 @@
 
 <!-- 自动生成索引，勿手改（改动会被下次重建覆盖）。新增 memory：在 .codex/memory/ 下新建 .md 文件，本索引会自动收录；写法见 ~/.codex/AGENTS.md「auto memory」段。达到条目或字符预算后自动滚入冷区，用 $find-memory 搜。 -->
 
-> Active: 7 | Cold: 14
+> Active: 8 | Cold: 14
 
 ## Active（按新增时间，新在前；主索引上限 6000 字符）
+- [topics/agents-md-simplification-review/summary](topics/agents-md-simplification-review/summary.md) — AGENTS.md 信息架构重构在完整项目镜像中逐项实施并由用户手动审阅，真实骨架暂不替换。
 - [architecture/bridgeforge-switch-direct-sync](architecture/bridgeforge-switch-direct-sync.md) — BridgeForge switch 采用双骨架直接同步；目标端 map 只记录可验证映射与生成基线，绝不替代真实项目资产。
 - [engineering/confirm-workflow](engineering/confirm-workflow.md) — BridgeForge 的统一需求确认工作流：confirm 先核验事实并生成确认卡，develop/debate/collab 必须复用有效确认卡。
 - [engineering/codex-ctx-budget-window](engineering/codex-ctx-budget-window.md) — Codex ctx-budget 口径：复用 Claude 成熟机制，但 Codex 窗口按 /status 实测 353K 校准，hook 用 transcript usage 计算比例。

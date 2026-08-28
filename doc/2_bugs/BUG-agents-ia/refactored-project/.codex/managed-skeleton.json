@@ -1,0 +1,680 @@
+{
+  "schema_version": 3,
+  "release_version": "1.5.10",
+  "host": "codex",
+  "stamp": ".codex/.bridgeforge_codex_version",
+  "contract_target": ".codex/managed-skeleton.json",
+  "assets": [
+    {
+      "id": "root.gitattributes",
+      "source": "templates/.gitattributes",
+      "target": ".gitattributes",
+      "strategy": "merge",
+      "merge_policy": "git-attributes-default-lf",
+      "current_sha256": "sha256:d60f352d0db1404c70afb4bb8b2ca3fd1c610572aa40720e8a0b7baa7885418c",
+      "merge_validation": {
+        "format": "git-attributes-default-lf-v1",
+        "required": {
+          "pattern": "*",
+          "text": "auto",
+          "eol": "lf"
+        }
+      }
+    },
+    {
+      "id": "root.agents",
+      "source": "templates/AGENTS.md",
+      "target": "AGENTS.md",
+      "strategy": "whole",
+      "agents_zones": {
+        "format": "bridgeforge-agents-zones",
+        "public": {
+          "begin": "<!-- BRIDGEFORGE:PUBLIC:BEGIN -->",
+          "end": "<!-- BRIDGEFORGE:PUBLIC:END -->",
+          "current_sha256": "sha256:a797fd0bad4cdb065fa95cd70e77359ded59a26435ca00ac561f0304cae02b26"
+        },
+        "project": {
+          "begin": "<!-- BRIDGEFORGE:PROJECT:BEGIN -->",
+          "end": "<!-- BRIDGEFORGE:PROJECT:END -->",
+          "required_headings": [
+            "## 项目级专区",
+            "### 项目架构红线",
+            "### 项目业务与安全红线",
+            "### 项目目录地图",
+            "### 项目快速命令",
+            "### 目录级 AGENTS 索引"
+          ],
+          "required_content_headings": [
+            "### 项目架构红线",
+            "### 项目目录地图",
+            "### 项目快速命令"
+          ]
+        }
+      },
+      "current_sha256": "sha256:d4aa39102cf7b8357cbbdbd76c35bd4c15b3773a0b01cc2aa61845d0b64446aa",
+      "render": "project-name"
+    },
+    {
+      "id": "codex.hooks-config",
+      "source": "templates/hooks.json",
+      "target": ".codex/hooks.json",
+      "strategy": "merge",
+      "current_sha256": "sha256:15be0b6f9531c21f305a1ae3765a508729ced070d3209e3ab26fb7aefd69d382",
+      "merge_policy": "codex-hooks",
+      "merge_validation": {
+        "format": "codex-hooks-current-v1",
+        "required_handlers": [
+          {
+            "id": "bridgeforge-codex.project-hook.v1:post-compact",
+            "event": "PostCompact",
+            "matcher": "",
+            "stage": "post-compact",
+            "sha256": "sha256:cee5ce1f8c3042f4aec16044e02d7f708eab594dadfdb44b8ae1ea063fcb9948"
+          },
+          {
+            "id": "bridgeforge-codex.project-hook.v1:post-read",
+            "event": "PostToolUse",
+            "matcher": "*",
+            "stage": "post-read",
+            "sha256": "sha256:5ba165859ef63e7487318bd3b306d52357331266a263cd571a4e182fb1b5103f"
+          },
+          {
+            "id": "bridgeforge-codex.project-hook.v1:post-shell",
+            "event": "PostToolUse",
+            "matcher": "Bash",
+            "stage": "post-shell",
+            "sha256": "sha256:e849ee7b676176402cbcdaa43c1f79e4eae8d5c2e83cea3cfe567e78dca70f35"
+          },
+          {
+            "id": "bridgeforge-codex.project-hook.v1:post-edit",
+            "event": "PostToolUse",
+            "matcher": "Edit|Write",
+            "stage": "post-edit",
+            "sha256": "sha256:010733a106bb7cd4ad24e13a75273d4bf69e5ee77126bba149bb93bd7527d006"
+          },
+          {
+            "id": "bridgeforge-codex.project-hook.v1:pre-tool",
+            "event": "PreToolUse",
+            "matcher": "Bash|Edit|Write",
+            "stage": "pre-tool",
+            "sha256": "sha256:44aa3fbc933f372fbfa9e5e159e88cc0d7da2957d51472be85810930bc441e9f"
+          },
+          {
+            "id": "bridgeforge-codex.project-hook.v1:session-start",
+            "event": "SessionStart",
+            "matcher": "",
+            "stage": "session-start",
+            "sha256": "sha256:98a1c661f7374095b060db0e474633dd8b600f9fb1419d201eec258a4ecb93cc"
+          },
+          {
+            "id": "bridgeforge-codex.project-hook.v1:stop",
+            "event": "Stop",
+            "matcher": "",
+            "stage": "stop",
+            "sha256": "sha256:90123395a1c6deaa14d761a2670c7feb7a07018a82ef0c592af7c1f1756e1c01"
+          },
+          {
+            "id": "bridgeforge-codex.project-hook.v1:user-prompt",
+            "event": "UserPromptSubmit",
+            "matcher": "",
+            "stage": "user-prompt",
+            "sha256": "sha256:e4668a889f6f1f5936434d54c29eb13ea2cbaf5f055d089bdd365c7f053f1d48"
+          }
+        ],
+        "managed_top_level": {
+          "description": "bridgeforge-codex project lifecycle hooks. This is the only managed Codex hook registration source."
+        }
+      }
+    },
+    {
+      "id": "codex.settings",
+      "source": "templates/settings.json",
+      "target": ".codex/settings.json",
+      "strategy": "merge",
+      "current_sha256": "sha256:9fd894e278d8edbe7ac6169b579a5cb7bd19a15e2d7c568f5d97b02ca5bbb6b8",
+      "merge_validation": {
+        "format": "json-subset-current-v1",
+        "required": {
+          "permissions": {
+            "defaultMode": "acceptEdits",
+            "allow": [
+              "Read",
+              "Grep",
+              "Glob",
+              "Bash(git status:*)",
+              "Bash(git diff:*)",
+              "Bash(git log:*)",
+              "Bash(git show:*)",
+              "Bash(git branch:*)",
+              "Bash(git tag:*)",
+              "Bash(git fetch:*)",
+              "Bash(git pull:*)",
+              "Bash(git remote:*)",
+              "Bash(git stash:*)",
+              "Bash(git add:*)",
+              "Bash(git commit:*)",
+              "Bash(git blame:*)",
+              "Bash(git rev-parse:*)",
+              "Bash(git describe:*)",
+              "Bash(git ls-files:*)",
+              "Bash(git shortlog:*)",
+              "Bash(git reflog:*)",
+              "Bash(ls:*)",
+              "Bash(cat:*)",
+              "Bash(pwd)",
+              "Bash(head:*)",
+              "Bash(tail:*)",
+              "Bash(wc:*)",
+              "Bash(which:*)",
+              "Bash(echo:*)",
+              "Bash(grep:*)",
+              "Bash(find:*)",
+              "Bash(tree:*)",
+              "Bash(stat:*)",
+              "Bash(file:*)",
+              "Bash(sort:*)",
+              "Bash(uniq:*)",
+              "Bash(diff:*)",
+              "Bash(env)",
+              "Bash(date)",
+              "Bash(whoami)",
+              "Bash(basename:*)",
+              "Bash(dirname:*)",
+              "Bash(realpath:*)",
+              "Bash(npm:*)",
+              "Bash(npx:*)",
+              "Bash(cargo:*)",
+              "Bash(rustc:*)",
+              "Bash(pytest:*)",
+              "Bash(python:*)",
+              "Bash(python3:*)",
+              "Bash(node:*)",
+              "Bash(pip:*)",
+              "Bash(pip3:*)",
+              "Bash(go:*)",
+              "Bash(make:*)",
+              "Bash(maturin:*)",
+              "Bash(tsc:*)",
+              "Bash(dotnet:*)",
+              "PowerShell(Get-ChildItem:*)",
+              "PowerShell(Get-Content:*)",
+              "PowerShell(Get-Location)",
+              "PowerShell(Select-String:*)",
+              "PowerShell(Test-Path:*)",
+              "PowerShell(Get-Item:*)",
+              "PowerShell(Get-Command:*)",
+              "PowerShell(Measure-Object:*)",
+              "PowerShell(Resolve-Path:*)"
+            ],
+            "ask": [
+              "Bash(git push:*)",
+              "Bash(git rebase:*)",
+              "Bash(git reset:*)",
+              "Bash(git checkout:*)",
+              "Bash(git restore:*)",
+              "Bash(git merge:*)",
+              "Bash(git cherry-pick:*)"
+            ],
+            "deny": [
+              "Read(./.env)",
+              "Read(./.env.*)",
+              "Read(./secrets/**)",
+              "Read(./**/*.key)",
+              "Read(./**/*.pem)",
+              "Read(./**/*.pfx)",
+              "Read(./**/*.p12)",
+              "Read(./**/id_rsa*)",
+              "Read(./**/id_ed25519*)",
+              "Read(./.npmrc)",
+              "Read(./.pypirc)",
+              "Read(./.git-credentials)",
+              "Read(~/.ssh/**)",
+              "Read(~/.aws/**)",
+              "Read(~/.gnupg/**)",
+              "Edit(./.env)",
+              "Edit(./.env.*)",
+              "Edit(./secrets/**)",
+              "Bash(cat .env*)",
+              "Bash(git push --force:*)",
+              "Bash(git push -f:*)",
+              "Bash(git push --delete:*)",
+              "Bash(git push -d:*)",
+              "Bash(git reset --hard:*)",
+              "Bash(git clean:*)",
+              "Bash(git branch -D:*)",
+              "Bash(git tag -d:*)",
+              "Bash(git tag --delete:*)",
+              "Bash(git reflog expire:*)",
+              "Bash(git filter-branch:*)",
+              "Bash(git filter-repo:*)",
+              "Bash(git stash clear:*)",
+              "Bash(git stash drop:*)",
+              "Bash(git update-ref -d:*)",
+              "Bash(rm -rf:*)",
+              "Bash(rm -fr:*)",
+              "Bash(rm -r:*)",
+              "Bash(rm -R:*)",
+              "Bash(dd:*)",
+              "Bash(mkfs:*)",
+              "Bash(shred:*)",
+              "Bash(chmod -R:*)",
+              "Bash(chown -R:*)",
+              "PowerShell(Remove-Item:*)",
+              "PowerShell(Clear-Content:*)",
+              "PowerShell(Clear-Disk:*)",
+              "PowerShell(Format-Volume:*)",
+              "PowerShell(git push --force:*)",
+              "PowerShell(git reset --hard:*)",
+              "PowerShell(git clean:*)",
+              "Bash(npm publish:*)",
+              "Bash(cargo publish:*)",
+              "Bash(twine upload:*)",
+              "Bash(gh release create:*)",
+              "Bash(docker push:*)",
+              "Bash(sudo:*)",
+              "Bash(shutdown:*)",
+              "Bash(reboot:*)",
+              "PowerShell(Stop-Computer:*)",
+              "PowerShell(Restart-Computer:*)"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": "codex.config",
+      "source": "templates/config.toml",
+      "target": ".codex/config.toml",
+      "strategy": "whole",
+      "current_sha256": "sha256:b74a963dca7f5b7515d901c251bbc7382316a55a0a6d70e35a8a2a36dcf9be23"
+    },
+    {
+      "id": "codex.skill-routing",
+      "source": "templates/skill-routing.json",
+      "target": ".codex/skill-routing.json",
+      "strategy": "whole",
+      "current_sha256": "sha256:4c77fa6ce20080338a3bbf27109d27111bd41be0008db3e30b79543c9140e8f5"
+    },
+    {
+      "id": "codex.agent.implementation-worker",
+      "source": "templates/agents/implementation-worker.toml",
+      "target": ".codex/agents/implementation-worker.toml",
+      "strategy": "whole",
+      "current_sha256": "sha256:4adc0bd16c07b43ebe8495dc0e42ec04b1b0ec216a8cc0e56d6bc739539107cc"
+    },
+    {
+      "id": "codex.agent.light-explorer",
+      "source": "templates/agents/light-explorer.toml",
+      "target": ".codex/agents/light-explorer.toml",
+      "strategy": "whole",
+      "current_sha256": "sha256:71f1c0886bfca3b15067b90d9902fd76999a87aaeba33b399ca630090e627c2e"
+    },
+    {
+      "id": "codex.agent.mechanical-sync-worker",
+      "source": "templates/agents/mechanical-sync-worker.toml",
+      "target": ".codex/agents/mechanical-sync-worker.toml",
+      "strategy": "whole",
+      "current_sha256": "sha256:3561c215ce3610421734e5173f911e38dc43657eee93272ec28ab520e6f8b871"
+    },
+    {
+      "id": "codex.agent.review-auditor",
+      "source": "templates/agents/review-auditor.toml",
+      "target": ".codex/agents/review-auditor.toml",
+      "strategy": "whole",
+      "current_sha256": "sha256:0a3487cecbe7ea8a1f1262d31417742e04d64681a5cdcea0bf64fe7f4b29a9b6"
+    },
+    {
+      "id": "codex.agent.xhigh-auditor",
+      "source": "templates/agents/xhigh-auditor.toml",
+      "target": ".codex/agents/xhigh-auditor.toml",
+      "strategy": "whole",
+      "current_sha256": "sha256:ba6c288791702f39ac9b51bf64693edfc54422b9b735d54533c0fd682544485f"
+    },
+    {
+      "id": "codex.doc.readme",
+      "source": "templates/doc/README.md",
+      "target": "doc/README.md",
+      "strategy": "whole",
+      "managed_blocks": {
+        "format": "markdown-headings",
+        "headings": [],
+        "keyed_tables": [
+          {
+            "heading": "## 目录职责",
+            "key_column": 0,
+            "managed_keys": [
+              "0_architecture/",
+              "1_delivery/",
+              "2_bugs/",
+              "3_reference/",
+              "4_archive/"
+            ]
+          },
+          {
+            "heading": "## 0_architecture/",
+            "key_column": 0,
+            "managed_keys": [
+              "system-overview.md",
+              "data-flow.md",
+              "interfaces.md",
+              "adr/ADR-*.md"
+            ]
+          },
+          {
+            "heading": "## 1_delivery/",
+            "key_column": 0,
+            "managed_keys": [
+              "1_delivery/feature_x/",
+              "1_delivery/M1/feature_x/"
+            ]
+          },
+          {
+            "heading": "## 2_bugs/",
+            "key_column": 0,
+            "managed_keys": [
+              "BUG-001_<topic>.md",
+              "BUG-002_<topic>/"
+            ]
+          },
+          {
+            "heading": "## 3_reference/",
+            "key_column": 0,
+            "managed_keys": [
+              "3_reference/external_api/"
+            ]
+          }
+        ],
+        "current_projection_sha256": "sha256:c69d9deec4a7b89845ec06094bf7e7daa07e1d2fcb0db74903eb15574de32c79"
+      },
+      "current_sha256": "sha256:0730412d06ba4166b9a848e8dba712b4f5276f8da17c9828e3026f6eca47f917",
+      "render": "project-name"
+    },
+    {
+      "id": "codex.memory.index",
+      "source": "templates/memory/MEMORY.md",
+      "target": ".codex/memory/MEMORY.md",
+      "strategy": "seed",
+      "current_sha256": "sha256:a20832447a3aea084c1280e28e811bd0dc57a41777d59398c8d12f2896a95b45",
+      "render": "project-name"
+    },
+    {
+      "id": "codex.precommit",
+      "source": "templates/.githooks/pre-commit",
+      "target": ".githooks/pre-commit",
+      "strategy": "region",
+      "current_sha256": "sha256:b5ba701af8bf567175fe3bdc3df577f37acfd54f9e677155e930fc1e83dc6f94",
+      "region": {
+        "begin": "# >>> BRIDGEFORGE_CODEX_MANAGED_BEGIN",
+        "end": "# <<< BRIDGEFORGE_CODEX_MANAGED_END",
+        "current_sha256": "sha256:f65093bc363fdf656bff0c597d2194e864a6abcdf83264171b4ecc8169d730f0"
+      }
+    },
+    {
+      "id": "codex.hook.allow-memory-write",
+      "source": "templates/hooks/allow_memory_write.py",
+      "target": ".codex/hooks/allow_memory_write.py",
+      "strategy": "whole",
+      "current_sha256": "sha256:40505c638ef635cba41c6d8e68d56ff886ea2efe739ab38a4669572467a1e572"
+    },
+    {
+      "id": "codex.hook.cargo-default-run-check",
+      "source": "templates/hooks/cargo_default_run_check.py",
+      "target": ".codex/hooks/cargo_default_run_check.py",
+      "strategy": "whole",
+      "current_sha256": "sha256:c287b7b54b977fcf09d63c1474558c211e72c65b0c8243e9ca849b54226286b4"
+    },
+    {
+      "id": "codex.hook.clarify-reminder",
+      "source": "templates/hooks/clarify_reminder.py",
+      "target": ".codex/hooks/clarify_reminder.py",
+      "strategy": "whole",
+      "current_sha256": "sha256:52414ccfeae83715e0f530e5034604934c6426c714e29c182ed6fc52c3101df7"
+    },
+    {
+      "id": "codex.hook.config-health-check",
+      "source": "templates/hooks/config_health_check.py",
+      "target": ".codex/hooks/config_health_check.py",
+      "strategy": "whole",
+      "current_sha256": "sha256:9aea617917797ebab174517e0176f79c640d1585e0cf9a27f2f6ccc599c3dc9d"
+    },
+    {
+      "id": "codex.hook.cross-project-write-guard",
+      "source": "templates/hooks/cross_project_write_guard.py",
+      "target": ".codex/hooks/cross_project_write_guard.py",
+      "strategy": "whole",
+      "current_sha256": "sha256:808fbd8505c8c817878527ef252bb10b7bc42f1ef83116c874c70079ec91749b"
+    },
+    {
+      "id": "codex.hook.encoding-check",
+      "source": "templates/hooks/encoding_check.py",
+      "target": ".codex/hooks/encoding_check.py",
+      "strategy": "whole",
+      "current_sha256": "sha256:90536d95eded68fac80375fe8c7c752ee2ff77027f21dbc1b5b7465b58747ddb"
+    },
+    {
+      "id": "codex.hook.enforce-no-effortlevel",
+      "source": "templates/hooks/enforce_no_effortlevel.py",
+      "target": ".codex/hooks/enforce_no_effortlevel.py",
+      "strategy": "whole",
+      "current_sha256": "sha256:db9744afe10521856e9a82966b281732e92f80beac089d920b6529b73b773d7f"
+    },
+    {
+      "id": "codex.hook.fallback-smell-check",
+      "source": "templates/hooks/fallback_smell_check.py",
+      "target": ".codex/hooks/fallback_smell_check.py",
+      "strategy": "whole",
+      "current_sha256": "sha256:db1e80a3cade5746d7e445866545bbe0acf428ac937bd1fbbadc6fe86bfccef2"
+    },
+    {
+      "id": "codex.hook.focus-reminder",
+      "source": "templates/hooks/focus_reminder.py",
+      "target": ".codex/hooks/focus_reminder.py",
+      "strategy": "whole",
+      "current_sha256": "sha256:03b4708856e4a7a6709485afae3b6b296d948374ffc819737c0cdae5081ac9e3"
+    },
+    {
+      "id": "codex.hook.git-add-all-guard",
+      "source": "templates/hooks/git_add_all_guard.py",
+      "target": ".codex/hooks/git_add_all_guard.py",
+      "strategy": "whole",
+      "current_sha256": "sha256:8a82e19929d0e3298057d0d860964e8ea93871c751cd62284a9f29022372871a"
+    },
+    {
+      "id": "codex.hook.githooks-path-check",
+      "source": "templates/hooks/githooks_path_check.py",
+      "target": ".codex/hooks/githooks_path_check.py",
+      "strategy": "whole",
+      "current_sha256": "sha256:1ae179f114d24308bec7919aad2c0c31546216610ba626997edf335dc26c872e"
+    },
+    {
+      "id": "codex.hook.hook-dispatcher",
+      "source": "templates/hooks/hook_dispatcher.py",
+      "target": ".codex/hooks/hook_dispatcher.py",
+      "strategy": "whole",
+      "current_sha256": "sha256:9439ccce5bed9972927d4999bd73ab25175e79c960e3e20fbcc7bfeea4eac9b0"
+    },
+    {
+      "id": "codex.hook.memory-dup-check",
+      "source": "templates/hooks/memory_dup_check.py",
+      "target": ".codex/hooks/memory_dup_check.py",
+      "strategy": "whole",
+      "current_sha256": "sha256:6bbd07a994f34fa77b74b7d4c015bbed593e56027e984069274a41d6965f084d"
+    },
+    {
+      "id": "codex.hook.memory-lint",
+      "source": "templates/hooks/memory_lint.py",
+      "target": ".codex/hooks/memory_lint.py",
+      "strategy": "whole",
+      "current_sha256": "sha256:1508793f91a367ca7993310e056747a960b3b43e10ba1e130592f4f9e8ef8a73"
+    },
+    {
+      "id": "codex.hook.non-ascii-shell-guard",
+      "source": "templates/hooks/non_ascii_shell_guard.py",
+      "target": ".codex/hooks/non_ascii_shell_guard.py",
+      "strategy": "whole",
+      "current_sha256": "sha256:d4c3ee90b90483c914f6978b97ebd32b448a08798741f2cc67ba88fd5a0a92fe"
+    },
+    {
+      "id": "codex.hook.requirements-check",
+      "source": "templates/hooks/requirements_check.py",
+      "target": ".codex/hooks/requirements_check.py",
+      "strategy": "whole",
+      "current_sha256": "sha256:8e6f5c0d844b57357b9928da7a671d525b1bc6b01ef2494cfff6e5003537b214"
+    },
+    {
+      "id": "codex.hook.instruction-source-check",
+      "source": "templates/hooks/instruction_source_check.py",
+      "target": ".codex/hooks/instruction_source_check.py",
+      "strategy": "whole",
+      "current_sha256": "sha256:8e2c6a337c63cdba8c2df2b1c137decaaa131059c9987c0ff939fdce75b566a5"
+    },
+    {
+      "id": "codex.hook.project-structure-check",
+      "source": "templates/hooks/project_structure_check.py",
+      "target": ".codex/hooks/project_structure_check.py",
+      "strategy": "whole",
+      "current_sha256": "sha256:38fe8d0d2f55408bf14ff2ab15c2b282502db96e5d2fb132964242e4e74b4cf3"
+    },
+    {
+      "id": "codex.hook.session-snapshot",
+      "source": "templates/hooks/session_snapshot.py",
+      "target": ".codex/hooks/session_snapshot.py",
+      "strategy": "whole",
+      "current_sha256": "sha256:4cd0394120c5cdfb2768b30496b350dfafd4558a407e1b9ea8a0556f2a3c1213"
+    },
+    {
+      "id": "codex.hook.show-state",
+      "source": "templates/hooks/show_state.py",
+      "target": ".codex/hooks/show_state.py",
+      "strategy": "whole",
+      "current_sha256": "sha256:ce3a161e85e40f5912800e897d534962cd2d41ba12b878128cf9c292148962bb"
+    },
+    {
+      "id": "codex.hook.skill-metadata-check",
+      "source": "templates/hooks/skill_metadata_check.py",
+      "target": ".codex/hooks/skill_metadata_check.py",
+      "strategy": "whole",
+      "current_sha256": "sha256:89172fdfe48a0f6f5af34afabd57de49e32cd83865b9edf28deb402efd413ef3"
+    },
+    {
+      "id": "codex.hook.skill-sync-check",
+      "source": "templates/hooks/skill_sync_check.py",
+      "target": ".codex/hooks/skill_sync_check.py",
+      "strategy": "whole",
+      "current_sha256": "sha256:f9a6f9c661bc48daa7695393c6deac821cb8a8fdca5cc4c1d5ffde6259b7ab27"
+    },
+    {
+      "id": "codex.hook.test-receipt",
+      "source": "templates/hooks/test_receipt.py",
+      "target": ".codex/hooks/test_receipt.py",
+      "strategy": "whole",
+      "current_sha256": "sha256:39238f883308cdc7a40f74d404ecfa300027153a738a366a8818121cf0d29156"
+    },
+    {
+      "id": "codex.hook.user-config-write-guard",
+      "source": "templates/hooks/user_config_write_guard.py",
+      "target": ".codex/hooks/user_config_write_guard.py",
+      "strategy": "whole",
+      "current_sha256": "sha256:ea396b2ac2ed6776459e6fd04952cf3603548a72518ec7c333b7c7ffacb18e6d"
+    },
+    {
+      "id": "codex.script.archive-scan",
+      "source": "templates/scripts/archive_scan.py",
+      "target": ".codex/scripts/archive_scan.py",
+      "strategy": "whole",
+      "current_sha256": "sha256:9812ba7c156f6b19057a4a9266a2ca89909a13056377319dd9fad9d5f996db20"
+    },
+    {
+      "id": "codex.script.audit-user-allow",
+      "source": "templates/scripts/audit_user_allow.py",
+      "target": ".codex/scripts/audit_user_allow.py",
+      "strategy": "whole",
+      "current_sha256": "sha256:9a5c704593a881c57bc01f7298aa10dffdb356ef8cfd857032d81eaecbfd87a9"
+    },
+    {
+      "id": "codex.script.current-baseline",
+      "source": "templates/scripts/current_baseline.py",
+      "target": ".codex/scripts/current_baseline.py",
+      "strategy": "whole",
+      "current_sha256": "sha256:7d2f054e682d14fe42ee9f24950eb4a71f82d16a392308f8e3e94e308986ce65"
+    },
+    {
+      "id": "codex.script.codex-git-sync",
+      "source": "templates/scripts/codex_git_sync.py",
+      "target": ".codex/scripts/codex_git_sync.py",
+      "strategy": "whole",
+      "current_sha256": "sha256:af80c94a3584be2bc3f707efbbc7738b9a8d03f038003d75c4d4bd3811804de0"
+    },
+    {
+      "id": "codex.script.hook-config-policy",
+      "source": "templates/scripts/hook_config_policy.py",
+      "target": ".codex/scripts/hook_config_policy.py",
+      "strategy": "whole",
+      "current_sha256": "sha256:1a06a4960fc90c6e6513e3331810b0a664e96302b819a97557fe9af3fe372ffb"
+    },
+    {
+      "id": "codex.script.memory-context",
+      "source": "templates/scripts/memory_context.py",
+      "target": ".codex/scripts/memory_context.py",
+      "strategy": "whole",
+      "current_sha256": "sha256:2a47d5a9e85853a6147e39454224ad9197c6ad096167e6fbc0c40c42ec7052f0"
+    },
+    {
+      "id": "codex.script.memory-rebuild-index",
+      "source": "templates/scripts/memory_rebuild_index.py",
+      "target": ".codex/scripts/memory_rebuild_index.py",
+      "strategy": "whole",
+      "current_sha256": "sha256:64f8c4919f93c3c5bf4a6682ec8de4aae19dd64f621bf4307c06736594edd635"
+    },
+    {
+      "id": "codex.script.memory-router",
+      "source": "templates/scripts/memory_router.py",
+      "target": ".codex/scripts/memory_router.py",
+      "strategy": "whole",
+      "current_sha256": "sha256:552b56479cbc1d9f80d956bf9f9de3d3862a4bc9c893e80f3f0430240c13a7f6"
+    },
+    {
+      "id": "codex.script.memory-search",
+      "source": "templates/scripts/memory_search.py",
+      "target": ".codex/scripts/memory_search.py",
+      "strategy": "whole",
+      "current_sha256": "sha256:0d228044b317cdb19b7ed034ebbf524b4162f1a992fac54eb65b1d1bc4de0574"
+    },
+    {
+      "id": "codex.script.memory-usage",
+      "source": "templates/scripts/memory_usage.py",
+      "target": ".codex/scripts/memory_usage.py",
+      "strategy": "whole",
+      "current_sha256": "sha256:152b96ac3e1fb7599575d218761a5d7ab606060b452b2a7e78a006f0e4fa4fe7"
+    },
+    {
+      "id": "codex.script.project-memory-recovery",
+      "source": "templates/scripts/project_memory_recovery.py",
+      "target": ".codex/scripts/project_memory_recovery.py",
+      "strategy": "whole",
+      "current_sha256": "sha256:f3bd1db389d7beaa2ddd5a6a27d29c942f01b05bae5328aa0d179de1cb687fc6"
+    },
+    {
+      "id": "codex.script.project-memory-writer",
+      "source": "templates/scripts/project_memory_writer.py",
+      "target": ".codex/scripts/project_memory_writer.py",
+      "strategy": "whole",
+      "current_sha256": "sha256:6fd90c74faaa6a885d8032fa9457ee24a0b0245eb152116e5dc7ede2b5488188"
+    },
+    {
+      "id": "codex.script.project-runtime",
+      "source": "templates/scripts/project_runtime.py",
+      "target": ".codex/scripts/project_runtime.py",
+      "strategy": "whole",
+      "current_sha256": "sha256:7e56c969bfcb1315f0feb6f29ad9e528dfed2c464033b9139e942efbbf5f82a7"
+    },
+    {
+      "id": "codex.script.version-release",
+      "source": "templates/scripts/version_release.py",
+      "target": ".codex/scripts/version_release.py",
+      "strategy": "whole",
+      "current_sha256": "sha256:8ce45137fb6c9c81c60c84175aca0cc545e3b782c3c32b15a63519ace48c6e5d"
+    }
+  ],
+  "baseline_model": "current-only"
+}

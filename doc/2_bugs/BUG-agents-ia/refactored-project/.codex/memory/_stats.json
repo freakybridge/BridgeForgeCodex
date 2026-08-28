@@ -1,0 +1,67 @@
+{
+  "files": {
+    "topics/memory-rule-organization/summary.md": {
+      "created_at": "2026-08-14"
+    },
+    "architecture/bridgeforge-switch-direct-sync.md": {
+      "created_at": "2026-07-25"
+    },
+    "architecture/codex-model-routing-policy.md": {
+      "created_at": "2026-07-08"
+    },
+    "engineering/bom-free-encoding-gate.md": {
+      "created_at": "2026-07-08"
+    },
+    "engineering/codex-ctx-budget-window.md": {
+      "created_at": "2026-07-09"
+    },
+    "engineering/confirm-workflow.md": {
+      "created_at": "2026-07-14"
+    },
+    "engineering/skill-metadata-precommit-gate.md": {
+      "created_at": "2026-07-08"
+    },
+    "operations/codex-bridgeforge-slash-entry-debug.md": {
+      "created_at": "2026-07-07"
+    },
+    "topics/claude-template-safety-hooks-review/summary.md": {
+      "created_at": "2026-07-08"
+    },
+    "topics/codex-harness-parity-closure/summary.md": {
+      "created_at": "2026-07-08"
+    },
+    "topics/bridgeforge-command-model/summary.md": {
+      "created_at": "2026-07-08"
+    },
+    "topics/bridgeforge-doc-runtime-packaging/summary.md": {
+      "created_at": "2026-07-25"
+    },
+    "topics/bridgeforge-switch-semantic-migration/summary.md": {
+      "created_at": "2026-07-25"
+    },
+    "topics/create-worktree-skill/summary.md": {
+      "created_at": "2026-08-15"
+    },
+    "topics/bridgeforge-single-confirmation/summary.md": {
+      "created_at": "2026-08-15"
+    },
+    "topics/codex-skeleton-refactor/summary.md": {
+      "created_at": "2026-08-15"
+    },
+    "topics/bridgeforge-latency-optimization/summary.md": {
+      "created_at": "2026-08-15"
+    },
+    "topics/skill-runtime-efficiency/summary.md": {
+      "created_at": "2026-08-15"
+    },
+    "topics/bridgeforge-actionable-readiness/summary.md": {
+      "created_at": "2026-08-15"
+    },
+    "topics/bridgeforge-upstream-absorption-modes/summary.md": {
+      "created_at": "2026-08-15"
+    },
+    "topics/codex-project-zone-ownership/summary.md": {
+      "created_at": "2026-08-17"
+    }
+  }
+}
