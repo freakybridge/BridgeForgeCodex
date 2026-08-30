@@ -93,6 +93,22 @@ class InstructionSourceCheckTests(unittest.TestCase):
             )
         )
 
+    def test_public_agents_scope_gate_precedes_repository_access(self) -> None:
+        for path in (ROOT / "templates" / "AGENTS.md", ROOT / "AGENTS.md"):
+            with self.subTest(path=path):
+                text = path.read_text(encoding="utf-8")
+                self.assertIn(
+                    "必须先只给当前理解并问一个最关键的范围问题，本轮停止",
+                    text,
+                )
+                self.assertIn(
+                    "此范围硬闸先于读取仓库、调用工具、运行测试、写盘和进入 "
+                    "`$confirm` / `$plan` / `$develop`",
+                    text,
+                )
+                self.assertIn("只有用户回答后才能继续", text)
+                self.assertIn("禁止用“读上下文”跳过硬闸", text)
+
     def test_public_agents_retire_project_memory_and_bound_summary(self) -> None:
         retired_contract = (
             "memory 纳入项目 Git（`.codex/memory/`）",

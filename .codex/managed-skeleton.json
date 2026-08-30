@@ -1,6 +1,6 @@
 {
   "schema_version": 3,
-  "release_version": "1.5.23",
+  "release_version": "1.5.25",
   "host": "codex",
   "stamp": ".codex/.bridgeforge_codex_version",
   "contract_target": ".codex/managed-skeleton.json",
@@ -31,7 +31,7 @@
         "public": {
           "begin": "<!-- BRIDGEFORGE:PUBLIC:BEGIN -->",
           "end": "<!-- BRIDGEFORGE:PUBLIC:END -->",
-          "current_sha256": "sha256:636cf6cc2e7f25966ffe0ab40be0cc493dd4b913952e53148429c7b895ddc32f"
+          "current_sha256": "sha256:895702cf3ad2a7d95d1f551025ef9bbb84432f28827500bf370e89d396b93767"
         },
         "project": {
           "begin": "<!-- BRIDGEFORGE:PROJECT:BEGIN -->",
@@ -51,7 +51,7 @@
           ]
         }
       },
-      "current_sha256": "sha256:45ef4f712ad6c1994a56605e05b9a365a234e7891159a189a2f3b02e8d283ae8",
+      "current_sha256": "sha256:78b45798dd17f37e8935805933fc989b05d4f35524795b5755c79bbfa5941e09",
       "render": "project-name"
     },
     {
