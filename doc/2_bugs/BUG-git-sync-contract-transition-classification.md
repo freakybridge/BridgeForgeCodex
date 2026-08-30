@@ -202,7 +202,7 @@ HEAD 旧 contract、无 zone
 
 ## 关联记录
 
-- `doc/1_delivery/codex-project-zone-ownership/requirements_2026-08-17_codex-project-zone-ownership.md`
+- `doc/4_archive/delivery/codex-project-zone-ownership/requirements_2026-08-17_codex-project-zone-ownership.md`
 - `doc/1_delivery/git-sync-version-automation/requirements_2026-08-12_git-sync-version-automation.md`
 
 ## 2026-08-21 current-only 重构回归与修复

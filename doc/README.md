@@ -58,7 +58,7 @@ delivery_layout: flat
 | `agents-md-simplification-review` | AGENTS.md 优化草案的确认卡、11 版双 agent 辩论、V11 中断现场、有限验收边界及“根级目录路由 + 工厂嵌套指令 + 硬闸”的后续决定（2026-08-27、2026-08-28） |
 | `hook-utf8-memory-loading` | Windows GBK 环境下由公共 Hook dispatcher 强制 UTF-8，恢复项目 memory 的 SessionStart 加载，并以四个真实下游隔离 worktree 验证（2026-08-26） |
 | `bridgeforge-codex-batch` | BridgeForgeCodex 仓库专属的下游骨架批量升级、Git 同步、异常隔离与全量重跑；新增 1.5.6 Git 环境污染和 Batch 状态机死锁的修复、真实恢复需求（2026-08-21、2026-08-27） |
-| `bridgeforge-command-clarity`、`bridgeforge-home-layout` | 入口与用户级目录演进 |
+| `bridgeforge-home-layout` | 用户级目录演进 |
 | `bridgeforge-codex-naming-contract` | 用户命令、菜单、聊天显示、GitHub identity 与内部技术标识的分层命名契约（2026-08-17） |
 | `bridgeforge-latency-optimization` | 用户级 sparse canonical fast path、项目 planner 去重、并行终态验证与阶段计时收据（2026-08-15） |
 | `bridgeforge-actionable-readiness` | 双状态更新结果、可执行完善清单、程序推荐与用户自定义部分确认，并保持整体 0/1 次确认（2026-08-15） |
@@ -88,25 +88,18 @@ delivery_layout: flat
 | `template-root-flattening` | Codex-only 模板从 `templates/codex/**` 提升为 `templates/**`，保留 `0.86.0+` 历史 lineage 并同步同步器、schema、dogfood 与测试（2026-08-16） |
 | `factory-template-dogfood-contract` | Template 公共 AGENTS/Rules 单一事实源、bridgeforge-codex 项目定制区与工厂 Overlay，以及编辑/提交/发布防漂移硬闸（2026-08-16） |
 | `codex-rule-runtime-simplification` | 退役未实际加载的 Markdown path rule，将有效红线无损迁入原生 AGENTS、hook、skill 与文档，并安全保留下游定制（2026-08-16） |
-| `codex-project-zone-ownership` | 根 AGENTS 公共区只读、项目专区独占写入、嵌套 AGENTS / 项目 hook ownership 与双高定制 worktree 迁移验收（2026-08-17） |
-| `bridgeforge-switch-direct-sync`、`bridgeforge-switch-semantic-migration` | 双宿主切换；各含 `debates/`；Markdown Rule 投影增强建议（2026-07-30） |
-| `codex-model-routing`、`codex-model-routing-56`、`codex-cost-routing`、`codex-subscription-routing` | Codex 模型路由历史与下游业务版本分离（2026-07-30） |
-| `codex-skeleton-refactor` | Codex 骨架系统性重构、11 条 Bug 全量闭环、`0.86.0+` 迁移、`create-worktree` 与双真实下游验证（2026-08-15） |
 | `codex-agents-structure-reorganization` | Codex AGENTS 信息架构重组、历史标题安全迁移、项目必填区双状态硬闸与 `ctx-budget` 完整退役（2026-08-16） |
-| `codex-skill-routing-dispatch` | skill routing 设计与 `debates/` |
 | `shared-skill-model-inheritance` | 删除 shared skill 的 Claude 专用 `model:` 覆盖，双宿主统一继承当前会话模型，并合并精简 Codex 模板的模型选择与执行分工说明（2026-08-16） |
 | `confirm-workflow`、`develop-demand-discovery`、`explain-skill` | 需求确认与通用 skill 演进；后两者含 `research/` |
 | `cross-project-write-guard`、`non-ascii-shell-guard` | 安全防护；后者新增 [memory writer stdin 编码旁路报告](1_delivery/non-ascii-shell-guard/research/2026-08-04_memory-writer-stdin-encoding-bypass-report.md) |
-| `ctx-management`、`token-context-optimization` | 上下文与 token 治理；Stall Warning 已裁定从双宿主骨架及下游更新中移除（2026-07-30） |
+| `ctx-management` | 上下文治理；Stall Warning 已裁定从双宿主骨架及下游更新中移除（2026-07-30） |
 | `doc-unification`、`document-lifecycle` | 文档体系演进 |
 | `git-sync-latency-optimization` | `$git-sync` 单脚本直跑、失败前置、重复重建消除与完整同步收据（2026-08-01） |
 | `git-sync-version-automation` | BridgeForge 与下游项目双版本域的 `$git-sync` 自动 bump、原生字段同步与统一 CHANGELOG 需求；新增 [下游项目 Rule 被误判为受管骨架的所有权缺口报告](1_delivery/git-sync-version-automation/research/2026-08-12_downstream-rule-managed-skeleton-boundary-gap.md)（2026-08-12） |
-| `memory-lifecycle-governance` | 统一 memory schema、模块/topic 分工、`$summary` 双模式与 topic 生命周期治理（2026-08-02） |
 | `memory-rule-organization` | 双 Memory 交付历史；项目 `.codex/memory/` 部分已被 `project-memory-retirement` 替代，当前只保留原生 Memory 同步事实并指向 `codex-native-memory-sync.md`（2026-08-30） |
 | `project-memory-retirement` | 退役项目 `.codex/memory/`，为候选工程与未来下游建立程序扫描、Agent 语义审核、用户逐项确认、受控迁移及独立清理授权（2026-08-30） |
 | `shared-skill-distribution` | 用户级 shared skill 分发 |
 | `skill-runtime-efficiency` | 非根 skill 的确定性 fast path、重复 agent/索引消除与高频 Git 单进程优化（2026-08-15） |
-| `create-worktree-skill` | Windows Codex 永久 worktree 创建、独立 `codex/` 分支与无槽位路径需求（2026-08-15） |
 
 每个 topic 内以 `requirements_*.md` 保存确认卡；实现计划、验收方案、协作记录和正式讨论分别与该确认卡同域保存。仅 topic 内路径可作为该事项的工作上下文。
 
@@ -134,7 +127,6 @@ delivery_layout: flat
 - [`BUG-shared-skill-manifest-line-endings.md`](2_bugs/BUG-shared-skill-manifest-line-endings.md)
 - [`BUG-summary-writes-global-memory-instead-of-project-memory.md`](2_bugs/BUG-summary-writes-global-memory-instead-of-project-memory.md)
 - [`BUG-migration-drops-project-pre-commit-extension.md`](2_bugs/BUG-migration-drops-project-pre-commit-extension.md)
-- [`BUG-downstream-business-version-rule-without-enforcement.md`](2_bugs/BUG-downstream-business-version-rule-without-enforcement.md)
 - [`BUG-bridgeforge-references-omitted-from-user-skill.md`](2_bugs/BUG-bridgeforge-references-omitted-from-user-skill.md)
 - [`BUG-update-stamped-before-memory-migration.md`](2_bugs/BUG-update-stamped-before-memory-migration.md)
 - [`BUG-codex-native-memory-empty-snapshot-reconcile.md`](2_bugs/BUG-codex-native-memory-empty-snapshot-reconcile.md)
@@ -144,3 +136,20 @@ delivery_layout: flat
 ## 归档与参考
 
 `4_archive/` 内现有文件为迁移前历史档案，继续保持可追溯性；Codex harness parity 设计与交付材料已归档到 [`codex-harness-parity-design.md`](4_archive/codex-harness-parity-design.md) 和 [`codex-harness-parity-delivery/`](4_archive/codex-harness-parity-delivery/)，旧运行手册打包结构见 [`bridgeforge-doc-runtime-packaging`](4_archive/delivery/bridgeforge-doc-runtime-packaging/summary.md)。新归档按 `4_archive/delivery/<topic>/` 或 `4_archive/bugs/` 落位。外部资料与仅供参考的实现放入 `3_reference/`，不作为运行时资产。
+
+| 归档日期 | 类型 | 记录 |
+|---|---|---|
+| 2026-08-30 | Delivery | [`bridgeforge-command-clarity`](4_archive/delivery/bridgeforge-command-clarity/) |
+| 2026-08-30 | Delivery | [`bridgeforge-switch-direct-sync`](4_archive/delivery/bridgeforge-switch-direct-sync/) |
+| 2026-08-30 | Delivery | [`bridgeforge-switch-semantic-migration`](4_archive/delivery/bridgeforge-switch-semantic-migration/) |
+| 2026-08-30 | Delivery | [`codex-cost-routing`](4_archive/delivery/codex-cost-routing/) |
+| 2026-08-30 | Delivery | [`codex-model-routing`](4_archive/delivery/codex-model-routing/) |
+| 2026-08-30 | Delivery | [`codex-model-routing-56`](4_archive/delivery/codex-model-routing-56/) |
+| 2026-08-30 | Delivery | [`codex-project-zone-ownership`](4_archive/delivery/codex-project-zone-ownership/) |
+| 2026-08-30 | Delivery | [`codex-skeleton-refactor`](4_archive/delivery/codex-skeleton-refactor/) |
+| 2026-08-30 | Delivery | [`codex-skill-routing-dispatch`](4_archive/delivery/codex-skill-routing-dispatch/) |
+| 2026-08-30 | Delivery | [`codex-subscription-routing`](4_archive/delivery/codex-subscription-routing/) |
+| 2026-08-30 | Delivery | [`create-worktree-skill`](4_archive/delivery/create-worktree-skill/) |
+| 2026-08-30 | Delivery | [`memory-lifecycle-governance`](4_archive/delivery/memory-lifecycle-governance/) |
+| 2026-08-30 | Delivery | [`token-context-optimization`](4_archive/delivery/token-context-optimization/) |
+| 2026-08-30 | Bug | [`BUG-downstream-business-version-rule-without-enforcement.md`](4_archive/bugs/BUG-downstream-business-version-rule-without-enforcement.md) |

@@ -578,5 +578,5 @@ ledger SHA256 为 9960F979472C9F22090BD95383BD7B5E41D8BD6696BE3DE43EF83DF30C57BE
 ## 关联记录
 
 - doc/2_bugs/BUG-git-sync-contract-transition-classification.md
-- doc/1_delivery/codex-project-zone-ownership/requirements_2026-08-17_codex-project-zone-ownership.md
+- doc/4_archive/delivery/codex-project-zone-ownership/requirements_2026-08-17_codex-project-zone-ownership.md
 - doc/1_delivery/git-sync-version-automation/requirements_2026-08-12_git-sync-version-automation.md

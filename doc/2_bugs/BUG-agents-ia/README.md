@@ -402,6 +402,14 @@ P0–P1 确定性基线（2026-08-30）：
 - 生命周期、扫描器与指令定向回归 22/22；完整自动测试 338 项结束，337 通过、1 项既有跳过；下游 fixture 4/4，项目结构、manifest `--check` 与 `git diff --check` 均通过。实跑 `$archive-scan` 得到 14 个候选，但没有执行移动。
 - 本组只完成状态判定，没有移动任何 delivery、没有写 `archived`，也没有修改 legacy `.codex/memory/`。IA-11 保持打开，下一组由 `$archive-scan` 审核并经用户逐项确认后移动归档候选。
 
+第四组历史归档收口（2026-08-30）：
+
+- 用户确认将扫描所得 14 个候选全部归档；13 个 Delivery topic 已用 `git mv` 移至 `doc/4_archive/delivery/`，1 个已解决 Bug 已移至 `doc/4_archive/bugs/`。
+- 13 个 topic 内共 16 张需求卡全部写为 `archived / verified`；原有 `superseded_by` 关系继续保留，13 个替代目标均已按归档后的相对位置重新解析并确认存在。归档 Bug 同样写为 `archived / verified`，旧 `status` 只作为历史证据保留。
+- `doc/README.md` 已从当前 Delivery 和 Bug 清单移除这 14 项，并新增按日期登记的归档表；当前 Bug、IA 账本与项目 Memory 退役账本中指向旧路径的引用全部改指归档位置，旧 `doc/1_delivery/<已归档 topic>` 与旧 Bug 路径命中清零。
+- 生命周期与归档扫描定向测试 5/5、完整自动测试 338 项结束，337 通过、1 项既有跳过；`archive_scan.py --json` 返回空数组，`git diff --check` 通过。
+- 工厂文档已具备可对账的 active / completed / superseded / archived 状态，当前索引与历史位置一致；IA-11 在工厂范围关闭。真实下游文档分类与归档仍需在各下游升级时独立执行和验收。
+
 ### IA-12：用户可见术语、语言和状态命名不统一
 
 证据：
@@ -574,9 +582,9 @@ P0–P1 确定性基线（2026-08-30）：
 ## 关联记录
 
 - `doc/1_delivery/codex-agents-structure-reorganization/requirements_2026-08-16_codex-agents-structure-reorganization.md`
-- `doc/1_delivery/codex-skill-routing-dispatch/requirements_2026-07-15_codex-skill-routing-dispatch.md`
+- `doc/4_archive/delivery/codex-skill-routing-dispatch/requirements_2026-07-15_codex-skill-routing-dispatch.md`
 - `doc/1_delivery/skill-runtime-efficiency/requirements_2026-08-15_skill-runtime-efficiency.md`
-- `doc/1_delivery/bridgeforge-command-clarity/requirements_2026-07-08_bridgeforge-command-clarity.md`
+- `doc/4_archive/delivery/bridgeforge-command-clarity/requirements_2026-07-08_bridgeforge-command-clarity.md`
 - `doc/0_architecture/design/codex-native-instruction-architecture.md`
 - `doc/0_architecture/design/design-rationale.md`
 - `doc/0_architecture/design/codex-project-sync.md`

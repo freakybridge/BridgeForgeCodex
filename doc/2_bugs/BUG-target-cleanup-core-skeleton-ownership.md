@@ -197,5 +197,5 @@ StratusAgent 应把现有扩展收敛为项目所有的 `stratus_target_cleanup.
 ## 关联记录
 
 - `CHANGELOG.md`：初始 Rust target hook、L2 deps 裁剪及 StratusAgent harvest 历史。
-- `doc/1_delivery/codex-project-zone-ownership/requirements_2026-08-17_codex-project-zone-ownership.md`
+- `doc/4_archive/delivery/codex-project-zone-ownership/requirements_2026-08-17_codex-project-zone-ownership.md`
 - `doc/1_delivery/codex-rule-runtime-simplification/`
