@@ -55,6 +55,21 @@ NEGATED_AUTOLOAD = re.compile(
     re.I,
 )
 CLAUSE_BREAK = re.compile(r"[。！？；;，,\n]+")
+RETIRED_RUNTIME_ASSETS = (
+    "skill-routing.json",
+    "clarify_reminder.py",
+    "focus_reminder.py",
+    "project_memory_writer.py",
+    "memory_rebuild_index.py",
+    "memory_lint.py",
+)
+REQUIRED_INSTRUCTION_REFERENCES = (
+    ("doc/README.md", "doc/README.md"),
+    (
+        "doc/3_reference/codex-hook-signals.md",
+        "doc/3_reference/codex-hook-signals.md",
+    ),
+)
 
 
 def _claims_positive_autoload(text: str) -> bool:
@@ -65,6 +80,25 @@ def _claims_positive_autoload(text: str) -> bool:
                 continue
             return True
     return False
+
+
+def _retired_runtime_issues(text: str, *, label: str) -> list[str]:
+    return [
+        f"{label} references retired runtime asset {name}; "
+        "keep retirement history outside active instructions"
+        for name in RETIRED_RUNTIME_ASSETS
+        if name.casefold() in text.casefold()
+    ]
+
+
+def _required_reference_issues(text: str, root: Path) -> list[str]:
+    issues: list[str] = []
+    for marker, target in REQUIRED_INSTRUCTION_REFERENCES:
+        if marker in text and not (root / target).is_file():
+            issues.append(
+                f"AGENTS.md references missing managed instruction document: {target}"
+            )
+    return issues
 
 
 def _read(path: Path, root: Path = ROOT) -> tuple[str | None, str | None]:
@@ -247,6 +281,8 @@ def instruction_source_issues(root: Path = ROOT) -> list[str]:
         return [error]
     assert text is not None
     issues.extend(_root_agents_issues(text, root, label="AGENTS.md"))
+    issues.extend(_retired_runtime_issues(text, label="AGENTS.md"))
+    issues.extend(_required_reference_issues(text, root))
     has_zone_markers = any(marker in text for marker in ZONE_MARKERS)
     if has_zone_markers:
         for heading in FORBIDDEN_RULE_HEADINGS:
@@ -266,8 +302,13 @@ def instruction_source_issues(root: Path = ROOT) -> list[str]:
         nested_text, nested_error = _read(nested, root)
         if nested_error:
             issues.append(nested_error)
-        elif nested_text and _claims_positive_autoload(nested_text):
-            issues.append(f"{nested.relative_to(root)} claims unsupported Markdown paths auto-loading")
+        elif nested_text:
+            nested_label = nested.relative_to(root).as_posix()
+            issues.extend(_retired_runtime_issues(nested_text, label=nested_label))
+            if _claims_positive_autoload(nested_text):
+                issues.append(
+                    f"{nested_label} claims unsupported Markdown paths auto-loading"
+                )
     template = root / "templates" / "AGENTS.md"
     if template.is_file():
         template_text, template_error = _read(template, root)

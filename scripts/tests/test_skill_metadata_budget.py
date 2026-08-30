@@ -132,15 +132,76 @@ class SkillMetadataBudgetTests(unittest.TestCase):
                 self.assertEqual(incomplete_result.returncode, 2, incomplete_result.stderr)
                 self.assertIn("invocation metadata requires argument", incomplete_result.stderr)
 
-    def test_long_description_body_and_dead_reference_fail(self) -> None:
+    def test_long_description_entry_and_dead_reference_fail(self) -> None:
         repo = self.make_repo()
-        body = "[missing](references/missing.md)\n" + "line\n" * 501
+        body = "[missing](references/missing.md)\n" + "line\n" * 121
         self.write_skill(repo, "demo", skill_text("demo", "x" * 501, body))
         result = self.run_hook(repo)
         self.assertEqual(result.returncode, 2)
         self.assertIn("description exceeds", result.stderr)
-        self.assertIn("exceeds 500 lines", result.stderr)
+        self.assertIn("entry exceeds 120 lines", result.stderr)
         self.assertIn("dead markdown reference", result.stderr)
+
+    def test_entry_responsibility_budget_blocks_ninth_h2_section(self) -> None:
+        repo = self.make_repo()
+        body = "\n".join(f"## Section {index}\nstep" for index in range(9))
+        self.write_skill(repo, "demo", skill_text("demo", body=body))
+
+        result = self.run_hook(repo)
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("exceeds 8 H2 sections", result.stderr)
+
+    def test_retired_runtime_asset_is_blocked_in_entry_and_reference(self) -> None:
+        repo = self.make_repo()
+        folder = repo / "skills" / "demo"
+        references = folder / "references"
+        references.mkdir(parents=True)
+        (folder / "SKILL.md").write_text(
+            skill_text(
+                "demo",
+                body=(
+                    "运行 focus_reminder.py。\n\n"
+                    "命中迁移时读取 [迁移](references/adopt.md)。\n"
+                ),
+            ),
+            encoding="utf-8",
+        )
+        (references / "adopt.md").write_text(
+            "运行 skill-routing.json。\n",
+            encoding="utf-8",
+        )
+
+        result = self.run_hook(repo)
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("focus_reminder.py", result.stderr)
+        self.assertIn("references/adopt.md", result.stderr)
+        self.assertIn("skill-routing.json", result.stderr)
+
+    def test_entry_must_not_duplicate_long_reference_paragraph(self) -> None:
+        repo = self.make_repo()
+        folder = repo / "skills" / "demo"
+        references = folder / "references"
+        references.mkdir(parents=True)
+        paragraph = (
+            "这是一个足够长的规则段落，用于证明入口和按需参考文件不能同时复制同一事实源。"
+            "入口只负责说明何时读取参考文件，详细规则必须只保留在唯一 owner 中。"
+            "任何需要补充的异常处理都应继续写入该 owner，禁止回到入口再次手写一份。"
+        )
+        (folder / "SKILL.md").write_text(
+            skill_text(
+                "demo",
+                body=f"[详细规则](references/deep.md)\n\n{paragraph}\n",
+            ),
+            encoding="utf-8",
+        )
+        (references / "deep.md").write_text(paragraph + "\n", encoding="utf-8")
+
+        result = self.run_hook(repo)
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("entry duplicates 1 long paragraph", result.stderr)
 
     def test_project_links_and_placeholders_are_not_packaged_references(self) -> None:
         repo = self.make_repo()

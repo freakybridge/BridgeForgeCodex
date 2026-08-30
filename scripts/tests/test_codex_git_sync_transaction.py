@@ -52,6 +52,27 @@ class GitSyncTransactionTests(unittest.TestCase):
         SYNC.REPO_ROOT = self.original_root
         SYNC.ADAPTATION_RECEIPT = self.original_receipt
 
+    def test_user_result_uses_fixed_chinese_contract(self) -> None:
+        output = io.StringIO()
+
+        SYNC._print_user_result(
+            SYNC.USER_CONCLUSION_COMPLETED,
+            [],
+            "本次同步已结束，无需继续处理。",
+            file=output,
+        )
+
+        self.assertEqual(
+            output.getvalue(),
+            "结论：已完成。\n"
+            "待处理事项：\n"
+            "- 无\n"
+            "下一步：本次同步已结束，无需继续处理。\n",
+        )
+        reason, next_step = SYNC._humanize_sync_stop("no upstream branch")
+        self.assertEqual(reason, "当前分支没有配置上游分支")
+        self.assertIn("重新运行 $git-sync", next_step)
+
     def _repository(self, root: Path) -> None:
         self.assertEqual(git(root, "init", "-q").returncode, 0)
         self.assertEqual(git(root, "config", "user.name", "BridgeForge Test").returncode, 0)

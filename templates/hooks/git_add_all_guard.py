@@ -137,10 +137,10 @@ def main() -> int:
         return 0
 
     print(
-        "[git-add-guard] Blocked bulk add: the following files look unsafe to stage:\n"
+        "[git-add-guard] BLOCKED 未完成：批量暂存包含高风险文件：\n"
         + "\n".join(flagged)
-        + "\n   Use `git add <exact-path>` for reviewed files, or add true generated/secret files "
-        "to .gitignore before retrying the bulk add.",
+        + "\n   下一步：审查后使用 `git add <精确路径>`；确属生成物或秘密文件时，"
+        "先加入 .gitignore，再重试批量暂存。",
         file=sys.stderr,
     )
     return 2

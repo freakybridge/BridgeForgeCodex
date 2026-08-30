@@ -165,6 +165,19 @@ class SkillRuntimeEfficiencyTests(unittest.TestCase):
         self.assertIn("直接复用 `collab` 的独立 review 收据", agent_execution)
         self.assertNotIn("不得重新走其用户确认闸", develop)
 
+    def test_plan_and_collab_guard_runtime_usability_failures(self) -> None:
+        plan = (ROOT / "skills/plan/SKILL.md").read_text(encoding="utf-8")
+        collab = (ROOT / "skills/collab/SKILL.md").read_text(encoding="utf-8")
+
+        self.assertLess(plan.index("范围充分性硬闸"), plan.index("读取相关代码"))
+        self.assertIn("只读评估也不得跳过此闸", plan)
+        self.assertIn("禁止在计划阶段运行完整回归、下游 fixture 或性能测试", plan)
+
+        self.assertIn("都不能代替有效确认卡，也不构成例外", collab)
+        self.assertIn("禁止降级为无确认卡的临时协作流程", collab)
+        self.assertIn("禁止以只读、时间紧或目标看似明确为由绕过", collab)
+
+
 
 if __name__ == "__main__":
     unittest.main()

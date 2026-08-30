@@ -93,14 +93,16 @@ class HookContextProbeTests(unittest.TestCase):
         self.assertEqual(self.report["focus"]["sequences"], [])
 
     def test_cost_report_separates_characters_from_runtime_tokens(self) -> None:
+        show_state = self.report["show_state"]
+        self.assertTrue(show_state["runtime_present"])
+        self.assertEqual(show_state["active_routes"], ["session-after"])
+        self.assertEqual(show_state["prompt_emitted_cases"], 0)
+        self.assertEqual(show_state["prompt_context_characters"], 0)
+        self.assertGreater(show_state["session_start_context_characters"], 0)
         combined = self.report["combined_prompt_context"]
-        self.assertEqual(
-            combined["p95_characters"], combined["minimum_characters"]
-        )
-        self.assertEqual(
-            combined["twenty_turn_p95_characters"],
-            20 * combined["p95_characters"],
-        )
+        self.assertEqual(combined["minimum_characters"], 0)
+        self.assertEqual(combined["p95_characters"], 0)
+        self.assertEqual(combined["twenty_turn_p95_characters"], 0)
         self.assertFalse(self.report["runtime_tokens"]["measured"])
         self.assertIsNone(self.report["runtime_tokens"]["value"])
 

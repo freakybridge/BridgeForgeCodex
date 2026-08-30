@@ -53,6 +53,77 @@ class SyncStop(Exception):
         self.code = code
 
 
+USER_CONCLUSION_COMPLETED = "已完成。"
+USER_CONCLUSION_COMPLETED_WITH_ACTIONS = "已完成，但仍有待处理项。"
+USER_CONCLUSION_NOT_COMPLETED = "未完成。"
+
+
+def _humanize_sync_stop(message: str) -> tuple[str, str]:
+    normalized = message.casefold()
+    mappings = (
+        (
+            "no upstream branch",
+            "当前分支没有配置上游分支",
+            "先配置上游分支，再重新运行 $git-sync。",
+        ),
+        (
+            "remote advanced",
+            "远端在同步期间出现了新提交",
+            "检查远端变化后，重新运行 $git-sync。",
+        ),
+        (
+            "branch diverged",
+            "本地与远端分别存在独有提交",
+            "查看下方提交清单并决定合并方式。",
+        ),
+        (
+            "project runtime",
+            "项目 .venv 不符合骨架运行要求",
+            "修复项目 .venv 后，重新运行 $git-sync。",
+        ),
+        (
+            "commit message is required",
+            "当前改动缺少提交说明",
+            "提供简体中文提交说明后，重新运行 $git-sync。",
+        ),
+        (
+            "stash pop failed",
+            "自动恢复本地改动时发生冲突，stash 已保留",
+            "人工处理 stash 冲突后，再继续同步。",
+        ),
+        (
+            "timed out",
+            "Git 同步命令执行超时",
+            "检查网络或 Hook 状态后，重新运行 $git-sync。",
+        ),
+    )
+    for marker, reason, next_step in mappings:
+        if marker in normalized:
+            return reason, next_step
+    return (
+        "Git 同步被安全闸停止，技术原因见下方收据",
+        "按技术收据处理原因后，重新运行 $git-sync。",
+    )
+
+
+def _print_user_result(
+    conclusion: str,
+    pending_items: list[str],
+    next_step: str,
+    *,
+    file: object | None = None,
+) -> None:
+    stream = file if file is not None else sys.stdout
+    print(f"结论：{conclusion}", file=stream)
+    print("待处理事项：", file=stream)
+    if pending_items:
+        for item in pending_items:
+            print(f"- {item}", file=stream)
+    else:
+        print("- 无", file=stream)
+    print(f"下一步：{next_step}", file=stream)
+
+
 @dataclass(frozen=True)
 class RepositoryIdentity:
     inside_work_tree: bool
@@ -475,6 +546,11 @@ def _ahead_behind() -> tuple[int, int]:
     return int(parts[0]), int(parts[1])
 
 def _print_diverged() -> None:
+    _print_user_result(
+        USER_CONCLUSION_NOT_COMPLETED,
+        ["本地与远端分别存在独有提交"],
+        "查看下方提交清单并决定合并方式。",
+    )
     print("[git-sync] branch diverged; manual decision required")
     local = _git(["log", "--oneline", "--decorate", "--max-count=5", "@{u}..HEAD"])
     remote = _git(["log", "--oneline", "--decorate", "--max-count=5", "HEAD..@{u}"])
@@ -650,6 +726,18 @@ def sync(args: argparse.Namespace) -> int:
     final_dirty = _status()
     final_ahead, final_behind = _ahead_behind()
     if final_dirty or final_ahead or final_behind:
+        if args.skip_push and not final_dirty and final_ahead and not final_behind:
+            _print_user_result(
+                USER_CONCLUSION_COMPLETED_WITH_ACTIONS,
+                [f"仍有 {final_ahead} 个本地提交尚未推送"],
+                "需要保存到远端时，再次运行不带 --skip-push 的 $git-sync。",
+            )
+        else:
+            _print_user_result(
+                USER_CONCLUSION_NOT_COMPLETED,
+                ["同步结束时仍检测到未收口的 Git 状态"],
+                "查看下方技术收据，处理剩余状态后重新运行 $git-sync。",
+            )
         print("[git-sync] finished with remaining state:")
         if final_dirty:
             print(final_dirty)
@@ -658,6 +746,11 @@ def sync(args: argparse.Namespace) -> int:
         return 3
 
     commit = _run_git(["rev-parse", "HEAD"], label="git rev-parse HEAD").stdout.strip()
+    _print_user_result(
+        USER_CONCLUSION_COMPLETED,
+        [],
+        "本次同步已结束，无需继续处理。",
+    )
     print("[git-sync] synced")
     print(f"commit={commit}")
     print(f"push_target={push_target}")
@@ -670,6 +763,12 @@ def main() -> int:
     try:
         validate_project_runtime(REPO_ROOT, executable=sys.executable)
     except ProjectRuntimeError as exc:
+        _print_user_result(
+            USER_CONCLUSION_NOT_COMPLETED,
+            ["项目 .venv 不符合骨架运行要求"],
+            "修复项目 .venv 后，重新运行 $git-sync。",
+            file=sys.stderr,
+        )
         print(f"[git-sync] project runtime contract rejected: {exc}", file=sys.stderr)
         return 2
     parser = argparse.ArgumentParser(description=__doc__)
@@ -683,9 +782,22 @@ def main() -> int:
     try:
         return sync(args)
     except subprocess.TimeoutExpired as exc:
+        _print_user_result(
+            USER_CONCLUSION_NOT_COMPLETED,
+            ["Git 同步命令执行超时"],
+            "检查网络或 Hook 状态后，重新运行 $git-sync。",
+            file=sys.stderr,
+        )
         print(f"[git-sync] command timed out: {exc}", file=sys.stderr)
         return 1
     except SyncStop as exc:
+        reason, next_step = _humanize_sync_stop(str(exc))
+        _print_user_result(
+            USER_CONCLUSION_NOT_COMPLETED,
+            [reason],
+            next_step,
+            file=sys.stderr,
+        )
         print(f"[git-sync] {exc}", file=sys.stderr)
         return exc.code
 

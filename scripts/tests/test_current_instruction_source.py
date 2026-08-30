@@ -31,6 +31,12 @@ class CurrentInstructionSourceTests(unittest.TestCase):
     def fixture(self, root: Path) -> None:
         (root / ".codex").mkdir()
         (root / "templates").mkdir()
+        (root / "doc" / "3_reference").mkdir(parents=True)
+        (root / "doc" / "README.md").write_text("# Docs\n", encoding="utf-8")
+        (root / "doc" / "3_reference" / "codex-hook-signals.md").write_text(
+            "# Hook signals\n",
+            encoding="utf-8",
+        )
         (root / "AGENTS.md").write_bytes((ROOT / "AGENTS.md").read_bytes())
         (root / "templates" / "AGENTS.md").write_bytes(
             (ROOT / "templates" / "AGENTS.md").read_bytes()

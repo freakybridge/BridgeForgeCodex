@@ -1,6 +1,6 @@
 {
   "schema_version": 3,
-  "release_version": "1.5.15",
+  "release_version": "1.5.19",
   "host": "codex",
   "stamp": ".codex/.bridgeforge_codex_version",
   "contract_target": ".codex/managed-skeleton.json",
@@ -419,7 +419,7 @@
       "source": "templates/hooks/cross_project_write_guard.py",
       "target": ".codex/hooks/cross_project_write_guard.py",
       "strategy": "whole",
-      "current_sha256": "sha256:808fbd8505c8c817878527ef252bb10b7bc42f1ef83116c874c70079ec91749b"
+      "current_sha256": "sha256:2659132af7fa08a2b0dc5d8323f9c5928d0efa9538fb4791948e557371f32549"
     },
     {
       "id": "codex.hook.encoding-check",
@@ -447,7 +447,7 @@
       "source": "templates/hooks/git_add_all_guard.py",
       "target": ".codex/hooks/git_add_all_guard.py",
       "strategy": "whole",
-      "current_sha256": "sha256:8a82e19929d0e3298057d0d860964e8ea93871c751cd62284a9f29022372871a"
+      "current_sha256": "sha256:75723afffb4c7714abd55738eaebafc69a5384ffe0d106a22fd69fb214e749f4"
     },
     {
       "id": "codex.hook.githooks-path-check",
@@ -482,14 +482,14 @@
       "source": "templates/hooks/instruction_source_check.py",
       "target": ".codex/hooks/instruction_source_check.py",
       "strategy": "whole",
-      "current_sha256": "sha256:e7e24ad8620cbe58471dbe14dd5d6a9df648a2001f8cc4ffd3f5e51357f62fb1"
+      "current_sha256": "sha256:461a80785c4158150a5abae17a1f543424a4b183cea1dfcc3e5d4c0461bf6d38"
     },
     {
       "id": "codex.hook.project-structure-check",
       "source": "templates/hooks/project_structure_check.py",
       "target": ".codex/hooks/project_structure_check.py",
       "strategy": "whole",
-      "current_sha256": "sha256:38fe8d0d2f55408bf14ff2ab15c2b282502db96e5d2fb132964242e4e74b4cf3"
+      "current_sha256": "sha256:f2de4d6e4fcc71e7627e058325a21d4f775538a0e851909f1cd189bdeb9320e3"
     },
     {
       "id": "codex.hook.session-snapshot",
@@ -510,7 +510,7 @@
       "source": "templates/hooks/skill_metadata_check.py",
       "target": ".codex/hooks/skill_metadata_check.py",
       "strategy": "whole",
-      "current_sha256": "sha256:60d9f536d29318d262406f4e822d9cb04b47258f83f7f2ca566c33c26ddc80a7"
+      "current_sha256": "sha256:da0c3219100fde30c22cae4a2121b41b2bab775fbe2c6ebea88d7d7065d76f1e"
     },
     {
       "id": "codex.hook.skill-sync-check",
@@ -531,7 +531,7 @@
       "source": "templates/hooks/user_config_write_guard.py",
       "target": ".codex/hooks/user_config_write_guard.py",
       "strategy": "whole",
-      "current_sha256": "sha256:ea396b2ac2ed6776459e6fd04952cf3603548a72518ec7c333b7c7ffacb18e6d"
+      "current_sha256": "sha256:1d7d5c1e25ed77737bb0a7aec1b3f80b7983440a6c0f817e735fa45eb915f770"
     },
     {
       "id": "codex.script.archive-scan",
@@ -559,7 +559,7 @@
       "source": "templates/scripts/codex_git_sync.py",
       "target": ".codex/scripts/codex_git_sync.py",
       "strategy": "whole",
-      "current_sha256": "sha256:4819315b13d6d7537273cc7d573aba43d8ce331b62bebe4102b0c075f84f3f2f"
+      "current_sha256": "sha256:710cb6fc02b42b5089263ba50d2fe615cc2bc70cd45f88e2a2af530700af19d6"
     },
     {
       "id": "codex.script.hook-config-policy",

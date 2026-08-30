@@ -94,6 +94,49 @@ class ProjectStructureCheckTests(unittest.TestCase):
             {item["code"] for item in payload["errors"]},
         )
 
+    def test_human_output_labels_advisory_and_blocked_in_chinese(self) -> None:
+        project = self.make_project()
+        (project / "tests").mkdir()
+        archive = project / "doc" / "4_archive" / "legacy.md"
+        archive.write_text("# legacy\n", encoding="utf-8")
+
+        result = self.run_check(project)
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("ADVISORY 提醒", result.stderr)
+        self.assertIn("BLOCKED 未完成", result.stderr)
+
+    def test_dead_active_document_reference_is_blocked_but_archive_is_frozen(self) -> None:
+        project = self.make_project()
+        readme = project / "doc" / "README.md"
+        readme.write_text(
+            readme.read_text(encoding="utf-8")
+            + "\n[missing](0_architecture/missing.md)\n",
+            encoding="utf-8",
+        )
+        archived = project / "doc" / "4_archive" / "legacy.md"
+        archived.write_text("[historical](missing.md)\n", encoding="utf-8")
+
+        result = self.run_check(project, json_output=True)
+
+        self.assertEqual(result.returncode, 2)
+        payload = json.loads(result.stdout)
+        dead = [
+            item for item in payload["errors"]
+            if item["code"] == "dead-doc-reference"
+        ]
+        self.assertEqual(len(dead), 1)
+        self.assertEqual(dead[0]["path"], "doc/README.md:7")
+
+    def test_ia_index_points_to_ledger_without_copying_status(self) -> None:
+        readme = (ROOT / "doc" / "README.md").read_text(encoding="utf-8")
+        ia_line = next(
+            line for line in readme.splitlines()
+            if line.startswith("- [") and "BUG-agents-ia/README.md" in line
+        )
+        self.assertIn("当前状态与验证收据见该总账", ia_line)
+        self.assertNotIn("IA-10", ia_line)
+
     def test_legacy_archive_and_closed_items_are_advisory(self) -> None:
         project = self.make_project()
         topic = project / "doc" / "1_delivery" / "done-topic"

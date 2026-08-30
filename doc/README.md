@@ -47,7 +47,7 @@ delivery_layout: flat
 
 ## 架构
 
-- 设计资料：[`0_architecture/design/`](0_architecture/design/)，包括 [`codex-project-sync.md`](0_architecture/design/codex-project-sync.md)、[`codex-native-instruction-architecture.md`](0_architecture/design/codex-native-instruction-architecture.md)、[`codex-native-memory-sync.md`](0_architecture/design/codex-native-memory-sync.md)、`design-rationale.md` 与上游同步 playbook。
+- 设计资料：[`0_architecture/design/`](0_architecture/design/)，包括 [`codex-project-sync.md`](0_architecture/design/codex-project-sync.md)、[`codex-native-instruction-architecture.md`](0_architecture/design/codex-native-instruction-architecture.md)、[`codex-native-memory-sync.md`](0_architecture/design/codex-native-memory-sync.md)、[`user-facing-result-contract.md`](0_architecture/design/user-facing-result-contract.md)、`design-rationale.md` 与上游同步 playbook。
 - 操作参考：[`codex-project-operating-guide.md`](3_reference/codex-project-operating-guide.md) 与主动澄清参考 [`codex-hook-signals.md`](3_reference/codex-hook-signals.md)；自动 Clarify / Focus Hook 已退役。
 - `$bridgeforge-codex` 的运行手册属于产品源码，位于 [`skills/bridgeforge-codex/references/`](../skills/bridgeforge-codex/references/)，不纳入 `doc/`。
 
@@ -105,7 +105,7 @@ delivery_layout: flat
 
 ## Bug records
 
-- [`BUG-agents-ia/`](2_bugs/BUG-agents-ia/README.md)（IA-10 已传播真实工厂 1.5.14；待真实下游、runtime 与 IA-11～IA-14）
+- [`BUG-agents-ia/`](2_bugs/BUG-agents-ia/README.md)（当前状态与验证收据见该总账；IA-14 用户与 runtime 验收见 [`IA-14-user-runtime-acceptance.md`](2_bugs/BUG-agents-ia/IA-14-user-runtime-acceptance.md)）
 - [`BUG-codex-backend-unexpected-control-exit.md`](2_bugs/BUG-codex-backend-unexpected-control-exit.md)
 - [`BUG-project-memory-sessionstart-gbk-output.md`](2_bugs/BUG-project-memory-sessionstart-gbk-output.md)
 - [`BUG-windows-codex-hooks-open-visible-terminal.md`](2_bugs/BUG-windows-codex-hooks-open-visible-terminal.md)

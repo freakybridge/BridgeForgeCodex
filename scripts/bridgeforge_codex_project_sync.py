@@ -2839,6 +2839,20 @@ def _plan_payload(
     return payload
 
 
+USER_CONCLUSION_COMPLETED = "已完成。"
+USER_CONCLUSION_NO_ACTION = "无需处理。"
+USER_CONCLUSION_AWAITING_CONFIRMATION = "等待确认。"
+USER_CONCLUSION_NOT_COMPLETED = "未完成。"
+USER_CONCLUSION_COMPLETED_WITH_ACTIONS = "已完成，但仍有待处理项。"
+USER_CONCLUSIONS = frozenset({
+    USER_CONCLUSION_COMPLETED,
+    USER_CONCLUSION_NO_ACTION,
+    USER_CONCLUSION_AWAITING_CONFIRMATION,
+    USER_CONCLUSION_NOT_COMPLETED,
+    USER_CONCLUSION_COMPLETED_WITH_ACTIONS,
+})
+
+
 def _humanize_sync_reason(reason: str) -> str:
     normalized = reason.casefold()
     mappings = (
@@ -2881,7 +2895,7 @@ def _plan_human_result(payload: dict[str, Any]) -> dict[str, Any]:
     if blockers:
         pending = [_humanize_sync_reason(str(item)) for item in blockers]
         return {
-            "conclusion": "骨架升级未完成。",
+            "conclusion": USER_CONCLUSION_NOT_COMPLETED,
             "pending_items": pending,
             "next_step": _human_next_step(str(blockers[0])),
         }
@@ -2893,7 +2907,7 @@ def _plan_human_result(payload: dict[str, Any]) -> dict[str, Any]:
             for item in gaps
         ]
         return {
-            "conclusion": "升级计划存在未解决缺口，尚未修改文件。",
+            "conclusion": USER_CONCLUSION_NOT_COMPLETED,
             "pending_items": pending,
             "next_step": "先处理计划中的缺口，再重新生成升级计划。",
         }
@@ -2911,11 +2925,7 @@ def _plan_human_result(payload: dict[str, Any]) -> dict[str, Any]:
         if not pending:
             pending.append("需要确认本次破坏性重建")
         return {
-            "conclusion": (
-                "已生成升级计划；legacy 项目 Memory 尚未迁移，且尚未修改文件。"
-                if legacy
-                else "已生成升级计划，尚未修改文件。"
-            ),
+            "conclusion": USER_CONCLUSION_AWAITING_CONFIRMATION,
             "pending_items": pending,
             "next_step": "确认上述事项后，才能执行升级。",
         }
@@ -2927,18 +2937,18 @@ def _plan_human_result(payload: dict[str, Any]) -> dict[str, Any]:
         if safe:
             pending.append(f"另有 {len(safe)} 项安全骨架更新等待执行")
         return {
-            "conclusion": "骨架可继续更新，但 legacy 项目 Memory 尚未迁移。",
+            "conclusion": USER_CONCLUSION_NOT_COMPLETED,
             "pending_items": pending,
             "next_step": "按扫描清单完成人工审核；迁移与清理必须分别授权。",
         }
     if safe:
         return {
-            "conclusion": "已生成可执行的升级计划，尚未修改文件。",
+            "conclusion": USER_CONCLUSION_AWAITING_CONFIRMATION,
             "pending_items": [f"有 {len(safe)} 项骨架更新等待执行"],
             "next_step": "执行刚刚生成的升级计划。",
         }
     return {
-        "conclusion": "当前骨架已是最新状态。",
+        "conclusion": USER_CONCLUSION_NO_ACTION,
         "pending_items": [],
         "next_step": "本次操作已结束，无需继续处理。",
     }
@@ -2955,18 +2965,18 @@ def _receipt_human_result(payload: dict[str, Any]) -> dict[str, Any]:
         if applied:
             pending.insert(0, f"已应用 {len(applied)} 项骨架更新，尚未提交到 Git")
         return {
-            "conclusion": "骨架更新已完成，但项目仍有 legacy Memory 缺口。",
+            "conclusion": USER_CONCLUSION_COMPLETED_WITH_ACTIONS,
             "pending_items": pending,
             "next_step": "按逐文件清单审核迁移；获得独立清理授权前保持原目录不变。",
         }
     if not applied:
         return {
-            "conclusion": "当前骨架已是最新状态。",
+            "conclusion": USER_CONCLUSION_NO_ACTION,
             "pending_items": [],
             "next_step": "本次操作已结束，无需继续处理。",
         }
     return {
-        "conclusion": "骨架升级已完成。",
+        "conclusion": USER_CONCLUSION_COMPLETED,
         "pending_items": [f"已应用 {len(applied)} 项骨架更新，尚未提交到 Git"],
         "next_step": "需要保存到 GitHub 时运行 $git-sync。",
     }
@@ -2980,7 +2990,7 @@ def _failure_human_result(payload: dict[str, Any]) -> dict[str, Any]:
     else:
         pending.append("没有确认成功的骨架写入")
     return {
-        "conclusion": "骨架升级未完成。",
+        "conclusion": USER_CONCLUSION_NOT_COMPLETED,
         "pending_items": pending,
         "next_step": _human_next_step(reason),
     }

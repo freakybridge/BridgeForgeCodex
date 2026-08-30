@@ -191,16 +191,15 @@ def risky_shell_target(command: str) -> tuple[str, Path] | None:
 
 def block(reason: str, target: Path) -> int:
     print(
-        "[cross-project-write-guard] Blocked cross-project write boundary.",
+        "[cross-project-write-guard] BLOCKED 未完成：拒绝跨项目写入。",
         file=sys.stderr,
     )
-    print(f"[cross-project-write-guard]   current project: {REPO_ROOT}", file=sys.stderr)
-    print(f"[cross-project-write-guard]   target path: {target}", file=sys.stderr)
-    print(f"[cross-project-write-guard]   operation: {reason}", file=sys.stderr)
+    print(f"[cross-project-write-guard]   当前项目：{REPO_ROOT}", file=sys.stderr)
+    print(f"[cross-project-write-guard]   目标路径：{target}", file=sys.stderr)
+    print(f"[cross-project-write-guard]   操作：{reason}", file=sys.stderr)
     print(
-        "[cross-project-write-guard] This conversation belongs to the current project, "
-        "but the tool would modify another project/path. Ask the user to confirm the "
-        "target project explicitly, then retry with that confirmation in context.",
+        "[cross-project-write-guard]   下一步：让用户明确确认目标项目，"
+        "再在保留该确认的上下文中重试。",
         file=sys.stderr,
     )
     return 2

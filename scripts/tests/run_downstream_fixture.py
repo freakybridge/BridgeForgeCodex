@@ -142,7 +142,7 @@ def init_check(base: Path) -> dict[str, object]:
             and not repeated["safe"]
             and not repeated["risk"]
             and human.returncode == 0
-            and "结论：当前骨架已是最新状态。" in human.stdout
+            and "结论：无需处理。" in human.stdout
             and "aggregate_fingerprint" not in human.stdout
             and not human.stderr
         ),

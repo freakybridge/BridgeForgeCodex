@@ -85,7 +85,7 @@ plan 必须零写入。同步器 `machine` 区负责 fingerprint、safe、risk�
 
 准备 Apply 时必须重新生成 plan；fingerprint 漂移则零写停止并重新展示。只有 fingerprint 与用户选择仍有效时，才读取 [事务与回滚](references/transaction.md) 并按其唯一顺序执行；Apply 也必须传入 `--output-format combined`，禁止人工 copy、merge、删除或写版本戳。
 
-默认结果必须逐项展示同步器 `human` 区的“结论、待处理事项、下一步”，禁止自行改写结论或直接倾倒 `machine` 区的 safe/risk/gap、fingerprint、asset ID、内部枚举与验证流水。只有同步器未覆盖用户追问的背景时，主对话才补充说明；补充说明不得改变同步器结论。
+默认结果必须逐项展示同步器 `human` 区的“结论、待处理事项、下一步”；结论只能使用“已完成、无需处理、等待确认、未完成、已完成但仍有待处理项”五类固定中文状态。禁止自行改写结论或直接倾倒 `machine` 区的 safe/risk/gap、fingerprint、asset ID、内部枚举与验证流水。只有同步器未覆盖用户追问的背景时，主对话才补充说明；补充说明不得改变同步器结论。
 
 - 成功：说明当前骨架版本；只把本轮真实收据证明产生的未提交骨架文件计入数量，并把 `$git-sync` 作为需要保存到 GitHub 时的唯一下一步。
 - no-op：说明当前版本和“本次操作已结束，无需继续处理”，不展示 planner、validator 或健康 Native Memory 明细。

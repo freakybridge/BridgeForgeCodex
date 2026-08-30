@@ -8,7 +8,7 @@
 
 > 状态：已退役历史设计（2026-08-30）；当前事实源见上方链接。
 > 前身：艾宾浩斯热度评分系统（2026-06-03 设计、已实现），**本次废弃**，原因见下。
-> 改版辩论：[debates_2026-06-27_memory-untrack.md](debates_2026-06-27_memory-untrack.md)
+> 改版辩论：[debates_2026-06-27_memory-untrack.md](../../4_archive/debates_2026-06-27_memory-untrack.md)
 
 ---
 

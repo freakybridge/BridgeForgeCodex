@@ -101,9 +101,15 @@ def command_targets_user_config(command: str) -> bool:
 
 
 def block() -> int:
-    print("[user-config-write-guard] Blocked write to user-level Codex model configuration.", file=sys.stderr)
-    print(f"[user-config-write-guard]   protected path: {USER_CONFIG}", file=sys.stderr)
-    print("[user-config-write-guard]   bridgeforge-codex skeletons may read but never write this file.", file=sys.stderr)
+    print(
+        "[user-config-write-guard] BLOCKED 未完成：禁止写入用户级 Codex 模型配置。",
+        file=sys.stderr,
+    )
+    print(f"[user-config-write-guard]   受保护路径：{USER_CONFIG}", file=sys.stderr)
+    print(
+        "[user-config-write-guard]   下一步：保留只读访问；骨架不得修改该文件。",
+        file=sys.stderr,
+    )
     return 2
 
 

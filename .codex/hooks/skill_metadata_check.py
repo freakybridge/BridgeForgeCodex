@@ -7,9 +7,10 @@ Scope:
   so this hook self-gates to no-op there.
 
 Hard gates cover discoverability plus unsafe context growth: required metadata,
-single-line descriptions <= 500 chars, SKILL.md <= 500 lines, live one-level
-`references/` links with no orphan Markdown files, and bridgeforge-codex invocation metadata. Descriptions
-over 300 chars are soft warnings.
+single-line descriptions <= 500 chars, entry SKILL.md <= 120 lines and <= 8 H2
+sections, live one-level `references/` links with no orphan Markdown files,
+retired runtime assets, exact entry/reference duplication, and invocation metadata.
+Descriptions over 300 chars are soft warnings.
 """
 from __future__ import annotations
 
@@ -30,7 +31,8 @@ SKILLS_DIR = REPO_ROOT / "skills"
 BOM = b"\xef\xbb\xbf"
 DESCRIPTION_WARN_CHARS = 300
 DESCRIPTION_MAX_CHARS = 500
-SKILL_MAX_LINES = 500
+SKILL_ENTRY_MAX_LINES = 120
+SKILL_ENTRY_MAX_H2_SECTIONS = 8
 CATALOG_DESCRIPTION_MAX_CHARS = 4_000
 MD_LINK_RE = re.compile(r"\[[^\]]+\]\(([^)]+\.md(?:#[^)]*)?)\)")
 AGENT_NAME_RE = re.compile(r"^[a-z][a-z0-9-]*$")
@@ -46,6 +48,62 @@ UNNAMED_AGENT_RE = re.compile(
 )
 BUILTIN_AGENT_NAMES = frozenset({"default", "worker", "explorer"})
 AGENT_ROLE_MARKER = "agent-role:"
+RETIRED_RUNTIME_ASSETS = (
+    "skill-routing.json",
+    "clarify_reminder.py",
+    "focus_reminder.py",
+    "project_memory_writer.py",
+    "memory_rebuild_index.py",
+    "memory_lint.py",
+)
+MIN_DUPLICATE_PARAGRAPH_CHARS = 80
+
+
+def _body_without_frontmatter(text: str) -> str:
+    lines = text.splitlines()
+    if not lines or lines[0].strip() != "---":
+        return text
+    for index, line in enumerate(lines[1:], start=1):
+        if line.strip() == "---":
+            return "\n".join(lines[index + 1 :])
+    return text
+
+
+def _retired_runtime_findings(text: str) -> list[str]:
+    return [
+        f"retired runtime asset must not appear in active Skill text: {name}"
+        for name in RETIRED_RUNTIME_ASSETS
+        if name.casefold() in text.casefold()
+    ]
+
+
+def _paragraphs(text: str) -> set[str]:
+    paragraphs: set[str] = set()
+    for raw in re.split(r"\n\s*\n", text):
+        normalized = " ".join(line.strip() for line in raw.splitlines() if line.strip())
+        if (
+            len(normalized) >= MIN_DUPLICATE_PARAGRAPH_CHARS
+            and not normalized.startswith("#")
+            and not normalized.startswith("```")
+        ):
+            paragraphs.add(normalized)
+    return paragraphs
+
+
+def _duplicate_reference_findings(
+    entry_text: str,
+    reference_texts: dict[str, str],
+) -> list[str]:
+    entry_paragraphs = _paragraphs(_body_without_frontmatter(entry_text))
+    findings: list[str] = []
+    for name, reference_text in sorted(reference_texts.items()):
+        duplicates = entry_paragraphs & _paragraphs(reference_text)
+        if duplicates:
+            findings.append(
+                f"entry duplicates {len(duplicates)} long paragraph(s) from {name}; "
+                "keep the rule in one owner and route to it"
+            )
+    return findings
 
 
 def load_agent_names(agent_dirs: Iterable[Path]) -> tuple[set[str], list[str]]:
@@ -196,9 +254,20 @@ def _validate_skill(
     except Exception as exc:
         issues.append(f"cannot read body: {exc}")
         text = ""
+    body_text = _body_without_frontmatter(text)
     line_count = len(text.splitlines())
-    if line_count > SKILL_MAX_LINES:
-        issues.append(f"SKILL.md exceeds {SKILL_MAX_LINES} lines ({line_count}); split conditional detail into references/")
+    if line_count > SKILL_ENTRY_MAX_LINES:
+        issues.append(
+            f"SKILL.md entry exceeds {SKILL_ENTRY_MAX_LINES} lines ({line_count}); "
+            "split conditional detail into references/"
+        )
+    h2_count = len(re.findall(r"(?m)^##\s+\S", body_text))
+    if h2_count > SKILL_ENTRY_MAX_H2_SECTIONS:
+        issues.append(
+            f"SKILL.md entry exceeds {SKILL_ENTRY_MAX_H2_SECTIONS} H2 sections "
+            f"({h2_count}); reduce entry responsibilities"
+        )
+    issues.extend(_retired_runtime_findings(body_text))
 
     if known_agent_names is not None:
         role_text = text
@@ -249,16 +318,25 @@ def _validate_skill(
                     "link it from SKILL.md with an explicit read condition"
                 )
 
+    reference_texts: dict[str, str] = {}
+    for resolved, clean in sorted(
+        linked_references.items(),
+        key=lambda item: item[1],
+    ):
+        try:
+            reference_texts[clean] = resolved.read_text(encoding="utf-8")
+        except Exception as exc:
+            issues.append(f"cannot read linked reference {clean}: {exc}")
+
+    for clean, reference_text in reference_texts.items():
+        issues.extend(
+            f"{clean}: {finding}"
+            for finding in _retired_runtime_findings(reference_text)
+        )
+    issues.extend(_duplicate_reference_findings(text, reference_texts))
+
     if known_agent_names is not None:
-        for resolved, clean in sorted(
-            linked_references.items(),
-            key=lambda item: item[1],
-        ):
-            try:
-                reference_text = resolved.read_text(encoding="utf-8")
-            except Exception as exc:
-                issues.append(f"cannot read linked reference {clean}: {exc}")
-                continue
+        for clean, reference_text in reference_texts.items():
             role_findings = [
                 f"{clean}: {finding}"
                 for finding in _agent_role_findings(

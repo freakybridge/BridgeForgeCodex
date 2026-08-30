@@ -80,21 +80,32 @@ def run_baseline(case_path: Path = CASES) -> dict[str, object]:
         for targets in dispatcher.RUNTIME_ROUTES.values()
         for target in targets
     })
+    show_state_routes = sorted(
+        route
+        for route, targets in dispatcher.RUNTIME_ROUTES.items()
+        if "hooks/show_state.py" in targets
+    )
     project_memory_routes = [
         target
         for target in runtime_targets
         if "memory" in Path(target).name.casefold()
     ]
 
-    state_context = _state_context(show_state)
+    session_state_context = _state_context(show_state)
+    prompt_state_context = (
+        session_state_context if "user-prompt" in show_state_routes else ""
+    )
     rows = []
     for case in corpus["prompt_cases"]:
-        combined = state_context
+        combined = prompt_state_context
         rows.append(
             {
                 **case,
                 "project_memory": {"context": "", **_metrics("")},
-                "state": {"context": state_context, **_metrics(state_context)},
+                "state": {
+                    "context": prompt_state_context,
+                    **_metrics(prompt_state_context),
+                },
                 "combined": {"context": combined, **_metrics(combined)},
             }
         )
@@ -102,7 +113,7 @@ def run_baseline(case_path: Path = CASES) -> dict[str, object]:
     combined_sizes = [int(row["combined"]["characters"]) for row in rows]
 
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "corpus": {
             "prompt_cases": len(rows),
             "focus_sequences": len(corpus["focus_sequences"]),
@@ -111,10 +122,15 @@ def run_baseline(case_path: Path = CASES) -> dict[str, object]:
             ),
         },
         "show_state": {
-            "emitted_cases": len(rows),
+            "runtime_present": bool(show_state_routes),
+            "active_routes": show_state_routes,
+            "prompt_emitted_cases": sum(
+                bool(row["state"]["emitted"]) for row in rows
+            ),
             "relevant_cases": sum(bool(row["state_relevant"]) for row in rows),
             "irrelevant_cases": sum(not bool(row["state_relevant"]) for row in rows),
-            "signal_characters": len(state_context),
+            "prompt_context_characters": len(prompt_state_context),
+            "session_start_context_characters": len(session_state_context),
         },
         "project_memory": {
             "runtime_present": bool(project_memory_routes),

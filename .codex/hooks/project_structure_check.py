@@ -9,6 +9,7 @@ import re
 import sys
 from pathlib import Path
 from typing import Any
+from urllib.parse import unquote
 
 REQUIRED_DOC_LAYERS = {
     "0_architecture",
@@ -20,6 +21,11 @@ REQUIRED_DOC_LAYERS = {
 ALLOWED_DOC_ENTRIES = REQUIRED_DOC_LAYERS | {"README.md"}
 CLOSED_DELIVERY_STATUSES = {"completed", "superseded"}
 CLOSED_BUG_STATUSES = {"resolved", "fixed"}
+MD_LINK_RE = re.compile(r"(?<!!)\[[^\]\n]+\]\(([^)\n]+)\)")
+URI_SCHEME_RE = re.compile(r"^[a-z][a-z0-9+.-]*:", re.IGNORECASE)
+FROZEN_DOC_SUBTREES = {
+    ("2_bugs", "BUG-agents-ia", "refactored-project"),
+}
 
 
 def _repo_root() -> Path:
@@ -105,6 +111,102 @@ def _contains_markdown(
             elif item.is_file() and item.suffix.casefold() == ".md":
                 found = True
     return found
+
+
+def _visible_markdown_links(text: str) -> list[tuple[int, str]]:
+    links: list[tuple[int, str]] = []
+    fence_char: str | None = None
+    fence_length = 0
+    for line_number, line in enumerate(text.splitlines(), start=1):
+        stripped = line.lstrip()
+        fence = re.match(r"(`{3,}|~{3,})", stripped)
+        if fence:
+            marker = fence.group(1)
+            if fence_char is None:
+                fence_char = marker[0]
+                fence_length = len(marker)
+            elif marker[0] == fence_char and len(marker) >= fence_length:
+                fence_char = None
+                fence_length = 0
+            continue
+        if fence_char is not None:
+            continue
+        links.extend((line_number, match) for match in MD_LINK_RE.findall(line))
+    return links
+
+
+def _local_markdown_target(raw: str) -> str | None:
+    target = raw.strip()
+    if target.startswith("<") and ">" in target:
+        target = target[1 : target.index(">")]
+    else:
+        target = target.split(maxsplit=1)[0]
+    target = unquote(target).replace("\\", "/")
+    target = target.split("#", 1)[0].split("?", 1)[0]
+    if (
+        not target
+        or target.endswith("/")
+        or target.startswith(("/", "#"))
+        or URI_SCHEME_RE.match(target)
+        or any(marker in target for marker in ("{{", "}}", "<", ">"))
+    ):
+        return None
+    return target
+
+
+def _is_frozen_doc(path: Path, doc: Path) -> bool:
+    parts = path.relative_to(doc).parts
+    return parts[:1] == ("4_archive",) or any(
+        parts[: len(prefix)] == prefix
+        for prefix in FROZEN_DOC_SUBTREES
+    )
+
+
+def _active_markdown_files(
+    doc: Path,
+    root: Path,
+    errors: list[dict[str, str]],
+) -> list[Path]:
+    files: list[Path] = []
+    pending = [doc]
+    while pending:
+        current = pending.pop()
+        for item in current.iterdir():
+            if _is_frozen_doc(item, doc):
+                continue
+            if _is_reparse(item):
+                _unsafe_entry(errors, item, root)
+                continue
+            if item.is_dir():
+                pending.append(item)
+            elif item.is_file() and item.suffix.casefold() == ".md":
+                files.append(item)
+    return sorted(files, key=lambda item: item.as_posix().casefold())
+
+
+def _append_dead_reference_issues(
+    doc: Path,
+    root: Path,
+    errors: list[dict[str, str]],
+) -> None:
+    for source in _active_markdown_files(doc, root, errors):
+        for line_number, raw_target in _visible_markdown_links(_read_text(source)):
+            target = _local_markdown_target(raw_target)
+            if target is None:
+                continue
+            resolved = (source.parent / target).resolve()
+            try:
+                resolved.relative_to(root)
+            except ValueError:
+                exists = False
+            else:
+                exists = resolved.exists()
+            if not exists:
+                errors.append({
+                    "code": "dead-doc-reference",
+                    "path": f"{source.relative_to(root).as_posix()}:{line_number}",
+                    "message": f"活动文档引用不存在：{raw_target}",
+                })
 
 
 def inspect_project(root: Path) -> dict[str, list[dict[str, str]]]:
@@ -223,14 +325,22 @@ def inspect_project(root: Path) -> dict[str, list[dict[str, str]]]:
                     "message": "旧式归档仍散放在 4_archive/ 根；后续确认后迁入 legacy/",
                 })
 
+    _append_dead_reference_issues(doc, root, errors)
+
     return {"errors": errors, "advisories": advisories}
 
 
 def _print_human(report: dict[str, list[dict[str, str]]]) -> None:
     for item in report["advisories"]:
-        print(f"[project-structure] ADVISORY {item['path']}: {item['message']}", file=sys.stderr)
+        print(
+            f"[project-structure] ADVISORY 提醒 {item['path']}: {item['message']}",
+            file=sys.stderr,
+        )
     for item in report["errors"]:
-        print(f"[project-structure] BLOCKED {item['path']}: {item['message']}", file=sys.stderr)
+        print(
+            f"[project-structure] BLOCKED 未完成 {item['path']}: {item['message']}",
+            file=sys.stderr,
+        )
 
 
 def main() -> int:
@@ -242,7 +352,10 @@ def main() -> int:
     try:
         report = inspect_project(args.root)
     except Exception as exc:
-        print(f"[project-structure] checker failed closed: {exc}", file=sys.stderr)
+        print(
+            f"[project-structure] BLOCKED 未完成：结构检查器失败并安全阻断。技术详情：{exc}",
+            file=sys.stderr,
+        )
         return 2
     if args.json:
         print(json.dumps(report, ensure_ascii=False, indent=2))

@@ -924,7 +924,7 @@ class CurrentProjectSyncTests(unittest.TestCase):
             check=False,
         )
         self.assertEqual(human_plan.returncode, 0, human_plan.stderr)
-        self.assertIn("结论：已生成升级计划，尚未修改文件。", human_plan.stdout)
+        self.assertIn("结论：等待确认。", human_plan.stdout)
         self.assertIn("下一步：确认上述事项后，才能执行升级。", human_plan.stdout)
         self.assertNotIn("aggregate_fingerprint", human_plan.stdout)
         self.assertFalse(human_plan.stderr)
@@ -944,7 +944,7 @@ class CurrentProjectSyncTests(unittest.TestCase):
         )
         self.assertEqual(
             combined_payload["human"]["conclusion"],
-            "已生成升级计划，尚未修改文件。",
+            SYNC.USER_CONCLUSION_AWAITING_CONFIRMATION,
         )
 
         rejected = subprocess.run(
@@ -978,7 +978,7 @@ class CurrentProjectSyncTests(unittest.TestCase):
         self.assertEqual(combined_failure["machine"]["status"], "failed")
         self.assertEqual(
             combined_failure["human"]["conclusion"],
-            "骨架升级未完成。",
+            SYNC.USER_CONCLUSION_NOT_COMPLETED,
         )
         self.assertIn("确认", combined_failure["human"]["next_step"])
         self.assertFalse(combined_rejected.stderr)
@@ -1755,9 +1755,9 @@ class CurrentProjectSyncTests(unittest.TestCase):
         self.assertEqual(machine["status"], "planned_with_gaps")
         self.assertEqual(machine["readiness"], "action_required")
         human = SYNC._plan_human_result(machine)
-        self.assertIn("尚未迁移", human["conclusion"])
+        self.assertIn(human["conclusion"], SYNC.USER_CONCLUSIONS)
         self.assertTrue(any(
-            "1 个 legacy" in item
+            "1 个 legacy" in item and "尚未迁移" in item
             for item in human["pending_items"]
         ))
 
@@ -1771,7 +1771,10 @@ class CurrentProjectSyncTests(unittest.TestCase):
         self.assertEqual(receipt.status, "completed_with_gaps")
         self.assertEqual(receipt.readiness, "action_required")
         receipt_human = SYNC._receipt_human_result(SYNC.asdict(receipt))
-        self.assertIn("legacy Memory 缺口", receipt_human["conclusion"])
+        self.assertEqual(
+            receipt_human["conclusion"],
+            SYNC.USER_CONCLUSION_COMPLETED_WITH_ACTIONS,
+        )
         self.assertIn("未迁移、未删除", receipt_human["pending_items"][-1])
         repeated = SYNC.build_plan(self.project, ROOT, "update")
         self.assertFalse(repeated.blockers)
@@ -2284,7 +2287,7 @@ class CurrentProjectSyncTests(unittest.TestCase):
             "confirmation_required": False,
         }
         noop = SYNC._plan_human_result(dict(common))
-        self.assertEqual(noop["conclusion"], "当前骨架已是最新状态。")
+        self.assertEqual(noop["conclusion"], SYNC.USER_CONCLUSION_NO_ACTION)
         self.assertEqual(noop["pending_items"], [])
 
         gap_payload = dict(common)
@@ -2298,7 +2301,10 @@ class CurrentProjectSyncTests(unittest.TestCase):
             "project runtime contract rejected: missing interpreter"
         ]
         blocker = SYNC._plan_human_result(blocker_payload)
-        self.assertEqual(blocker["conclusion"], "骨架升级未完成。")
+        self.assertEqual(
+            blocker["conclusion"],
+            SYNC.USER_CONCLUSION_NOT_COMPLETED,
+        )
         self.assertIn("项目 .venv", blocker["next_step"])
 
         failure = SYNC._failure_human_result(
@@ -2308,9 +2314,12 @@ class CurrentProjectSyncTests(unittest.TestCase):
             }
         )
         rendered = SYNC._render_human_result(failure)
-        self.assertIn("结论：骨架升级未完成。", rendered)
+        self.assertIn("结论：未完成。", rendered)
         self.assertIn("本次写入已回滚", rendered)
         self.assertNotIn("traceback", rendered.casefold())
+
+        for result in (noop, gap, blocker, failure):
+            self.assertIn(result["conclusion"], SYNC.USER_CONCLUSIONS)
 
 
 if __name__ == "__main__":

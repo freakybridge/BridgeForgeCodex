@@ -203,6 +203,12 @@ class InstructionSourceCheckTests(unittest.TestCase):
                 self.assertEqual(text.count("修改前必须追踪完整调用链"), 1)
 
     def _zoned_project(self, root: Path) -> Path:
+        (root / "doc" / "3_reference").mkdir(parents=True)
+        (root / "doc" / "README.md").write_text("# Docs\n", encoding="utf-8")
+        (root / "doc" / "3_reference" / "codex-hook-signals.md").write_text(
+            "# Hook signals\n",
+            encoding="utf-8",
+        )
         target = root / "AGENTS.md"
         target.write_text(
             (ROOT / "templates/AGENTS.md").read_text(encoding="utf-8").replace(
@@ -214,6 +220,39 @@ class InstructionSourceCheckTests(unittest.TestCase):
         contract.parent.mkdir(parents=True)
         shutil.copy2(ROOT / "templates/managed-skeleton.json", contract)
         return target
+
+    def test_retired_runtime_asset_is_blocked_in_active_instructions(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            agents = self._zoned_project(root)
+            agents.write_text(
+                agents.read_text(encoding="utf-8").replace(
+                    "<!-- BRIDGEFORGE:PROJECT:END -->",
+                    "- 项目继续使用 skill-routing.json。\n"
+                    "<!-- BRIDGEFORGE:PROJECT:END -->",
+                ),
+                encoding="utf-8",
+            )
+
+            issues = self.hook.instruction_source_issues(root)
+
+            self.assertTrue(
+                any("retired runtime asset skill-routing.json" in item for item in issues),
+                issues,
+            )
+
+    def test_missing_managed_instruction_reference_is_blocked(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._zoned_project(root)
+            (root / "doc" / "3_reference" / "codex-hook-signals.md").unlink()
+
+            issues = self.hook.instruction_source_issues(root)
+
+            self.assertTrue(
+                any("references missing managed instruction document" in item for item in issues),
+                issues,
+            )
 
     def test_project_zone_edit_is_allowed_but_public_or_marker_edit_is_blocked(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
