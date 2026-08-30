@@ -150,6 +150,17 @@ class SharedSkillDistributionTests(unittest.TestCase):
         self.assertNotIn("Remove-VerifiedLegacyJunction", installer)
         self.assertNotIn('Join-Path $UserProfile ".bridgeforge"', installer)
 
+    def test_installer_enables_long_paths_for_bootstrap_clone(self) -> None:
+        installer = (ROOT / "scripts/install-shared-skills.ps1").read_text(
+            encoding="utf-8-sig"
+        )
+        self.assertIn(
+            '"-c", "core.autocrlf=false",\n'
+            '            "-c", "core.longpaths=true",\n'
+            '            "clone",',
+            installer,
+        )
+
     def test_manifest_rebuild_check_is_read_only_and_current(self) -> None:
         result = subprocess.run(
             [sys.executable, "scripts/rebuild_shared_skill_manifest.py", "--check"],

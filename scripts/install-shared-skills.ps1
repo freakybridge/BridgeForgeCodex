@@ -119,6 +119,7 @@ function Invoke-Main {
     try {
         Invoke-Git -Arguments @(
             "-c", "core.autocrlf=false",
+            "-c", "core.longpaths=true",
             "clone",
             "--branch", $CanonicalBranch,
             "--single-branch",
