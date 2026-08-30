@@ -115,7 +115,7 @@ function Invoke-Main {
         throw "USERPROFILE is not a valid existing directory."
     }
 
-    $cloneRoot = Join-Path ([IO.Path]::GetTempPath()) "bridgeforge-codex-bootstrap-$([Guid]::NewGuid().ToString('N'))"
+    $cloneRoot = Join-Path ([IO.Path]::GetTempPath()) "bfc-$([Guid]::NewGuid().ToString('N'))"
     try {
         Invoke-Git -Arguments @(
             "-c", "core.autocrlf=false",
@@ -127,6 +127,9 @@ function Invoke-Main {
             "--no-recurse-submodules",
             $CanonicalRemote,
             $cloneRoot
+        ) | Out-Null
+        Invoke-Git -WorkingDirectory $cloneRoot -Arguments @(
+            "config", "core.longpaths", "true"
         ) | Out-Null
         Assert-CanonicalRepositoryIdentity -Root $cloneRoot
         $updater = Join-Path $cloneRoot "scripts\bridgeforge_codex_shared_update.ps1"

@@ -160,6 +160,17 @@ class SharedSkillDistributionTests(unittest.TestCase):
             '            "clone",',
             installer,
         )
+        self.assertIn(
+            'Join-Path ([IO.Path]::GetTempPath()) '
+            '"bfc-$([Guid]::NewGuid().ToString(\'N\'))"',
+            installer,
+        )
+        self.assertIn(
+            'Invoke-Git -WorkingDirectory $cloneRoot -Arguments @(\n'
+            '            "config", "core.longpaths", "true"\n'
+            '        ) | Out-Null',
+            installer,
+        )
 
     def test_manifest_rebuild_check_is_read_only_and_current(self) -> None:
         result = subprocess.run(
