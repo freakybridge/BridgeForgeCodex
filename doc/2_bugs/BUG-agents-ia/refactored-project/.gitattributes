@@ -1,4 +1,0 @@
-# BridgeForge 由 GitHub 分发；所有文本检出为 LF，避免同一版本因
-# Windows 的 core.autocrlf 不同而产生不同的 manifest SHA-256。
-# Git 会自动识别二进制文件，二进制内容不受此规则转换。
-* text=auto eol=lf

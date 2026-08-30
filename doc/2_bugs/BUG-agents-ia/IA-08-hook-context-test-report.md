@@ -1,7 +1,7 @@
 # IA-08 Hook 上下文测试报告
 
 > 状态：P0–P1 与四组件桌面端 A/B 已完成；Clarify / Focus / 项目 Memory 已退役，Show State 会话级保留，并已整体传播到真实工厂 1.5.13；待真实业务下游与全新会话 runtime smoke
-> 测试对象：`refactored-project` 候选镜像与真实工厂 1.5.13
+> 测试对象：当时的 `refactored-project` 候选镜像与真实工厂 1.5.13；候选镜像完成传播后已于 2026-08-31 删除
 > 日期：2026-08-30
 
 ## 1. 测试边界

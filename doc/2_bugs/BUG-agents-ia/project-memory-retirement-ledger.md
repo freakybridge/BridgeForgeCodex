@@ -2,6 +2,7 @@
 status: verified_pending_cleanup_authorization
 record_type: migration_ledger
 scope: refactored-project/.codex/memory
+source_snapshot_disposition: deleted_after_factory_propagation_2026_08_31
 inventoried_at: 2026-08-30
 approved_for_migration: true
 approved_for_deletion: false

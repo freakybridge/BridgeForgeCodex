@@ -1,6 +1,6 @@
 # AGENTS 信息架构优化提案（第十一版）
 
-> 状态：历史实施基线，已由 `refactored-project` 最终候选和真实工厂 `1.5.13` 取代。本文和同目录合同不参与当前运行时，也不再作为发布门；当前事实以根 `templates/`、`skills/`、`scripts/`、`.codex/` dogfood、manifest 和现行测试为准。
+> 状态：历史实施基线，曾由 `refactored-project` 最终候选承接，现已由真实工厂 `1.5.26` 取代；候选目录完成传播后已删除。本文和同目录合同不参与当前运行时，也不再作为发布门；当前事实以根 `templates/`、`skills/`、`scripts/`、`.codex/` dogfood、manifest 和现行测试为准。
 
 ## 结论
 

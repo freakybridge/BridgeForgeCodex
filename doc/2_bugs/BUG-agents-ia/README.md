@@ -72,7 +72,7 @@ source: 用户体验反馈 + 只读静态审计
 
 ## 真实工厂传播收据（2026-08-30）
 
-- `refactored-project` 已先合并 IA-08 Memory 退役、自动 Focus 退役与 IA-09 文档改造，再按候选相对可信基线的 119 项差异传播到根 `templates/`、`skills/`、`scripts/`、文档与 `.codex/` dogfood；根 `VERSION` 升至 `1.5.13`。
+- `refactored-project` 已先合并 IA-08 Memory 退役、自动 Focus 退役与 IA-09 文档改造，再按候选相对可信基线的 119 项差异传播到根 `templates/`、`skills/`、`scripts/`、文档与 `.codex/` dogfood；根 `VERSION` 升至 `1.5.13`。正式根继续演进并发布至 1.5.26 后，用户于 2026-08-31 授权删除该候选快照。
 - 旧 `skill-routing.json`、Clarify / Focus 自动 Hook、项目 Memory Hook / 脚本、`$find-memory` 与 Summary 的项目 Memory 写入链已从正式产品面移除；Show State 只保留 `SessionStart` 路由。
 - 工厂既有 `.codex/memory/` 25 个 legacy 文件未修改、未删除，也未被活动 Hook、dispatcher、manifest 或 managed contract 引用；后续清理仍须独立授权。
 - `rebuild_shared_skill_manifest.py --check` 返回 `unchanged`；针对性测试 77/77、完整自动测试 333 项通过（1 项既有跳过）、下游 fixture 4/4、项目结构检查退出码 0，`git diff --check` 通过。
@@ -447,7 +447,7 @@ P0–P1 确定性基线（2026-08-30）：
 - 没有新增 Hook。现有 `skill_metadata_check.py`、`instruction_source_check.py` 与 `project_structure_check.py` 分别继续拥有 Skill、原生指令和文档结构边界，避免增加第四个信息架构运行部件。
 - 对19个当前 Skill 入口实测后，将入口硬预算从宽泛的500行收紧为120行，并增加最多8个 H2 章节的职责代理指标；当前基线为41～104行、最多8个 H2。入口与一层 reference 之间完全相同且不少于80字符的长段落会被阻断。
 - Skill 入口、已链接 reference、根与嵌套 `AGENTS.md` 均禁止重新引用已退役的 `skill-routing.json`、Clarify / Focus 自动 Hook 和项目 Memory writer / index / lint 运行时资产；`AGENTS.md` 指向的受管索引与 Hook 信号文档必须真实存在。
-- `project_structure_check.py` 现在验证活动文档的本地文件链接；`doc/4_archive/**` 和冻结的 `refactored-project` 证据镜像不追溯改写，目录型布局示例不冒充必须存在的文件。首次实跑发现并修复 `memory-scoring-design.md` 指向已移动辩论记录的真实断链。
+- `project_structure_check.py` 现在验证活动文档的本地文件链接；`doc/4_archive/**` 不追溯改写，目录型布局示例不冒充必须存在的文件。当时冻结的 `refactored-project` 证据镜像也不追溯改写，完成传播后已删除。首次实跑发现并修复 `memory-scoring-design.md` 指向已移动辩论记录的真实断链。
 - `doc/README.md` 不再复制 IA 子项进度，只链接 IA 总账；该单一事实源边界已有专项回归。跨文件语义改写后的近义重复仍不能由确定性 Hook 可靠判断，继续由专项 owner 测试和 IA-14 用户审阅承担。
 - 新硬闸定向回归 46/46；完整自动测试共347项（346通过、1项既有跳过），下游 fixture 4/4；三项 dogfood Hook、manifest `--check` 与 `git diff --check` 均通过。项目结构只保留既有 archive advisory，没有活动文档错误。
 - 本项已完成真实工厂源码、Template 与 dogfood 的确定性防复发闭环；真实业务下游升级和 Codex runtime smoke 尚未执行，不能宣称对应场景已关闭。
@@ -543,7 +543,7 @@ P0–P1 确定性基线（2026-08-30）：
 
 ## 当前方案草案
 
-- [`proposal/README.md`](proposal/README.md)：AGENTS 信息架构第十一版历史实施基线；已由 `refactored-project` 与真实工厂 `1.5.13` 取代，不参与运行时，也不再作为当前发布门。
+- [`proposal/README.md`](proposal/README.md)：AGENTS 信息架构第十一版历史实施基线；曾由 `refactored-project` 候选快照承接，现已由真实工厂 `1.5.26` 取代，不参与运行时，也不再作为当前发布门。
 - [`project-memory-retirement-ledger.md`](project-memory-retirement-ledger.md)：项目 `.codex/memory/` 24 个资产的 P0 逐文件迁移账本；24/24 已审核，P1 迁移已授权，删除仍未授权。
 - [`../../1_delivery/project-memory-retirement/requirements_2026-08-30_project-memory-retirement.md`](../../1_delivery/project-memory-retirement/requirements_2026-08-30_project-memory-retirement.md)：下游通用的程序扫描、Agent 语义审核、用户逐项确认、受控迁移与独立清理授权合同。
 
@@ -573,11 +573,11 @@ P0–P1 确定性基线（2026-08-30）：
 - 标记外内容归各项目所有，更新器不得覆盖；`doc/README.md` 继续只负责项目文档索引，不替代根 README。
 - proposal 中独立的 `shared-docs/codex-project-operating-guide.md` 已移除，内容已经并入 `readme/bridgeforge-public-section.md` 草案。
 
-## 重构项目完整镜像
+## 已删除的重构项目完整镜像
 
-- [`refactored-project/`](refactored-project/) 是本 Bug 的完整候选项目，基线为提交 `53722fc845f6d6934f4c7d88fec36257171392b5`。
-- 后续重构先在该镜像内完成，用户手动查看并确认前，不替换仓库根目录的真实运行资产。
-- 镜像包含基线提交中的全部 Git 跟踪文件，不包含 `.git`、`.venv`、缓存或运行时临时文件，也不递归复制自身。
+- `refactored-project/` 曾是本 Bug 的完整候选项目，基线为提交 `53722fc845f6d6934f4c7d88fec36257171392b5`。
+- 119 项候选差异已于 2026-08-30 传播到正式根目录；正式根继续演进并发布至 1.5.26 后，用户于 2026-08-31 授权删除该候选目录。
+- 历史设计与传播收据继续由本总账、`proposal/` 和 Git 历史保存；禁止从旧提交恢复候选目录后覆盖正式根目录。
 
 ### 2026-08-28：卡点 #1 候选镜像已解决
 
