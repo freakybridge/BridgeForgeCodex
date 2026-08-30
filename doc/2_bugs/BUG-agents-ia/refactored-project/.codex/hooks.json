@@ -17,18 +17,6 @@
     ],
     "PostToolUse": [
       {
-        "matcher": "*",
-        "hooks": [
-          {
-            "type": "command",
-            "bridgeforgeCodexId": "bridgeforge-codex.project-hook.v1:post-read",
-            "command": "\"$(git rev-parse --show-toplevel)/.venv/Scripts/python.exe\" \"$(git rev-parse --show-toplevel)/.codex/hooks/hook_dispatcher.py\" post-read",
-            "commandWindows": "powershell.exe -NoProfile -NonInteractive -WindowStyle Hidden -Command \"& (Join-Path (git rev-parse --show-toplevel) '.venv/Scripts/python.exe') (Join-Path (git rev-parse --show-toplevel) '.codex/hooks/hook_dispatcher.py') post-read; exit $LASTEXITCODE\"",
-            "comment": "Observes all supported tools, then records only successful read-like calls for project-memory Markdown bodies."
-          }
-        ]
-      },
-      {
         "matcher": "Edit|Write",
         "hooks": [
           {
@@ -77,19 +65,6 @@
         ]
       }
     ],
-    "UserPromptSubmit": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "bridgeforgeCodexId": "bridgeforge-codex.project-hook.v1:user-prompt",
-            "command": "\"$(git rev-parse --show-toplevel)/.venv/Scripts/python.exe\" \"$(git rev-parse --show-toplevel)/.codex/hooks/hook_dispatcher.py\" user-prompt",
-            "commandWindows": "powershell.exe -NoProfile -NonInteractive -WindowStyle Hidden -Command \"& (Join-Path (git rev-parse --show-toplevel) '.venv/Scripts/python.exe') (Join-Path (git rev-parse --show-toplevel) '.codex/hooks/hook_dispatcher.py') user-prompt; exit $LASTEXITCODE\"",
-            "comment": "Routes 3-5 project-memory candidates, then injects repository state, clarification, and focus signals."
-          }
-        ]
-      }
-    ],
     "SessionStart": [
       {
         "hooks": [
@@ -99,7 +74,7 @@
             "command": "\"$(git rev-parse --show-toplevel)/.venv/Scripts/python.exe\" \"$(git rev-parse --show-toplevel)/.codex/hooks/hook_dispatcher.py\" session-start",
             "commandWindows": "powershell.exe -NoProfile -NonInteractive -WindowStyle Hidden -Command \"& (Join-Path (git rev-parse --show-toplevel) '.venv/Scripts/python.exe') (Join-Path (git rev-parse --show-toplevel) '.codex/hooks/hook_dispatcher.py') session-start; exit $LASTEXITCODE\"",
             "additionalContextLimit": 0,
-            "comment": "Rebuilds and injects the bounded project-memory index before repository state, cleanup, and managed-skill checks."
+            "comment": "Validates repository runtime state, then reports cleanup and managed-skill drift."
           }
         ]
       }

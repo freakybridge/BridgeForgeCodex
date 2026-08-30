@@ -3,11 +3,9 @@
 仅在根 skill 判定为 `update` 后读取。
 
 1. 只运行 `bridgeforge_codex_project_sync.py --mode update` 生成计划。
-2. 缺戳、双戳或异常值必须零写阻断；恰好一个合法戳时只按版本路由，不按文件名路由。
-3. 版本 `<1.4.31` 时进入 `PreservationManifest` destructive rebuild；`>=1.4.31` 时先校验已安装 baseline，旧文件名在同一事务中迁移为 current stamp。
-4. 重建前独立审计 AGENTS 项目区、rules、hooks、memory 与 Skills，对所有用户决策项逐项确认 preserve 或 delete。
-5. 散落 Hook 或非 canonical 注册必须阻断；由独立 Agent 在临时副本或受控前置步骤中整理为 `.codex/hooks/project_XXXX/entrypoint.py` 自包含目录后重新规划。
-6. apply 前重建 plan 并核对 fingerprint；失败回滚。
-7. 所有资产验证通过后最后写 current 版本戳。
+2. 只接受 `>=1.4.31` 的合法单戳并先校验已安装 current baseline；缺戳、双戳、非法戳、合同损坏或公共资产漂移必须零写阻断。
+3. 旧戳文件名只允许在通过 current-only 校验后由同一事务迁移；终态只保留 `.codex/.bridgeforge_codex_version`。
+4. 常规更新必须保留 project-owned、未知文件和人工定制；存在 risk 时返回根入口走本轮唯一确认。
+5. 准备 apply 时返回根入口并读取 `references/transaction.md`。
 
 不得调用已退役的 switch、finalizer、parity 或布局迁移工具，不得手工写戳。

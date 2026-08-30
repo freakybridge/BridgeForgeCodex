@@ -1,3 +1,9 @@
+---
+lifecycle: superseded
+validation_status: verified
+superseded_by: ../shared-skill-model-inheritance/requirements_2026-08-16_shared-skill-model-inheritance.md
+---
+
 # 需求：Codex 按任务成本路由与用户级配置保护
 > 日期：2026-07-10
 > 状态：trial

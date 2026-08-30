@@ -1,5 +1,6 @@
 ---
-status: implemented-awaiting-independent-audit
+lifecycle: active
+validation_status: awaiting_validation
 next: independent_audit
 scale: M
 source_bug: doc/2_bugs/BUG-native-memory-maintain-misclassified-safe-data-egress.md

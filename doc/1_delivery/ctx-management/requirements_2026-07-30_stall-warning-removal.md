@@ -1,5 +1,6 @@
 ---
-status: implemented
+lifecycle: active
+validation_status: awaiting_validation
 topic: ctx-management
 source: downstream JSONL compatibility proposal, superseded by user decision
 ---

@@ -1,3 +1,8 @@
+---
+lifecycle: active
+validation_status: awaiting_validation
+---
+
 # `explain` 通用 Skill 回灌需求卡
 
 **状态：** confirmed  

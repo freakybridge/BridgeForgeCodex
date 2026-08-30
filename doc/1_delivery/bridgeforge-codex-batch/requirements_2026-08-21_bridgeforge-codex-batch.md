@@ -1,3 +1,8 @@
+---
+lifecycle: active
+validation_status: awaiting_validation
+---
+
 # `$bridgeforge-codex-batch` 需求确认卡
 
 - 状态：实现与自动验证完成，待 BridgeForgeCodex 发布及四项目真实验收

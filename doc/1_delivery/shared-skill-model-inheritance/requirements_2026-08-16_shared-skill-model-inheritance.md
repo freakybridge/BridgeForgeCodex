@@ -1,5 +1,6 @@
 ---
-status: implemented-awaiting-user-acceptance
+lifecycle: active
+validation_status: awaiting_user_acceptance
 topic: shared-skill-model-inheritance
 date: 2026-08-16
 source: "$confirm"

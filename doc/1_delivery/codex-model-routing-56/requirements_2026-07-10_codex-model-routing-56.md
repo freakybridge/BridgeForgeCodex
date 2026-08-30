@@ -1,3 +1,9 @@
+---
+lifecycle: superseded
+validation_status: verified
+superseded_by: ../shared-skill-model-inheritance/requirements_2026-08-16_shared-skill-model-inheritance.md
+---
+
 # 需求：Codex 模型路由升级到 GPT-5.6
 > 日期：2026-07-10
 > 状态：trial

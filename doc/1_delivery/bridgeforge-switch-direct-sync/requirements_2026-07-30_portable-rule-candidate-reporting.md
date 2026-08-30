@@ -1,3 +1,9 @@
+---
+lifecycle: superseded
+validation_status: verified
+superseded_by: ../bridgeforgecodex-codex-only-rebrand/requirements_2026-08-16_bridgeforgecodex-codex-only-rebrand.md
+---
+
 # Portable Rule 候选发现与报告确认卡
 
 > 状态：已实现并验证

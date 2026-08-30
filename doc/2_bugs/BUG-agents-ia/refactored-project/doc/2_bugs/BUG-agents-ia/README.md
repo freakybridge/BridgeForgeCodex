@@ -318,6 +318,8 @@ source: 用户体验反馈 + 只读静态审计
 ## 当前方案草案
 
 - [`proposal/README.md`](proposal/README.md)：AGENTS 信息架构、工厂与 Template 第十一版候选、根级目录路由、三份工厂嵌套指令、README 公共区、逐条语义合同和可执行机器合同。当前不参与运行时，也不是最终通过版。
+- [`project-memory-retirement-ledger.md`](project-memory-retirement-ledger.md)：项目 `.codex/memory/` 24 个资产的 P0 逐文件迁移账本；24/24 已审核，P1 迁移已授权，删除仍未授权。
+- [`../../1_delivery/project-memory-retirement/requirements_2026-08-30_project-memory-retirement.md`](../../1_delivery/project-memory-retirement/requirements_2026-08-30_project-memory-retirement.md)：下游通用的程序扫描、Agent 语义审核、用户逐项确认、受控迁移与独立清理授权合同。
 
 ### 2026-08-27 迭代中断进度
 

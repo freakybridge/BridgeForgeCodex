@@ -1,5 +1,6 @@
 ---
-status: confirmed
+lifecycle: active
+validation_status: awaiting_validation
 topic: memory-rule-organization
 date: 2026-08-01
 source: "$confirm：下游 hook 投影单一源建议 + 当前 Codex hook 承载核查"

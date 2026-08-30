@@ -1,15 +1,10 @@
 #!/usr/bin/env python3
-"""UserPromptSubmit & SessionStart hook: 打印当前项目状态（分支 / uncommitted / ahead-behind / 版本）。
+"""SessionStart hook：一次性打印项目状态和接续提示。
 
-被两个 hook 复用：
-- UserPromptSubmit：每次用户提交 prompt 前运行，输出注入到 Codex 上下文（让 Codex 实时
-  感知 dirty 状态 / 远端漂移）
-- SessionStart：session 开始时运行，让 Codex 一眼看到当前仓库状态 + snapshot 接续提示
-  + 归档候选数
+输出分支、未提交数、ahead/behind、骨架版本、最新 snapshot 与归档候选。
+提交、推送或需要最新状态时，由 Agent 重新调用 Git 工具取得实时证据。
 
-用法：`python show_state.py <prefix>`
-  prefix = "prompt-state" → UserPromptSubmit 调用（只打基本状态行）
-  prefix = "session-start" → SessionStart 调用（额外打 snapshot / archive 提示）
+用法：`python show_state.py session-start`
 """
 import re
 import subprocess

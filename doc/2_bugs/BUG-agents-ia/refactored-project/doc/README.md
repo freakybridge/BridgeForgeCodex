@@ -18,8 +18,8 @@ delivery_layout: flat
 
 ## 架构
 
-- 设计资料：[`0_architecture/design/`](0_architecture/design/)，包括 [`codex-project-sync.md`](0_architecture/design/codex-project-sync.md)、[`codex-native-instruction-architecture.md`](0_architecture/design/codex-native-instruction-architecture.md)、`design-rationale.md`、上游同步 playbook、memory 与文档体系设计。
-- 操作参考：[`codex-project-operating-guide.md`](3_reference/codex-project-operating-guide.md) 与 [`codex-hook-signals.md`](3_reference/codex-hook-signals.md)。
+- 设计资料：[`0_architecture/design/`](0_architecture/design/)，包括 [`codex-project-sync.md`](0_architecture/design/codex-project-sync.md)、[`codex-native-instruction-architecture.md`](0_architecture/design/codex-native-instruction-architecture.md)、[`codex-native-memory-sync.md`](0_architecture/design/codex-native-memory-sync.md)、`design-rationale.md` 与上游同步 playbook。
+- 操作参考：[`codex-project-operating-guide.md`](3_reference/codex-project-operating-guide.md) 与主动澄清参考 [`codex-hook-signals.md`](3_reference/codex-hook-signals.md)；自动 Clarify / Focus Hook 已退役。
 - `$bridgeforge-codex` 的运行手册属于产品源码，位于 [`skills/bridgeforge-codex/references/`](../skills/bridgeforge-codex/references/)，不纳入 `doc/`。
 
 ## Delivery topic
@@ -73,7 +73,8 @@ delivery_layout: flat
 | `git-sync-latency-optimization` | `$git-sync` 单脚本直跑、失败前置、重复重建消除与完整同步收据（2026-08-01） |
 | `git-sync-version-automation` | BridgeForge 与下游项目双版本域的 `$git-sync` 自动 bump、原生字段同步与统一 CHANGELOG 需求；新增 [下游项目 Rule 被误判为受管骨架的所有权缺口报告](1_delivery/git-sync-version-automation/research/2026-08-12_downstream-rule-managed-skeleton-boundary-gap.md)（2026-08-12） |
 | `memory-lifecycle-governance` | 统一 memory schema、模块/topic 分工、`$summary` 双模式与 topic 生命周期治理（2026-08-02） |
-| `memory-rule-organization` | 下游 memory / rule 分类、topic memory 与渐进加载；项目级双宿主 memory junction hook（2026-07-28）；Rule 索引 hook 批次 A 上游增强已采纳（2026-07-29）；Codex hook 单一注册源与全量承载迁移、Summary 职责收口与 memory 颗粒度治理需求已确认（2026-08-01）；新增项目 memory 确定性加载、自动召回及 Codex 原生 memories GitHub 同步确认卡（2026-08-14） |
+| `memory-rule-organization` | 双 Memory 交付历史；项目 `.codex/memory/` 部分已被 `project-memory-retirement` 替代，当前只保留原生 Memory 同步事实并指向 `codex-native-memory-sync.md`（2026-08-30） |
+| `project-memory-retirement` | 退役项目 `.codex/memory/`，为候选工程与未来下游建立程序扫描、Agent 语义审核、用户逐项确认、受控迁移及独立清理授权（2026-08-30） |
 | `shared-skill-distribution` | 用户级 shared skill 分发 |
 | `skill-runtime-efficiency` | 非根 skill 的确定性 fast path、重复 agent/索引消除与高频 Git 单进程优化（2026-08-15） |
 | `create-worktree-skill` | Windows Codex 永久 worktree 创建、独立 `codex/` 分支与无槽位路径需求（2026-08-15） |
@@ -82,7 +83,7 @@ delivery_layout: flat
 
 ## Bug records
 
-- [`BUG-agents-ia/`](2_bugs/BUG-agents-ia/README.md)（开放：公共骨架的信息分层、人类可理解性、运行时指令、Skill、收据与文档导航需自上而下治理）
+- [`BUG-agents-ia/`](2_bugs/BUG-agents-ia/README.md)（开放：IA-01～IA-09 已传播真实工厂 1.5.13；待真实下游、runtime 与 IA-10～IA-14）
 - [`BUG-codex-backend-unexpected-control-exit.md`](2_bugs/BUG-codex-backend-unexpected-control-exit.md)
 - [`BUG-project-memory-sessionstart-gbk-output.md`](2_bugs/BUG-project-memory-sessionstart-gbk-output.md)
 - [`BUG-windows-codex-hooks-open-visible-terminal.md`](2_bugs/BUG-windows-codex-hooks-open-visible-terminal.md)
@@ -113,4 +114,4 @@ delivery_layout: flat
 
 ## 归档与参考
 
-`4_archive/` 内现有文件为迁移前历史档案，继续保持可追溯性；Codex harness parity 设计与交付材料已归档到 [`codex-harness-parity-design.md`](4_archive/codex-harness-parity-design.md) 和 [`codex-harness-parity-delivery/`](4_archive/codex-harness-parity-delivery/)；新归档按 `4_archive/delivery/<topic>/` 或 `4_archive/bugs/` 落位。外部资料与仅供参考的实现放入 `3_reference/`，不作为运行时资产。
+`4_archive/` 内现有文件为迁移前历史档案，继续保持可追溯性；Codex harness parity 设计与交付材料已归档到 [`codex-harness-parity-design.md`](4_archive/codex-harness-parity-design.md) 和 [`codex-harness-parity-delivery/`](4_archive/codex-harness-parity-delivery/)，旧运行手册打包结构见 [`bridgeforge-doc-runtime-packaging`](4_archive/delivery/bridgeforge-doc-runtime-packaging/summary.md)。新归档按 `4_archive/delivery/<topic>/` 或 `4_archive/bugs/` 落位。外部资料与仅供参考的实现放入 `3_reference/`，不作为运行时资产。

@@ -15,6 +15,35 @@
 
 > **追溯说明**：v0.1.0 - v0.7.0 基于 git log 历史回溯标记，**git tag 仅从 v0.8.0 开始打**。早期未启用版本号管理是 setup_agent 自打脸问题（要求下游用但自己没用），v0.8.0 修补。
 
+## [1.5.15] - 2026-08-30
+
+### Changed
+
+- [product][meta] 建立 IA-11 文档生命周期合同：需求卡和 Bug 分离 `lifecycle` 与 `validation_status`，由 `$confirm`、`$develop`、`$summary`、`$archive-scan` 分阶段写入；下游文档索引获得同一受管说明，归档扫描器优先读取正式字段并把旧状态降级为兼容证据。
+- [repo][meta] 完成 IA-11 历史需求卡分类：78 张工厂需求卡全部迁入正式生命周期字段，明确 active、completed 与 superseded，并以仓库回归阻止无分类卡、旧 `status` 和断裂替代关系复发。
+- [repo][meta] 完成 IA-11 历史需求卡分类：78 张工厂需求卡全部迁入正式生命周期字段，明确 active、completed 与 superseded，并以仓库回归阻止无分类卡、旧 `status` 和断裂替代关系复发。
+
+## [1.5.14] - 2026-08-30
+
+### Changed
+
+- [product][meta] 收口 IA-10 文档第一阅读路径：根 README 只保留稳定入口，`doc/README.md` 顶部导航当前架构、交付、开放 Bug、项目操作和历史记录；Template 以受管表格行传播公共导航，同时保留下游追加的项目主线。
+- [meta] 修正 IA-11 第一组当前事实冲突：统一 Clarify / Focus 自动 Hook 退役结论，移除 `$git-sync` 重建项目 Memory 索引的旧职责，并把 legacy Memory 索引明确降级为非权威历史证据。
+
+## [1.5.13] - 2026-08-30
+
+### Changed
+
+- [product][repo][meta] 将 IA-01 至 IA-09 重构镜像传播到正式工厂源与 dogfood：以原生 `AGENTS.md`、角色配置和按需 Skill reference 形成路由闭环，退役旧 `skill-routing.json` 与 Clarify 自动 Hook，并将 Show State 收口为会话级注入。
+- [product][repo][meta] 退役项目级 `.codex/memory/` 运行时与 `$find-memory`，下游既有目录改为 legacy 整树保留并报告逐项目迁移缺口；`$summary` 不再写 Memory，Codex 原生 Memory 同步链保持不变。
+- [meta] 重写 README、INSTALL 与文档索引的用户入口，补齐原生指令、Hook 信号和 Memory 边界说明。
+
+## [1.5.12] - 2026-08-30
+
+### Changed
+
+- [product][repo][meta] 退役无可测行为收益的自动 Focus Hook；删除 Template 与 dogfood 脚本及路由，移除常驻 `[focus]` 规则，保留并解耦手动 `$focus` Skill。
+
 ## [1.5.11] - 2026-08-28
 
 ### Changed

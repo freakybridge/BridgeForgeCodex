@@ -3,7 +3,6 @@
 # bridgeforge current-only pre-commit 闸（严格执行序）：
 #   [baseline] 工作树与 staged index 的公共骨架必须同时匹配当前合同；
 #   [skills] 项目 Skill 树和 metadata 必须满足当前规则；
-#   [memory] 派生索引只读验证，生成与暂存只允许由 git-sync 事务执行。
 #
 # 硬闸原则: 只有明确判出违规才 exit 2; 脚本自身异常一律放行(宁漏不误伤)。
 #   · exit 2 段必须在受管区块内立即退出；项目扩展位于受管区块之后，保留其原有退出码。
@@ -61,8 +60,6 @@ run_exit2_hook ".codex/hooks/project_structure_check.py" --pre-commit
 # ── [skills] 通用 skill metadata 闸(硬拦; 下游无 skills/ 则自门控 no-op) ──
 run_exit2_hook ".codex/hooks/skill_metadata_check.py" --pre-commit
 
-# ── [memory] 派生索引只读闸 ──
-run_exit2_hook ".codex/scripts/memory_rebuild_index.py" --check
 # <<< BRIDGEFORGE_CODEX_MANAGED_END
 
 # >>> PROJECT_EXTENSION_BEGIN

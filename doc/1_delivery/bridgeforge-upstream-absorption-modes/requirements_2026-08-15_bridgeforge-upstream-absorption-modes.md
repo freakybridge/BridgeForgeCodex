@@ -1,6 +1,7 @@
 ---
 title: BridgeForge 上游吸收模式需求确认卡
-status: implemented
+lifecycle: active
+validation_status: awaiting_validation
 date: 2026-08-15
 source: confirm
 handoff: user_trial

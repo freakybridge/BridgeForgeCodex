@@ -1,3 +1,9 @@
+---
+lifecycle: superseded
+validation_status: verified
+superseded_by: requirements_2026-07-30_stall-warning-removal.md
+---
+
 # Stall Warning 的 Codex JSONL 兼容增强建议
 
 > 状态：已拒绝并由 `requirements_2026-07-30_stall-warning-removal.md` 取代；该能力从双宿主骨架及下游更新中移除。  

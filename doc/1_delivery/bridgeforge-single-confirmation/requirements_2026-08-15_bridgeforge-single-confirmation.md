@@ -3,7 +3,8 @@ name: BridgeForge 单次确认与零确认更新协议
 description: 将 init、adopt、update、switch 的安全动作自动执行，风险动作集中确认一次，并减少 Codex 重复权限弹窗。
 type: requirements
 category: architecture
-status: completed
+lifecycle: active
+validation_status: awaiting_user_acceptance
 date: 2026-08-15
 scale: L
 source: confirm

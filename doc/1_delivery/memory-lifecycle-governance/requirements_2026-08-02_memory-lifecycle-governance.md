@@ -1,3 +1,9 @@
+---
+lifecycle: superseded
+validation_status: verified
+superseded_by: ../project-memory-retirement/requirements_2026-08-30_project-memory-retirement.md
+---
+
 # 统一 Memory schema 与 topic 生命周期治理需求
 
 > 状态：已实现，独立审计通过，待用户验收  

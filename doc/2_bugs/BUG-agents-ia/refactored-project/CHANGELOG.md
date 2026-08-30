@@ -15,6 +15,12 @@
 
 > **追溯说明**：v0.1.0 - v0.7.0 基于 git log 历史回溯标记，**git tag 仅从 v0.8.0 开始打**。早期未启用版本号管理是 setup_agent 自打脸问题（要求下游用但自己没用），v0.8.0 修补。
 
+## [1.5.11] - 2026-08-30
+
+### Changed
+
+- [product][repo][meta] 退役项目级 `.codex/memory/` 运行时与 `$find-memory`，下游既有目录改为 legacy 整树保留并报告逐项目迁移缺口；Codex 原生 Memory 同步链保持不变。
+
 ## [1.5.10] - 2026-08-28
 
 ### Changed

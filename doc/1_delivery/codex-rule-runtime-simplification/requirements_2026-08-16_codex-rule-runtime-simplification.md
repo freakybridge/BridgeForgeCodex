@@ -1,5 +1,6 @@
 ---
-status: implemented-awaiting-user-acceptance
+lifecycle: active
+validation_status: awaiting_user_acceptance
 date: 2026-08-16
 topic: codex-rule-runtime-simplification
 source: direct-confirm

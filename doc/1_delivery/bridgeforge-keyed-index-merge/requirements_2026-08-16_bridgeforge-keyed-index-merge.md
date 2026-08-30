@@ -1,6 +1,7 @@
 ---
 title: BridgeForge 索引稳定键合并需求确认卡
-status: implemented
+lifecycle: active
+validation_status: awaiting_validation
 date: 2026-08-16
 source: confirm
 handoff: develop

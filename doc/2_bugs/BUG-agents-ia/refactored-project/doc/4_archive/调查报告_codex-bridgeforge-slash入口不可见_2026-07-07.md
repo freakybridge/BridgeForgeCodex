@@ -1,5 +1,30 @@
 # Codex 中 `/bridgeforge` 斜杠命令不可见问题报告
 
+> **历史状态**：本文第 1～7 节保存 2026-07-07 的早期判断与备选方案，不是当前安装说明。
+> 后续实机验真表明，问题由旧扫描目录污染、入口不是叶子 Skill 以及 BOM 共同造成；当前
+> BridgeForgeCodex 入口与安装方式必须以现行 Skill、manifest 和安装文档为准。
+
+## 0. 最终验真与替代结论
+
+2026-07-08 的本机迁移确认了完整故障链：
+
+1. `~/.codex/skills/bridgeforge` 曾是指向完整 BridgeForge 仓库的 junction。Codex 因而扫到
+   仓库内子 Skill，却没有把仓库根识别成合法的 `bridgeforge` 叶子入口。
+2. 当时实际用户级货架为 `~/.agents/skills/`；`bridgeforge` 入口必须是普通叶子目录，只放
+   薄 `SKILL.md`，完整工厂不得直接放入 Skill 货架。
+3. 根入口文件曾带 UTF-8 BOM，首字节不是裸 `---`。frontmatter 入口必须使用 UTF-8 no
+   BOM，字节开头为 `2D 2D 2D`。
+4. 修复后需要执行 Codex 的 `Force Reload Skills` 或重新启动会话，旧会话菜单不能作为新
+   入口尚未安装的证据。
+
+当时的稳定排查顺序是：先检查旧扫描目录是否被完整仓库或 junction 污染，再确认入口是
+普通叶子目录，然后检查 `SKILL.md` 首字节与 frontmatter，最后重新加载 Skill。若薄入口
+带版本字段，发布时还要与根版本和分发源一起核对并做内容 hash 验证。
+
+本文后续关于 `$harvest`、旧 `/bridgeforge`、custom prompt 和 plugin 的推荐均只代表当时
+候选路线，已经被 BridgeForgeCodex 的当前产品结构替代，禁止据此恢复旧入口、junction、
+Claude wrapper 或完整仓库货架。
+
 ## 1. 问题现象
 
 在 Claude Code 中，用户曾经可以通过输入 `/bridgeforge` 调用对应命令；切换到 Codex 后，在斜杠菜单中输入 `/bridgeforge`，菜单里看不到对应命令，也无法按同样方式调用。

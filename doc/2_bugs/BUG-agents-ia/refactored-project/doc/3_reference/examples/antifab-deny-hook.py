@@ -19,8 +19,8 @@ agent 真去读「能解析出路径、且确证不存在」的资源那一刻�
   G3 确证不存在: 规范化后路径 exists() == False（硬证据，不是「我猜」）
   G4 豁免      : 不在 EXEMPT_PREFIXES 内
 
-宿主对接：本文件按 Claude Code 的 PreToolUse 协议输出 deny 决定（permissionDecision，
-字段写法对齐本仓库 templates/hooks/allow_memory_write.py）。换宿主时只需改 main() 的
+宿主对接：本文件按 Claude Code 的 PreToolUse 协议输出 deny 决定（permissionDecision）。
+换宿主时只需改 main() 的
 输入读取 + 决定输出两段；四 gate 纯函数 evaluate() 是宿主无关的，可原样复用。
 """
 from __future__ import annotations

@@ -8,7 +8,7 @@
 
 禁止直接回灌：
 
-- `.codex/memory/` 正文、业务文档、凭证和运行时数据；
+- legacy `.codex/memory/` 正文、Codex 原生 `~/.codex/memories/`、业务文档、凭证和运行时数据；
 - 项目名、账户、内部 URL、绝对路径、业务阈值、事故标识；
 - 只适用于单一业务或单一仓库布局的规则；
 - 旧 `.claude/` 或退役 harvest inbox 的内容。

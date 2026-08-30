@@ -1,5 +1,7 @@
 ---
-status: confirmed
+lifecycle: superseded
+validation_status: verified
+superseded_by: ../project-memory-retirement/requirements_2026-08-30_project-memory-retirement.md
 topic: memory-rule-organization
 date: 2026-08-01
 source: "$confirm：梳理 summary 职责、项目写入边界与 memory 颗粒度治理"

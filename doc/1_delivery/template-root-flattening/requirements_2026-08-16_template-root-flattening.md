@@ -1,3 +1,8 @@
+---
+lifecycle: active
+validation_status: awaiting_user_acceptance
+---
+
 # BridgeForgeCodex 模板根目录扁平化需求卡
 
 ## 状态

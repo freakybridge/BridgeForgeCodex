@@ -27,67 +27,7 @@ def load(path: Path, name: str):
     return module
 
 
-search_mod = load(ROOT / "templates/scripts/memory_search.py", "memory_search")
-context_mod = load(ROOT / "templates/scripts/memory_context.py", "bf_memory_context")
-usage_mod = load(ROOT / "templates/scripts/memory_usage.py", "memory_usage")
-router_mod = load(ROOT / "templates/scripts/memory_router.py", "memory_router")
 sync_mod = load(ROOT / "scripts/codex_memory_sync.py", "bf_codex_memory_sync")
-
-
-class ProjectMemoryTests(unittest.TestCase):
-    def test_field_weight_beats_body_noise_and_context_is_bounded(self) -> None:
-        with tempfile.TemporaryDirectory() as raw:
-            memory = Path(raw)
-            (memory / "exact.md").write_text("---\nname: Exact\ntopic: orders\nrelated_paths: [src/orders.rs]\ntags: [oms]\ndescription: route orders\ncreated_at: 2026-01-01\n---\nshort", encoding="utf-8")
-            (memory / "noise.md").write_text("---\nname: Noise\ndescription: repeated body\ncreated_at: 2026-02-01\n---\n" + "orders " * 200, encoding="utf-8")
-            results = search_mod.search(memory, "orders", 5)
-            self.assertEqual(results[0].path, "exact.md")
-            self.assertIn("topic/path", results[0].reason)
-            (memory / "chinese.md").write_text(
-                "---\nname: 订单路由\ntags: [订单路由]\ndescription: 订单路由规则\ncreated_at: 2026-03-01\n---\n按账户和市场路由订单",
-                encoding="utf-8",
-            )
-            chinese = search_mod.search(memory, "帮我查一下订单路由问题", 5)
-            self.assertEqual(chinese[0].path, "chinese.md")
-            self.assertIn("tags", chinese[0].reason)
-            (memory / "MEMORY.md").write_text("x" * 7000, encoding="utf-8")
-            self.assertLessEqual(len(context_mod.build_context(memory)), 6000)
-
-    def test_router_records_candidates_and_only_counts_successful_body_reads(self) -> None:
-        with tempfile.TemporaryDirectory() as raw:
-            repo = Path(raw)
-            memory = repo / ".codex" / "memory"
-            memory.mkdir(parents=True)
-            for index in range(3):
-                (memory / f"note-{index}.md").write_text(
-                    f"---\nname: Orders {index}\ndescription: order routing {index}\ncreated_at: 2026-01-0{index + 1}\n---\norders",
-                    encoding="utf-8",
-                )
-            stats = memory / "_stats.json"
-            stats.write_text('{"keep": true}\n', encoding="utf-8")
-            with mock.patch.object(router_mod, "REPO_ROOT", repo), mock.patch.object(router_mod, "MEMORY_DIR", memory):
-                candidates, receipt = router_mod.route({"prompt": "orders"})
-                self.assertEqual(len(candidates), 3)
-                self.assertIn("candidates 3; used 0", receipt)
-                self.assertFalse(router_mod.record_read({"tool_name": "mcp__fs__read", "tool_input": {"path": str(memory / "note-0.md")}, "tool_response": {"isError": True}}))
-                self.assertFalse(router_mod.record_read({"tool_name": "apply_patch", "tool_input": {"path": str(memory / "note-0.md")}, "tool_response": "write"}))
-                self.assertTrue(router_mod.record_read({"tool_name": "Read", "tool_input": {"path": str(memory / "note-0.md")}, "tool_response": "body"}))
-                self.assertTrue(router_mod.record_read({"tool_name": "mcp__fs__read_file", "tool_input": {"path": str(memory / "note-1.md")}, "tool_response": "body"}))
-            events = [json.loads(line) for line in (repo / ".runtime/memory_usage.jsonl").read_text(encoding="utf-8").splitlines()]
-            self.assertEqual([event["event"] for event in events], ["search", "used", "used"])
-            self.assertEqual(usage_mod.used_count_since_last_search(repo), 2)
-            self.assertEqual(stats.read_text(encoding="utf-8"), '{"keep": true}\n')
-
-    def test_usage_counts_are_isolated_by_session_and_turn(self) -> None:
-        with tempfile.TemporaryDirectory() as raw:
-            repo = Path(raw)
-            usage_mod.append_event(repo, {"event": "search", "session_id": "s", "turn_id": "a"})
-            usage_mod.append_event(repo, {"event": "search", "session_id": "s", "turn_id": "b"})
-            usage_mod.append_event(repo, {"event": "used", "path": "a.md", "session_id": "s", "turn_id": "a"})
-            usage_mod.append_event(repo, {"event": "used", "path": "b.md", "session_id": "s", "turn_id": "b"})
-            usage_mod.append_event(repo, {"event": "used", "path": "other.md", "session_id": "other", "turn_id": "a"})
-            self.assertEqual(usage_mod.used_count_since_last_search(repo, session_id="s", turn_id="a"), 1)
-            self.assertEqual(usage_mod.used_count_since_last_search(repo, session_id="s", turn_id="b"), 1)
 
 
 class NativeMemorySyncTests(unittest.TestCase):

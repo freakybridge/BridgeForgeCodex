@@ -2,9 +2,17 @@
 
 ## 决策
 
+信息放置与指令承载合同以根 `AGENTS.md` 的同名章节为唯一事实源；本文只记录 Codex 原生加载原理和历史迁移映射，不复制运行时规则。
+
 Codex 指令只经 `AGENTS.md` / 嵌套 `AGENTS.md` 原生加载。`.codex/rules/*.rules` 是命令执行策略，Markdown frontmatter `paths:` 不是指令加载机制。bridgeforge-codex 不实现自研加载器。
 
 根 `AGENTS.md` 使用两个精确 marker 区域：BridgeForge 公共区由产品维护并按发布 hash 校验，项目级专区由下游完全所有并在更新中逐字保留。下游只能在项目专区、项目自有嵌套 `AGENTS.md` 与项目自有 hook 中增加约束；公共区修改会在编辑后提示、pre-commit 和同步计划中 fail-closed。旧无 marker 项目继续由 `section_layout` 做一次性迁移；无法可靠分类时保留原文件、旧 rule 与旧版本戳。
+
+## Agent 路由责任链
+
+Agent 路由不使用中央映射文件。根 `AGENTS.md` 是默认执行与委派红线的唯一 owner；没有显式委派的阶段由主对话执行。每个 `SKILL.md` 只负责本流程的阶段划分，并在需要委派时点名已存在的 Agent 角色；`.codex/agents/*.toml` 只定义角色职责、工具与安全边界。Codex 原生运行时负责创建 Agent、等待结果、续接指令和汇总，bridgeforge-codex 不实现第二套调度器。
+
+工厂检查器只验证显式角色引用能解析，并把未命名或未知角色报告为问题。下游项目级 Skill 完全归项目所有；同步时同样检查其角色引用，但只生成 gap 并逐字保留原文件，禁止替下游猜测或补写分工。
 
 ## 逐节语义映射
 
@@ -22,7 +30,7 @@ Codex 指令只经 `AGENTS.md` / 嵌套 `AGENTS.md` 原生加载。`.codex/rules
 | `workflow.md` §10 | `codex-project-operating-guide.md`「大版本依赖升级 Spike」 | 体验驱动的大版本升级先在主项目外验证，用户确认有效后再升级 |
 | `portability.md` §1-§4 | `AGENTS.md` §1.3；`codex-project-operating-guide.md` | 环境隔离/禁用户级暗写/可复现依赖常驻，安装细节按需 |
 | `portability.md` §5 | hook / pre-commit | 编码、注册、dogfood 是机器可判契约 |
-| `anti_drift_hooks.md` | `AGENTS.md` §4.4-§4.5；`codex-hook-signals.md` | 响应红线常驻，机制/调参进参考 |
+| `anti_drift_hooks.md` | `AGENTS.md` §4.4；`codex-hook-signals.md`；`$focus` | Clarify 与 Focus 自动 Hook 均已退役；澄清由 Agent 依据常驻红线语义判断，手动任务锚由 `$focus` Skill 承担 |
 | `meta_rule_design.md` | `AGENTS.md` §2.1；本文档 | 保留单一事实源/可机判交 hook/说明进 doc；删除伪 path 加载模型 |
 | `bridgeforgecodex-product-change.md` | 根 `AGENTS.md` 项目专区“项目架构红线” | 工厂发布红线真正常驻，且不下沉普通项目 |
 

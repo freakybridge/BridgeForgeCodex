@@ -1,3 +1,9 @@
+---
+lifecycle: superseded
+validation_status: verified
+superseded_by: requirements_2026-07-30_portable-rule-candidate-reporting.md
+---
+
 # Markdown Rule 投影 Debate 确认卡
 
 > 状态：已确认，待 debate
@@ -36,4 +42,3 @@
 
 - 有损投影、map 漂移和人工修改必须保守处理，不得伪称等价。
 - debate 仅输出设计裁定；任何实现需用户在辩论结论后另行确认。
-

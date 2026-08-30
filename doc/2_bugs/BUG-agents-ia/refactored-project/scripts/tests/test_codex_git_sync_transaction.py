@@ -70,9 +70,10 @@ class GitSyncTransactionTests(unittest.TestCase):
             (project / "CHANGELOG.md").write_text("# Changelog\n", encoding="utf-8")
             SYNC.REPO_ROOT = project
 
-            with (
-                mock.patch.object(SYNC, "render_memory_indexes", return_value={}),
-                mock.patch.object(SYNC, "_load_factory_manifest_module", return_value=None),
+            with mock.patch.object(
+                SYNC,
+                "_load_factory_manifest_module",
+                return_value=None,
             ):
                 plan = SYNC._build_sync_write_plan(
                     "chore: 同步当前骨架",
@@ -104,7 +105,6 @@ class GitSyncTransactionTests(unittest.TestCase):
                 mock.patch.object(SYNC, "_changed_paths", return_value=set()),
                 mock.patch.object(SYNC, "_read_message") as read_message,
                 mock.patch.object(SYNC, "verify_current_baseline"),
-                mock.patch.object(SYNC, "render_memory_indexes", return_value={}),
                 mock.patch.object(SYNC, "_load_factory_manifest_module", return_value=None),
                 mock.patch.object(SYNC, "_check_factory_version_worktree"),
             ):
@@ -483,7 +483,6 @@ class GitSyncTransactionTests(unittest.TestCase):
         renderer = mock.Mock()
         renderer.render_all_outputs.side_effect = ValueError("injected manifest failure")
         with mock.patch.object(SYNC, "build_release_plan", return_value=None), \
-                mock.patch.object(SYNC, "render_memory_indexes", return_value={}), \
                 mock.patch.object(SYNC, "_load_factory_manifest_module", return_value=renderer):
             with self.assertRaisesRegex(SYNC.SyncStop, "shared manifest render blocked"):
                 SYNC._build_sync_write_plan("fix: render", {"tracked.txt"})

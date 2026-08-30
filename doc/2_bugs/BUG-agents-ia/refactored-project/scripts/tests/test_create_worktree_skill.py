@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
-import json
 import os
 import shutil
 import subprocess
@@ -474,23 +473,5 @@ class CreateWorktreeSkillTests(unittest.TestCase):
         )
         for forbidden in (" worktree remove ", " fetch ", " pull ", " push ", " reset "):
             self.assertNotIn(forbidden, script.lower())
-        for routing in (
-            ROOT / ".codex" / "skill-routing.json",
-            ROOT / "templates" / "skill-routing.json",
-        ):
-            manifest = json.loads(routing.read_text(encoding="utf-8-sig"))
-            entry = next(
-                item
-                for item in manifest["global_entries"]
-                if item["skill"] == "create-worktree"
-            )
-            self.assertEqual(entry["agent"], "main")
-            self.assertEqual(entry["mode"], "main")
-            self.assertNotIn(
-                "create-worktree",
-                {item["skill"] for item in manifest["skills"]},
-            )
-
-
 if __name__ == "__main__":
     unittest.main()

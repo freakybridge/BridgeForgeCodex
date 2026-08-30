@@ -21,7 +21,7 @@
         "public": {
           "begin": "<!-- BRIDGEFORGE:PUBLIC:BEGIN -->",
           "end": "<!-- BRIDGEFORGE:PUBLIC:END -->",
-          "current_sha256": "sha256:8ab2bffc6698f9495bb2947d2738acf028bef65abf31c5938afc3dae2893140e"
+          "current_sha256": "sha256:27f4a46629b735101e090e093786dc1baa8fec389559baf4383bdb2c639d6ed6"
         },
         "project": {
           "begin": "<!-- BRIDGEFORGE:PROJECT:BEGIN -->",
@@ -41,7 +41,7 @@
           ]
         }
       },
-      "current_sha256": "sha256:96b1a96c4bbee9f2a8a2d67d140bf68932e8c4a280203d11133751cff5a13d34",
+      "current_sha256": "sha256:ac60eadbb4a3d025023839177c61809062e9bf86410f6e0fd1a931f5636ccf3b",
       "render": "project-name"
     },
     {
@@ -64,7 +64,7 @@
       "proposal_source": "shared-docs/codex-hook-signals.md",
       "target": "doc/3_reference/codex-hook-signals.md",
       "strategy": "whole",
-      "current_sha256": "sha256:5d5c254391762d7eed59d93e7ab787e914de7b37d29f82511d2aa1ae54f2dd51"
+      "current_sha256": "sha256:ae53e4dfa5c5bb9a3d171a4e1600a46058cf757c5259d7717d748787d60c61cc"
     }
   ],
   "generated_sources": [
@@ -73,19 +73,10 @@
       "source": "templates/hooks/instruction_source_check.py",
       "mirror": ".codex/hooks/instruction_source_check.py",
       "generator": "replace-public-required-headings",
-      "current_sha256": "sha256:f4922bd121a52e0957921d501ce9588cb98b9aeb961e78927890c8bd5242911c"
+      "current_sha256": "sha256:45f405b32536e832ff48fbe7a8bec8ab878624d22288c360f16cfa44ba7ded1e"
     }
   ],
   "pointer_migrations": [
-    {
-      "target": "templates/hooks/clarify_reminder.py",
-      "mirror": ".codex/hooks/clarify_reminder.py",
-      "current_sha256": "sha256:67b96793e88cbaf0b52927d605ecef3d7fc7a7e4d90580c4d15eb022f48aa365",
-      "replacements": [
-        {"from": "AGENTS.md §4.4", "to": "doc/3_reference/codex-hook-signals.md"},
-        {"from": "AGENTS.md「主动澄清」", "to": "doc/3_reference/codex-hook-signals.md"}
-      ]
-    },
     {
       "target": "templates/hooks/focus_reminder.py",
       "mirror": ".codex/hooks/focus_reminder.py",
@@ -132,7 +123,7 @@
     },
     {
       "target": "doc/README.md",
-      "current_sha256": "sha256:ae229ad3020e1ec1eb8f5a8b4b67d98a4e1f3eb57a5fe176599f460af011c7ab",
+      "current_sha256": "sha256:ebb57178e8800ca18808a7e1a57a9e481ba4a4451919a70d505d6c068a2951c2",
       "replacements": [
         {"from": "[`codex-project-operating-guide.md`](3_reference/codex-project-operating-guide.md) 与 ", "to": ""}
       ]
@@ -152,7 +143,7 @@
     },
     {
       "target": "CHANGELOG.md",
-      "current_sha256": "sha256:081332cf45cd714f162dae61e2d57a87e43ab1df255d6a6f03e2411c554919fa",
+      "current_sha256": "sha256:dc59851d241b0e936077904157f1818fba81a9f2c16351022700df4d1550788b",
       "replacements": [
         {"from": "语义见 `AGENTS.md §3`", "to": "语义见 `AGENTS.md「项目架构红线」`"}
       ]

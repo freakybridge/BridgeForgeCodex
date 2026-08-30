@@ -1,5 +1,6 @@
 ---
-status: implemented-awaiting-user-acceptance
+lifecycle: active
+validation_status: awaiting_user_acceptance
 next: user_acceptance
 scale: M
 budget: 45_minutes_20k_tokens_unmeasured_1_auditor_2_validation_rounds_plus_user_approved_repair_round

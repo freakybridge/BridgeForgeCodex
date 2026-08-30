@@ -1,6 +1,6 @@
 ---
 name: find-doc
-description: 定位主题相关文档、TODO、当前进展、设计计划、验收方案及关联 memory/rules；用户询问“相关文档在哪、还有什么未解决、现状如何、查一下某主题”时主动使用。精确路径、纯代码搜索或本轮已查过同一主题时跳过。
+description: 定位主题相关文档、TODO、当前进展、设计计划、验收方案及关联 rules；用户询问“相关文档在哪、还有什么未解决、现状如何、查一下某主题”时主动使用。精确路径、纯代码搜索或本轮已查过同一主题时跳过。
 user_invocable: true
 argument: 主题关键词（中英混合，例 "auth oauth" / "数据库 schema"）
 ---
@@ -9,7 +9,7 @@ argument: 主题关键词（中英混合，例 "auth oauth" / "数据库 schema"
 
 ## 定位与边界
 
-只检索 `doc/`、当前 agent 的 memory 索引和项目专属 rule 映射，不扫描源代码，不先读取完整文档。目标是用少量高信号命中回答“在哪、现状、TODO、设计和计划”。
+只检索 `doc/` 和项目专属 rule 映射，不扫描源代码、项目 Memory 或原生 Memory，也不先读取完整文档。目标是用少量高信号命中回答“在哪、现状、TODO、设计和计划”。
 
 ## 输入
 
@@ -21,7 +21,7 @@ argument: 主题关键词（中英混合，例 "auth oauth" / "数据库 schema"
 
 | 意图 | 典型问题 | 执行路径 |
 |------|----------|----------|
-| 找东西（默认） | 找、在哪、涉及、查、搜、设计、计划 | A + B + D + E |
+| 找东西（默认） | 找、在哪、涉及、查、搜、设计、计划 | A + B + D |
 | 看待处理事项 | 未解决、没修、bug、todo、进展、现状 | C + D |
 | 看交付计划 | Milestone、M1、验收、需求、开发计划 | A + C + D |
 
@@ -40,8 +40,7 @@ argument: 主题关键词（中英混合，例 "auth oauth" / "数据库 schema"
   - 读取 `doc/README.md` 的 `delivery_layout`；
   - Glob `doc/1_delivery/**/<topic>*/**/*.md`，并匹配 `requirements_*.md`、`plan.md`、`acceptance.md`、`debates/*.md`；
   - Grep `doc/2_bugs/**/<topic>*.md`，只返回命中文件，最多 20 个。
-- **Path D—Memory 索引**：只 Grep `.codex/memory/MEMORY.md`，最多 25 条；不扫描具体 memory 文件。
-- **Path E—多词共现**：仅多 token 时，在 `doc/**/*.md` 中按正反顺序做 multiline 共现 Grep，只返回文件，最多 15 个。
+- **Path D—多词共现**：仅多 token 时，在 `doc/**/*.md` 中按正反顺序做 multiline 共现 Grep，只返回文件，最多 15 个。
 
 ### 3. 查项目 rule 映射
 
@@ -49,13 +48,13 @@ argument: 主题关键词（中英混合，例 "auth oauth" / "数据库 schema"
 
 ### 4. 聚合与收尾
 
-1. 聚合去重：A 作基线，E 作高优先级，B/D 调整次序，空段不显示。
+1. 聚合去重：A 作基线，D 作高优先级，B/C 调整次序，空段不显示。
 2. 命中后读取 [references/output-format.md](references/output-format.md)，按其格式输出。
 3. 收尾读取 [references/map-reminder-sop.md](references/map-reminder-sop.md)，只在满足条件时提醒维护映射。
 
 ## 输出与验证
 
-标明每项命中来自文件名、README、TODO、memory 还是规则映射；区分进行中、待解决与已归档文档。需要正文结论时，只读用户选定或最高信号的目标文件。
+标明每项命中来自文件名、README、TODO 还是规则映射；区分进行中、待解决与已归档文档。需要正文结论时，只读用户选定或最高信号的目标文件。
 
 ## 停止条件
 
@@ -68,7 +67,7 @@ argument: 主题关键词（中英混合，例 "auth oauth" / "数据库 schema"
 ## 禁止事项
 
 - 禁止先读完整文件理解上下文；先检索，再按需读。
-- 禁止扫描源代码、全量 memory 文件或全量 rules。
+- 禁止扫描源代码、项目 `.codex/memory/`、原生 `~/.codex/memories/` 或全量 rules。
 - 禁止在无明确 topic 时提醒创建映射，或在同一会话重复提醒同一 topic。
 - 禁止用 `todo`、`resume`、`summary` 的能力替代本 skill；新建文档、跨会话接续和对话总结应转交对应 skill。
 

@@ -1,5 +1,7 @@
 ---
-status: confirmed
+lifecycle: superseded
+validation_status: verified
+superseded_by: ../project-memory-retirement/requirements_2026-08-30_project-memory-retirement.md
 topic: memory-rule-organization
 created: 2026-07-28
 source: "$confirm: simplified dual-host project-level memory junction hooks"

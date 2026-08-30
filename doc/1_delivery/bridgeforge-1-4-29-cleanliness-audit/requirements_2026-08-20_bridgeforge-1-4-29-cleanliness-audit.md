@@ -1,5 +1,6 @@
 ---
-status: audited
+lifecycle: active
+validation_status: awaiting_validation
 next: implementation-card-confirmed-awaiting-develop-start
 scale: L
 budget: 180_minutes_60k_tokens_unmeasured_5_agents_3_validation_rounds

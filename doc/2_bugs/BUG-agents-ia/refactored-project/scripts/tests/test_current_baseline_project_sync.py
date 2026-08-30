@@ -491,6 +491,87 @@ class CurrentProjectSyncTests(unittest.TestCase):
         )
         return template
 
+    def template_without_asset(self, asset_id: str) -> Path:
+        template = self.template_base / f"without-{asset_id.replace('.', '-')}"
+        shutil.copytree(ROOT / "templates", template / "templates")
+        shutil.copy2(ROOT / "VERSION", template / "VERSION")
+        contract_path = template / "templates" / "managed-skeleton.json"
+        contract = json.loads(contract_path.read_text(encoding="utf-8"))
+        contract["assets"] = [
+            item for item in contract["assets"] if item["id"] != asset_id
+        ]
+        contract_path.write_text(
+            json.dumps(contract, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        return template
+
+    def template_with_whole_strategy_transition(
+        self,
+        strategy: str,
+    ) -> tuple[Path, Path, str]:
+        installed = self.template_base / f"{strategy}-to-whole-installed"
+        incoming = self.template_base / f"{strategy}-to-whole-incoming"
+        shutil.copytree(ROOT / "templates", installed / "templates")
+        shutil.copy2(ROOT / "VERSION", installed / "VERSION")
+        relative = f".codex/hooks/{strategy}_to_whole.txt"
+        source_relative = f"templates/hooks/{strategy}_to_whole.txt"
+        source = installed / source_relative
+        asset: dict[str, object] = {
+            "id": f"codex.test.{strategy}-to-whole",
+            "source": source_relative,
+            "target": relative,
+            "strategy": strategy,
+        }
+        if strategy == "merge":
+            payload = b'{"managed": true}\n'
+            asset["merge_validation"] = {
+                "format": "json-subset-current-v1",
+                "required": {"managed": True},
+            }
+        elif strategy == "region":
+            payload = b"# BEGIN TRANSITION\nmanaged\n# END TRANSITION\n"
+            asset["region"] = {
+                "begin": "# BEGIN TRANSITION",
+                "end": "# END TRANSITION",
+                "current_sha256": SYNC._sha256_bytes(payload),
+            }
+        elif strategy == "seed":
+            payload = b"managed seed\n"
+        else:
+            raise AssertionError(f"unsupported transition strategy: {strategy}")
+        source.write_bytes(payload)
+        asset["current_sha256"] = SYNC._sha256_bytes(payload)
+        contract_path = installed / "templates" / "managed-skeleton.json"
+        contract = json.loads(contract_path.read_text(encoding="utf-8"))
+        contract["assets"].append(asset)
+        contract_path.write_text(
+            json.dumps(contract, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+
+        shutil.copytree(installed, incoming)
+        incoming_source = incoming / source_relative
+        incoming_payload = b"official whole replacement\n"
+        incoming_source.write_bytes(incoming_payload)
+        incoming_contract_path = incoming / "templates" / "managed-skeleton.json"
+        incoming_contract = json.loads(
+            incoming_contract_path.read_text(encoding="utf-8")
+        )
+        incoming_asset = next(
+            item for item in incoming_contract["assets"]
+            if item["id"] == asset["id"]
+        )
+        incoming_asset["strategy"] = "whole"
+        incoming_asset["current_sha256"] = SYNC._sha256_bytes(incoming_payload)
+        incoming_asset.pop("merge_validation", None)
+        incoming_asset.pop("region", None)
+        incoming_contract_path.write_text(
+            json.dumps(incoming_contract, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        return installed, incoming, relative
+
     def test_init_installs_a_verified_current_baseline(self) -> None:
         plan = SYNC.build_plan(self.project, ROOT, "init")
         self.assertFalse(plan.blockers)
@@ -677,6 +758,282 @@ class CurrentProjectSyncTests(unittest.TestCase):
         self.assertEqual(plan.actions, [])
         receipt = self.apply(plan)
         self.assertEqual(receipt.applied, ())
+
+    def test_new_whole_asset_collision_requires_confirmed_risk(self) -> None:
+        asset_id = "codex.doc.hook-signals"
+        baseline = self.template_without_asset(asset_id)
+        self.apply(SYNC.build_plan(self.project, baseline, "init"))
+        target = self.project / "doc" / "3_reference" / "codex-hook-signals.md"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        original = b"project-owned hook notes\n"
+        target.write_bytes(original)
+
+        plan = SYNC.build_plan(self.project, ROOT, "update")
+        self.assertFalse(plan.blockers)
+        risks = [item for item in plan.risk_actions if item.asset_id == asset_id]
+        self.assertEqual(len(risks), 1)
+        self.assertEqual(risks[0].target, target.relative_to(self.project).as_posix())
+        self.assertEqual(risks[0].before_sha256, SYNC._sha256_bytes(original))
+        self.assertTrue(SYNC._plan_payload(plan)["confirmation_required"])
+        before = self.snapshot_tree()
+
+        with self.assertRaisesRegex(SYNC.SyncBlocked, "confirmed-risk"):
+            self.apply(plan)
+        self.assertEqual(self.snapshot_tree(), before)
+
+        receipt = self.apply(plan, confirmed_risk=True)
+        self.assertTrue(receipt.stamp_written_last)
+        self.assertEqual(
+            target.read_bytes(),
+            (ROOT / "templates" / target.relative_to(self.project)).read_bytes(),
+        )
+        repeated = SYNC.build_plan(self.project, ROOT, "update")
+        self.assertFalse(repeated.blockers)
+        self.assertEqual(repeated.actions, [])
+
+    def test_partial_ownership_to_whole_requires_confirmed_risk(self) -> None:
+        for strategy in ("merge", "region", "seed"):
+            with self.subTest(strategy=strategy), tempfile.TemporaryDirectory() as raw:
+                project = Path(raw)
+                installed, incoming, relative = (
+                    self.template_with_whole_strategy_transition(strategy)
+                )
+                installed_plan = SYNC.build_plan(project, installed, "init")
+                SYNC.apply_plan(
+                    installed_plan,
+                    plan_fingerprint=installed_plan.aggregate_fingerprint,
+                )
+                target = project / relative
+                if strategy == "merge":
+                    payload = json.loads(target.read_text(encoding="utf-8"))
+                    payload["project_owned"] = True
+                    target.write_text(
+                        json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+                        encoding="utf-8",
+                    )
+                elif strategy == "region":
+                    target.write_bytes(
+                        b"project prefix\n" + target.read_bytes() + b"project suffix\n"
+                    )
+                else:
+                    target.write_bytes(target.read_bytes() + b"project-owned seed data\n")
+                before = target.read_bytes()
+
+                plan = SYNC.build_plan(project, incoming, "update")
+                self.assertFalse(plan.blockers)
+                risks = [
+                    item for item in plan.risk_actions
+                    if item.target == relative
+                ]
+                self.assertEqual(len(risks), 1)
+                self.assertTrue(SYNC._plan_payload(plan)["confirmation_required"])
+                with self.assertRaisesRegex(SYNC.SyncBlocked, "confirmed-risk"):
+                    SYNC.apply_plan(
+                        plan,
+                        plan_fingerprint=plan.aggregate_fingerprint,
+                    )
+                self.assertEqual(target.read_bytes(), before)
+
+                receipt = SYNC.apply_plan(
+                    plan,
+                    plan_fingerprint=plan.aggregate_fingerprint,
+                    confirmed_risk=True,
+                )
+                self.assertTrue(receipt.stamp_written_last)
+                self.assertEqual(
+                    target.read_bytes(),
+                    (incoming / "templates" / "hooks" / f"{strategy}_to_whole.txt")
+                    .read_bytes(),
+                )
+                self.assertEqual(
+                    SYNC.build_plan(project, incoming, "update").actions,
+                    [],
+                )
+
+    def test_current_only_risk_cli_requires_confirmation(self) -> None:
+        asset_id = "codex.doc.hook-signals"
+        baseline = self.template_without_asset(asset_id)
+        self.apply(SYNC.build_plan(self.project, baseline, "init"))
+        target = self.project / "doc" / "3_reference" / "codex-hook-signals.md"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        original = b"project-owned hook notes\n"
+        target.write_bytes(original)
+        subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "venv",
+                "--without-pip",
+                str(self.project / ".venv"),
+            ],
+            check=True,
+        )
+        executable = self.project / ".venv" / "Scripts" / "python.exe"
+        command = [
+            str(executable),
+            "-B",
+            str(ROOT / "scripts" / "bridgeforge_codex_project_sync.py"),
+            "--project-root",
+            str(self.project),
+            "--template-root",
+            str(ROOT),
+            "--mode",
+            "update",
+        ]
+        planned = subprocess.run(
+            command,
+            text=True,
+            encoding="utf-8",
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(planned.returncode, 0, planned.stdout + planned.stderr)
+        plan_payload = json.loads(planned.stdout)
+        self.assertTrue(plan_payload["confirmation_required"])
+        self.assertEqual(len(plan_payload["risk"]), 1)
+        fingerprint = plan_payload["aggregate_fingerprint"]
+
+        human_plan = subprocess.run(
+            command + ["--output-format", "human"],
+            text=True,
+            encoding="utf-8",
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(human_plan.returncode, 0, human_plan.stderr)
+        self.assertIn("结论：已生成升级计划，尚未修改文件。", human_plan.stdout)
+        self.assertIn("下一步：确认上述事项后，才能执行升级。", human_plan.stdout)
+        self.assertNotIn("aggregate_fingerprint", human_plan.stdout)
+        self.assertFalse(human_plan.stderr)
+
+        combined_plan = subprocess.run(
+            command + ["--output-format", "combined"],
+            text=True,
+            encoding="utf-8",
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(combined_plan.returncode, 0, combined_plan.stderr)
+        combined_payload = json.loads(combined_plan.stdout)
+        self.assertEqual(
+            combined_payload["machine"]["aggregate_fingerprint"],
+            fingerprint,
+        )
+        self.assertEqual(
+            combined_payload["human"]["conclusion"],
+            "已生成升级计划，尚未修改文件。",
+        )
+
+        rejected = subprocess.run(
+            command + ["--apply", "--plan-fingerprint", fingerprint],
+            text=True,
+            encoding="utf-8",
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(rejected.returncode, 2)
+        rejected_payload = json.loads(rejected.stdout)
+        self.assertIn("confirmed-risk", rejected_payload["error"])
+        self.assertEqual(target.read_bytes(), original)
+
+        combined_rejected = subprocess.run(
+            command
+            + [
+                "--apply",
+                "--plan-fingerprint",
+                fingerprint,
+                "--output-format",
+                "combined",
+            ],
+            text=True,
+            encoding="utf-8",
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(combined_rejected.returncode, 2)
+        combined_failure = json.loads(combined_rejected.stdout)
+        self.assertEqual(combined_failure["machine"]["status"], "failed")
+        self.assertEqual(
+            combined_failure["human"]["conclusion"],
+            "骨架升级未完成。",
+        )
+        self.assertIn("确认", combined_failure["human"]["next_step"])
+        self.assertFalse(combined_rejected.stderr)
+        self.assertEqual(target.read_bytes(), original)
+
+        applied = subprocess.run(
+            command
+            + [
+                "--apply",
+                "--plan-fingerprint",
+                fingerprint,
+                "--confirmed-risk",
+            ],
+            text=True,
+            encoding="utf-8",
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(applied.returncode, 0, applied.stdout + applied.stderr)
+        self.assertEqual(json.loads(applied.stdout)["status"], "completed")
+        repeated = subprocess.run(
+            command,
+            text=True,
+            encoding="utf-8",
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(repeated.returncode, 0, repeated.stdout + repeated.stderr)
+        self.assertFalse(json.loads(repeated.stdout)["safe"])
+        self.assertFalse(json.loads(repeated.stdout)["risk"])
+
+    def test_new_whole_asset_identical_content_is_adopted_without_risk(self) -> None:
+        asset_id = "codex.doc.hook-signals"
+        baseline = self.template_without_asset(asset_id)
+        self.apply(SYNC.build_plan(self.project, baseline, "init"))
+        target = self.project / "doc" / "3_reference" / "codex-hook-signals.md"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        incoming = ROOT / "templates" / target.relative_to(self.project)
+        target.write_bytes(incoming.read_bytes())
+
+        plan = SYNC.build_plan(self.project, ROOT, "update")
+        self.assertFalse(plan.blockers)
+        self.assertFalse(plan.risk_actions)
+        self.assertFalse(any(item.asset_id == asset_id for item in plan.actions))
+        self.apply(plan)
+        self.assertEqual(target.read_bytes(), incoming.read_bytes())
+        self.assertEqual(SYNC.build_plan(self.project, ROOT, "update").actions, [])
+
+    def test_new_whole_asset_risk_replan_and_rollback_fail_closed(self) -> None:
+        asset_id = "codex.doc.hook-signals"
+        baseline = self.template_without_asset(asset_id)
+        self.apply(SYNC.build_plan(self.project, baseline, "init"))
+        target = self.project / "doc" / "3_reference" / "codex-hook-signals.md"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        original = b"project-owned hook notes\n"
+        target.write_bytes(original)
+
+        drift_plan = SYNC.build_plan(self.project, ROOT, "update")
+        drifted = b"changed after planning\n"
+        target.write_bytes(drifted)
+        with self.assertRaisesRegex(SYNC.SyncBlocked, "fingerprint"):
+            self.apply(drift_plan, confirmed_risk=True)
+        self.assertEqual(target.read_bytes(), drifted)
+
+        target.write_bytes(original)
+        rollback_plan = SYNC.build_plan(self.project, ROOT, "update")
+
+        def fail_after_risk(label: str) -> None:
+            if label == f"after-action:{asset_id}":
+                raise RuntimeError("injected risk failure")
+
+        with self.assertRaisesRegex(SYNC.SyncBlocked, "rolled back"):
+            self.apply(
+                rollback_plan,
+                confirmed_risk=True,
+                checkpoint=fail_after_risk,
+            )
+        self.assertEqual(target.read_bytes(), original)
 
     def test_current_update_deletes_removed_unchanged_whole_asset(self) -> None:
         installed, incoming, relative = self.template_with_removable_asset(
@@ -926,6 +1283,84 @@ class CurrentProjectSyncTests(unittest.TestCase):
         plan = SYNC.build_plan(self.project, ROOT, "adopt")
         self.assertIn("compatibility check", " ".join(plan.blockers))
         self.assertEqual(skill.read_text(encoding="utf-8"), "---\nname: broken\n---\n")
+
+    def test_project_skill_generic_agent_role_becomes_gap_without_writes(self) -> None:
+        skill = self.project / ".codex" / "skills" / "generic" / "SKILL.md"
+        skill.parent.mkdir(parents=True)
+        (self.project / SYNC.OBSOLETE_STAMP).write_text(
+            LEGACY_VERSION + "\n",
+            encoding="utf-8",
+        )
+        skill.write_text(
+            "---\nname: generic\ndescription: project semantics\n---\n\n"
+            "旧项目必须先由独立 agent 审计。\n",
+            encoding="utf-8",
+        )
+        before = skill.read_bytes()
+
+        plan = SYNC.build_plan(self.project, ROOT, "adopt")
+
+        self.assertEqual(plan.blockers, [])
+        self.assertTrue(
+            any(
+                gap.asset_id == "project.skill-agent-routing"
+                and "generic Agent label" in gap.reason
+                for gap in plan.gaps
+            ),
+            plan.gaps,
+        )
+        with self.assertRaisesRegex(SYNC.SyncBlocked, "unresolved gaps"):
+            self.apply(plan)
+        self.assertEqual(skill.read_bytes(), before)
+        self.assertFalse(
+            (self.project / SYNC.CURRENT_STAMP).exists()
+        )
+
+    def test_project_skill_named_agent_role_is_accepted(self) -> None:
+        skill = self.project / ".codex" / "skills" / "named" / "SKILL.md"
+        skill.parent.mkdir(parents=True)
+        (self.project / SYNC.OBSOLETE_STAMP).write_text(
+            LEGACY_VERSION + "\n",
+            encoding="utf-8",
+        )
+        skill.write_text(
+            "---\nname: named\ndescription: project semantics\n---\n\n"
+            "把独立审计显式分派给 `review-auditor`。\n",
+            encoding="utf-8",
+        )
+
+        plan = SYNC.build_plan(self.project, ROOT, "adopt")
+
+        self.assertEqual(plan.blockers, [])
+        self.assertFalse(
+            any(gap.asset_id == "project.skill-agent-routing" for gap in plan.gaps),
+            plan.gaps,
+        )
+
+    def test_project_skill_unknown_agent_role_becomes_gap(self) -> None:
+        skill = self.project / ".codex" / "skills" / "unknown" / "SKILL.md"
+        skill.parent.mkdir(parents=True)
+        (self.project / SYNC.OBSOLETE_STAMP).write_text(
+            LEGACY_VERSION + "\n",
+            encoding="utf-8",
+        )
+        skill.write_text(
+            "---\nname: unknown\ndescription: project semantics\n---\n\n"
+            "把调查显式分派给 `missing-agent`。\n",
+            encoding="utf-8",
+        )
+
+        plan = SYNC.build_plan(self.project, ROOT, "adopt")
+
+        self.assertEqual(plan.blockers, [])
+        self.assertTrue(
+            any(
+                gap.asset_id == "project.skill-agent-routing"
+                and "unknown Agent role 'missing-agent'" in gap.reason
+                for gap in plan.gaps
+            ),
+            plan.gaps,
+        )
 
     def test_fingerprint_and_preservation_ids_fail_closed(self) -> None:
         plan = SYNC.build_plan(self.project, ROOT, "init")
@@ -1259,7 +1694,7 @@ class CurrentProjectSyncTests(unittest.TestCase):
         )
         self.assertFalse((self.project / SYNC.CURRENT_STAMP).exists())
 
-    def test_rebuild_memory_compatibility_plan_is_zero_write(self) -> None:
+    def test_rebuild_preserves_legacy_memory_and_reports_gap(self) -> None:
         stamp = self.project / SYNC.OBSOLETE_STAMP
         stamp.parent.mkdir(parents=True)
         stamp.write_text(LEGACY_VERSION + "\n", encoding="utf-8")
@@ -1270,15 +1705,187 @@ class CurrentProjectSyncTests(unittest.TestCase):
             "description: project note\n---\n\n# Note\n",
             encoding="utf-8",
         )
-        before = self.snapshot_tree()
+        expected = note.read_bytes()
 
         plan = SYNC.build_plan(self.project, ROOT, "auto")
 
-        self.assertIn(
-            "project memory compatibility check failed",
-            " ".join(plan.blockers),
+        self.assertFalse(plan.blockers)
+        entry = next(
+            item
+            for item in plan.preservation_entries
+            if item.get("id") == "R:legacy-project-memory"
         )
-        self.assertEqual(self.snapshot_tree(), before)
+        self.assertEqual(entry["status"], "legacy-gap")
+        self.assertEqual(entry["disposition"], "required-preserve")
+        self.assertEqual(entry["file_count"], 1)
+        self.assertIn("pending per-project migration", entry["reason"])
+        self.assertEqual(len(entry["files"]), 1)
+        scanned = entry["files"][0]
+        self.assertEqual(scanned["source_path"], "note.md")
+        self.assertEqual(scanned["size_bytes"], len(expected))
+        self.assertEqual(scanned["sha256"], SYNC._sha256_bytes(expected))
+        self.assertEqual(scanned["information_type"], "body")
+        self.assertEqual(scanned["ledger_status"], "discovered")
+        self.assertEqual(scanned["disposition"], "hold")
+        self.assertEqual(scanned["metadata"]["category"], "engineering")
+        machine = SYNC._plan_payload(plan)
+        self.assertEqual(machine["status"], "planned_with_gaps")
+        self.assertEqual(machine["readiness"], "action_required")
+        human = SYNC._plan_human_result(machine)
+        self.assertIn("尚未迁移", human["conclusion"])
+        self.assertTrue(any(
+            "1 个 legacy" in item
+            for item in human["pending_items"]
+        ))
+
+        receipt = self.apply(
+            plan,
+            confirmed_preservation_manifest=True,
+            confirmed_risk=True,
+        )
+
+        self.assertEqual(note.read_bytes(), expected)
+        self.assertEqual(receipt.status, "completed_with_gaps")
+        self.assertEqual(receipt.readiness, "action_required")
+        receipt_human = SYNC._receipt_human_result(SYNC.asdict(receipt))
+        self.assertIn("legacy Memory 缺口", receipt_human["conclusion"])
+        self.assertIn("未迁移、未删除", receipt_human["pending_items"][-1])
+        repeated = SYNC.build_plan(self.project, ROOT, "update")
+        self.assertFalse(repeated.blockers)
+        self.assertTrue(any(
+            item.get("status") == "legacy-gap"
+            for item in repeated.preservation_entries
+        ))
+
+    def test_retired_memory_runtime_removal_plan_excludes_legacy_tree(self) -> None:
+        runtime = self.project / ".codex" / "scripts" / "memory_router.py"
+        runtime.parent.mkdir(parents=True)
+        runtime.write_bytes(b"retired runtime\n")
+        legacy = self.project / ".codex" / "memory" / "legacy.md"
+        legacy.parent.mkdir(parents=True)
+        legacy.write_bytes(b"legacy project memory\n")
+        installed = {
+            "assets": [{
+                "id": "codex.script.memory-router",
+                "source": "templates/scripts/memory_router.py",
+                "target": ".codex/scripts/memory_router.py",
+                "strategy": "whole",
+                "current_sha256": SYNC._sha256_bytes(runtime.read_bytes()),
+            }],
+        }
+        incoming = {"assets": []}
+
+        actions, blockers, removed = SYNC._current_contract_removals(
+            self.project,
+            installed,
+            incoming,
+        )
+
+        self.assertEqual(blockers, [])
+        self.assertEqual(removed, {".codex/scripts/memory_router.py"})
+        self.assertEqual(len(actions), 1)
+        self.assertEqual(actions[0].action, "delete")
+        self.assertEqual(actions[0].classification, "safe")
+        self.assertEqual(legacy.read_bytes(), b"legacy project memory\n")
+
+    def test_legacy_ledger_progress_and_damage_are_reported_read_only(self) -> None:
+        stamp = self.project / SYNC.OBSOLETE_STAMP
+        stamp.parent.mkdir(parents=True)
+        stamp.write_text(LEGACY_VERSION + "\n", encoding="utf-8")
+        note = self.project / ".codex" / "memory" / "topic.md"
+        note.parent.mkdir(parents=True)
+        note.write_text(
+            "---\nstatus: active\n---\nlegacy body\n",
+            encoding="utf-8",
+        )
+        expected = note.read_bytes()
+
+        initial = SYNC.build_plan(self.project, ROOT, "auto")
+        entry = next(
+            item for item in initial.preservation_entries
+            if item.get("id") == "R:legacy-project-memory"
+        )
+        self.assertEqual(entry["ledger"]["status"], "absent")
+        scanned = entry["files"][0]
+        ledger_path = self.project / SYNC.LEGACY_MEMORY_LEDGER
+        ledger_path.parent.mkdir(parents=True)
+        ledger_path.write_text(
+            json.dumps({
+                "schema_version": 1,
+                "scan_fingerprint": entry["scan_fingerprint"],
+                "records": {
+                    scanned["asset_id"]: {
+                        "source_path": scanned["source_path"],
+                        "source_sha256": scanned["sha256"],
+                        "migration_status": "verified",
+                        "proposed_target": "doc/0_architecture/topic.md",
+                        "disposition": "migrate",
+                        "user_decision": "approve",
+                        "cleanup_decision": None,
+                    },
+                },
+            }, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+
+        current = SYNC.build_plan(self.project, ROOT, "auto")
+        current_entry = next(
+            item for item in current.preservation_entries
+            if item.get("id") == "R:legacy-project-memory"
+        )
+        self.assertFalse(current.blockers)
+        self.assertEqual(current_entry["ledger"]["status"], "current")
+        self.assertEqual(current_entry["ledger"]["progress"], {"verified": 1})
+        self.assertEqual(current_entry["files"][0]["user_decision"], "approve")
+        self.assertEqual(note.read_bytes(), expected)
+
+        ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
+        ledger["records"][scanned["asset_id"]]["source_sha256"] = "sha256:" + "0" * 64
+        ledger_path.write_text(
+            json.dumps(ledger, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        source_drift = SYNC.build_plan(self.project, ROOT, "auto")
+        source_drift_entry = next(
+            item for item in source_drift.preservation_entries
+            if item.get("id") == "R:legacy-project-memory"
+        )
+        self.assertEqual(source_drift_entry["ledger"]["status"], "drifted")
+        self.assertEqual(source_drift_entry["files"][0]["ledger_status"], "drifted")
+        self.assertTrue(any(
+            "ledger source drift" in error
+            for error in source_drift_entry["ledger"]["errors"]
+        ))
+        self.assertEqual(note.read_bytes(), expected)
+
+        ledger["records"][scanned["asset_id"]]["source_sha256"] = scanned["sha256"]
+        ledger["scan_fingerprint"] = "sha256:" + "f" * 64
+        ledger_path.write_text(
+            json.dumps(ledger, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        fingerprint_drift = SYNC.build_plan(self.project, ROOT, "auto")
+        fingerprint_entry = next(
+            item for item in fingerprint_drift.preservation_entries
+            if item.get("id") == "R:legacy-project-memory"
+        )
+        self.assertEqual(fingerprint_entry["ledger"]["status"], "drifted")
+        self.assertTrue(any(
+            "scan_fingerprint" in error
+            for error in fingerprint_entry["ledger"]["errors"]
+        ))
+        self.assertEqual(note.read_bytes(), expected)
+
+        ledger_path.write_text("{damaged\n", encoding="utf-8")
+        damaged = SYNC.build_plan(self.project, ROOT, "auto")
+        damaged_entry = next(
+            item for item in damaged.preservation_entries
+            if item.get("id") == "R:legacy-project-memory"
+        )
+        self.assertFalse(damaged.blockers)
+        self.assertEqual(damaged_entry["ledger"]["status"], "invalid")
+        self.assertTrue(damaged_entry["ledger"]["errors"])
+        self.assertEqual(note.read_bytes(), expected)
 
     def test_reparse_codex_directory_blocks_rebuild_without_writes(self) -> None:
         stamp = self.project / SYNC.OBSOLETE_STAMP
@@ -1603,42 +2210,84 @@ class CurrentProjectSyncTests(unittest.TestCase):
             self.apply(plan)
         self.assertTrue(local.is_file())
 
-    def test_post_index_validator_failure_rolls_back_derived_memory(self) -> None:
+    def test_post_legacy_preserve_checkpoint_failure_rolls_back(self) -> None:
         plan = SYNC.build_plan(self.project, ROOT, "init")
-        def fail_after_index(label: str) -> None:
-            if label == "after-memory-index":
-                raise RuntimeError("post-index failure")
+        def fail_after_preserve(label: str) -> None:
+            if label == "after-legacy-memory-preserve":
+                raise RuntimeError("post-preserve failure")
 
         with self.assertRaisesRegex(SYNC.SyncBlocked, "rolled back"):
             SYNC.apply_plan(
                 plan,
                 plan_fingerprint=plan.aggregate_fingerprint,
-                checkpoint=fail_after_index,
+                checkpoint=fail_after_preserve,
             )
 
         self.assertFalse((self.project / "AGENTS.md").exists())
-        self.assertFalse((self.project / ".codex" / "memory" / "MEMORY.md").exists())
-        self.assertFalse(
-            (self.project / ".codex" / "memory" / "MEMORY_COLD.md").exists()
-        )
+        self.assertFalse((self.project / ".codex" / "memory").exists())
 
-    def test_current_stamp_drift_during_apply_is_not_absorbed(self) -> None:
-        self.apply(SYNC.build_plan(self.project, ROOT, "init"))
-        plan = SYNC.build_plan(self.project, ROOT, "update")
-        stamp = self.project / SYNC.CURRENT_STAMP
-        self.assertEqual(
-            plan.current_stamp_before_sha256,
-            SYNC._sha256_path(stamp),
+    def test_legacy_memory_drift_during_apply_is_rolled_back(self) -> None:
+        note = self.project / ".codex" / "memory" / "legacy.md"
+        note.parent.mkdir(parents=True)
+        note.write_bytes(b"original legacy memory\n")
+        (self.project / SYNC.OBSOLETE_STAMP).write_text(
+            LEGACY_VERSION + "\n",
+            encoding="utf-8",
         )
+        plan = SYNC.build_plan(self.project, ROOT, "auto")
+        self.assertFalse(plan.blockers)
 
-        def drift_stamp_after_index(label: str) -> None:
-            if label == "after-memory-index":
-                stamp.write_text("1.4.30\n", encoding="utf-8")
+        def drift_memory_after_preserve(label: str) -> None:
+            if label == "after-legacy-memory-preserve":
+                note.write_bytes(b"drifted legacy memory\n")
 
         with self.assertRaisesRegex(SYNC.SyncBlocked, "rolled back"):
-            self.apply(plan, checkpoint=drift_stamp_after_index)
+            self.apply(
+                plan,
+                confirmed_preservation_manifest=True,
+                confirmed_risk=True,
+                checkpoint=drift_memory_after_preserve,
+            )
 
-        self.assertEqual(stamp.read_text(encoding="utf-8").strip(), "1.4.30")
+        self.assertEqual(note.read_bytes(), b"original legacy memory\n")
+
+    def test_human_result_covers_noop_gap_blocker_and_failure(self) -> None:
+        common = {
+            "safe": [],
+            "risk": [],
+            "gaps": [],
+            "blockers": [],
+            "preservation_manifest": [],
+            "confirmation_required": False,
+        }
+        noop = SYNC._plan_human_result(dict(common))
+        self.assertEqual(noop["conclusion"], "当前骨架已是最新状态。")
+        self.assertEqual(noop["pending_items"], [])
+
+        gap_payload = dict(common)
+        gap_payload["gaps"] = [{"reason": "unresolved gap in project skill"}]
+        gap = SYNC._plan_human_result(gap_payload)
+        self.assertIn("未解决缺口", gap["pending_items"][0])
+        self.assertNotIn("project skill", SYNC._render_human_result(gap))
+
+        blocker_payload = dict(common)
+        blocker_payload["blockers"] = [
+            "project runtime contract rejected: missing interpreter"
+        ]
+        blocker = SYNC._plan_human_result(blocker_payload)
+        self.assertEqual(blocker["conclusion"], "骨架升级未完成。")
+        self.assertIn("项目 .venv", blocker["next_step"])
+
+        failure = SYNC._failure_human_result(
+            {
+                "error": "transaction failed and was rolled back: disk error",
+                "rollback_performed": True,
+            }
+        )
+        rendered = SYNC._render_human_result(failure)
+        self.assertIn("结论：骨架升级未完成。", rendered)
+        self.assertIn("本次写入已回滚", rendered)
+        self.assertNotIn("traceback", rendered.casefold())
 
 
 if __name__ == "__main__":

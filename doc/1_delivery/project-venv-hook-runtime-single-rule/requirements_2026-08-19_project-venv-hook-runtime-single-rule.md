@@ -1,5 +1,6 @@
 ---
-status: implemented-awaiting-user-acceptance
+lifecycle: active
+validation_status: awaiting_user_acceptance
 product_version: 1.4.21
 delivery_size: L
 delivery_budget: 120m / 50k estimated new tokens / 4 subagents / 3 validation rounds

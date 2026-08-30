@@ -15,7 +15,7 @@
 | `AGENTS.md:74-76` | 项目与用户级 Skill 位置、常用入口和发现方式 | `template/AGENTS.md`「先找对位置」；README「指令和说明分别放在哪里」 | 根常驻；当前会话 Skill 列表 | 完成 | 自动合同通过；独立复评中 | 未安装 |
 | `AGENTS.md:80-86` | 换电脑、新机 clone 或重装时进入换机流程，并按主语言恢复依赖 | 触发义务归 `template/AGENTS.md`「BridgeForge 公共区」；步骤归 README「第一次 clone、换机或重建环境」 | 根常驻触发；执行时读 README | 完成 | 通过（自动合同） | 未安装 |
 | `AGENTS.md:90-95` | 模型继承、主对话、子 agent 与三个主对话 Skill | `template/AGENTS.md`「协作与项目资料」 | 根常驻 | 完成 | 自动合同通过；独立复评中 | 未安装 |
-| `AGENTS.md:97-115` | clarify/focus 触发、可选/推荐路线、develop 分流、单题/收敛、spinoff/todo 和修改披露 | 根触发归 `template/AGENTS.md`；细则归 `shared-docs/codex-hook-signals.md` | 收到信号时读 reference；真实 Hook；semantic ID | 完成 | 通过（自动合同） | 未安装 |
+| `AGENTS.md:97-115` | 原生主动澄清、focus 触发、可选/推荐路线、develop 分流、单题/收敛、spinoff/todo 和修改披露 | 根判断归 `template/AGENTS.md`；细则归 `shared-docs/codex-hook-signals.md` | 澄清由 Agent 语义判断；仅 focus 使用真实 Hook；semantic ID | 完成 | Clarify A/B 后退役；其余通过自动合同 | 未安装 |
 | `AGENTS.md:123` | 主观体验先采证据再量化 | `template/AGENTS.md`「任务控制与排障」 | 根常驻 | 完成 | 自动合同通过；独立复评中 | 未安装 |
 | `AGENTS.md:127-137` | 独立验证、陌生模块、失败升级、Bug 假说/影响面、性能、自改审计 | `template/AGENTS.md`「任务控制与排障」 | 根常驻；独立审阅 | 完成 | 自动合同通过；独立复评中 | 未安装 |
 | `AGENTS.md:144` | 工厂项目区逐字所有权 | `factory/AGENTS.md`「项目级专区」 | 工厂根常驻；项目区 byte fixture | 完成 | 通过（自动合同） | 未安装 |

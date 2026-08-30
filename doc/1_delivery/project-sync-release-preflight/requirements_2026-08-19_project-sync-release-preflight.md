@@ -1,5 +1,6 @@
 ---
-status: regression-fixed-awaiting-real-downstream
+lifecycle: active
+validation_status: awaiting_validation
 next: publish_1.4.37_and_retest_causis_git_sync
 scale: M
 source_bug: doc/2_bugs/BUG-bridgeforge-codex-145-end-to-end-acceptance-gaps.md

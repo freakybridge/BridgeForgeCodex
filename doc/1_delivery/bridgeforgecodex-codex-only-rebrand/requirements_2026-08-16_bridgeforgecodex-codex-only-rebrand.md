@@ -1,5 +1,6 @@
 ---
-status: implementing
+lifecycle: active
+validation_status: in_progress
 size: L
 ---
 

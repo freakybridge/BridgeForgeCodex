@@ -1,6 +1,7 @@
 ---
 title: BridgeForge 下游更新延迟优化需求确认卡
-status: confirmed
+lifecycle: active
+validation_status: not_started
 date: 2026-08-15
 source: conversation
 handoff: direct-development

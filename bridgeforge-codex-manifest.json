@@ -17,7 +17,7 @@
             {
               "source": "skills/bridgeforge-codex/SKILL.md",
               "target": "SKILL.md",
-              "sha256": "sha256:9d6b81569fd9eb577c2426ea407e043f7aec15c831135a35992283ad67a36576"
+              "sha256": "sha256:bd2d3b911ebbc3983be41d46bbd2c39a14bcef872bdc215612e7dc0ce88e4acb"
             },
             {
               "source": "skills/bridgeforge-codex/agents/openai.yaml",
@@ -27,17 +27,37 @@
             {
               "source": "skills/bridgeforge-codex/references/adopt.md",
               "target": "references/adopt.md",
-              "sha256": "sha256:c32e7e82503b76c16dcff5da90f9e085f36fe9795e2bb118606bda473d4707fd"
+              "sha256": "sha256:04470e45014aec94f607168502dcc6a408601da8b5e9a341a259275f5cd723c1"
             },
             {
               "source": "skills/bridgeforge-codex/references/init.md",
               "target": "references/init.md",
-              "sha256": "sha256:a35c3f398f75d6b1f9e29290b865a2a835af791cf2ade29085e27c23c3089f5f"
+              "sha256": "sha256:2e38f9f287b59af694b4b906755a24e76ea73036a12d4878168558ab71be3c64"
+            },
+            {
+              "source": "skills/bridgeforge-codex/references/native-memory.md",
+              "target": "references/native-memory.md",
+              "sha256": "sha256:dacfeef6988940e5b83f62125f7183899311185b477c30cd17ce087335db45de"
+            },
+            {
+              "source": "skills/bridgeforge-codex/references/runtime-preflight.md",
+              "target": "references/runtime-preflight.md",
+              "sha256": "sha256:4308a568e347c0e0b05e4e15ee1e6cde1d4d8d47c455ca9f2a20fd578768659c"
+            },
+            {
+              "source": "skills/bridgeforge-codex/references/technical-receipts.md",
+              "target": "references/technical-receipts.md",
+              "sha256": "sha256:315a674620296241f96000b1d6ccfd263cb5cb3b14fddcb7811bb327b302bfc2"
+            },
+            {
+              "source": "skills/bridgeforge-codex/references/transaction.md",
+              "target": "references/transaction.md",
+              "sha256": "sha256:3625f07dd293de15da18419b84d0febddb67a2d8693e87ae1d5ef13565d32e01"
             },
             {
               "source": "skills/bridgeforge-codex/references/update.md",
               "target": "references/update.md",
-              "sha256": "sha256:498edf1bf7087594e606f29a53a2c030b2913fc1970cd35bac89e546b9192438"
+              "sha256": "sha256:409e98179b60202e7a07ed3dc4aa3297d3c1e9701b344a1afd749cca1572d0a4"
             },
             {
               "source": "skills/bridgeforge-codex/references/user-skill-maintenance.md",
@@ -52,7 +72,7 @@
             {
               "source": "skills/archive-scan/SKILL.md",
               "target": "SKILL.md",
-              "sha256": "sha256:4665c71e457aaee58f387c7f376c600ed4309d8e2393c34f3bb1101a6b7ee572"
+              "sha256": "sha256:2385cbe5856fc92a8839f399a0fa715e70e66217f3bbfcbfd4a3c8f2d647cc0b"
             }
           ]
         },
@@ -62,7 +82,7 @@
             {
               "source": "skills/collab/SKILL.md",
               "target": "SKILL.md",
-              "sha256": "sha256:b70cf4539d44bfe6388d5c53a22f6dd35a6efe1513a1d5cca8a3f196041d6a07"
+              "sha256": "sha256:6b2ea6e8f9066e68f9f2155eae48024d8aefdc131ed1298ef059ace0b88bc538"
             }
           ]
         },
@@ -72,7 +92,7 @@
             {
               "source": "skills/confirm/SKILL.md",
               "target": "SKILL.md",
-              "sha256": "sha256:dffb8a68a77da2b36910e980daf29977834730f0c440d770926f42ebb98f708b"
+              "sha256": "sha256:4549069f34c379bb8b429b9b0edb72824d456e7f7036f4f76d0fcb797256ec8c"
             }
           ]
         },
@@ -110,9 +130,19 @@
           "name": "develop",
           "files": [
             {
+              "source": "skills/develop/references/agent-execution.md",
+              "target": "references/agent-execution.md",
+              "sha256": "sha256:de2446b8f6d4b5e75d46e665bb85aa7ce46e233d07995415a9d92926c58a0cbc"
+            },
+            {
+              "source": "skills/develop/references/ml-delivery.md",
+              "target": "references/ml-delivery.md",
+              "sha256": "sha256:ae5e6df8d48e2dfd8989bbf9653f780d53828b559e736d7ecf5db83a1f697cee"
+            },
+            {
               "source": "skills/develop/SKILL.md",
               "target": "SKILL.md",
-              "sha256": "sha256:8499f0f99c8463c78e3ad915b6a421a2445eee88c1fcad361b5fd5a4811cf3cf"
+              "sha256": "sha256:cfd485cbcb49bfa2c955773e700583e713299e5eeb2808ef8d54b511eb714392"
             }
           ]
         },
@@ -147,22 +177,12 @@
             {
               "source": "skills/find-doc/references/output-format.md",
               "target": "references/output-format.md",
-              "sha256": "sha256:b3b4b5bc38dd8f7fcddea906624804555850951070c387f596bd4cc87f519bac"
+              "sha256": "sha256:904b8f1529a5d72a956687c55d2aca5b505784199eee680c301b47abbf9fa7cc"
             },
             {
               "source": "skills/find-doc/SKILL.md",
               "target": "SKILL.md",
-              "sha256": "sha256:188afd48699f1af6262de8f25029c802ae00a9cbebbfdad662d77ed5c863b68d"
-            }
-          ]
-        },
-        {
-          "name": "find-memory",
-          "files": [
-            {
-              "source": "skills/find-memory/SKILL.md",
-              "target": "SKILL.md",
-              "sha256": "sha256:1ed93358b527626c1017e03d26011964f1057f44ccf678d2f27537f037081477"
+              "sha256": "sha256:4fdf78047ff2167b88705de424a9099ae1c08056406ff90f87537f90ac6c06a0"
             }
           ]
         },
@@ -172,7 +192,7 @@
             {
               "source": "skills/focus/SKILL.md",
               "target": "SKILL.md",
-              "sha256": "sha256:2ad43e0e09ec979941684009ea16d4250e05152633fc80ea58f30b164fbffd7f"
+              "sha256": "sha256:d6eb386a5bf73e532d204f3c74885f236a0d571df8b85c1780733954ca8db3d4"
             }
           ]
         },
@@ -202,7 +222,7 @@
             {
               "source": "skills/resume/SKILL.md",
               "target": "SKILL.md",
-              "sha256": "sha256:afe444c01163b14c59f949af7d3487146249a373564defc03423043217711c75"
+              "sha256": "sha256:b6de076212ab7167e7d172439409614cb0fb6ff8a6eea93725d32e1c6998ab8a"
             }
           ]
         },
@@ -230,14 +250,24 @@
           "name": "summary",
           "files": [
             {
+              "source": "skills/summary/references/acceptance-mode.md",
+              "target": "references/acceptance-mode.md",
+              "sha256": "sha256:11b1d826a5f1e45df481c6cf35b0d5eb508b6e778f6fc09ecf31f917ac511249"
+            },
+            {
               "source": "skills/summary/references/deep-steps.md",
               "target": "references/deep-steps.md",
-              "sha256": "sha256:1559cad9c92c4d3e46f160b7b0193a3a56413e976d95cbf1b5cd3f78818cba46"
+              "sha256": "sha256:00cfd72e860be763eed99b4d7a962a6e9c16ca3a002025252aab2f11037e74d4"
+            },
+            {
+              "source": "skills/summary/references/ordinary-mode.md",
+              "target": "references/ordinary-mode.md",
+              "sha256": "sha256:395cd54fabb7abe8bd15c88eef651b0b7df19ffab271bb84e50ab0fdd979c7e7"
             },
             {
               "source": "skills/summary/SKILL.md",
               "target": "SKILL.md",
-              "sha256": "sha256:1a48d3ef77023cdd74f5f4f5acf84cb4e6f24cbc622049f664e9c914d6292dcf"
+              "sha256": "sha256:fc2f0a4952261581137cb3f3a5f49f36c3936274f2cfd559e751ef6b627fc44f"
             }
           ]
         },
@@ -257,7 +287,7 @@
             {
               "source": "skills/todo/SKILL.md",
               "target": "SKILL.md",
-              "sha256": "sha256:adb838ffe649c6ac5dbf6fe5e646e4fcbcf0d5019ebb726747bd587f7376bd6b"
+              "sha256": "sha256:ae518dafd08933756e61773e405f6f35b4ec155ccb78edd9743211519164ad6b"
             }
           ]
         }

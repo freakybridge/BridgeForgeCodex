@@ -21,6 +21,11 @@ DELIVERY_DIR = REPO_ROOT / "doc" / "1_delivery"
 BUG_DIR = REPO_ROOT / "doc" / "2_bugs"
 ARCHIVE_DIR = REPO_ROOT / "doc" / "4_archive"
 DONE = re.compile(r"(?:状态|status)\s*[:：]\s*(?:已完成|已验收|已解决|done|accepted|resolved)", re.I)
+LIFECYCLE = re.compile(
+    r"^lifecycle:\s*(active|completed|superseded|archived)\s*$",
+    re.I | re.M,
+)
+ARCHIVE_READY = {"completed", "superseded"}
 STALE_DAYS = 30
 
 
@@ -70,11 +75,57 @@ def _done(path: Path) -> bool:
         return False
 
 
+def _lifecycle(path: Path) -> str | None:
+    try:
+        text = path.read_text(encoding="utf-8")
+    except Exception:
+        return None
+    if not text.startswith("---\n"):
+        return None
+    end = text.find("\n---\n", 4)
+    if end < 0:
+        return None
+    match = LIFECYCLE.search(text[4:end])
+    return match.group(1).lower() if match else None
+
+
+def _topic_lifecycle(topic: Path) -> tuple[Path, str] | None:
+    cards = sorted(topic.glob("requirements_*.md"))
+    if not cards:
+        return None
+    states = [_lifecycle(card) for card in cards]
+    if any(state is None for state in states):
+        return None
+    if not all(state in ARCHIVE_READY for state in states):
+        return None
+    return cards[0], "全部需求卡 lifecycle 为 completed / superseded"
+
+
 def scan() -> list[dict[str, Any]]:
     candidates: list[dict[str, Any]] = []
     pending: list[tuple[Path, dict[str, Any]]] = []
     if DELIVERY_DIR.exists():
+        lifecycle_topics = {
+            card.parent
+            for card in DELIVERY_DIR.rglob("requirements_*.md")
+        }
+        lifecycle_candidates: set[Path] = set()
+        for topic in sorted(lifecycle_topics):
+            evidence = _topic_lifecycle(topic)
+            if evidence is None:
+                continue
+            representative, reason = evidence
+            rel = topic.relative_to(DELIVERY_DIR)
+            lifecycle_candidates.add(topic)
+            pending.append((representative, {
+                "source": str(topic.relative_to(REPO_ROOT)),
+                "target": str((ARCHIVE_DIR / "delivery" / rel).relative_to(REPO_ROOT)),
+                "kind": "delivery",
+                "reasons": [reason],
+            }))
         for acceptance in DELIVERY_DIR.rglob("acceptance.md"):
+            if acceptance.parent in lifecycle_candidates:
+                continue
             if not _done(acceptance):
                 continue
             topic = acceptance.parent
@@ -83,17 +134,30 @@ def scan() -> list[dict[str, Any]]:
                 "source": str(topic.relative_to(REPO_ROOT)),
                 "target": str((ARCHIVE_DIR / "delivery" / rel).relative_to(REPO_ROOT)),
                 "kind": "delivery",
-                "reasons": ["acceptance.md 标记为已完成 / 已验收"],
+                "reasons": ["legacy evidence: acceptance.md 标记为已完成 / 已验收"],
             }))
     if BUG_DIR.exists():
-        for bug in BUG_DIR.rglob("BUG-*.md"):
-            if not _done(bug):
+        bug_records = [(bug, bug) for bug in BUG_DIR.glob("BUG-*.md")]
+        bug_records.extend(
+            (package, package / "README.md")
+            for package in BUG_DIR.glob("BUG-*")
+            if package.is_dir() and (package / "README.md").is_file()
+        )
+        for source, evidence in sorted(bug_records, key=lambda item: item[0]):
+            lifecycle = _lifecycle(evidence)
+            if lifecycle in ARCHIVE_READY:
+                reason = f"lifecycle: {lifecycle}"
+            elif lifecycle is not None:
                 continue
-            pending.append((bug, {
-                "source": str(bug.relative_to(REPO_ROOT)),
-                "target": str((ARCHIVE_DIR / "bugs" / bug.name).relative_to(REPO_ROOT)),
+            elif _done(evidence):
+                reason = "legacy evidence: Bug 记录标记为已解决"
+            else:
+                continue
+            pending.append((evidence, {
+                "source": str(source.relative_to(REPO_ROOT)),
+                "target": str((ARCHIVE_DIR / "bugs" / source.name).relative_to(REPO_ROOT)),
                 "kind": "bug",
-                "reasons": ["Bug 记录标记为已解决"],
+                "reasons": [reason],
             }))
     days_by_path = _days_by_path([path for path, _ in pending])
     for path, item in pending:

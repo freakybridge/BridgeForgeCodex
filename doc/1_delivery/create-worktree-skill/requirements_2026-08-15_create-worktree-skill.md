@@ -1,3 +1,8 @@
+---
+lifecycle: completed
+validation_status: verified
+---
+
 # 需求：永久 Git Worktree 创建 Skill
 
 > 日期：2026-08-15

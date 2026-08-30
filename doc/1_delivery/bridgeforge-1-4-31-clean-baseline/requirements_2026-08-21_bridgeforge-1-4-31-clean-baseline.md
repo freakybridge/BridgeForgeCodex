@@ -1,5 +1,6 @@
 ---
-status: validated-audited-awaiting-user-trial
+lifecycle: active
+validation_status: awaiting_user_acceptance
 next: user-trial-or-git-sync
 scale: L
 budget: 230_minutes_75k_tokens_unmeasured_3_agents_4_validation_rounds

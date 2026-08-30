@@ -8,7 +8,7 @@
 
 ## 文档治理
 
-`doc/README.md` 是文档唯一索引。`0_architecture` 放长期架构，`1_delivery` 放未验收交付，`2_bugs` 放未解决 Bug，`3_reference` 放操作参考，`4_archive` 放已验收或过时记录。新增、删除、移动文档时同步索引，完成交付通过 `$archive-scan` 归档。
+文档布局、各层职责与当前索引以 `doc/README.md` 为唯一事实源。完成的 delivery 或 Bug 需要归档时调用 `$archive-scan`；本文不复制五层含义或索引同步红线。
 
 ## 换机与依赖
 
@@ -18,12 +18,9 @@ clone 后先建立项目虚拟环境，再从受版本控制的依赖清单安�
 
 ## 版本域隔离
 
-项目根 `VERSION` 是下游业务版本的唯一事实源；语言原生 manifest 可以镜像业务版本，但必须由项目发布流程同步。`.codex/.bridgeforge_codex_version` 只表示 bridgeforge-codex 骨架版本，只能由统一项目同步器在资产和验证全部通过后最后写入。业务发布、普通提交和本地骨架定制不得修改骨架版本戳。
+项目根 `VERSION` 表示下游业务版本，`.codex/.bridgeforge_codex_version` 表示 bridgeforge-codex 骨架版本；两者属于独立生命周期，不能互相代替。
 
-统一项目同步器准备报告 ready 且实际修改受管资产时还必须通过只读 release preflight；即使
-骨架戳已经是当前版本也不得跳过。该预检与 `$git-sync` 使用同一
-ownership classifier，且不得修改业务 `VERSION`、CHANGELOG、Git index 或历史。失败时本轮骨架
-写入回滚并输出逐文件 `G*` 清单，禁止先写新戳或以“无需改戳”为由把提交问题留给用户处理。
+版本域红线以根 `AGENTS.md`「信息放置与指令承载」为准。实际 preflight、事务、回滚和版本戳写入顺序唯一归 `$bridgeforge-codex` 及其统一项目同步器，本文不复制操作规则。
 
 ## 大版本依赖升级 Spike
 

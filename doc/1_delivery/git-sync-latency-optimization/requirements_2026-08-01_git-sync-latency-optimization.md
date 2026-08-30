@@ -1,6 +1,7 @@
 ---
 title: Git Sync 延迟优化需求确认卡
-status: confirmed
+lifecycle: active
+validation_status: awaiting_user_acceptance
 date: 2026-08-01
 source: confirm
 handoff: develop

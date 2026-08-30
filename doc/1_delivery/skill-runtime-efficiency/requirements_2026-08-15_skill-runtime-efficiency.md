@@ -1,6 +1,7 @@
 ---
 title: BridgeForge Skill 运行效率优化需求确认卡
-status: confirmed
+lifecycle: active
+validation_status: awaiting_validation
 date: 2026-08-15
 source: plan -> confirm
 handoff: develop

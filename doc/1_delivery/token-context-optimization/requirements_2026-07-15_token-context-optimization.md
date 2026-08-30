@@ -1,3 +1,9 @@
+---
+lifecycle: superseded
+validation_status: verified
+superseded_by: ../../2_bugs/BUG-agents-ia/README.md
+---
+
 # 需求：Codex token 与 skill 上下文优化
 > 日期：2026-07-15
 > 状态：awaiting_trial

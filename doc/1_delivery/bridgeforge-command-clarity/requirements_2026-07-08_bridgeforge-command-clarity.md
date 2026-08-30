@@ -1,3 +1,9 @@
+---
+lifecycle: superseded
+validation_status: verified
+superseded_by: ../bridgeforge-codex-naming-contract/requirements_2026-08-17_bridgeforge-codex-naming-contract.md
+---
+
 # 需求：BridgeForge 命令心智收敛
 > 日期：2026-07-08
 > 状态：trial

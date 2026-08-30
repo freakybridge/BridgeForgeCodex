@@ -1,5 +1,6 @@
 ---
-status: implemented
+lifecycle: active
+validation_status: awaiting_validation
 date: 2026-08-12
 source: direct user confirmation via $confirm
 scope: git-sync automatic version bump for BridgeForge and downstream projects

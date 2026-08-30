@@ -1,5 +1,6 @@
 ---
-status: completed
+lifecycle: active
+validation_status: awaiting_user_acceptance
 next: phase-2-cleanliness-requirement
 scale: L
 budget: 180_minutes_60k_tokens_unmeasured_3_subagents_2_validation_rounds

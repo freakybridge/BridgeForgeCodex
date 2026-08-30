@@ -1,5 +1,6 @@
 ---
-status: implemented
+lifecycle: active
+validation_status: awaiting_validation
 topic: bridgeforge-managed-rule-safety
 scale: L
 confirmed_at: 2026-08-16

@@ -1,5 +1,6 @@
 ---
-status: implementing
+lifecycle: active
+validation_status: in_progress
 next: close-issue-9-and-run-product-audit
 scale: L
 budget: 4_hours_tokens_unmeasured_2_independent_agents_3_validation_rounds

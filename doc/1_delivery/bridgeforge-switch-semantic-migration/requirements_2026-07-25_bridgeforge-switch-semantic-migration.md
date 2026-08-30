@@ -1,3 +1,9 @@
+---
+lifecycle: superseded
+validation_status: verified
+superseded_by: ../bridgeforgecodex-codex-only-rebrand/requirements_2026-08-16_bridgeforgecodex-codex-only-rebrand.md
+---
+
 # BridgeForge switch 项目级资产语义保全需求卡
 
 > 状态：`implemented`

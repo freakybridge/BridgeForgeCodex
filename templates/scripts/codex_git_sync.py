@@ -32,7 +32,6 @@ from current_baseline import (
     detect_repository_role,
     verify_current_baseline,
 )
-from memory_rebuild_index import render_memory_indexes
 from version_release import ReleaseError, ReleasePlan, build_release_plan
 
 try:
@@ -368,8 +367,6 @@ def _build_sync_write_plan(
     if release is not None:
         for path, payload in release.writes.items():
             _merge_planned_write(writes, path, payload)
-    for path, payload in render_memory_indexes(REPO_ROOT / ".codex" / "memory").items():
-        _merge_planned_write(writes, path, payload)
     renderer = _load_factory_manifest_module()
     if renderer is not None:
         try:

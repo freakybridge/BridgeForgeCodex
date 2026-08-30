@@ -1,5 +1,7 @@
 ---
-status: confirmed
+lifecycle: superseded
+validation_status: verified
+superseded_by: ../shared-skill-model-inheritance/requirements_2026-08-16_shared-skill-model-inheritance.md
 date: 2026-07-23
 source: $confirm
 ---

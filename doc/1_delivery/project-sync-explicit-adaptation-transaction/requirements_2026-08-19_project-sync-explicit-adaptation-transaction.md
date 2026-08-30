@@ -1,5 +1,6 @@
 ---
-status: implemented-awaiting-independent-audit
+lifecycle: active
+validation_status: awaiting_validation
 next: independent-audit-and-real-cba-trial
 scale: M
 budget: 45_minutes_20k_tokens_unmeasured_1_auditor_2_validation_rounds

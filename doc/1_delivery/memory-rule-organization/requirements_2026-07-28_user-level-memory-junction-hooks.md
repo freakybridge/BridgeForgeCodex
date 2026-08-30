@@ -1,5 +1,6 @@
 ---
-status: superseded
+lifecycle: superseded
+validation_status: verified
 topic: memory-rule-organization
 created: 2026-07-28
 source: "$confirm via $debate: user-level dual-host memory junction hooks"

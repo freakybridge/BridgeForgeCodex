@@ -3,13 +3,20 @@ name: BridgeForge 项目 memory 可发现性与 Codex 原生 memories 云同步
 description: 修复项目 memory 的确定性加载、自动召回和可审计回执，并通过用户级 Codex hooks 与 GitHub 私有仓库同步原生 memories。
 type: requirements
 category: architecture
-status: completed
+lifecycle: completed
+validation_status: verified
 date: 2026-08-14
 scale: L
 source: confirm -> develop
 ---
 
 # 项目 memory 可发现性与原生 memories 云同步确认卡
+
+> **当前范围说明（2026-08-30）**：本文保存当时的双 Memory 交付与验收历史。项目
+> `.codex/memory/` 的注入、检索、索引、写入、lint、duplicate、usage 和 `$find-memory`
+> 已由 `project-memory-retirement` 决策替代，不再是当前架构。仍有效的 Codex 原生 Memory
+> 同步合同以 `doc/0_architecture/design/codex-native-memory-sync.md` 为当前事实源；本文中的
+> 项目 Memory 段落不得作为恢复旧运行时的依据。
 
 ## 原始需求摘要
 

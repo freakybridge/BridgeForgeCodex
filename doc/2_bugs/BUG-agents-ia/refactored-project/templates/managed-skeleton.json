@@ -1,6 +1,6 @@
 {
   "schema_version": 3,
-  "release_version": "1.5.10",
+  "release_version": "1.5.11",
   "host": "codex",
   "stamp": ".codex/.bridgeforge_codex_version",
   "contract_target": ".codex/managed-skeleton.json",
@@ -31,7 +31,7 @@
         "public": {
           "begin": "<!-- BRIDGEFORGE:PUBLIC:BEGIN -->",
           "end": "<!-- BRIDGEFORGE:PUBLIC:END -->",
-          "current_sha256": "sha256:a797fd0bad4cdb065fa95cd70e77359ded59a26435ca00ac561f0304cae02b26"
+          "current_sha256": "sha256:636cf6cc2e7f25966ffe0ab40be0cc493dd4b913952e53148429c7b895ddc32f"
         },
         "project": {
           "begin": "<!-- BRIDGEFORGE:PROJECT:BEGIN -->",
@@ -51,7 +51,7 @@
           ]
         }
       },
-      "current_sha256": "sha256:d4aa39102cf7b8357cbbdbd76c35bd4c15b3773a0b01cc2aa61845d0b64446aa",
+      "current_sha256": "sha256:45ef4f712ad6c1994a56605e05b9a365a234e7891159a189a2f3b02e8d283ae8",
       "render": "project-name"
     },
     {
@@ -59,7 +59,7 @@
       "source": "templates/hooks.json",
       "target": ".codex/hooks.json",
       "strategy": "merge",
-      "current_sha256": "sha256:15be0b6f9531c21f305a1ae3765a508729ced070d3209e3ab26fb7aefd69d382",
+      "current_sha256": "sha256:419b7f0a2cd595e7c9dc1ff98aa6dcb9c3ea171cd0edef0e524e02d02f33869d",
       "merge_policy": "codex-hooks",
       "merge_validation": {
         "format": "codex-hooks-current-v1",
@@ -70,13 +70,6 @@
             "matcher": "",
             "stage": "post-compact",
             "sha256": "sha256:cee5ce1f8c3042f4aec16044e02d7f708eab594dadfdb44b8ae1ea063fcb9948"
-          },
-          {
-            "id": "bridgeforge-codex.project-hook.v1:post-read",
-            "event": "PostToolUse",
-            "matcher": "*",
-            "stage": "post-read",
-            "sha256": "sha256:5ba165859ef63e7487318bd3b306d52357331266a263cd571a4e182fb1b5103f"
           },
           {
             "id": "bridgeforge-codex.project-hook.v1:post-shell",
@@ -104,7 +97,7 @@
             "event": "SessionStart",
             "matcher": "",
             "stage": "session-start",
-            "sha256": "sha256:98a1c661f7374095b060db0e474633dd8b600f9fb1419d201eec258a4ecb93cc"
+            "sha256": "sha256:b542132cdbe2ccff6b6075844269cba48daef3fd2d23634d2dbd669fd7b4fbe8"
           },
           {
             "id": "bridgeforge-codex.project-hook.v1:stop",
@@ -112,13 +105,6 @@
             "matcher": "",
             "stage": "stop",
             "sha256": "sha256:90123395a1c6deaa14d761a2670c7feb7a07018a82ef0c592af7c1f1756e1c01"
-          },
-          {
-            "id": "bridgeforge-codex.project-hook.v1:user-prompt",
-            "event": "UserPromptSubmit",
-            "matcher": "",
-            "stage": "user-prompt",
-            "sha256": "sha256:e4668a889f6f1f5936434d54c29eb13ea2cbaf5f055d089bdd365c7f053f1d48"
           }
         ],
         "managed_top_level": {
@@ -289,13 +275,6 @@
       "current_sha256": "sha256:b74a963dca7f5b7515d901c251bbc7382316a55a0a6d70e35a8a2a36dcf9be23"
     },
     {
-      "id": "codex.skill-routing",
-      "source": "templates/skill-routing.json",
-      "target": ".codex/skill-routing.json",
-      "strategy": "whole",
-      "current_sha256": "sha256:4c77fa6ce20080338a3bbf27109d27111bd41be0008db3e30b79543c9140e8f5"
-    },
-    {
       "id": "codex.agent.implementation-worker",
       "source": "templates/agents/implementation-worker.toml",
       "target": ".codex/agents/implementation-worker.toml",
@@ -380,41 +359,33 @@
             "heading": "## 3_reference/",
             "key_column": 0,
             "managed_keys": [
-              "3_reference/external_api/"
+              "3_reference/codex-hook-signals.md"
             ]
           }
         ],
-        "current_projection_sha256": "sha256:c69d9deec4a7b89845ec06094bf7e7daa07e1d2fcb0db74903eb15574de32c79"
+        "current_projection_sha256": "sha256:8c98ecc5cbc4f76d52a8c22192886232e129e019fb9874af0aba3e079227ac5e"
       },
-      "current_sha256": "sha256:0730412d06ba4166b9a848e8dba712b4f5276f8da17c9828e3026f6eca47f917",
+      "current_sha256": "sha256:749af1f702d575a9bf3e1cb5d35d621648fccaa019a5eeb7fd736478aaf9cad5",
       "render": "project-name"
     },
     {
-      "id": "codex.memory.index",
-      "source": "templates/memory/MEMORY.md",
-      "target": ".codex/memory/MEMORY.md",
-      "strategy": "seed",
-      "current_sha256": "sha256:a20832447a3aea084c1280e28e811bd0dc57a41777d59398c8d12f2896a95b45",
-      "render": "project-name"
+      "id": "codex.doc.hook-signals",
+      "source": "templates/doc/3_reference/codex-hook-signals.md",
+      "target": "doc/3_reference/codex-hook-signals.md",
+      "strategy": "whole",
+      "current_sha256": "sha256:d38796b5337de48ca044c1b5cf64df8520c3fea825f8dba09005465c67199b29"
     },
     {
       "id": "codex.precommit",
       "source": "templates/.githooks/pre-commit",
       "target": ".githooks/pre-commit",
       "strategy": "region",
-      "current_sha256": "sha256:b5ba701af8bf567175fe3bdc3df577f37acfd54f9e677155e930fc1e83dc6f94",
+      "current_sha256": "sha256:f5f2b7bf7fdb7c966274a20b4a411362939a36711e21af16d81e93b90fc409e4",
       "region": {
         "begin": "# >>> BRIDGEFORGE_CODEX_MANAGED_BEGIN",
         "end": "# <<< BRIDGEFORGE_CODEX_MANAGED_END",
-        "current_sha256": "sha256:f65093bc363fdf656bff0c597d2194e864a6abcdf83264171b4ecc8169d730f0"
+        "current_sha256": "sha256:d329f6e5a02483b404dd7a52bca88e4fbeea01afe731bce09e06790e11845f94"
       }
-    },
-    {
-      "id": "codex.hook.allow-memory-write",
-      "source": "templates/hooks/allow_memory_write.py",
-      "target": ".codex/hooks/allow_memory_write.py",
-      "strategy": "whole",
-      "current_sha256": "sha256:40505c638ef635cba41c6d8e68d56ff886ea2efe739ab38a4669572467a1e572"
     },
     {
       "id": "codex.hook.cargo-default-run-check",
@@ -424,18 +395,11 @@
       "current_sha256": "sha256:c287b7b54b977fcf09d63c1474558c211e72c65b0c8243e9ca849b54226286b4"
     },
     {
-      "id": "codex.hook.clarify-reminder",
-      "source": "templates/hooks/clarify_reminder.py",
-      "target": ".codex/hooks/clarify_reminder.py",
-      "strategy": "whole",
-      "current_sha256": "sha256:52414ccfeae83715e0f530e5034604934c6426c714e29c182ed6fc52c3101df7"
-    },
-    {
       "id": "codex.hook.config-health-check",
       "source": "templates/hooks/config_health_check.py",
       "target": ".codex/hooks/config_health_check.py",
       "strategy": "whole",
-      "current_sha256": "sha256:9aea617917797ebab174517e0176f79c640d1585e0cf9a27f2f6ccc599c3dc9d"
+      "current_sha256": "sha256:fe8c0893966cee782ed50834a51067211eb1a6eb540024af47e100301d6c3a91"
     },
     {
       "id": "codex.hook.cross-project-write-guard",
@@ -466,13 +430,6 @@
       "current_sha256": "sha256:db1e80a3cade5746d7e445866545bbe0acf428ac937bd1fbbadc6fe86bfccef2"
     },
     {
-      "id": "codex.hook.focus-reminder",
-      "source": "templates/hooks/focus_reminder.py",
-      "target": ".codex/hooks/focus_reminder.py",
-      "strategy": "whole",
-      "current_sha256": "sha256:03b4708856e4a7a6709485afae3b6b296d948374ffc819737c0cdae5081ac9e3"
-    },
-    {
       "id": "codex.hook.git-add-all-guard",
       "source": "templates/hooks/git_add_all_guard.py",
       "target": ".codex/hooks/git_add_all_guard.py",
@@ -491,21 +448,7 @@
       "source": "templates/hooks/hook_dispatcher.py",
       "target": ".codex/hooks/hook_dispatcher.py",
       "strategy": "whole",
-      "current_sha256": "sha256:9439ccce5bed9972927d4999bd73ab25175e79c960e3e20fbcc7bfeea4eac9b0"
-    },
-    {
-      "id": "codex.hook.memory-dup-check",
-      "source": "templates/hooks/memory_dup_check.py",
-      "target": ".codex/hooks/memory_dup_check.py",
-      "strategy": "whole",
-      "current_sha256": "sha256:6bbd07a994f34fa77b74b7d4c015bbed593e56027e984069274a41d6965f084d"
-    },
-    {
-      "id": "codex.hook.memory-lint",
-      "source": "templates/hooks/memory_lint.py",
-      "target": ".codex/hooks/memory_lint.py",
-      "strategy": "whole",
-      "current_sha256": "sha256:1508793f91a367ca7993310e056747a960b3b43e10ba1e130592f4f9e8ef8a73"
+      "current_sha256": "sha256:5ae1a81675ec51ed46b05634aeb9cfe12e3c0ad8e6c6f8af9b2af938307e0c56"
     },
     {
       "id": "codex.hook.non-ascii-shell-guard",
@@ -519,14 +462,14 @@
       "source": "templates/hooks/requirements_check.py",
       "target": ".codex/hooks/requirements_check.py",
       "strategy": "whole",
-      "current_sha256": "sha256:8e6f5c0d844b57357b9928da7a671d525b1bc6b01ef2494cfff6e5003537b214"
+      "current_sha256": "sha256:ef3a37a6b6dc60a99ebb7406e8b2b0d880d4229e75a3c59c0a9a00b7ebc36588"
     },
     {
       "id": "codex.hook.instruction-source-check",
       "source": "templates/hooks/instruction_source_check.py",
       "target": ".codex/hooks/instruction_source_check.py",
       "strategy": "whole",
-      "current_sha256": "sha256:8e2c6a337c63cdba8c2df2b1c137decaaa131059c9987c0ff939fdce75b566a5"
+      "current_sha256": "sha256:e7e24ad8620cbe58471dbe14dd5d6a9df648a2001f8cc4ffd3f5e51357f62fb1"
     },
     {
       "id": "codex.hook.project-structure-check",
@@ -540,21 +483,21 @@
       "source": "templates/hooks/session_snapshot.py",
       "target": ".codex/hooks/session_snapshot.py",
       "strategy": "whole",
-      "current_sha256": "sha256:4cd0394120c5cdfb2768b30496b350dfafd4558a407e1b9ea8a0556f2a3c1213"
+      "current_sha256": "sha256:c56daa8bbe4fd2ed04f28e297c27a0765c9cd52cfeb4703aa25dbee063294aa8"
     },
     {
       "id": "codex.hook.show-state",
       "source": "templates/hooks/show_state.py",
       "target": ".codex/hooks/show_state.py",
       "strategy": "whole",
-      "current_sha256": "sha256:ce3a161e85e40f5912800e897d534962cd2d41ba12b878128cf9c292148962bb"
+      "current_sha256": "sha256:3620040a25a10cfc3dc0e1d448334b9852ce24e182f95fff3702a135da426fe1"
     },
     {
       "id": "codex.hook.skill-metadata-check",
       "source": "templates/hooks/skill_metadata_check.py",
       "target": ".codex/hooks/skill_metadata_check.py",
       "strategy": "whole",
-      "current_sha256": "sha256:89172fdfe48a0f6f5af34afabd57de49e32cd83865b9edf28deb402efd413ef3"
+      "current_sha256": "sha256:60d9f536d29318d262406f4e822d9cb04b47258f83f7f2ca566c33c26ddc80a7"
     },
     {
       "id": "codex.hook.skill-sync-check",
@@ -603,7 +546,7 @@
       "source": "templates/scripts/codex_git_sync.py",
       "target": ".codex/scripts/codex_git_sync.py",
       "strategy": "whole",
-      "current_sha256": "sha256:af80c94a3584be2bc3f707efbbc7738b9a8d03f038003d75c4d4bd3811804de0"
+      "current_sha256": "sha256:4819315b13d6d7537273cc7d573aba43d8ce331b62bebe4102b0c075f84f3f2f"
     },
     {
       "id": "codex.script.hook-config-policy",
@@ -611,55 +554,6 @@
       "target": ".codex/scripts/hook_config_policy.py",
       "strategy": "whole",
       "current_sha256": "sha256:1a06a4960fc90c6e6513e3331810b0a664e96302b819a97557fe9af3fe372ffb"
-    },
-    {
-      "id": "codex.script.memory-context",
-      "source": "templates/scripts/memory_context.py",
-      "target": ".codex/scripts/memory_context.py",
-      "strategy": "whole",
-      "current_sha256": "sha256:2a47d5a9e85853a6147e39454224ad9197c6ad096167e6fbc0c40c42ec7052f0"
-    },
-    {
-      "id": "codex.script.memory-rebuild-index",
-      "source": "templates/scripts/memory_rebuild_index.py",
-      "target": ".codex/scripts/memory_rebuild_index.py",
-      "strategy": "whole",
-      "current_sha256": "sha256:64f8c4919f93c3c5bf4a6682ec8de4aae19dd64f621bf4307c06736594edd635"
-    },
-    {
-      "id": "codex.script.memory-router",
-      "source": "templates/scripts/memory_router.py",
-      "target": ".codex/scripts/memory_router.py",
-      "strategy": "whole",
-      "current_sha256": "sha256:552b56479cbc1d9f80d956bf9f9de3d3862a4bc9c893e80f3f0430240c13a7f6"
-    },
-    {
-      "id": "codex.script.memory-search",
-      "source": "templates/scripts/memory_search.py",
-      "target": ".codex/scripts/memory_search.py",
-      "strategy": "whole",
-      "current_sha256": "sha256:0d228044b317cdb19b7ed034ebbf524b4162f1a992fac54eb65b1d1bc4de0574"
-    },
-    {
-      "id": "codex.script.memory-usage",
-      "source": "templates/scripts/memory_usage.py",
-      "target": ".codex/scripts/memory_usage.py",
-      "strategy": "whole",
-      "current_sha256": "sha256:152b96ac3e1fb7599575d218761a5d7ab606060b452b2a7e78a006f0e4fa4fe7"
-    },
-    {
-      "id": "codex.script.project-memory-recovery",
-      "source": "templates/scripts/project_memory_recovery.py",
-      "target": ".codex/scripts/project_memory_recovery.py",
-      "strategy": "whole",
-      "current_sha256": "sha256:f3bd1db389d7beaa2ddd5a6a27d29c942f01b05bae5328aa0d179de1cb687fc6"
-    },
-    {
-      "id": "codex.script.project-memory-writer",
-      "source": "templates/scripts/project_memory_writer.py",
-      "target": ".codex/scripts/project_memory_writer.py",
-      "strategy": "whole",
-      "current_sha256": "sha256:6fd90c74faaa6a885d8032fa9457ee24a0b0245eb152116e5dc7ede2b5488188"
     },
     {
       "id": "codex.script.project-runtime",

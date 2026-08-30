@@ -49,7 +49,7 @@
 ## 4 任务控制与排障
 
 - 琐碎、续接或细节完整的任务直接执行；新的、大而模糊且关键取舍会改变实现或验收时，按 `doc/3_reference/codex-hook-signals.md` 每轮只确认一个关键问题。
-- 收到 `[clarify]` 或 `[focus]` 时必须读取 `doc/3_reference/codex-hook-signals.md` 的对应章节再判断；信号本身不构成阻断。
+- 收到 `[focus]` 时必须读取 `doc/3_reference/codex-hook-signals.md` 的对应章节再判断；信号本身不构成阻断。主动澄清由 Agent 按上一条语义直接判断，禁止恢复 Clarify Hook。
 - 主观“慢、难用、不清楚”且没有稳定复现时禁止猜修；必须一次性收集可观察证据、触发步骤、发生频率和是否能保存现场，再用 timer、counter 或 log 建立基线。
 - 任务跨两个以上陌生模块时必须先查清模块边界和调用链。
 - 修 Bug 必须区分事实与假说；根因未确认时标明置信度，禁止先加兜底掩盖问题。

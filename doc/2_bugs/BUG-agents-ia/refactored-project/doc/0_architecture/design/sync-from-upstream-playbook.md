@@ -27,7 +27,7 @@ Claude 骨架已经退役。遗留 `.claude/` 只报告存在，不读取正文�
 - 项目 Hook 以 `.codex/hooks/project_XXXX/` 自包含 Python 目录为原子所有权单位，目录与 `.codex/hooks.json` 注册必须成对。
 - 散落 Hook 先阻断；独立 Agent 只能在临时副本或受控前置步骤中完成目录正规化，随后重新生成 `PreservationManifest`。
 - `seed` 只在缺失时创建，既有内容归项目。
-- `.codex/memory/` 与 `.codex/skills/` 自动保留正文并执行当前兼容检查；其他未登记旧内容阻断，不得静默删除。
+- `.codex/skills/` 自动保留正文并执行当前兼容检查；既有 `.codex/memory/` 仅作为 legacy 原样保留并报告待迁移，禁止注入、索引、语义检查或直接删除；其他未登记旧内容阻断，不得静默删除。
 
 ## 4. 验收收据
 

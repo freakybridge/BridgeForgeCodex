@@ -124,7 +124,7 @@ class CurrentReleaseTests(unittest.TestCase):
         template = (ROOT / precommit["source"]).read_text(encoding="utf-8")
         self.assertIn(".codex/scripts/current_baseline.py", template)
         self.assertIn("--index", template)
-        self.assertIn('memory_rebuild_index.py" --check', template)
+        self.assertNotIn("memory_rebuild_index.py", template)
         self.assertNotIn("git add", template)
         self.assertIn('[ "$rc" = 2 ] && exit 2\n    return 0', template)
         self.assertNotIn("factory_version_check.py", template)
@@ -866,6 +866,7 @@ class CurrentReleaseTests(unittest.TestCase):
             SYNC.apply_plan(
                 update,
                 plan_fingerprint=update.aggregate_fingerprint,
+                confirmed_risk=True,
             )
             no_op = SYNC.build_plan(checkout, ROOT, "update")
             status_before_sync = subprocess.run(

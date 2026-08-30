@@ -1,3 +1,9 @@
+---
+lifecycle: superseded
+validation_status: verified
+superseded_by: ../../2_bugs/BUG-agents-ia/README.md
+---
+
 # 需求：Codex skill 分段模型分派
 > 日期：2026-07-15
 > 状态：trial

@@ -141,6 +141,7 @@ class Receipt:
     stamp_written_last: bool
     rollback_performed: bool
     timings_ms: dict[str, float]
+    legacy_gaps: tuple[dict[str, Any], ...]
 
 
 def _git_blob_bytes(payload: bytes) -> bytes:
@@ -995,6 +996,7 @@ def _fingerprint(plan: Plan) -> str:
 
 OBSOLETE_STAMP = ".codex/.bridgeforge_version"
 CURRENT_STAMP = ".codex/.bridgeforge_codex_version"
+LEGACY_MEMORY_LEDGER = "doc/2_bugs/BUG-project-memory-retirement/ledger.json"
 
 
 def _detect_mode(project_root: Path, requested: str) -> str:
@@ -1266,6 +1268,122 @@ def _desired_payload(
     return _render_source(source, asset, project_root)
 
 
+def _legacy_memory_inventory(memory: Path) -> list[dict[str, Any]]:
+    inventory: list[dict[str, Any]] = []
+    derived_names = {"MEMORY.md", "MEMORY_COLD.md", "_stats.json"}
+    for path in sorted(item for item in memory.rglob("*") if item.is_file()):
+        if _is_reparse(path):
+            raise SyncBlocked(f"legacy project memory contains a linked file: {path}")
+        payload = path.read_bytes()
+        relative = path.relative_to(memory).as_posix()
+        metadata: dict[str, str] = {}
+        if path.suffix.casefold() == ".md":
+            try:
+                lines = payload.decode("utf-8-sig").splitlines()
+            except UnicodeDecodeError:
+                lines = []
+            if lines and lines[0].strip() == "---":
+                for line in lines[1:]:
+                    if line.strip() == "---":
+                        break
+                    match = re.match(r"^([A-Za-z_][A-Za-z0-9_-]*):\s*(.*)$", line)
+                    if match:
+                        metadata[match.group(1)] = match.group(2).strip()
+        information_type = (
+            "derived"
+            if path.name in derived_names
+            else "topic"
+            if relative.startswith("topics/")
+            else "body"
+        )
+        inventory.append({
+            "asset_id": "legacy:" + relative,
+            "source_path": relative,
+            "size_bytes": len(payload),
+            "sha256": _sha256_bytes(payload),
+            "information_type": information_type,
+            "metadata": metadata,
+            "proposed_target": None,
+            "disposition": "hold",
+            "ledger_status": "discovered",
+            "user_decision": None,
+            "cleanup_decision": None,
+        })
+    return inventory
+
+
+def _reconcile_legacy_memory_ledger(
+    root: Path,
+    files: list[dict[str, Any]],
+    scan_fingerprint: str,
+) -> dict[str, Any]:
+    ledger_path = root / LEGACY_MEMORY_LEDGER
+    result: dict[str, Any] = {
+        "path": LEGACY_MEMORY_LEDGER,
+        "status": "absent",
+        "scan_fingerprint": scan_fingerprint,
+        "progress": {"discovered": len(files)},
+        "unknown_records": [],
+        "errors": [],
+    }
+    if not ledger_path.exists():
+        return result
+    if not ledger_path.is_file() or _is_reparse(ledger_path):
+        result["status"] = "invalid"
+        result["errors"] = ["ledger path is not a plain file"]
+        return result
+    try:
+        ledger = json.loads(ledger_path.read_text(encoding="utf-8-sig"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        result["status"] = "invalid"
+        result["errors"] = [f"ledger cannot be read: {type(exc).__name__}"]
+        return result
+    if not isinstance(ledger, dict) or ledger.get("schema_version") != 1:
+        result["status"] = "invalid"
+        result["errors"] = ["ledger schema_version must be 1"]
+        return result
+    records = ledger.get("records")
+    if not isinstance(records, dict):
+        result["status"] = "invalid"
+        result["errors"] = ["ledger records must be an object keyed by asset_id"]
+        return result
+    known_ids = {str(item["asset_id"]) for item in files}
+    errors: list[str] = []
+    progress: dict[str, int] = {}
+    for item in files:
+        item_id = str(item["asset_id"])
+        record = records.get(item_id)
+        if not isinstance(record, dict):
+            item["ledger_status"] = "discovered"
+        elif (
+            record.get("source_path") != item["source_path"]
+            or record.get("source_sha256") != item["sha256"]
+        ):
+            item["ledger_status"] = "drifted"
+            errors.append(f"ledger source drift: {item['source_path']}")
+        else:
+            status = str(record.get("migration_status") or "proposed")
+            item["ledger_status"] = status
+            item["proposed_target"] = record.get("proposed_target")
+            item["disposition"] = str(record.get("disposition") or "hold")
+            item["user_decision"] = record.get("user_decision")
+            item["cleanup_decision"] = record.get("cleanup_decision")
+        status = str(item["ledger_status"])
+        progress[status] = progress.get(status, 0) + 1
+    unknown = sorted(str(item) for item in set(records) - known_ids)
+    if unknown:
+        errors.append(f"ledger has {len(unknown)} unknown asset record(s)")
+    if ledger.get("scan_fingerprint") != scan_fingerprint:
+        errors.append("ledger scan_fingerprint does not match the current scan")
+    result.update({
+        "status": "drifted" if errors else "current",
+        "progress": progress,
+        "unknown_records": unknown,
+        "errors": errors,
+    })
+    return result
+
+
 def _project_asset_candidates(
     root: Path,
     agents_asset: dict[str, Any],
@@ -1452,18 +1570,54 @@ def _project_asset_candidates(
                 "disposition": "user-decision",
             })
 
-    for kind in ("memory", "skills"):
-        folder = root / ".codex" / kind
-        if folder.exists():
+    memory = root / ".codex" / "memory"
+    if memory.exists():
+        try:
+            tree_hash = _sha256_tree(memory)
+        except SyncBlocked as exc:
+            blockers.append(str(exc))
+        else:
             try:
-                tree_hash = _sha256_tree(folder)
+                files = _legacy_memory_inventory(memory)
             except SyncBlocked as exc:
                 blockers.append(str(exc))
-                continue
+                files = []
+            if not files and blockers:
+                return candidates, blockers
+            scan_fingerprint = _sha256_bytes(_canonical_json(files))
+            ledger = _reconcile_legacy_memory_ledger(
+                root,
+                files,
+                scan_fingerprint,
+            )
             candidates.append({
-                "id": f"R:{kind}",
-                "kind": kind,
-                "target": f".codex/{kind}",
+                "id": "R:legacy-project-memory",
+                "kind": "legacy-project-memory",
+                "target": ".codex/memory",
+                "sha256": tree_hash,
+                "file_count": len(files),
+                "files": files,
+                "scan_fingerprint": scan_fingerprint,
+                "ledger": ledger,
+                "recommended": "preserve",
+                "disposition": "required-preserve",
+                "status": "legacy-gap",
+                "reason": (
+                    "legacy project memory pending per-project migration; "
+                    "preserve the complete tree byte-for-byte"
+                ),
+            })
+    skills = root / ".codex" / "skills"
+    if skills.exists():
+        try:
+            tree_hash = _sha256_tree(skills)
+        except SyncBlocked as exc:
+            blockers.append(str(exc))
+        else:
+            candidates.append({
+                "id": "R:skills",
+                "kind": "skills",
+                "target": ".codex/skills",
                 "sha256": tree_hash,
                 "recommended": "preserve",
                 "disposition": "required-preserve",
@@ -1471,32 +1625,8 @@ def _project_asset_candidates(
     return candidates, blockers
 
 
-def _validate_preserved_knowledge(root: Path, template_root: Path) -> None:
-    memory = root / ".codex" / "memory"
-    if memory.is_dir():
-        lint = template_root / "templates" / "hooks" / "memory_lint.py"
-        if not lint.is_file() or _is_reparse(lint):
-            raise SyncBlocked("trusted project memory validator is missing or unsafe")
-        result = subprocess.run(
-            [
-                sys.executable,
-                str(lint),
-                "--organize",
-                "--project-root",
-                str(root),
-            ],
-            cwd=root,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=120,
-        )
-        if result.returncode != 0:
-            raise SyncBlocked(
-                "project memory compatibility check failed: "
-                + (result.stderr or result.stdout).strip()
-            )
+def _validate_preserved_knowledge(root: Path, template_root: Path) -> list[str]:
+    role_gaps: list[str] = []
     skills = root / ".codex" / "skills"
     if skills.is_dir() and not _is_reparse(skills):
         validator_path = template_root / "templates" / "hooks" / "skill_metadata_check.py"
@@ -1510,7 +1640,29 @@ def _validate_preserved_knowledge(root: Path, template_root: Path) -> None:
         sys.dont_write_bytecode = True
         try:
             spec.loader.exec_module(module)
-            issues, _warnings = module.validate_skill_tree(skills)
+            trusted_agent_names, trusted_agent_issues = module.load_agent_names((
+                template_root / "templates" / "agents",
+            ))
+            if trusted_agent_issues:
+                raise SyncBlocked(
+                    "trusted Agent contract is invalid: "
+                    + "; ".join(trusted_agent_issues)
+                )
+            project_agent_names, project_agent_issues = module.load_agent_names((
+                root / ".codex" / "agents",
+            ))
+            known_agent_names = trusted_agent_names | project_agent_names
+            issues, warnings = module.validate_skill_tree(
+                skills,
+                known_agent_names=known_agent_names,
+                agent_role_warnings=True,
+            )
+            role_gaps.extend(project_agent_issues)
+            role_gaps.extend(
+                warning
+                for warning in warnings
+                if module.AGENT_ROLE_MARKER in warning
+            )
         except Exception as exc:
             raise SyncBlocked(f"project Skill compatibility check failed: {exc}") from exc
         finally:
@@ -1520,6 +1672,7 @@ def _validate_preserved_knowledge(root: Path, template_root: Path) -> None:
             raise SyncBlocked(
                 "project Skill compatibility check failed: " + "; ".join(issues)
             )
+    return role_gaps
 
 
 def _trusted_project_runtime_module(template_root: Path) -> Any:
@@ -1566,6 +1719,21 @@ def _contract_targets(
     return targets
 
 
+def _is_fully_whole_owned(asset: dict[str, Any] | None) -> bool:
+    if asset is None or asset.get("strategy") != "whole":
+        return False
+    return not any(
+        asset.get(key) is not None
+        for key in (
+            "agents_zones",
+            "managed_blocks",
+            "merge_policy",
+            "merge_validation",
+            "region",
+        )
+    )
+
+
 def _current_contract_removals(
     root: Path,
     installed_contract: dict[str, Any],
@@ -1585,17 +1753,7 @@ def _current_contract_removals(
         target = _inside(root, str(asset["target"]), f"removed asset {asset_id}")
         relative = target.relative_to(root).as_posix()
         removed_targets.add(relative)
-        has_partial_ownership = any(
-            asset.get(key) is not None
-            for key in (
-                "agents_zones",
-                "managed_blocks",
-                "merge_policy",
-                "merge_validation",
-                "region",
-            )
-        )
-        if asset.get("strategy") != "whole" or has_partial_ownership:
+        if not _is_fully_whole_owned(asset):
             blockers.append(
                 f"removed current asset is not whole-owned: {asset_id}: {relative}"
             )
@@ -1732,15 +1890,23 @@ def build_plan(project_root: Path, template_root: Path, mode: str = "auto") -> P
             )
     if blockers:
         return blocked_plan()
+    preserved_knowledge_gaps: list[str] = []
     try:
-        _validate_preserved_knowledge(root, template)
+        preserved_knowledge_gaps = _validate_preserved_knowledge(root, template)
     except SyncBlocked as exc:
         blockers.append(str(exc))
     if blockers:
         return blocked_plan()
 
     actions: list[Action] = []
-    gaps: list[Gap] = []
+    gaps: list[Gap] = [
+        Gap(
+            "project.skill-agent-routing",
+            ".codex/skills",
+            reason,
+        )
+        for reason in preserved_knowledge_gaps
+    ]
     if old_stamp_present:
         actions.append(Action(
             asset_id="stamp.remove-obsolete",
@@ -1752,6 +1918,33 @@ def build_plan(project_root: Path, template_root: Path, mode: str = "auto") -> P
             after_sha256=None,
             payload=None,
         ))
+    contract_target = str(contract["contract_target"])
+    current_contract_path = _inside(
+        root,
+        contract_target,
+        "installed current baseline",
+    )
+    current_contract = (
+        current_contract_path.read_bytes()
+        if current_contract_path.is_file()
+        else None
+    )
+    installed_contract: dict[str, Any] | None = None
+    installed_assets_by_target: dict[str, dict[str, Any]] = {}
+    if current_contract is not None and not rebuild:
+        try:
+            installed_contract = checker.load_contract(current_contract_path)
+        except Exception as exc:
+            blockers.append(
+                f"installed current contract is invalid; zero writes performed: {exc}"
+            )
+        else:
+            installed_assets_by_target = {
+                str(item["target"]): item
+                for item in installed_contract["assets"]
+            }
+    if blockers:
+        return blocked_plan()
     desired_targets: set[str] = {
         str(contract["contract_target"]),
         CURRENT_STAMP,
@@ -1782,13 +1975,22 @@ def build_plan(project_root: Path, template_root: Path, mode: str = "auto") -> P
             raise SyncBlocked(f"cannot render {asset['id']}: {exc}") from exc
         if desired == current:
             continue
+        unowned_whole_collision = bool(
+            current is not None
+            and asset.get("strategy") == "whole"
+            and not _is_fully_whole_owned(
+                installed_assets_by_target.get(target_relative)
+            )
+        )
         actions.append(Action(
             asset_id=str(asset["id"]),
             target=target_relative,
             action="create" if current is None else "replace",
-            classification="safe",
+            classification="risk" if unowned_whole_collision else "safe",
             reason=(
-                "install the clean current public baseline"
+                "replace a pre-existing project file without prior whole-file ownership"
+                if unowned_whole_collision
+                else "install the clean current public baseline"
                 if rebuild
                 else "advance verified current baseline"
             ),
@@ -1796,35 +1998,17 @@ def build_plan(project_root: Path, template_root: Path, mode: str = "auto") -> P
             after_sha256=None if desired is None else _sha256_bytes(desired),
             payload=desired,
         ))
-    contract_target = str(contract["contract_target"])
     incoming_contract_bytes = (
         json.dumps(contract, ensure_ascii=False, indent=2).encode("utf-8")
         + b"\n"
     )
-    current_contract_path = _inside(
-        root,
-        contract_target,
-        "installed current baseline",
-    )
-    current_contract = (
-        current_contract_path.read_bytes()
-        if current_contract_path.is_file()
-        else None
-    )
     removed_current_targets: set[str] = set()
-    if current_contract is not None and not rebuild:
-        try:
-            installed_contract = checker.load_contract(current_contract_path)
-        except Exception as exc:
-            blockers.append(
-                f"installed current contract is invalid; zero writes performed: {exc}"
-            )
-        else:
-            removal_actions, removal_blockers, removed_current_targets = (
-                _current_contract_removals(root, installed_contract, contract)
-            )
-            actions.extend(removal_actions)
-            blockers.extend(removal_blockers)
+    if installed_contract is not None and not rebuild:
+        removal_actions, removal_blockers, removed_current_targets = (
+            _current_contract_removals(root, installed_contract, contract)
+        )
+        actions.extend(removal_actions)
+        blockers.extend(removal_blockers)
     if current_contract != incoming_contract_bytes:
         actions.append(Action(
             asset_id="contract.current-baseline",
@@ -1851,7 +2035,15 @@ def build_plan(project_root: Path, template_root: Path, mode: str = "auto") -> P
         desired_targets | removed_current_targets,
     )
     blockers.extend(candidate_blockers)
-    candidates: list[dict[str, Any]] = inspected_candidates if rebuild else []
+    candidates: list[dict[str, Any]] = (
+        inspected_candidates
+        if rebuild
+        else [
+            item
+            for item in inspected_candidates
+            if item.get("kind") == "legacy-project-memory"
+        ]
+    )
     if rebuild:
         codex_root = root / ".codex"
         if codex_root.is_dir() and not _is_reparse(codex_root):
@@ -2167,7 +2359,6 @@ def _run_current_validators(project_root: Path, actions: Iterable[Action]) -> No
 
 def _preserved_knowledge_snapshots(project_root: Path) -> dict[Path, bytes]:
     snapshots: dict[Path, bytes] = {}
-    memory_derived = {"MEMORY.md", "MEMORY_COLD.md", "_stats.json"}
     for folder_name in ("memory", "skills"):
         folder = project_root / ".codex" / folder_name
         if not folder.is_dir() or _is_reparse(folder):
@@ -2175,8 +2366,6 @@ def _preserved_knowledge_snapshots(project_root: Path) -> dict[Path, bytes]:
         for target in sorted(item for item in folder.rglob("*") if item.is_file()):
             if _is_reparse(target):
                 raise SyncBlocked(f"project knowledge contains a linked file: {target}")
-            if folder_name == "memory" and target.name in memory_derived:
-                continue
             snapshots[target] = target.read_bytes()
     return snapshots
 
@@ -2185,7 +2374,7 @@ def _verify_preserved_knowledge(snapshots: dict[Path, bytes]) -> None:
     changed = [str(path) for path, payload in snapshots.items() if not path.is_file() or path.read_bytes() != payload]
     if changed:
         raise SyncBlocked(
-            "project memory or Skill semantics changed during update: "
+            "legacy project memory or Skill changed during update: "
             + ", ".join(changed)
         )
 
@@ -2348,8 +2537,10 @@ def _apply_rebuilt_plan(
             )
     elif confirmed_preservation_manifest or preserve_ids or delete_ids:
         raise SyncBlocked("project asset decisions are only valid for old-project rebuild")
-    elif rebuilt.risk_actions:
-        raise SyncBlocked("current-only update cannot contain risk actions")
+    elif rebuilt.risk_actions and not confirmed_risk:
+        raise SyncBlocked(
+            "current-only update risk actions require the single --confirmed-risk decision"
+        )
 
     if rebuilt.mode == "rebuild":
         preservation_manifest = _build_preservation_manifest(
@@ -2509,24 +2700,8 @@ def _apply_rebuilt_plan(
             transaction.delete_tree(bundle_path)
         if checkpoint is not None:
             checkpoint("after-project-hook-bundle-deletions")
-        rebuild_index = root / ".codex" / "scripts" / "memory_rebuild_index.py"
-        if memory_root.is_dir() and rebuild_index.is_file():
-            result = subprocess.run(
-                [sys.executable, str(rebuild_index)],
-                cwd=root,
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                timeout=120,
-            )
-            if result.returncode != 0:
-                raise SyncBlocked(
-                    "project memory derived-index rebuild failed: "
-                    + (result.stderr or result.stdout).strip()
-                )
         if checkpoint is not None:
-            checkpoint("after-memory-index")
+            checkpoint("after-legacy-memory-preserve")
         _verify_actions(root, actions, mutable_targets=seed_targets)
         remaining_bundles = [
             str(path.relative_to(root))
@@ -2582,9 +2757,14 @@ def _apply_rebuilt_plan(
         "total": round((time.perf_counter() - apply_started) * 1000, 1),
     }
     applied = tuple(action.asset_id for action in actions)
+    legacy_gaps = tuple(
+        item
+        for item in rebuilt.preservation_entries
+        if item.get("status") == "legacy-gap"
+    )
     return Receipt(
-        status="completed",
-        readiness="ready",
+        status="completed_with_gaps" if legacy_gaps else "completed",
+        readiness="action_required" if legacy_gaps else "ready",
         execution_status="completed",
         mode=rebuilt.mode,
         previous_version=rebuilt.previous_version,
@@ -2596,6 +2776,7 @@ def _apply_rebuilt_plan(
         stamp_written_last=stamp_written,
         rollback_performed=rollback_performed,
         timings_ms=timings,
+        legacy_gaps=legacy_gaps,
     )
 
 
@@ -2604,9 +2785,27 @@ def _plan_payload(
     *,
     timings_ms: dict[str, float] | None = None,
 ) -> dict[str, Any]:
+    legacy_gaps = [
+        item
+        for item in plan.preservation_entries
+        if item.get("status") == "legacy-gap"
+    ]
     payload = {
-        "status": "blocked" if plan.blockers else "planned",
-        "readiness": "blocked" if plan.blockers else "ready",
+        "status": (
+            "blocked" if plan.blockers
+            else "planned_with_gaps" if legacy_gaps
+            else "planned"
+        ),
+        "readiness": (
+            "blocked" if plan.blockers
+            else "action_required" if legacy_gaps
+            else "ready"
+        ),
+        "target_readiness": (
+            "blocked" if plan.blockers
+            else "action_required" if legacy_gaps
+            else "ready"
+        ),
         "execution_status": "failed" if plan.blockers else "planned",
         "mode": plan.mode,
         "previous_version": plan.previous_version,
@@ -2631,12 +2830,194 @@ def _plan_payload(
         "gaps": [asdict(item) for item in plan.gaps],
         "blockers": plan.blockers,
         "preservation_manifest": plan.preservation_entries,
-        "confirmation_required": plan.mode == "rebuild",
+        "legacy_gaps": legacy_gaps,
+        "confirmation_required": plan.mode == "rebuild" or bool(plan.risk_actions),
         "aggregate_fingerprint": plan.aggregate_fingerprint,
     }
     if timings_ms is not None:
         payload["timings_ms"] = timings_ms
     return payload
+
+
+def _humanize_sync_reason(reason: str) -> str:
+    normalized = reason.casefold()
+    mappings = (
+        ("unresolved gap", "计划中仍有未解决缺口"),
+        ("--confirmed-risk", "尚未确认可能覆盖或删除现有内容的操作"),
+        ("--plan-fingerprint", "缺少刚刚生成的计划指纹"),
+        ("aggregate fingerprint", "计划生成后项目或模板发生了变化"),
+        ("project runtime contract", "项目 Python 运行环境不符合骨架要求"),
+        ("preservationmanifest", "尚未确认项目资产的保留或删除选择"),
+        ("preservation manifest", "尚未确认项目资产的保留或删除选择"),
+        ("rolled back", "同步事务失败，本次写入已回滚"),
+    )
+    for marker, message in mappings:
+        if marker in normalized:
+            return message
+    return f"同步器报告：{reason.strip()}" if reason.strip() else "同步器没有提供具体原因"
+
+
+def _human_next_step(reason: str) -> str:
+    normalized = reason.casefold()
+    if "unresolved gap" in normalized:
+        return "先处理计划中的缺口，再重新生成升级计划。"
+    if "--confirmed-risk" in normalized or "preservation" in normalized:
+        return "确认本轮风险与项目资产选择后，再执行升级。"
+    if "--plan-fingerprint" in normalized or "aggregate fingerprint" in normalized:
+        return "重新生成计划，并使用最新计划继续升级。"
+    if "project runtime contract" in normalized:
+        return "先修复项目 .venv，再重新运行骨架升级。"
+    return "处理上述原因后，重新运行骨架升级。"
+
+
+def _plan_human_result(payload: dict[str, Any]) -> dict[str, Any]:
+    blockers = payload.get("blockers") or []
+    gaps = payload.get("gaps") or []
+    risk = payload.get("risk") or []
+    safe = payload.get("safe") or []
+    preservation = payload.get("preservation_manifest") or []
+    legacy = payload.get("legacy_gaps") or []
+
+    if blockers:
+        pending = [_humanize_sync_reason(str(item)) for item in blockers]
+        return {
+            "conclusion": "骨架升级未完成。",
+            "pending_items": pending,
+            "next_step": _human_next_step(str(blockers[0])),
+        }
+    if gaps:
+        pending = [
+            _humanize_sync_reason(str(item.get("reason", item)))
+            if isinstance(item, dict)
+            else _humanize_sync_reason(str(item))
+            for item in gaps
+        ]
+        return {
+            "conclusion": "升级计划存在未解决缺口，尚未修改文件。",
+            "pending_items": pending,
+            "next_step": "先处理计划中的缺口，再重新生成升级计划。",
+        }
+    if payload.get("confirmation_required"):
+        pending = []
+        if risk:
+            pending.append(f"需要确认 {len(risk)} 项可能覆盖或删除现有内容的操作")
+        if preservation:
+            pending.append(f"需要确认 {len(preservation)} 项项目资产的保留或删除选择")
+        if legacy:
+            files = sum(int(item.get("file_count", 0)) for item in legacy)
+            pending.append(
+                f"发现 {files} 个 legacy 项目 Memory 资产，尚未迁移且必须原样保留"
+            )
+        if not pending:
+            pending.append("需要确认本次破坏性重建")
+        return {
+            "conclusion": (
+                "已生成升级计划；legacy 项目 Memory 尚未迁移，且尚未修改文件。"
+                if legacy
+                else "已生成升级计划，尚未修改文件。"
+            ),
+            "pending_items": pending,
+            "next_step": "确认上述事项后，才能执行升级。",
+        }
+    if legacy:
+        files = sum(int(item.get("file_count", 0)) for item in legacy)
+        pending = [
+            f"发现 {files} 个 legacy 项目 Memory 资产，已原样保留，仍需逐项目人工审核与迁移"
+        ]
+        if safe:
+            pending.append(f"另有 {len(safe)} 项安全骨架更新等待执行")
+        return {
+            "conclusion": "骨架可继续更新，但 legacy 项目 Memory 尚未迁移。",
+            "pending_items": pending,
+            "next_step": "按扫描清单完成人工审核；迁移与清理必须分别授权。",
+        }
+    if safe:
+        return {
+            "conclusion": "已生成可执行的升级计划，尚未修改文件。",
+            "pending_items": [f"有 {len(safe)} 项骨架更新等待执行"],
+            "next_step": "执行刚刚生成的升级计划。",
+        }
+    return {
+        "conclusion": "当前骨架已是最新状态。",
+        "pending_items": [],
+        "next_step": "本次操作已结束，无需继续处理。",
+    }
+
+
+def _receipt_human_result(payload: dict[str, Any]) -> dict[str, Any]:
+    applied = payload.get("applied") or []
+    legacy = payload.get("legacy_gaps") or []
+    if legacy:
+        files = sum(int(item.get("file_count", 0)) for item in legacy)
+        pending = [
+            f"{files} 个 legacy 项目 Memory 资产仍原样保留，未迁移、未删除"
+        ]
+        if applied:
+            pending.insert(0, f"已应用 {len(applied)} 项骨架更新，尚未提交到 Git")
+        return {
+            "conclusion": "骨架更新已完成，但项目仍有 legacy Memory 缺口。",
+            "pending_items": pending,
+            "next_step": "按逐文件清单审核迁移；获得独立清理授权前保持原目录不变。",
+        }
+    if not applied:
+        return {
+            "conclusion": "当前骨架已是最新状态。",
+            "pending_items": [],
+            "next_step": "本次操作已结束，无需继续处理。",
+        }
+    return {
+        "conclusion": "骨架升级已完成。",
+        "pending_items": [f"已应用 {len(applied)} 项骨架更新，尚未提交到 Git"],
+        "next_step": "需要保存到 GitHub 时运行 $git-sync。",
+    }
+
+
+def _failure_human_result(payload: dict[str, Any]) -> dict[str, Any]:
+    reason = str(payload.get("error", ""))
+    pending = [_humanize_sync_reason(reason)]
+    if payload.get("rollback_performed"):
+        pending.append("本次写入已回滚")
+    else:
+        pending.append("没有确认成功的骨架写入")
+    return {
+        "conclusion": "骨架升级未完成。",
+        "pending_items": pending,
+        "next_step": _human_next_step(reason),
+    }
+
+
+def _render_human_result(result: dict[str, Any]) -> str:
+    lines = [f"结论：{result['conclusion']}", "待处理事项："]
+    pending = result.get("pending_items") or []
+    lines.extend(f"- {item}" for item in pending)
+    if not pending:
+        lines.append("- 无")
+    lines.append(f"下一步：{result['next_step']}")
+    return "\n".join(lines)
+
+
+def _emit_result(
+    machine: dict[str, Any],
+    human: dict[str, Any],
+    output_format: str,
+    *,
+    blocked_message: str | None = None,
+) -> None:
+    if output_format == "human":
+        print(_render_human_result(human))
+        return
+    if output_format == "combined":
+        print(
+            json.dumps(
+                {"machine": machine, "human": human},
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        return
+    print(json.dumps(machine, ensure_ascii=False, indent=2))
+    if blocked_message is not None:
+        print(f"BLOCKED: {blocked_message}", file=sys.stderr)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -2666,6 +3047,12 @@ def main(argv: list[str] | None = None) -> int:
         help="repeat an exact user-decision ID approved for deletion",
     )
     parser.add_argument("--confirmed-risk", action="store_true")
+    parser.add_argument(
+        "--output-format",
+        choices=("machine", "human", "combined"),
+        default="machine",
+        help="machine preserves the legacy JSON contract; human is user-facing; combined returns both",
+    )
     args = parser.parse_args(argv)
 
     try:
@@ -2688,12 +3075,11 @@ def main(argv: list[str] | None = None) -> int:
         plan = build_plan(args.project_root, args.template_root, args.mode)
         plan_ms = round((time.perf_counter() - plan_started) * 1000, 1)
         if not args.apply:
-            print(
-                json.dumps(
-                    _plan_payload(plan, timings_ms={"plan": plan_ms}),
-                    ensure_ascii=False,
-                    indent=2,
-                )
+            machine = _plan_payload(plan, timings_ms={"plan": plan_ms})
+            _emit_result(
+                machine,
+                _plan_human_result(machine),
+                args.output_format,
             )
             return 2 if plan.blockers else 0
         if not args.plan_fingerprint:
@@ -2706,24 +3092,28 @@ def main(argv: list[str] | None = None) -> int:
             preserved_project_asset_ids=tuple(args.preserve_project_asset),
             deleted_project_asset_ids=tuple(args.delete_project_asset),
         )
-        print(json.dumps(asdict(receipt), ensure_ascii=False, indent=2))
+        machine = asdict(receipt)
+        _emit_result(
+            machine,
+            _receipt_human_result(machine),
+            args.output_format,
+        )
         return 0
     except (OSError, SyncBlocked, KeyError, TypeError, ValueError) as exc:
-        print(
-            json.dumps(
-                {
-                    "status": "failed",
-                    "readiness": "blocked",
-                    "execution_status": "failed",
-                    "target_readiness": "blocked",
-                    "error": str(exc),
-                    "rollback_performed": "rolled back" in str(exc),
-                },
-                ensure_ascii=False,
-                indent=2,
-            )
+        machine = {
+            "status": "failed",
+            "readiness": "blocked",
+            "execution_status": "failed",
+            "target_readiness": "blocked",
+            "error": str(exc),
+            "rollback_performed": "rolled back" in str(exc),
+        }
+        _emit_result(
+            machine,
+            _failure_human_result(machine),
+            args.output_format,
+            blocked_message=str(exc),
         )
-        print(f"BLOCKED: {exc}", file=sys.stderr)
         return 2
 
 

@@ -1,5 +1,6 @@
 ---
-status: implemented
+lifecycle: active
+validation_status: awaiting_validation
 next: user-trial-and-acceptance
 scale: L
 budget: 300_minutes_100k_tokens_unmeasured_3_sequential_agents_2_validation_rounds

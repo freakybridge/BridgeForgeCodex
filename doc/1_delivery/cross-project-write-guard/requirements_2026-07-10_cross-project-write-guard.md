@@ -1,3 +1,8 @@
+---
+lifecycle: active
+validation_status: awaiting_user_acceptance
+---
+
 # 需求：跨项目写入保护 hook
 > 日期：2026-07-10
 > 状态：trial

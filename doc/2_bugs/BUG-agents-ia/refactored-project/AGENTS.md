@@ -12,109 +12,83 @@
 
 ### 1.2 专业表达风格
 
-- 默认先给结论，再给依据；不确定时标明“未验证 / 缺证据 / 只是推断”，并说明下一步怎么验证。
-- 禁止空泛安抚句；禁止连续用“可能 / 可以考虑 / 建议”稀释判断。
+- 默认先给结论，再给依据；不确定时标明“未验证 / 缺证据 / 只是推断”并给出验证动作，禁止用空泛安抚或连续的“可能 / 可以考虑 / 建议”稀释判断。
 - 代码审查必须先列问题、按严重度排序；每条必须包含文件 / 行号 / 行为风险。排障必须先给最可能根因、证据和验证动作。
 - 架构判断必须先给推荐结论，再给取舍理由、主要风险与触发条件；禁止只罗列选项不拍板。
-- 执行类任务默认接管到结果：读上下文 -> 判断风险 -> 修改 / 执行 -> 验证 -> 汇报。
-- 交付时报告“已做什么 / 验证了什么 / 还剩什么风险”，不要用“你可以……”当主要收尾。
+- 执行类任务默认接管到结果：读上下文 -> 判断风险 -> 修改 / 执行 -> 验证 -> 汇报；交付必须说明“已做什么 / 验证了什么 / 还剩什么风险”，禁止用“你可以……”代替结果。
 
 ### 1.3 工具与证据红线
 
 - 找文件 / 查内容用 `Glob` / `Grep` / `Read`；shell 只用于构建、测试、git、进程等执行动作。禁止反射性用 `find` / `Get-ChildItem` / `Select-String` 做大检索。
 - 工具返回出现同段重影、命中 0 与预期矛盾、不认识的文件名、`__unparsedToolInput` 时，禁止直接下结论或改盘，先用单命令二次验真。
-- 交付处或危险处的结论必须有真实工具返回作证；拿不到就写“未验证”或“不知道”。
-- 写“验证通过 / 测试通过 / 已验证”必须同时列出实际命令或收据、具体验证断言、覆盖路径 / 场景。
-- 使用文件、路径、字段、接口或配置前必须当次验证；禁止编造资源、静默换来源或把未发生的操作归咎于用户、工具或环境。
-- 发现自己的结论或操作错误时必须立即承认、更正并重新验证。
-- 必须在项目虚拟环境中安装依赖；禁止隐式写入用户级配置或使用全局安装代替项目依赖。新依赖必须同步可复现的依赖清单。
-- 每个项目必须自建 CPython 3.11+ `.venv`；所有骨架脚本与 hook 只能使用当前项目 `.venv`。仅 init/adopt 且 `.venv` 完全缺失时允许用 PATH 中经验证的 CPython 3.11+ 创建它，创建后必须立即切换，其他场景禁止回退 PATH。
+- 交付处或危险处的结论必须有真实工具返回作证；写“验证通过 / 测试通过 / 已验证”必须同时列出实际命令或收据、具体验证断言和覆盖场景，拿不到证据就标明“未验证”或“不知道”。
+- 使用文件、路径、字段、接口或配置前必须当次验证；禁止编造资源、静默换来源或归咎未发生的操作。发现自己的结论或操作错误时必须立即承认、更正并重新验证。
+- 依赖只能安装到项目自建的 CPython 3.11+ `.venv` 并同步可复现清单；骨架脚本与 Hook 只能使用该环境。仅 init/adopt 且 `.venv` 完全缺失时允许用 PATH 中经验证的 CPython 3.11+ 创建，随后必须立即切换，其他场景禁止回退 PATH 或隐式写用户级配置。
 - 非 ASCII 正文禁止经 shell 字符串中转写入或动态执行；配置、hook 与入口脚本的编码和注册必须通过项目硬闸。
 - Windows 上由 GUI、Codex Hook 或后台任务启动非交互、无人值守命令时，必须使用可验证的无可见控制台窗口入口，并保持 stdin、stdout、stderr、退出码与 timeout 语义；除非用户明确要求可见交互窗口，禁止让 cmd、PowerShell 或 Python 控制台弹到用户桌面。
 
 ## 2 bridgeforge-codex 协作骨架
 
-### 2.1 原生指令承载索引
+### 2.1 信息放置与指令承载
 
-| 指令类型 | 唯一承载位置 | 适用范围 |
+新增或修改信息前，必须先按主要读者选择唯一事实源。其他载体只能保留链接、机械生成的投影或执行所需的短摘要；禁止手写复制完整规则。
+
+| 信息类型 | 唯一承载位置 | 主要读者与生效方式 |
 |---|---|---|
-| 全项目常驻红线 | 根 `AGENTS.md` | 全项目，由 Codex 原生加载 |
-| 目录专属约束 | 相应目录的嵌套 `AGENTS.md` | 该目录及子目录 |
-| 可机器判定的硬闸 | `.codex/hooks/` 与 `.githooks/pre-commit` | 对应事件或提交 |
-| 操作流程 | 对应 Skill | 用户调用该 Skill 时 |
-| 原理、案例、参数与长 SOP | `doc/0_architecture/` 或 `doc/3_reference/` | 按需查阅，不冒充运行时指令 |
+| 全项目始终遵守的红线 | 根 `AGENTS.md` | Agent 每轮原生加载 |
+| 目录专属红线 | 相应目录的嵌套 `AGENTS.md` | Agent 处理该目录时加载 |
+| 用户调用后的操作流程 | 对应 Skill | Agent 调用时按需读取 |
+| 机器合同 | 对应 manifest、schema 或结构化配置 | 程序直接读取 |
+| 可自动判定的硬闸 | Hook、pre-commit；测试负责验证 | 程序自动执行 |
+| 设计原因、迁移说明、案例与长 SOP | `doc/0_architecture/` 或 `doc/3_reference/` | 维护者按需查阅 |
+| 产品用途与最短使用路径 | 根 `README.md` | 用户阅读 |
+| 安装与迁移步骤 | `INSTALL.md` | 用户需要安装或迁移时阅读 |
+| 本次执行的选择、结果与下一步 | 确定性的用户结果输出 | 用户直接判断，不依赖 Agent 临场翻译 |
 
-`.codex/rules/*.rules` 只用于 Codex 命令执行策略。Markdown 中的 `paths:` 不会被 Codex 自动加载；禁止建立或宣称这种隐式机制。指令只保留“必须 / 禁止”红线，单一事实源，可机判优先交 hook，说明性内容进文档。
+`.codex/rules/*.rules` 只用于 Codex 命令执行策略。Markdown `paths:` 不会被 Codex 自动加载，禁止把它声明为指令加载机制。
 
 - 下游业务版本必须以项目根 `VERSION` 为唯一事实源；原生 manifest 中的业务版本字段必须由项目发布流程同步，禁止让骨架版本戳代替业务版本。
-- bridgeforge-codex 骨架版本只记录在 `.codex/.bridgeforge_codex_version`，仅允许统一项目同步器在全部验证通过后最后写入；业务提交和项目本地定制禁止修改该戳。
+- bridgeforge-codex 骨架版本只记录在 `.codex/.bridgeforge_codex_version`，仅允许统一项目同步器修改；业务提交和项目本地定制禁止修改该戳。
 
-### 2.2 Memory 项目内托管
+### 2.2 Codex 原生 Memory 与 legacy 项目 Memory
 
-- memory 纳入项目 Git（`.codex/memory/`），与 Codex 原生 `~/.codex/memories/` 完全分离；禁止建立用户级 junction。
-- 检索必须先读 `MEMORY.md` 主索引；任务锚或确认卡能唯一定位 topic 时再读 `topics/<topic>/`；未命中才调用 `$find-memory`。`MEMORY.md` 是派生索引，禁止手改。
-- 模块 memory 回答“这个模块长期怎样工作”；Topic memory 回答“这次独立交付为何做、做到哪里、是否关闭”。
-- 只有用户已确认且同时具备独立目标、独立验收和独立生命周期的交付才能建 topic；禁止为普通子任务建 topic。
-- `$summary` 只更新一个当前主 memory；`$summary 同意验收` 才结算当前交付。完成或废弃的 topic 留在原目录并进入 `MEMORY_COLD.md`。
-
-详细 schema、writer、冷热区和检索流程见 `$summary`、`$find-memory` 及项目 memory 脚本。
+- Codex 原生 `~/.codex/memories/` 只由官方机制生成和注入；BridgeForge 禁止语义读取、创建、改写或删除。跨电脑同步只把该目录视为不透明整树快照。
+- 禁止新建或继续使用项目 `.codex/memory/`，也禁止注入、检索、索引、写入、lint、duplicate、usage 或 `$find-memory` 运行链。
+- 下游既有 `.codex/memory/` 必须作为 legacy 原样保留并报告待迁移；同步器不得直接删除。只有完成逐文件扫描、用户逐项确认和独立清理授权后，才允许在对应项目中迁移并删除。
+- `$summary` 只做阶段总结和“同意验收”收口；Rule / Hook 只能提出等待用户采纳的候选，禁止写项目 Memory、直接写原生 Memory、自动写 Rule 或实现 Hook。
 
 ### 2.3 文档管理
 
-- 本项目必须使用 `doc/0_architecture`、`1_delivery`、`2_bugs`、`3_reference`、`4_archive` 五层结构。
-- `doc/README.md` 的 `delivery_layout` 是交付路径单一事实源；禁止靠目录猜测布局。
-- 禁止文档散落根目录或源码目录，禁止删层、跳层、改名、合并或新增同级目录。
-- `doc/README.md` 是唯一索引；任何 `doc/**.md` 新增、删除、移动或重命名必须同步。
+- 文档必须使用 `doc/0_architecture`、`1_delivery`、`2_bugs`、`3_reference`、`4_archive` 五层结构；禁止散落根目录或源码目录，也禁止删层、跳层、改名、合并或新增同级目录。
+- `doc/README.md` 是唯一索引，`delivery_layout` 是交付路径单一事实源；任何 `doc/**.md` 新增、删除、移动或重命名必须同步，禁止靠目录猜测布局。
 - 所有测试代码必须放在 `scripts/tests/**`；禁止重建根 `tests/` 或在产品目录散落测试。
 
-各层职责、迁移和 README 同步细则见 `doc/3_reference/codex-project-operating-guide.md`。
+各层职责与当前布局以 `doc/README.md` 为准；完成事项需要归档时调用 `$archive-scan`。
 
 ### 2.4 Skills
 
 项目 Skill 位于 `.codex/skills/<name>/SKILL.md`，用户级通用 Skill 位于 `~/.codex/skills/<name>/SKILL.md`。
-
-常用入口：`$confirm` / `$develop` / `$plan` / `$collab` / `$debate` / `$summary` / `$todo` / `$find-doc` / `$archive-scan` / `$escalate` / `$snapshot` / `$resume` / `$git-sync`。
+可用 Skill 以当前会话原生发现结果为准；禁止在根 `AGENTS.md` 维护易过期的 Skill 名单。
+- 简单 Skill 必须保持单文件；多模式或包含大量条件性细节的 Skill，入口只保留共同目标、主路径、选择点、停止条件和明确的 reference 读取条件。入口与 reference 禁止手写复制同一规则。
 
 ## 4 开发
 
 ### 4.1 换机首次启动 Checklist
 
-用户提到“换电脑 / 新机 clone / 重装”时，先 clone 并按主语言初始化依赖，再按 `doc/3_reference/codex-project-operating-guide.md` 处理 Python hook、git UTF-8 和依赖清单。
-
-```bash
-git clone <repo_url> BridgeForgeCodex && cd BridgeForgeCodex
-```
+用户提到“换电脑 / 新机 clone / 重装”时，必须先按项目级“快速命令”恢复主语言依赖和 `.venv`，再调用 `$bridgeforge-codex` 核验骨架与 Hook；禁止照抄通用 clone 占位命令猜测仓库地址或项目名。
 
 ### 4.3 模型与 Skill 执行分工
 
 bridgeforge-codex 不替用户选择模型。所有 Skill 和子 agent 默认沿用用户当前会话的 model 和 effort；项目模板不得擅自锁定模型或思考强度。
 
-- 主对话负责与用户沟通、取得确认、处理授权并汇总最终结果。
-- Skill 定义工作流程；只有路由明确要求独立调研、实现或审计时，主对话才启动对应子 agent。
-- 子 agent 只执行分配阶段，不代替用户决策，也不重复已完成工作。
+- 主对话负责与用户沟通、取得确认、处理授权和汇总结果；子 agent 只执行分配阶段，不代替用户决策，也不重复已完成工作。
+- Skill 定义工作流程。
+- 用户未明确要求、且适用的项目或 Skill 指令未显式委派的阶段，必须由主对话执行；Skill 一旦委派，必须点名已存在的 Agent 角色，禁止只写“独立 agent”“子 agent”等泛称。
 - `$bridgeforge-codex`、`$create-worktree` 和 `$git-sync` 始终由主对话执行；`$git-sync` 只能运行当前项目自带的同步脚本。
 
-### 4.4 较大需求主动澄清 — `[clarify]`
+### 4.4 较大需求主动澄清
 
-读到 `[clarify]` 后先语义精判：琐碎、续接或细节完整时直接执行；新的、大而模糊或容易走偏的开发需求先澄清。
-
-- 已表达执行意图但范围、验收或关键取舍模糊时，先给当前理解、可选路线、推荐路线和理由，再只问一个关键问题。
-- 每轮最多问一个问题；累计每 3 个问题暂停总结；超过 6 个仍未收敛时改出需求或验收草案。
-- 能说清目标、非目标、触发条件、验收口径、合理假设和剩余风险时停止追问。
-- 需要落盘需求和试用闭环的大需求进入 `$develop`；评估或咨询类直接给结论和风险。
-
-机制与调试见 `doc/3_reference/codex-hook-signals.md`。
-
-### 4.5 任务防漂移 — `[focus]`
-
-读到 `[focus]` 后只处理无意漂移；用户明确转入新任务或正当深入时忽略。
-
-- 大的前置阻塞用 `$spinoff`，小的内联完成后立即返回主线。
-- 附加扩张或无关支线用 `$todo` 归档，不在当前任务展开。
-- 方案替换或范围变化必须先说明原方案、现方案和原因。
-- 顺手修改非点名内容必须主动说明改了什么以及为什么。
-
-机制与调试见 `doc/3_reference/codex-hook-signals.md`。
+琐碎、续接或细节完整的任务必须直接执行；新的、大而模糊或关键取舍不明确的开发需求，只有缺失信息会实质改变实现或验收时才进入澄清。完整响应流程见 `doc/3_reference/codex-hook-signals.md`。
 
 ## 5 Debug 与验证
 
@@ -124,12 +98,9 @@ bridgeforge-codex 不替用户选择模型。所有 Skill 和子 agent 默认沿
 
 ### 5.2 鬼打墙觉察与渐进升级
 
-- 等价性验收、重写或移植完成后必须独立验证，禁止只靠自测。
-- 任务跨两个以上陌生模块时先调研再动手。
-- 同一 Bug 前 3 次修改失败后，第 4 次禁止继续写；必须列出已试方案和未验证假说，并进入 `$escalate` 或 `$debate`。
-- 每次失败后再次修改前，必须取得一项量化证据。
-- 修 Bug 前必须追踪完整调用链并区分事实与假说；根因未确认时必须标明置信度，禁止先加兜底再说。
-- 修复前必须确认数据源、用户路径、边界条件和外部副作用；禁止基于焦虑跨层连带修改。
+- 等价性验收、重写或移植完成后必须独立验证，禁止只靠自测；任务跨两个以上陌生模块时必须先调研再动手。
+- 同一 Bug 前 3 次修改失败后，第 4 次禁止继续写；再次修改前必须取得量化证据，并列出已试方案和未验证假说，进入 `$escalate` 或 `$debate`。
+- 修 Bug 必须区分事实与假说，并确认数据源、用户路径、边界条件和外部副作用；根因未确认时必须标明置信度，禁止先加兜底或基于焦虑跨层连带修改。
 - 性能调优必须先用 timer、counter 或 log 建立基线，优化后用同一方法复测，并清理临时诊断工具。
 
 ### 5.3 自改审计独立性
@@ -155,7 +126,6 @@ bridgeforge-codex 不替用户选择模型。所有 Skill 和子 agent 默认沿
 - 产品层改动必须 bump 根 `VERSION` 并在 `CHANGELOG.md` 标记 `[product]`；自身配置与元文档分别标记 `[repo]` / `[meta]`。
 - 受管资产必须使用显式 target、稳定 asset id、可验证历史 hash 和单一 ownership strategy；禁止 glob ownership。
 - safe/risk/gap 计划必须在 apply 前重算 aggregate fingerprint；漂移时禁止写入。gap 必须原样保留并降级收据。
-- 任一可捕获失败必须回滚本事务写入；版本戳只允许在 ready 时最后写，degraded 必须保留旧戳或无戳。
 - 新增、删除或改名用户级 skill 时，manifest、兼容 manifest 与两份 routing 必须同轮更新，global entry 还必须同步根与 Template `AGENTS.md`。
 - `--check` / `--dry-run` 必须零写入；`init/adopt/update` 必须只经 `scripts/bridgeforge_codex_project_sync.py` apply。
 - Bug 关闭必须分别记录源码、产品传播、dogfood、fixture、真实下游与 runtime 六类证据；缺失项必须标为未验证。
@@ -171,8 +141,10 @@ bridgeforge-codex 不替用户选择模型。所有 Skill 和子 agent 默认沿
 - `templates/**`：下沉到项目的 Codex 公共骨架与公共 `AGENTS.md` 源。
 - `skills/**`：由用户级分发器安装的通用 Skill 与 bridgeforge-codex 入口。
 - `scripts/**`：工厂同步、迁移、manifest 重建器及 `scripts/tests/**` 自动测试。
-- `.codex/**`：本仓库 dogfood 镜像、项目 memory 与本仓库配置。
+- `.codex/**`：本仓库 dogfood 镜像与本仓库配置；legacy 项目 Memory 仅在迁移完成前保留，不再作为运行时设施。
 - `doc/**`、`README.md`、`CHANGELOG.md`：架构、交付、Bug、参考资料与发布说明。
+
+原生 Memory 跨电脑同步的工厂架构事实源为 `doc/0_architecture/design/codex-native-memory-sync.md`。
 
 ### 项目快速命令
 

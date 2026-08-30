@@ -1,3 +1,8 @@
+---
+lifecycle: active
+validation_status: awaiting_user_acceptance
+---
+
 # Requirement: unify document tree under doc
 > Date: 2026-07-09
 > Status: trial

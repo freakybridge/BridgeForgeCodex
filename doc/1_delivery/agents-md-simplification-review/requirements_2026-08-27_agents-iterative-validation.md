@@ -1,3 +1,9 @@
+---
+lifecycle: superseded
+validation_status: verified
+superseded_by: ../../2_bugs/BUG-agents-ia/README.md
+---
+
 # AGENTS.md 草案持续迭代验证确认卡
 
 > 状态：已中断，未验收  

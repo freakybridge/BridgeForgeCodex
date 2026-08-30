@@ -138,7 +138,7 @@ def main() -> int:
     out.write_text(content, encoding="utf-8")
 
     # 注：MEMORY.md/MEMORY_COLD.md 的重建已移出 Stop 链路，改由 PostToolUse(Write/Edit memory
-    # 文件) 事件驱动 + SessionStart 兜底（见 settings.json / memory_rebuild_index.py）。
+    # 文件) 事件驱动 + SessionStart 兜底（见 hooks.json）。
     # Stop 不再碰 memory 索引 → sync 后对话结束不会再把索引弄脏。
 
     trimmed = _trim_old()

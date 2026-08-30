@@ -6,7 +6,7 @@
 # 关于 "<topic>" 的检索结果
 
 ## 📍 直达位置（文件名 + 共现交集）
-- `<paths from Path A + E, 去重后>`
+- `<paths from Path A + D, 去重后>`
 
 ## 📚 README 入口（agent 推荐先读）
 - `<paths from Path B>`
@@ -20,9 +20,6 @@
 
 ## ⚠️ 关联 rules（字典查表，无 grep）
 - `<rules from Step 2 字典>`
-
-## 🧠 相关 memory
-- `<entries from Path D>`
 
 ## 🗂 已归档（仅作历史参考）
 - 从 Path A 命中里挑 `4_archive/` 下的文件

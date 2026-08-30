@@ -1,6 +1,7 @@
 ---
 title: ClaudeBridgeAssist BridgeForge 1.4.26 白名单式干净安装需求
-status: confirmed
+lifecycle: active
+validation_status: not_started
 date: 2026-08-20
 product_version: 1.4.26
 source: $confirm

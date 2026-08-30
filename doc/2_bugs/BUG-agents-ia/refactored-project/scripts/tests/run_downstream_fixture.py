@@ -88,6 +88,11 @@ def cli(
             payload = json.loads(result.stdout)
             if payload.get("status") == "blocked":
                 return payload
+        if allow_blocked and result.stderr.startswith("BLOCKED:"):
+            return {
+                "status": "blocked",
+                "blockers": [result.stderr.strip()],
+            }
         raise RuntimeError(result.stderr or result.stdout)
     return json.loads(result.stdout)
 
@@ -105,14 +110,41 @@ def init_check(base: Path) -> dict[str, object]:
     )
     report = BASELINE.verify_current_baseline(project)
     repeated = cli(python, project, "update")
+    human = subprocess.run(
+        [
+            str(python),
+            "-B",
+            str(ROOT / "scripts" / "bridgeforge_codex_project_sync.py"),
+            "--project-root",
+            str(project),
+            "--template-root",
+            str(ROOT),
+            "--mode",
+            "update",
+            "--output-format",
+            "human",
+        ],
+        cwd=project,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=180,
+        check=False,
+    )
     return {
         "name": "current-init-idempotent",
         "ok": (
             receipt["stamp_written_last"]
             and report.version == CURRENT_VERSION
+            and not (project / ".codex" / "skill-routing.json").exists()
             and not repeated["blockers"]
             and not repeated["safe"]
             and not repeated["risk"]
+            and human.returncode == 0
+            and "结论：当前骨架已是最新状态。" in human.stdout
+            and "aggregate_fingerprint" not in human.stdout
+            and not human.stderr
         ),
     }
 
@@ -227,6 +259,7 @@ def rebuild_check(base: Path) -> dict[str, object]:
                 for path, payload in project_maps.items()
             )
             and not (project / ".codex" / ".bridgeforge_version").exists()
+            and not (project / ".codex" / "skill-routing.json").exists()
             and not repeated["blockers"]
             and not repeated["safe"]
             and not repeated["risk"]
@@ -279,6 +312,46 @@ def drift_check(base: Path) -> dict[str, object]:
     }
 
 
+def project_skill_agent_routing_gap_check(base: Path) -> dict[str, object]:
+    project = base / "project-skill-agent-routing-gap"
+    skill = project / ".codex" / "skills" / "project" / "SKILL.md"
+    skill.parent.mkdir(parents=True)
+    python = project_python(project)
+    obsolete_stamp = project / ".codex" / ".bridgeforge_version"
+    obsolete_stamp.write_text("1.4.30\n", encoding="utf-8")
+    skill.write_text(
+        "---\nname: project\ndescription: project skill\n---\n\n"
+        "旧项目必须先由独立 agent 审计。\n",
+        encoding="utf-8",
+    )
+    before = skill.read_bytes()
+    plan = cli(python, project, "adopt")
+    blocked = cli(
+        python,
+        project,
+        "adopt",
+        apply_fingerprint=str(plan["aggregate_fingerprint"]),
+        allow_blocked=True,
+    )
+    routing_gaps = [
+        item
+        for item in plan["gaps"]
+        if item.get("asset_id") == "project.skill-agent-routing"
+    ]
+    return {
+        "name": "project-skill-agent-routing-gap-zero-write",
+        "ok": (
+            bool(routing_gaps)
+            and blocked["status"] == "blocked"
+            and "unresolved gaps" in " ".join(blocked["blockers"])
+            and skill.read_bytes() == before
+            and obsolete_stamp.read_text(encoding="utf-8") == "1.4.30\n"
+            and not (project / ".codex" / ".bridgeforge_codex_version").exists()
+            and not (project / "AGENTS.md").exists()
+        ),
+    }
+
+
 def main() -> int:
     with tempfile.TemporaryDirectory() as raw:
         base = Path(raw)
@@ -286,6 +359,7 @@ def main() -> int:
             init_check(base),
             rebuild_check(base),
             drift_check(base),
+            project_skill_agent_routing_gap_check(base),
         ]
     status = "passed" if all(bool(item["ok"]) for item in checks) else "failed"
     print(json.dumps({"status": status, "checks": checks}, ensure_ascii=False, indent=2))

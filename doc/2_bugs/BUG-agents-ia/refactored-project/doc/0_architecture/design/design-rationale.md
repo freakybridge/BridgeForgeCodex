@@ -35,7 +35,7 @@ Markdown `paths:` 不是 Codex 的自动指令路由机制。项目不得建立�
   新增项目 Rule 推荐集中放在 `.codex/rules/project/**`，但同步器不靠目录名猜 ownership；
 - 项目 Hook：每个 Hook 独占 `.codex/hooks/project_XXXX/`，入口为 `entrypoint.py`，
   私有代码、配置和数据都放在同一目录内；
-- 项目 Memory 与 Skill：整棵项目资产保留，但必须通过当前版本兼容性检查。
+- legacy 项目 Memory：整棵 `.codex/memory/` 原样保留并报告待迁移，禁止同步器注入、检索、改写、重建或直接删除；项目 Skill 仍按当前兼容性检查管理。
 
 版本分类比较 ownership projection，而不是只看文件路径。项目区发生变化就属于业务变化；
 公共区发生变化才属于骨架变化。
@@ -94,9 +94,11 @@ Template 与 `.codex/` 的公共运行时必须保持当前投影一致。校验
 `doc/README.md` 是唯一索引。活跃架构文档只描述当前行为；历史决策留在交付记录、Bug、
 archive 与 Git 历史中。
 
-项目 Memory 保存在 `.codex/memory/` 并纳入 Git，与 Codex 原生用户级 memories 分离；禁止
-junction。项目 Skill 保存在 `.codex/skills/<name>/SKILL.md`，必须满足当前 metadata、结构、
-引用和体积规则。
+新骨架不再创建或运行项目 `.codex/memory/`。下游既有目录仅作为 legacy 保留：必须先逐文件
+扫描、人工确认并把独有信息迁入治理文档，才允许由独立清理任务删除。Codex 原生
+`~/.codex/memories/` 只由官方机制生成和注入；BridgeForge 只做不透明整树同步，见
+`codex-native-memory-sync.md`。项目 Skill 保存在 `.codex/skills/<name>/SKILL.md`，必须满足
+当前 metadata、结构、引用和体积规则。
 
 ## 8. 有意不做
 

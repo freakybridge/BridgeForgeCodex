@@ -1,5 +1,6 @@
 ---
-status: validated-audited-awaiting-user-trial
+lifecycle: active
+validation_status: awaiting_user_acceptance
 scale: M
 date: 2026-08-26
 source: develop -> confirm

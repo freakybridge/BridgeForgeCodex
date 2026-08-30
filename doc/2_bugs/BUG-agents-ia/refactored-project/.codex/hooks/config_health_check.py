@@ -169,34 +169,6 @@ def _check_single_hook_source() -> "str | None":
     )
 
 
-def _check_memory_schema() -> "str | None":
-    """Project memory must already match the canonical bridgeforge-codex layout."""
-    lint = Path(__file__).resolve().parent / "memory_lint.py"
-    if not lint.is_file():
-        return "MEMORY_SCHEMA: memory_lint.py is missing. FIX: rerun $bridgeforge-codex."
-    try:
-        result = subprocess.run(
-            [sys.executable, str(lint), "--organize"],
-            cwd=Path.cwd(),
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            timeout=30,
-            check=False,
-        )
-    except Exception as exc:
-        return (
-            f"MEMORY_SCHEMA: audit failed ({type(exc).__name__}). "
-            "FIX: rerun $bridgeforge-codex."
-        )
-    if result.returncode == 0:
-        return None
-    return (
-        "MEMORY_SCHEMA: project memory needs migration. "
-        "FIX: run $bridgeforge-codex and review the complete memory plan."
-    )
-
-
 # 本 hook 亲测 + 报告的项（单一事实源之一）。
 ACTIVE_CHECKS = (
     ("project-runtime", _check_project_runtime),
@@ -204,14 +176,12 @@ ACTIVE_CHECKS = (
     ("pythonutf8", _check_pythonutf8),
     ("settings-json-valid", _check_settings_json_valid),
     ("single-hook-source", _check_single_hook_source),
-    ("memory-schema", _check_memory_schema),
 )
 
 # 已有专职 hook 保证的必要配置 —— 本 hook **不重复测**（避免双重刷屏 / 时序竞争），仅在此
 # 登记备查，让本文件成为「骨架要求哪些配置 + 谁来保证」的完整单一事实源。新增「已有 owner」
 # 的必要配置登记到这；若要本 hook 亲测，则改放 ACTIVE_CHECKS。
 DELEGATED = (
-    ("project-memory-context", "memory_context.py after memory_rebuild_index.py"),
     ("no-project-effortlevel", "enforce_no_effortlevel.py (strips + reports on action)"),
     ("user-skill-sync", "skill_sync_check.py (reports drift)"),
 )

@@ -1,3 +1,9 @@
+---
+lifecycle: superseded
+validation_status: verified
+superseded_by: ../codex-model-routing-56/requirements_2026-07-10_codex-model-routing-56.md
+---
+
 # 需求：Codex 模型 / effort 分层路由
 > 日期：2026-07-08
 > 状态：trial

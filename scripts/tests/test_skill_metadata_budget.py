@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
-import json
 import shutil
 import subprocess
 import sys
@@ -42,6 +41,13 @@ class SkillMetadataBudgetTests(unittest.TestCase):
         hooks = repo / ".codex" / "hooks"
         hooks.mkdir(parents=True)
         shutil.copy2(SCRIPT, hooks / SCRIPT.name)
+        agents = repo / "templates" / "agents"
+        agents.mkdir(parents=True)
+        for name in ("light-explorer", "implementation-worker", "review-auditor"):
+            (agents / f"{name}.toml").write_text(
+                f'name = "{name}"\n',
+                encoding="utf-8",
+            )
         return repo
 
     def run_hook(self, repo: Path) -> subprocess.CompletedProcess[str]:
@@ -145,6 +151,103 @@ class SkillMetadataBudgetTests(unittest.TestCase):
         self.write_skill(repo, "demo", skill_text("demo", body=body))
         self.assertEqual(self.run_hook(repo).returncode, 0)
 
+    def test_orphan_reference_fails_until_entry_routes_to_it(self) -> None:
+        repo = self.make_repo()
+        folder = repo / "skills" / "demo"
+        references = folder / "references"
+        references.mkdir(parents=True)
+        (folder / "SKILL.md").write_text(skill_text("demo"), encoding="utf-8")
+        (references / "deep.md").write_text("低频步骤。\n", encoding="utf-8")
+
+        result = self.run_hook(repo)
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("orphan markdown reference: references/deep.md", result.stderr)
+
+        (folder / "SKILL.md").write_text(
+            skill_text(
+                "demo",
+                body="命中低频分支时读取 [深档](references/deep.md)。\n",
+            ),
+            encoding="utf-8",
+        )
+        self.assertEqual(self.run_hook(repo).returncode, 0)
+
+    def test_agent_role_contract_accepts_default_main_and_named_delegate(self) -> None:
+        repo = self.make_repo()
+        self.write_skill(repo, "main-only", skill_text("main-only"))
+        self.write_skill(
+            repo,
+            "delegated",
+            skill_text(
+                "delegated",
+                body="把只读调查显式分派给 `light-explorer`。\n",
+            ),
+        )
+        self.assertEqual(self.run_hook(repo).returncode, 0)
+
+    def test_agent_role_contract_rejects_unknown_and_generic_delegate(self) -> None:
+        repo = self.make_repo()
+        self.write_skill(
+            repo,
+            "unknown",
+            skill_text(
+                "unknown",
+                body="把实现显式分派给 `missing-worker`。\n",
+            ),
+        )
+        self.write_skill(
+            repo,
+            "generic",
+            skill_text(
+                "generic",
+                body="旧项目必须先由独立 agent 审计。\n",
+            ),
+        )
+        result = self.run_hook(repo)
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("unknown Agent role 'missing-worker'", result.stderr)
+        self.assertIn("generic Agent label", result.stderr)
+
+    def test_agent_role_contract_ignores_prohibited_delegation(self) -> None:
+        repo = self.make_repo()
+        self.write_skill(
+            repo,
+            "main-only",
+            skill_text(
+                "main-only",
+                body="禁止把脚本执行委派给其他 agent。\n",
+            ),
+        )
+        self.assertEqual(self.run_hook(repo).returncode, 0)
+
+    def test_agent_role_contract_scans_linked_references(self) -> None:
+        repo = self.make_repo()
+        folder = repo / "skills" / "delegated"
+        references = folder / "references"
+        references.mkdir(parents=True)
+        (folder / "SKILL.md").write_text(
+            skill_text(
+                "delegated",
+                body="命中迁移时读取 [迁移](references/adopt.md)。\n",
+            ),
+            encoding="utf-8",
+        )
+        reference = references / "adopt.md"
+        reference.write_text(
+            "把只读审计显式分派给 `light-explorer`。\n",
+            encoding="utf-8",
+        )
+        self.assertEqual(self.run_hook(repo).returncode, 0)
+
+        reference.write_text(
+            "把只读审计显式分派给 `missing-worker`。\n",
+            encoding="utf-8",
+        )
+        result = self.run_hook(repo)
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("references/adopt.md", result.stderr)
+        self.assertIn("unknown Agent role 'missing-worker'", result.stderr)
+
     def test_catalog_description_budget_fails(self) -> None:
         repo = self.make_repo()
         for index in range(9):
@@ -154,65 +257,18 @@ class SkillMetadataBudgetTests(unittest.TestCase):
         self.assertEqual(result.returncode, 2)
         self.assertIn("skill catalog descriptions exceed 4000", result.stderr)
 
-    def test_factory_distribution_routing_and_global_agents_are_one_contract(self) -> None:
-        repo = self.make_repo()
-        self.write_skill(repo, "demo", skill_text("demo"))
-        self.write_skill(repo, "bridgeforge-codex", skill_text("bridgeforge-codex"))
-        manifest = {
-            "platforms": {
-                "codex": {
-                    "skills": [
-                        {"name": "demo"},
-                        {"name": "bridgeforge-codex"},
-                        {"name": "create-worktree"},
-                    ]
-                }
-            }
-        }
-        (repo / "bridgeforge-codex-manifest.json").write_text(
-            json.dumps(manifest), encoding="utf-8"
+    def test_public_agents_define_progressive_skill_disclosure(self) -> None:
+        required = (
+            "简单 Skill 必须保持单文件",
+            "入口只保留共同目标、主路径、选择点、停止条件",
+            "明确的 reference 读取条件",
+            "入口与 reference 禁止手写复制同一规则",
         )
-        routing = {
-            "skills": [{"skill": "demo"}],
-            "global_entries": [{"skill": "bridgeforge-codex"}],
-        }
-        template = repo / "templates"
-        template.mkdir(parents=True)
-        (template / "managed-skeleton.json").write_text("{}\n", encoding="utf-8")
-        for path in (repo / ".codex/skill-routing.json", template / "skill-routing.json"):
-            path.write_text(json.dumps(routing), encoding="utf-8")
-        (repo / "AGENTS.md").write_text("demo bridgeforge-codex\n", encoding="utf-8")
-        (template / "AGENTS.md").write_text(
-            "demo bridgeforge-codex\n",
-            encoding="utf-8",
-        )
-
-        missing = self.run_hook(repo)
-        self.assertEqual(missing.returncode, 2)
-        self.assertIn("missing from routing: create-worktree", missing.stderr)
-
-        routing["global_entries"].append({"skill": "create-worktree"})
-        for path in (repo / ".codex/skill-routing.json", template / "skill-routing.json"):
-            path.write_text(json.dumps(routing), encoding="utf-8")
-        omitted = self.run_hook(repo)
-        self.assertEqual(omitted.returncode, 2)
-        self.assertIn("omits global entries: create-worktree", omitted.stderr)
-
-        (repo / "AGENTS.md").write_text(
-            "demo bridgeforge-codex create-worktree\n",
-            encoding="utf-8",
-        )
-        (template / "AGENTS.md").write_text(
-            "demo bridgeforge-codex create-worktree\n",
-            encoding="utf-8",
-        )
-        self.assertEqual(self.run_hook(repo).returncode, 0)
-
-        (repo / ".codex/skill-routing.json").unlink()
-        absent_sot = self.run_hook(repo)
-        self.assertEqual(absent_sot.returncode, 2)
-        self.assertIn("factory skill routing SoT is missing", absent_sot.stderr)
-
+        for path in (ROOT / "templates" / "AGENTS.md", ROOT / "AGENTS.md"):
+            with self.subTest(path=path):
+                text = path.read_text(encoding="utf-8")
+                for phrase in required:
+                    self.assertIn(phrase, text)
 
 if __name__ == "__main__":
     unittest.main()

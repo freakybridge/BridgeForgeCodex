@@ -51,7 +51,7 @@ def check(path: Path) -> list[str]:
 
 
 def main() -> int:
-    # 输入双兜底（与 allow_memory_write.py 一致）：官方 Codex hook 走 stdin JSON，
+    # 输入双兜底：官方 Codex hook 走 stdin JSON，
     # file_path 嵌在 `tool_input` 下；环境变量只使用 CODEX_TOOL_INPUT 兜底。
     data = {}
     try:

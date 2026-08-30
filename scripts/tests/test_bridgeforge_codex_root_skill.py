@@ -123,7 +123,7 @@ class BridgeForgeCodexRootSkillTests(unittest.TestCase):
         self.assertIn("name: bridgeforge-codex", text)
         self.assertIn("Codex-only", text)
         self.assertIn('".bridgeforge-codex"', text)
-        self.assertIn("只是 Codex 可发现的薄入口", text)
+        self.assertIn("薄入口只是 Codex 可发现入口", text)
         self.assertIn("scripts/bridgeforge_codex_project_sync.py", text)
 
     def test_legacy_user_migration_surfaces_are_retired(self) -> None:
@@ -140,10 +140,18 @@ class BridgeForgeCodexRootSkillTests(unittest.TestCase):
         )
 
     def test_current_only_risk_and_project_sync_contract_are_explicit(self) -> None:
-        text = SKILL.read_text(encoding="utf-8")
+        text = "\n".join(
+            [SKILL.read_text(encoding="utf-8")]
+            + [
+                path.read_text(encoding="utf-8")
+                for path in sorted(REFERENCES.glob("*.md"))
+            ]
+        )
         for marker in (
-            "destructive rebuild 必须先由独立 agent",
-            "用户逐项确认可",
+            "destructive rebuild 计划",
+            "`review-auditor`",
+            "`implementation-worker`",
+            "逐项确认可以组成本轮唯一确认",
             "plan-fingerprint",
             "--confirmed-preservation-manifest",
             "--confirmed-risk",
@@ -160,34 +168,76 @@ class BridgeForgeCodexRootSkillTests(unittest.TestCase):
         ):
             self.assertIn(marker, text)
 
+    def test_version_domain_and_transaction_have_distinct_owners(self) -> None:
+        skill = SKILL.read_text(encoding="utf-8")
+        transaction = (REFERENCES / "transaction.md").read_text(encoding="utf-8")
+        guide = (
+            ROOT / "doc/3_reference/codex-project-operating-guide.md"
+        ).read_text(encoding="utf-8")
+        agents_text = (
+            (ROOT / "AGENTS.md").read_text(encoding="utf-8"),
+            (ROOT / "templates/AGENTS.md").read_text(encoding="utf-8"),
+        )
+
+        self.assertIn("版本戳写入顺序的唯一操作 owner", transaction)
+        self.assertIn("最后写 `.codex/.bridgeforge_codex_version`", transaction)
+        self.assertIn("任一失败回滚本事务全部写入", transaction)
+        self.assertNotIn("版本戳写入顺序的唯一操作 owner", skill)
+        self.assertNotIn("最后写 `.codex/.bridgeforge_codex_version`", skill)
+        for agents in agents_text:
+            self.assertIn("仅允许统一项目同步器修改", agents)
+            self.assertNotIn("在全部验证通过后最后写入", agents)
+            self.assertNotIn("版本戳只允许在 ready 时最后写", agents)
+
+        self.assertIn("唯一归 `$bridgeforge-codex`", guide)
+        for operational_detail in (
+            "release preflight",
+            "ownership classifier",
+            "逐文件 `G*` 清单",
+        ):
+            self.assertNotIn(operational_detail, guide)
+
     def test_default_result_is_conclusion_first_and_hides_raw_receipt(self) -> None:
         text = SKILL.read_text(encoding="utf-8")
-        result_contract = text[text.index("## 7. 用户结果与技术收据") :]
+        result_contract = text[text.index("## 5. Apply 与用户结果") :]
+        receipt_contract = (REFERENCES / "technical-receipts.md").read_text(
+            encoding="utf-8"
+        )
         for marker in (
             "结论、待处理事项、下一步",
+            "`human` 区",
+            "禁止自行改写结论",
+            "--output-format combined",
             "本次操作已结束，无需继续处理",
-            "骨架升级已完成，当前骨架版本为 {version}",
-            "本次升级产生的 {count} 个骨架文件尚未保存到 GitHub",
-            "当前 Codex 对话框运行 $git-sync",
-            "骨架升级未完成",
-            "无关且无需操作的 advisory 默认隐藏",
-            "Native Memory 健康且无需用户操作时默认不单列",
-            "只有用户追问原因、证据或技术细节时",
+            "说明当前骨架版本",
+            "`$git-sync`",
+            "同步器确定的停止原因",
+            "只有影响当前结果、需要用户操作或会改变后续行为时才展示",
+            "用户未追问时不得补发整份技术清单",
         ):
             self.assertIn(marker, result_contract)
 
-        hidden_receipt = result_contract.index("### 7.2 内部技术收据")
-        self.assertGreater(result_contract.index("`execution_status`"), hidden_receipt)
-        self.assertGreater(result_contract.index("preserved project asset IDs"), hidden_receipt)
-        self.assertGreater(result_contract.index("rollback 字段"), hidden_receipt)
+        self.assertIn("`machine` 保持旧 JSON 自动化合同", receipt_contract)
+        self.assertIn("不得用临场解释覆盖 `human` 区结论", receipt_contract)
+
+        for marker in (
+            "`execution_status`",
+            "preserved project asset IDs",
+            "rollback 字段",
+            "`user_native_memory_readiness`",
+        ):
+            self.assertNotIn(marker, result_contract)
+            self.assertIn(marker, receipt_contract)
 
     def test_preservation_manifest_is_the_only_old_project_decision_term(self) -> None:
         skill = SKILL.read_text(encoding="utf-8")
+        adopt = (REFERENCES / "adopt.md").read_text(encoding="utf-8")
         sync = (
             ROOT / "scripts" / "bridgeforge_codex_project_sync.py"
         ).read_text(encoding="utf-8")
         self.assertIn("PreservationManifest", skill)
-        self.assertIn("--confirmed-preservation-manifest", skill)
+        self.assertNotIn("--confirmed-preservation-manifest", skill)
+        self.assertIn("--confirmed-preservation-manifest", adopt)
         obsolete_term = "white" + "list"
         self.assertNotIn(obsolete_term, skill.casefold())
         self.assertNotIn(obsolete_term, sync.casefold())
@@ -196,23 +246,38 @@ class BridgeForgeCodexRootSkillTests(unittest.TestCase):
 
     def test_python_preflight_native_memory_and_project_sync_are_in_one_orchestration(self) -> None:
         text = SKILL.read_text(encoding="utf-8")
-        preflight = text.index("## 2. Python preflight")
-        mode = text.index("按以下顺序只读判定并锁定 `$MODE`", preflight)
-        bootstrap = text.index("project_runtime.py", mode)
-        native_memory = text.index("codex_memory_sync.py", preflight)
+        runtime = (REFERENCES / "runtime-preflight.md").read_text(encoding="utf-8")
+        native = (REFERENCES / "native-memory.md").read_text(encoding="utf-8")
+        preflight = text.index("## 2. 判断模式并锁定项目 Python")
+        mode = text.index("只读检查版本戳并锁定唯一 `$MODE`", preflight)
+        validate = text.index("project_runtime.py", mode)
+        native_memory = text.index("codex_memory_sync.py", validate)
         project_sync = text.index("bridgeforge_codex_project_sync.py", native_memory)
         self.assertLess(preflight, mode)
-        self.assertLess(mode, bootstrap)
-        self.assertLess(bootstrap, native_memory)
+        self.assertLess(mode, validate)
+        self.assertLess(validate, native_memory)
         self.assertLess(native_memory, project_sync)
         self.assertNotIn("\npython ", text)
         self.assertIn("status --project-root .", text)
-        self.assertIn("禁止持久化任一项目的绝对 Python 路径", text)
-        self.assertIn("本轮统一 safe/risk/gap accumulator", text)
+        self.assertIn("bootstrap --project-root . --mode $MODE", runtime)
+        self.assertIn("禁止持久化任一项目的绝对 Python 路径", native)
+        self.assertIn("唯一 accumulator", text)
 
     def test_references_are_codex_only_and_have_no_switch(self) -> None:
-        expected = {"user-skill-maintenance.md", "init.md", "adopt.md", "update.md"}
+        expected = {
+            "user-skill-maintenance.md",
+            "runtime-preflight.md",
+            "native-memory.md",
+            "init.md",
+            "adopt.md",
+            "update.md",
+            "transaction.md",
+            "technical-receipts.md",
+        }
         self.assertEqual({path.name for path in REFERENCES.glob("*.md")}, expected)
+        entry = SKILL.read_text(encoding="utf-8")
+        for name in expected:
+            self.assertIn(f"references/{name}", entry)
         combined = "\n".join(
             path.read_text(encoding="utf-8") for path in sorted(REFERENCES.glob("*.md"))
         )
@@ -220,6 +285,77 @@ class BridgeForgeCodexRootSkillTests(unittest.TestCase):
         self.assertNotIn("bridgeforge_switch.py", combined)
         self.assertNotIn("project_finalize", combined)
         self.assertNotIn("bridgeforge_codex_user_maintenance.ps1", combined)
+
+    def test_bridgeforge_skill_manifest_covers_every_packaged_file(self) -> None:
+        manifest = json.loads(
+            (ROOT / "bridgeforge-codex-manifest.json").read_text(encoding="utf-8")
+        )
+        skill = next(
+            item
+            for item in manifest["platforms"]["codex"]["skills"]
+            if item["name"] == "bridgeforge-codex"
+        )
+        prefix = "skills/bridgeforge-codex/"
+        actual = {
+            path.relative_to(ROOT).as_posix()
+            for path in (ROOT / "skills" / "bridgeforge-codex").rglob("*")
+            if path.is_file() and "__pycache__" not in path.parts
+        }
+        declared = {
+            item["source"]
+            for item in skill["files"]
+            if item["source"].startswith(prefix)
+        }
+        self.assertEqual(declared, actual)
+
+    def test_entry_routes_conditional_details_to_single_reference_owners(self) -> None:
+        entry = SKILL.read_text(encoding="utf-8")
+        owners = {
+            "runtime-preflight.md": (
+                "bootstrap --project-root . --mode $MODE",
+                "update` 禁止创建或重建 `.venv`",
+            ),
+            "native-memory.md": (
+                "`consent=null + disabled`",
+                "本地较新自动上传",
+                "`repair-hook` 只能修改用户 hooks",
+            ),
+            "adopt.md": (
+                "`--confirmed-preservation-manifest`",
+                "显式分派给 `review-auditor`",
+                "显式分派给 `implementation-worker`",
+            ),
+            "transaction.md": (
+                "版本戳写入顺序的唯一操作 owner",
+                "最后写 `.codex/.bridgeforge_codex_version`",
+                "任一失败回滚本事务全部写入",
+            ),
+            "technical-receipts.md": (
+                "`execution_status`",
+                "`user_native_memory_readiness`",
+                "rollback 字段",
+            ),
+        }
+        reference_text = {
+            path.name: path.read_text(encoding="utf-8")
+            for path in REFERENCES.glob("*.md")
+        }
+        for owner, markers in owners.items():
+            with self.subTest(owner=owner):
+                for marker in markers:
+                    self.assertNotIn(marker, entry)
+                    self.assertIn(marker, reference_text[owner])
+                    self.assertEqual(
+                        [
+                            name
+                            for name, text in reference_text.items()
+                            if marker in text
+                        ],
+                        [owner],
+                    )
+
+        self.assertNotIn("<1.4.31", reference_text["update.md"])
+        self.assertIn("<1.4.31", reference_text["adopt.md"])
 
     def test_shared_skills_inherit_session_model(self) -> None:
         skill_files = sorted((ROOT / "skills").glob("*/SKILL.md"))

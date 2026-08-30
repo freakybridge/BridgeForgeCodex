@@ -1,3 +1,8 @@
+---
+lifecycle: active
+validation_status: awaiting_user_acceptance
+---
+
 # 需求：BridgeForge 用户级工厂目录改为 `.bridgeforge`
 > 日期：2026-07-08
 > 状态：trial

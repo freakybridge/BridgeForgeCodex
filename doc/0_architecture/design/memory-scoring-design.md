@@ -1,6 +1,12 @@
-# Memory 索引设计（确定性事件驱动）
+# 已退役：项目 Memory 索引设计（历史）
 
-> 状态：现行设计（2026-08-14 增补自动加载与原生 memories 分离）
+> **已退役设计**：本文只保留为历史设计证据，不再描述当前架构，也不得据此恢复项目
+> `.codex/memory/` 的注入、检索、索引、写入或冷热区机制。当前边界见
+> `design-rationale.md` 与 `codex-native-memory-sync.md`；运行时资产的实际清理属于
+> `project-memory-retirement` P2。下文所有“必须 / 禁止”只记录旧系统当时的合同，不对当前
+> 产品或下游项目生效；完成 P2 后再由 `$archive-scan` 提议移动本文。
+
+> 状态：已退役历史设计（2026-08-30）；当前事实源见上方链接。
 > 前身：艾宾浩斯热度评分系统（2026-06-03 设计、已实现），**本次废弃**，原因见下。
 > 改版辩论：[debates_2026-06-27_memory-untrack.md](debates_2026-06-27_memory-untrack.md)
 
@@ -124,7 +130,7 @@ metadata schema、writer、索引器和冷热策略；禁止第二套实现或�
 
 ---
 
-## 组件清单（现行）
+## 组件清单（退役前）
 
 | 组件 | 位置 | 触发 | 职责 |
 |---|---|---|---|
@@ -148,7 +154,7 @@ metadata schema、writer、索引器和冷热策略；禁止第二套实现或�
 - **双机制隔离**：项目 `.<host>/memory/` 由项目 Git、索引器和 summary 维护；Codex 原生
   `~/.codex/memories/` 由 Codex 自身生成。两者禁止 junction、混写或互相替代。
 
-## Codex 原生 memories 云同步边界
+## Codex 原生 memories 云同步边界（历史说明）
 
 BridgeForge 把 `~/.codex/memories/` 当作不透明整树。用户明确同意后，用户级 hook 与
 `$bridgeforge` 才把它同步到固定 private 仓库 `bridgeforge-codex-memories`：每次只保留

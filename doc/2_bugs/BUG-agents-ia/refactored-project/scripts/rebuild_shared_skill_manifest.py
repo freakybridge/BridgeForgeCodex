@@ -192,7 +192,7 @@ def _hook_stage(handler: dict[str, Any]) -> str:
     command = str(handler.get("commandWindows") or handler.get("command") or "")
     match = re.search(
         r"hook_dispatcher\.py(?:['\"\)]|\s)+"
-        r"(pre-tool|post-read|post-edit|post-shell|post-compact|stop|user-prompt|session-start)",
+        r"(pre-tool|post-edit|post-shell|post-compact|stop|user-prompt|session-start)",
         command.replace("\\", "/").casefold(),
     )
     return match.group(1) if match else "unknown"

@@ -1,3 +1,9 @@
+---
+lifecycle: superseded
+validation_status: verified
+superseded_by: ../../2_bugs/BUG-agents-ia/README.md
+---
+
 # AGENTS.md 第二版草案复评确认卡
 
 > 状态：已确认  

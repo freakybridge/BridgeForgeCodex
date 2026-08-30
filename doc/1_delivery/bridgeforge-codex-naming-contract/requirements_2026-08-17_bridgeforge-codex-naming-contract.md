@@ -1,3 +1,8 @@
+---
+lifecycle: active
+validation_status: awaiting_user_acceptance
+---
+
 # 需求：bridgeforge-codex 分层命名统一
 
 > 日期：2026-08-17  

@@ -9,7 +9,7 @@ argument: 无
 
 ## 定位与边界
 
-脚本只负责候选打分；用户决定是否移动。扫描范围是 `doc/1_delivery/` 中包含完成验收标记的 topic 与 `doc/2_bugs/` 中状态已解决的 Bug；系统架构和外部资料不是候选。
+脚本只负责候选打分；用户决定是否移动。扫描优先使用 `doc/README.md` 生命周期合同：`doc/1_delivery/` 中全部需求卡均为 `completed` / `superseded` 的 topic，以及 `doc/2_bugs/` 中相同生命周期的 Bug 才是新合同候选。未迁移文档仅保留旧完成标记兼容扫描并明确标为 legacy evidence；系统架构和外部资料不是候选。
 
 ## 输入
 
@@ -39,8 +39,9 @@ argument: 无
      git mv <source> <target>
      ```
 
-7. 同步 `doc/README.md`：从 current 表格删除对应行，按时间倒序加入 archive 表格；“最近归档批次”注释可选。
-8. 再次检查 Git 状态，确认移动文件与索引修改和用户选择一致。
+7. 移动成功后，把目标中的需求卡或 Bug 更新为 `lifecycle: archived`；原 `superseded_by` 必须保留，旧文档在此时补齐生命周期 frontmatter。
+8. 同步 `doc/README.md`：从 current 表格删除对应行，按时间倒序加入 archive 表格；“最近归档批次”注释可选。
+9. 再次检查 Git 状态，确认移动文件、生命周期更新与索引修改和用户选择一致。
 
 ## 输出与验证
 

@@ -8,14 +8,15 @@ Scope:
 
 Hard gates cover discoverability plus unsafe context growth: required metadata,
 single-line descriptions <= 500 chars, SKILL.md <= 500 lines, live one-level
-`references/` links, and bridgeforge-codex invocation metadata. Descriptions
+`references/` links with no orphan Markdown files, and bridgeforge-codex invocation metadata. Descriptions
 over 300 chars are soft warnings.
 """
 from __future__ import annotations
 
-import json
 import re
 import sys
+import tomllib
+from collections.abc import Iterable
 from pathlib import Path
 
 try:
@@ -32,6 +33,77 @@ DESCRIPTION_MAX_CHARS = 500
 SKILL_MAX_LINES = 500
 CATALOG_DESCRIPTION_MAX_CHARS = 4_000
 MD_LINK_RE = re.compile(r"\[[^\]]+\]\(([^)]+\.md(?:#[^)]*)?)\)")
+AGENT_NAME_RE = re.compile(r"^[a-z][a-z0-9-]*$")
+DELEGATION_CUE_RE = re.compile(r"(?:显式)?(?:分派|委派)给", re.IGNORECASE)
+EXPLICIT_AGENT_RE = re.compile(
+    r"(?:显式)?(?:分派|委派)给\s*`([a-z][a-z0-9-]*)`",
+    re.IGNORECASE,
+)
+UNNAMED_AGENT_RE = re.compile(
+    r"(?:必须先由|让|交给)\s*(?:一个|某个)?\s*(?:独立|子)\s*agent"
+    r"|使用一次匹配职责的子\s*agent",
+    re.IGNORECASE,
+)
+BUILTIN_AGENT_NAMES = frozenset({"default", "worker", "explorer"})
+AGENT_ROLE_MARKER = "agent-role:"
+
+
+def load_agent_names(agent_dirs: Iterable[Path]) -> tuple[set[str], list[str]]:
+    names = set(BUILTIN_AGENT_NAMES)
+    issues: list[str] = []
+    for agent_dir in agent_dirs:
+        if not agent_dir.exists():
+            continue
+        if not agent_dir.is_dir():
+            issues.append(f"{AGENT_ROLE_MARKER} Agent path is not a directory: {agent_dir}")
+            continue
+        for path in sorted(agent_dir.glob("*.toml")):
+            if path.is_symlink() or bool(getattr(path, "is_junction", lambda: False)()):
+                issues.append(f"{AGENT_ROLE_MARKER} reparse Agent file is not allowed: {path}")
+                continue
+            try:
+                payload = tomllib.loads(path.read_text(encoding="utf-8"))
+            except Exception as exc:
+                issues.append(f"{AGENT_ROLE_MARKER} cannot parse {path}: {exc}")
+                continue
+            name = payload.get("name")
+            if not isinstance(name, str) or not AGENT_NAME_RE.fullmatch(name):
+                issues.append(f"{AGENT_ROLE_MARKER} invalid Agent name in {path}: {name!r}")
+                continue
+            names.add(name)
+    return names, issues
+
+
+def _agent_role_findings(text: str, known_agent_names: set[str]) -> list[str]:
+    findings: list[str] = []
+    for match in EXPLICIT_AGENT_RE.finditer(text):
+        role = match.group(1)
+        if role not in known_agent_names:
+            line = text.count("\n", 0, match.start()) + 1
+            findings.append(
+                f"{AGENT_ROLE_MARKER} line {line} references unknown Agent role {role!r}"
+            )
+
+    for match in DELEGATION_CUE_RE.finditer(text):
+        sentence_start = max(
+            text.rfind("\n", 0, match.start()),
+            text.rfind("。", 0, match.start()),
+        )
+        if "禁止" in text[sentence_start + 1 : match.start()]:
+            continue
+        following = text[match.end() : match.end() + 96].lstrip()
+        if not re.match(r"`[a-z][a-z0-9-]*`", following):
+            line = text.count("\n", 0, match.start()) + 1
+            findings.append(
+                f"{AGENT_ROLE_MARKER} line {line} delegates without an explicit Agent role"
+            )
+
+    for match in UNNAMED_AGENT_RE.finditer(text):
+        line = text.count("\n", 0, match.start()) + 1
+        findings.append(
+            f"{AGENT_ROLE_MARKER} line {line} uses a generic Agent label instead of a role"
+        )
+    return list(dict.fromkeys(findings))
 
 
 def _parse_frontmatter(path: Path) -> tuple[dict[str, str], list[str]]:
@@ -81,6 +153,8 @@ def _validate_skill(
     expected_name: str | None = None,
     *,
     report_root: Path = REPO_ROOT,
+    known_agent_names: set[str] | None = None,
+    agent_role_warnings: bool = False,
 ) -> tuple[list[str], list[str]]:
     rel = skill_file.relative_to(report_root).as_posix()
     meta, issues = _parse_frontmatter(skill_file)
@@ -126,6 +200,21 @@ def _validate_skill(
     if line_count > SKILL_MAX_LINES:
         issues.append(f"SKILL.md exceeds {SKILL_MAX_LINES} lines ({line_count}); split conditional detail into references/")
 
+    if known_agent_names is not None:
+        role_text = text
+        lines = text.splitlines()
+        if lines and lines[0].strip() == "---":
+            for index, line in enumerate(lines[1:], start=1):
+                if line.strip() == "---":
+                    role_text = "\n" * (index + 1) + "\n".join(lines[index + 1 :])
+                    break
+        role_findings = _agent_role_findings(role_text, known_agent_names)
+        if agent_role_warnings:
+            warnings.extend(role_findings)
+        else:
+            issues.extend(role_findings)
+
+    linked_references: dict[Path, str] = {}
     for target in MD_LINK_RE.findall(text):
         clean = target.split("#", 1)[0].strip()
         parts = Path(clean).parts
@@ -140,12 +229,58 @@ def _validate_skill(
         resolved = (skill_file.parent / clean).resolve()
         if not resolved.exists():
             issues.append(f"dead markdown reference: {clean}")
+            continue
+        linked_references[resolved] = clean
+
+    references_dir = skill_file.parent / "references"
+    if references_dir.is_dir():
+        packaged_references = {
+            path.resolve(): path.relative_to(skill_file.parent).as_posix()
+            for path in references_dir.glob("*.md")
+            if path.is_file()
+        }
+        for resolved, clean in sorted(
+            packaged_references.items(),
+            key=lambda item: item[1],
+        ):
+            if resolved not in linked_references:
+                issues.append(
+                    f"orphan markdown reference: {clean}; "
+                    "link it from SKILL.md with an explicit read condition"
+                )
+
+    if known_agent_names is not None:
+        for resolved, clean in sorted(
+            linked_references.items(),
+            key=lambda item: item[1],
+        ):
+            try:
+                reference_text = resolved.read_text(encoding="utf-8")
+            except Exception as exc:
+                issues.append(f"cannot read linked reference {clean}: {exc}")
+                continue
+            role_findings = [
+                f"{clean}: {finding}"
+                for finding in _agent_role_findings(
+                    reference_text,
+                    known_agent_names,
+                )
+            ]
+            if agent_role_warnings:
+                warnings.extend(role_findings)
+            else:
+                issues.extend(role_findings)
 
     prefix = f"{rel}: "
     return [prefix + issue for issue in issues], [prefix + warning for warning in warnings]
 
 
-def validate_skill_tree(skills_dir: Path) -> tuple[list[str], list[str]]:
+def validate_skill_tree(
+    skills_dir: Path,
+    *,
+    known_agent_names: set[str] | None = None,
+    agent_role_warnings: bool = False,
+) -> tuple[list[str], list[str]]:
     issues: list[str] = []
     warnings: list[str] = []
     if not skills_dir.is_dir():
@@ -177,75 +312,12 @@ def validate_skill_tree(skills_dir: Path) -> tuple[list[str], list[str]]:
         skill_issues, skill_warnings = _validate_skill(
             skill_file,
             report_root=report_root,
+            known_agent_names=known_agent_names,
+            agent_role_warnings=agent_role_warnings,
         )
         issues.extend(skill_issues)
         warnings.extend(skill_warnings)
     return issues, warnings
-
-
-def _validate_factory_routing() -> list[str]:
-    manifest_path = REPO_ROOT / "bridgeforge-codex-manifest.json"
-    routing_path = REPO_ROOT / ".codex" / "skill-routing.json"
-    template_routing_path = REPO_ROOT / "templates" / "skill-routing.json"
-    is_factory = (
-        (REPO_ROOT / "skills" / "bridgeforge-codex" / "SKILL.md").is_file()
-        and (REPO_ROOT / "templates" / "managed-skeleton.json").is_file()
-    )
-    if not is_factory:
-        return []
-    missing = [
-        path.relative_to(REPO_ROOT).as_posix()
-        for path in (manifest_path, routing_path, template_routing_path)
-        if not path.is_file()
-    ]
-    if missing:
-        return ["factory skill routing SoT is missing: " + ", ".join(missing)]
-    issues: list[str] = []
-    try:
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8-sig"))
-        routing = json.loads(routing_path.read_text(encoding="utf-8-sig"))
-        template_routing = json.loads(
-            template_routing_path.read_text(encoding="utf-8-sig")
-        )
-    except (OSError, KeyError, TypeError, json.JSONDecodeError) as exc:
-        return [f"factory skill routing metadata is unreadable: {exc}"]
-    if routing != template_routing:
-        issues.append(".codex/skill-routing.json must structurally match templates/skill-routing.json")
-    try:
-        distributed = {
-            str(item["name"])
-            for item in manifest["platforms"]["codex"]["skills"]
-        }
-        routed = {
-            str(item["skill"])
-            for item in (*routing["skills"], *routing.get("global_entries", []))
-        }
-    except (KeyError, TypeError) as exc:
-        return issues + [f"factory skill routing schema is invalid: {exc}"]
-    missing = sorted(distributed - routed)
-    stale = sorted(routed - distributed)
-    if missing:
-        issues.append("Codex-distributed skills missing from routing: " + ", ".join(missing))
-    if stale:
-        issues.append("Codex routing contains undistributed skills: " + ", ".join(stale))
-    global_entries = {
-        str(item["skill"])
-        for item in routing.get("global_entries", [])
-        if isinstance(item, dict) and "skill" in item
-    }
-    for agents_path in (REPO_ROOT / "AGENTS.md", REPO_ROOT / "templates/AGENTS.md"):
-        try:
-            agents_text = agents_path.read_text(encoding="utf-8-sig")
-        except OSError as exc:
-            issues.append(f"cannot read {agents_path.relative_to(REPO_ROOT).as_posix()}: {exc}")
-            continue
-        absent = sorted(name for name in global_entries if name not in agents_text)
-        if absent:
-            issues.append(
-                f"{agents_path.relative_to(REPO_ROOT).as_posix()} omits global entries: "
-                + ", ".join(absent)
-            )
-    return issues
 
 
 def main() -> int:
@@ -255,8 +327,15 @@ def main() -> int:
 
         issues: list[str] = []
         warnings: list[str] = []
-        issues.extend(_validate_factory_routing())
-        tree_issues, tree_warnings = validate_skill_tree(SKILLS_DIR)
+        agent_dir = REPO_ROOT / "templates" / "agents"
+        if not agent_dir.is_dir():
+            issues.append(f"{AGENT_ROLE_MARKER} factory Agent directory is missing: {agent_dir}")
+        known_agent_names, agent_issues = load_agent_names((agent_dir,))
+        issues.extend(agent_issues)
+        tree_issues, tree_warnings = validate_skill_tree(
+            SKILLS_DIR,
+            known_agent_names=known_agent_names,
+        )
         issues.extend(tree_issues)
         warnings.extend(tree_warnings)
 

@@ -1,5 +1,6 @@
 ---
-status: completed
+lifecycle: active
+validation_status: awaiting_user_acceptance
 size: M
 ---
 

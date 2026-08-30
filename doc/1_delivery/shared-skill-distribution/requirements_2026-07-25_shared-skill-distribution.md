@@ -1,3 +1,8 @@
+---
+lifecycle: active
+validation_status: awaiting_user_acceptance
+---
+
 # 共享 Skill 双骨架分发与 `.agents` 退役需求卡
 
 > 状态：`confirmed`

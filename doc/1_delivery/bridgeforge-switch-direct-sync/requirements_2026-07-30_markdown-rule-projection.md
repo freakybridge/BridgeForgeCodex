@@ -1,3 +1,9 @@
+---
+lifecycle: superseded
+validation_status: verified
+superseded_by: requirements_2026-07-30_portable-rule-candidate-reporting.md
+---
+
 # BridgeForge Switch 的 Markdown Rule 投影增强建议
 
 > 状态：部分采纳：仅实现 portable Rule 迁移候选发现 / 报告；自动投影、v2–v4 与 root map 已拒绝  

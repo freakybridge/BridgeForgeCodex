@@ -1,3 +1,9 @@
+---
+lifecycle: superseded
+validation_status: verified
+superseded_by: ../../2_bugs/BUG-agents-ia/README.md
+---
+
 # 需求：Codex ctx-budget 适配修复
 > 日期：2026-07-09
 > 状态：trial

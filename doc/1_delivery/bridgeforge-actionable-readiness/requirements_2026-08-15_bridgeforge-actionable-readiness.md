@@ -1,6 +1,7 @@
 ---
 title: BridgeForge 双状态与可执行完善清单需求确认卡
-status: confirmed
+lifecycle: active
+validation_status: awaiting_validation
 date: 2026-08-15
 source: confirm
 handoff: develop

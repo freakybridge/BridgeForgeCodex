@@ -1,3 +1,8 @@
+---
+lifecycle: completed
+validation_status: verified
+---
+
 # 需求确认：Codex 骨架系统性重构
 
 > 日期：2026-08-15  

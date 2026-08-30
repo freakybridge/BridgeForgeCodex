@@ -15,7 +15,7 @@ delivery_layout: flat # flat | milestone；初始化时确认，已有项目不�
 | [`0_architecture/`](0_architecture/) | 系统当前架构、关键接口、数据流与 ADR | 长期，慎改 |
 | [`1_delivery/`](1_delivery/) | 需求从确认、计划到验收的完整交付包 | 活跃 |
 | [`2_bugs/`](2_bugs/) | 尚未归档的 Bug：现象、根因、修复和验证 | 活跃 |
-| [`3_reference/`](3_reference/) | 外部 / 第三方资料及可复核摘录 | 只读 |
+| [`3_reference/`](3_reference/) | 外部资料与 BridgeForge 公共参考 | 只读 |
 | [`4_archive/`](4_archive/) | 已完成归档 | 只读 |
 
 完整边界见根 `AGENTS.md` §2.3；长 SOP 由项目自行放入 `doc/3_reference/`。
@@ -55,11 +55,11 @@ delivery_layout: flat # flat | milestone；初始化时确认，已有项目不�
 
 ## 3_reference/
 
-<!-- TODO: 外部资料必须记录来源、获取日期和适用范围，例：
-| 文件 / 子目录 | 说明 |
-|------|------|
-| [`external_api/`](3_reference/external_api/) | 外部 API / 协议资料 |
--->
+| 文件 | 说明 |
+|---|---|
+| [`codex-hook-signals.md`](3_reference/codex-hook-signals.md) | Agent 原生主动澄清的响应边界、例外和调试方法；自动 Clarify / Focus Hook 已退役 |
+
+<!-- 外部资料必须记录来源、获取日期和适用范围。 -->
 
 ## 4_archive/
 

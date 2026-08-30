@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import importlib.util
-import json
 import sys
 import types
 import unittest
@@ -19,12 +18,6 @@ ARCHIVE_SCANS = (
     ROOT / ".codex/scripts/archive_scan.py",
     ROOT / "templates/scripts/archive_scan.py",
 )
-ROUTING_FILES = (
-    ROOT / ".codex/skill-routing.json",
-    ROOT / "templates/skill-routing.json",
-)
-
-
 def load(path: Path, name: str) -> types.ModuleType:
     spec = importlib.util.spec_from_file_location(name, path)
     assert spec is not None and spec.loader is not None
@@ -97,36 +90,80 @@ class SkillRuntimeEfficiencyTests(unittest.TestCase):
         for path in ARCHIVE_SCANS[1:]:
             self.assertEqual(archive, path.read_bytes())
 
-    def test_routing_has_main_fast_paths_and_bounded_fallbacks(self) -> None:
-        for path in ROUTING_FILES:
-            with self.subTest(path=path):
-                routing = json.loads(path.read_text(encoding="utf-8"))
-                by_skill: dict[str, list[dict[str, str]]] = {}
-                for route in routing["skills"]:
-                    by_skill.setdefault(route["skill"], []).append(route)
-                for skill in ("archive-scan", "find-doc", "find-memory", "todo"):
-                    agents = {route["agent"] for route in by_skill[skill]}
-                    self.assertEqual(agents, {"main", "light-explorer"})
-                self.assertNotIn(
-                    "light-explorer",
-                    {route["agent"] for route in by_skill["debate"]},
-                )
-                self.assertTrue(all(
-                    "only" in route["root_must_do"]
-                    for skill in ("archive-scan", "find-doc", "find-memory", "todo")
-                    for route in by_skill[skill]
-                    if route["agent"] == "light-explorer"
-                ))
-
-    def test_memory_skills_forbid_manual_or_duplicate_index_updates(self) -> None:
+    def test_summary_and_todo_are_native_memory_read_write_free(self) -> None:
         todo = (ROOT / "skills/todo/SKILL.md").read_text(encoding="utf-8")
-        summary = (ROOT / "skills/summary/SKILL.md").read_text(encoding="utf-8")
-        deep = (ROOT / "skills/summary/references/deep-steps.md").read_text(
-            encoding="utf-8"
-        )
-        self.assertIn("禁止手工编辑 `MEMORY.md`", todo)
-        self.assertIn("禁止再次单独运行 `memory_rebuild_index.py`", summary)
-        self.assertIn("writer 已返回成功 `rebuild_command` 时复用该收据", deep)
+        summary_files = [ROOT / "skills/summary/SKILL.md"]
+        summary_files.extend(sorted((ROOT / "skills/summary/references").glob("*.md")))
+        summary = "\n".join(path.read_text(encoding="utf-8") for path in summary_files)
+        combined = summary + "\n" + todo
+
+        self.assertIn("禁止创建、更新、移动或删除项目 `.codex/memory/`", summary)
+        self.assertIn("禁止直接写入 Codex 原生 `~/.codex/memories/`", summary)
+        self.assertIn("禁止创建、读取、更新、移动或删除项目 `.codex/memory/`", todo)
+        self.assertIn("禁止直接写入或把内容路由到 Codex 原生", todo)
+        for retired_runtime in (
+            "project_memory_writer.py",
+            "memory_rebuild_index.py",
+            "memory_lint.py",
+            "MEMORY_COLD.md",
+        ):
+            self.assertNotIn(retired_runtime, combined)
+
+    def test_find_doc_does_not_route_to_project_or_native_memory(self) -> None:
+        find_doc_root = ROOT / "skills/find-doc"
+        files = [find_doc_root / "SKILL.md"]
+        files.extend(sorted((find_doc_root / "references").glob("*.md")))
+        content = "\n".join(path.read_text(encoding="utf-8") for path in files)
+
+        self.assertIn("不扫描源代码、项目 Memory 或原生 Memory", content)
+        self.assertIn("禁止扫描源代码、项目 `.codex/memory/`", content)
+        for retired_route in (
+            "相关 memory",
+            "memory 索引",
+            "entries from Path D",
+            "Path E",
+        ):
+            self.assertNotIn(retired_route, content)
+
+    def test_confirm_is_the_only_scale_budget_contract_owner(self) -> None:
+        skill_text = {
+            path.parent.name: path.read_text(encoding="utf-8")
+            for path in (ROOT / "skills").glob("*/SKILL.md")
+        }
+        for marker in (
+            "20 分钟 / 8k 新增 token",
+            "45 分钟 / 20k 新增 token",
+            "平台没有可靠 token 计量器",
+            "验证轮次统一口径",
+        ):
+            owners = [name for name, text in skill_text.items() if marker in text]
+            self.assertEqual(owners, ["confirm"], marker)
+
+        develop = skill_text["develop"]
+        self.assertIn("读取并应用 `confirm` 的“规模与预算硬闸”", develop)
+        for path_name in ("S 级直接路径", "M 级精简路径", "L 级完整路径"):
+            self.assertIn(path_name, develop)
+
+    def test_collab_is_the_only_parallel_execution_contract_owner(self) -> None:
+        collab = (ROOT / "skills/collab/SKILL.md").read_text(encoding="utf-8")
+        develop_entry = (ROOT / "skills/develop/SKILL.md").read_text(encoding="utf-8")
+        agent_execution = (
+            ROOT / "skills/develop/references/agent-execution.md"
+        ).read_text(encoding="utf-8")
+        develop = develop_entry + "\n" + agent_execution
+
+        self.assertIn("并行研读、拆分确认、执行分派、串联和独立验证机制的唯一 owner", collab)
+        for parallel_rule in (
+            "单任务控制在 3-5 个文件",
+            "同一并行组同时启动多个实例",
+            "禁止同一并行组的 agent 修改同一文件",
+        ):
+            self.assertIn(parallel_rule, collab)
+            self.assertNotIn(parallel_rule, develop)
+
+        self.assertIn("完整交给 `collab`", agent_execution)
+        self.assertIn("直接复用 `collab` 的独立 review 收据", agent_execution)
+        self.assertNotIn("不得重新走其用户确认闸", develop)
 
 
 if __name__ == "__main__":

@@ -1,5 +1,7 @@
 ---
-status: confirmed
+lifecycle: superseded
+validation_status: verified
+superseded_by: ../project-memory-retirement/requirements_2026-08-30_project-memory-retirement.md
 topic: memory-rule-organization
 created: 2026-07-25
 source: "$confirm：下游项目 memory / rule 组织与渐进加载"

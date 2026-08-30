@@ -36,27 +36,18 @@ RUNTIME_ROUTES = {
     ),
     "pre-edit": (
         "hooks/cross_project_write_guard.py", "hooks/user_config_write_guard.py",
-        "hooks/memory_dup_check.py",
     ),
-    "pre-allow": ("hooks/allow_memory_write.py",),
     "post-encoding": ("hooks/encoding_check.py",),
-    "post-memory": ("scripts/memory_rebuild_index.py", "hooks/memory_lint.py"),
     "post-edit": (
         "hooks/instruction_source_check.py", "hooks/requirements_check.py",
         "hooks/cargo_default_run_check.py", "hooks/fallback_smell_check.py",
     ),
     "post-shell": ("hooks/test_receipt.py",),
-    "post-read": ("scripts/memory_router.py",),
-    "user-prompt": (
-        "scripts/memory_router.py",
-        "hooks/show_state.py", "hooks/clarify_reminder.py", "hooks/focus_reminder.py",
-    ),
     "post-compact": ("hooks/session_snapshot.py",),
     "stop": ("hooks/session_snapshot.py",),
     "session-before": (
         "hooks/config_health_check.py",
         "hooks/enforce_no_effortlevel.py", "hooks/githooks_path_check.py",
-        "scripts/memory_rebuild_index.py", "scripts/memory_context.py",
     ),
     "session-after": (
         "hooks/show_state.py", "hooks/skill_sync_check.py",
@@ -267,47 +258,21 @@ def _pre_tool(payload: dict, raw: bytes) -> int:
             if result.returncode:
                 return _finish("PreToolUse", output, result.returncode)
 
-    # An allow decision is safe only when the tool affects one memory Markdown
-    # file.  Mixed patches keep Codex's default approval boundary.
-    if len(edits) == 1:
-        allow = _run(RUNTIME_ROUTES["pre-allow"][0], edits[0][2])
-        _emit(allow, output)
-        if allow.returncode:
-            return _finish("PreToolUse", output, allow.returncode)
     return _finish("PreToolUse", output)
 
 
 def _post_edit(payload: dict) -> int:
     edits = _virtual_edit_payloads(payload)
     output = _new_output()
-    memory_payload: bytes | None = None
-    for _name, virtual, encoded in edits:
-        path = str(_tool_input(virtual).get("file_path") or "").replace("\\", "/")
+    for _name, _virtual, encoded in edits:
         encoding = _run(RUNTIME_ROUTES["post-encoding"][0], encoded)
         _emit(encoding, output)
         if encoding.returncode:
             print(
-                "[hook-dispatch] encoding_check failed; dependent memory checks skipped.",
+                "[hook-dispatch] encoding_check failed; dependent edit checks skipped.",
                 file=sys.stderr,
             )
             return _finish("PostToolUse", output, encoding.returncode)
-        if ".codex/memory/" in "/" + path.lstrip("/") and memory_payload is None:
-            memory_payload = encoded
-
-    if memory_payload is not None:
-        rebuild = _run(RUNTIME_ROUTES["post-memory"][0], memory_payload, "--from-hook")
-        _emit(rebuild, output)
-        if rebuild.returncode:
-            print(
-                f"[hook-dispatch] memory_rebuild_index failed (exit {rebuild.returncode}); "
-                "memory_lint skipped to avoid checking a stale index.",
-                file=sys.stderr,
-            )
-            return _finish("PostToolUse", output, rebuild.returncode)
-        lint = _run(RUNTIME_ROUTES["post-memory"][1], memory_payload)
-        _emit(lint, output)
-        if lint.returncode:
-            return _finish("PostToolUse", output, lint.returncode)
     for _name, _virtual, encoded in edits:
         for relative in RUNTIME_ROUTES["post-edit"]:
             extra = ("--post-edit",) if relative == "hooks/instruction_source_check.py" else ()
@@ -321,19 +286,10 @@ def _post_edit(payload: dict) -> int:
 def _session_start(raw: bytes) -> int:
     output = _new_output()
     first_failure = 0
-    rebuild_failed = False
     for relative in RUNTIME_ROUTES["session-before"]:
-        if relative == "scripts/memory_context.py" and rebuild_failed:
-            print(
-                "[hook-dispatch] memory_context skipped because index rebuild failed.",
-                file=sys.stderr,
-            )
-            continue
         result = _run(relative, raw)
         _emit(result, output)
         if result.returncode:
-            if relative == "scripts/memory_rebuild_index.py":
-                rebuild_failed = True
             if not first_failure:
                 first_failure = result.returncode
             print(f"[hook-dispatch] SessionStart step failed: {relative}", file=sys.stderr)
@@ -372,21 +328,16 @@ def main(version_info: object = sys.version_info) -> int:
     if event == "post-edit":
         return _post_edit(payload)
     route_args = {
-        ("post-read", "scripts/memory_router.py"): ("record-read",),
-        ("user-prompt", "scripts/memory_router.py"): ("route",),
-        ("user-prompt", "hooks/show_state.py"): ("prompt-state",),
         ("post-compact", "hooks/session_snapshot.py"): ("post-compact",),
         ("stop", "hooks/session_snapshot.py"): ("stop",),
     }
     if event == "session-start":
         return _session_start(raw)
-    if event not in {"post-shell", "post-read", "user-prompt", "post-compact", "stop"}:
+    if event not in {"post-shell", "post-compact", "stop"}:
         print(f"unknown hook event route: {event}", file=sys.stderr)
         return 2
     event_names = {
         "post-shell": "PostToolUse",
-        "post-read": "PostToolUse",
-        "user-prompt": "UserPromptSubmit",
         "post-compact": "PostCompact",
         "stop": "Stop",
     }

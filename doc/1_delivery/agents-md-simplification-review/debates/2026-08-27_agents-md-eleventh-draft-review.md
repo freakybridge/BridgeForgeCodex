@@ -50,3 +50,11 @@
 - 后续核对确认 `$summary` 验收模式仍保留 Claude 式 Markdown `paths:` Rule 生成分支；该分支在 Codex 中无原生加载语义，必须改为根/嵌套 `AGENTS.md`、Hook/测试、`.rules` 命令权限与 Memory/文档五类路由。
 - 下游只读抽查确认：StratusAgent 的 21 个和 CausisRiskSuite 的 6 个 `.codex/rules/*.md` 都不是 Codex 原生命令 Rule；两者目前仅靠根 `AGENTS.md` 显式读取索引软路由。BridgePersonalAssist 已无该目录。
 - 用户决定把“下游旧 Rule 逐文件迁移”和“Summary Skill 原生路由”纳入 V11 实施范围；本轮只更新 proposal 和交接状态，不写真实下游。
+
+## 2026-08-29 有限边界独立收口
+
+- 用户明确把停止条件收敛为：一名新的独立审计者判断当前 V11、完整候选镜像和卡点 #1/#2 是否存在阻止进入 IA 系列的 P0/P1；不重开无限 debate，也不设计 V12。
+- 独立首审发现 1 个 P1：旧 `merge/region/seed` 资产与 incoming `whole` 使用同一 target 时，planner 只记录旧 target 集合，可能误列 safe 并静默删除项目自有内容。
+- 候选同步器改为保留 `target -> asset`，并用统一判定区分真正 whole-owned 与部分所有权；新增三种跨策略 risk、未确认零写、confirmed apply、CLI 和二次 no-op 回归。
+- 修复后候选同步测试 55/55、下游 fixture 3/3、manifest `--check`、结构门、proposal validator 与 `git diff --check` 均通过。
+- 同一独立审计者有限复审结论为 `PASS`：无 P0/P1，允许进入 IA-01～IA-14。此结论不代表真实骨架替换、真实下游、runtime、release 或用户试读已经完成。

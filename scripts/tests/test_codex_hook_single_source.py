@@ -246,23 +246,16 @@ class HookSingleSourceTest(unittest.TestCase):
             (ROOT / ".codex/hooks.json").read_text(encoding="utf-8")
         )
         self.assertEqual(template_hooks, dogfood_hooks)
-        user_prompt = json.dumps(
-            template_hooks["hooks"]["UserPromptSubmit"],
-            ensure_ascii=False,
-        ).casefold()
-        self.assertNotIn("context budget", user_prompt)
-        self.assertIn(
-            "repository state, clarification, and focus signals",
-            user_prompt,
-        )
+        self.assertNotIn("UserPromptSubmit", template_hooks["hooks"])
 
         dispatcher = load_module(
             TEMPLATE / "hooks" / "hook_dispatcher.py",
             "hook_dispatcher_without_context_budget",
         )
-        self.assertNotIn(
-            "hooks/context_warning.py",
-            dispatcher.RUNTIME_ROUTES["user-prompt"],
+        self.assertNotIn("user-prompt", dispatcher.RUNTIME_ROUTES)
+        self.assertIn(
+            "hooks/show_state.py",
+            dispatcher.RUNTIME_ROUTES["session-after"],
         )
         contract = json.loads(
             (TEMPLATE / "managed-skeleton.json").read_text(encoding="utf-8")
@@ -271,6 +264,50 @@ class HookSingleSourceTest(unittest.TestCase):
             asset["id"] == "codex.hook.context-warning"
             for asset in contract["assets"]
         ))
+        self.assertFalse(any(
+            asset["id"] == "codex.hook.focus-reminder"
+            for asset in contract["assets"]
+        ))
+        self.assertFalse((TEMPLATE / "hooks" / "focus_reminder.py").exists())
+        self.assertFalse((ROOT / ".codex" / "hooks" / "focus_reminder.py").exists())
+        focus_skill = (ROOT / "skills" / "focus" / "SKILL.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("没有自动 Hook 捕获、更新或提醒", focus_skill)
+        self.assertIn("只在用户显式调用时", focus_skill)
+
+    def test_project_memory_runtime_is_absent_from_all_active_owners(self) -> None:
+        retired_hooks = (
+            "allow_memory_write.py", "memory_dup_check.py", "memory_lint.py",
+        )
+        retired_scripts = (
+            "memory_context.py", "memory_rebuild_index.py", "memory_router.py",
+            "memory_search.py", "memory_usage.py",
+            "project_memory_recovery.py", "project_memory_writer.py",
+        )
+        for base in (TEMPLATE, ROOT / ".codex"):
+            self.assertTrue(all(
+                not (base / "hooks" / name).exists()
+                for name in retired_hooks
+            ))
+            self.assertTrue(all(
+                not (base / "scripts" / name).exists()
+                for name in retired_scripts
+            ))
+        self.assertEqual(
+            list((ROOT / "templates" / "memory").glob("*")),
+            [],
+        )
+        self.assertEqual(list((ROOT / "skills" / "find-memory").glob("*")), [])
+        contract_text = (
+            ROOT / "templates" / "managed-skeleton.json"
+        ).read_text(encoding="utf-8")
+        manifest_text = (
+            ROOT / "bridgeforge-codex-manifest.json"
+        ).read_text(encoding="utf-8")
+        for name in (*retired_hooks, *retired_scripts):
+            self.assertNotIn(name, contract_text)
+        self.assertNotIn('"name": "find-memory"', manifest_text)
 
     def test_template_registration_is_single_source_and_git_rooted(self) -> None:
         settings = json.loads((TEMPLATE / "settings.json").read_text(encoding="utf-8"))
@@ -284,7 +321,7 @@ class HookSingleSourceTest(unittest.TestCase):
             for block in blocks:
                 for hook in block.get("hooks", []):
                     commands.append(hook)
-        self.assertEqual(len(commands), 8)
+        self.assertEqual(len(commands), 6)
         for hook in commands:
             self.assertIn("git rev-parse --show-toplevel", hook["command"])
             self.assertIn("git rev-parse --show-toplevel", hook["commandWindows"])
@@ -347,7 +384,7 @@ class HookSingleSourceTest(unittest.TestCase):
         )
         self.assertEqual(completed.returncode, 2, completed.stderr)
 
-    def test_dispatcher_orders_memory_chain_and_skips_lint_after_rebuild_failure(self) -> None:
+    def test_dispatcher_never_runs_project_memory_runtime(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)
             host = root / ".codex"
@@ -357,13 +394,11 @@ class HookSingleSourceTest(unittest.TestCase):
             project_python = prepare_dispatcher_runtime(root)
             log = root / "order.log"
             stub = (
-                "import os,sys\n"
+                "import os\n"
                 f"open({str(log)!r}, 'a', encoding='utf-8').write(os.path.basename(__file__)+'\\n')\n"
-                "sys.exit(int(os.environ.get('STUB_EXIT', '0')) if os.path.basename(__file__) == 'memory_rebuild_index.py' else 0)\n"
             )
             hook_names = (
                 "encoding_check.py", "instruction_source_check.py",
-                "rule_index_check.py", "rule_size_check.py",
                 "requirements_check.py", "cargo_default_run_check.py",
                 "fallback_smell_check.py", "memory_lint.py",
             )
@@ -377,25 +412,9 @@ class HookSingleSourceTest(unittest.TestCase):
             result = run([str(project_python), str(host / "hooks" / "hook_dispatcher.py"), "post-edit"], root, payload)
             self.assertEqual(result.returncode, 0, result.stderr)
             order = log.read_text(encoding="utf-8").splitlines()
-            self.assertLess(order.index("encoding_check.py"), order.index("memory_rebuild_index.py"))
-            self.assertLess(order.index("memory_rebuild_index.py"), order.index("memory_lint.py"))
-
-            log.write_text("", encoding="utf-8")
-            env = dict(os.environ)
-            env.update(PYTHONUTF8="1", STUB_EXIT="7")
-            failed = subprocess.run(
-                [str(project_python), str(host / "hooks" / "hook_dispatcher.py"), "post-edit"],
-                cwd=root,
-                input=json.dumps(payload),
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                env=env,
-                check=False,
-            )
-            self.assertEqual(failed.returncode, 7)
-            self.assertIn("memory_lint skipped", failed.stderr)
-            self.assertNotIn("memory_lint.py", log.read_text(encoding="utf-8"))
+            self.assertEqual(order[0], "encoding_check.py")
+            self.assertNotIn("memory_rebuild_index.py", order)
+            self.assertNotIn("memory_lint.py", order)
 
     def test_pre_edit_decisions_are_serial_and_mixed_patch_is_not_auto_allowed(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
@@ -409,35 +428,29 @@ class HookSingleSourceTest(unittest.TestCase):
                 "import os\n"
                 f"open({str(log)!r}, 'a', encoding='utf-8').write(os.path.basename(__file__)+'\\n')\n"
             )
-            for name in ("cross_project_write_guard.py", "user_config_write_guard.py", "memory_dup_check.py"):
+            for name in ("cross_project_write_guard.py", "user_config_write_guard.py"):
                 (hooks / name).write_text(ordinary, encoding="utf-8")
-            (hooks / "memory_dup_check.py").write_text(ordinary + "print('[memory-dup] similar topic')\n", encoding="utf-8")
-            (hooks / "allow_memory_write.py").write_text(
-                ordinary + "print('{\"hookSpecificOutput\":{\"permissionDecision\":\"allow\"}}')\n",
-                encoding="utf-8",
-            )
             single = {"tool_name": "apply_patch", "tool_input": {"command": "*** Add File: .codex/memory/topic.md"}}
             allowed = run([str(project_python), str(hooks / "hook_dispatcher.py"), "pre-tool"], root, single)
             self.assertEqual(allowed.returncode, 0, allowed.stderr)
             self.assertEqual(
                 log.read_text(encoding="utf-8").splitlines(),
-                ["cross_project_write_guard.py", "user_config_write_guard.py", "memory_dup_check.py", "allow_memory_write.py"],
+                ["cross_project_write_guard.py", "user_config_write_guard.py"],
             )
-            allowed_output = json.loads(allowed.stdout)
-            specific = allowed_output["hookSpecificOutput"]
-            self.assertEqual(specific["hookEventName"], "PreToolUse")
-            self.assertEqual(specific["permissionDecision"], "allow")
-            self.assertIn("[memory-dup]", specific["additionalContext"])
-            self.assertEqual(allowed.stdout.count("hookSpecificOutput"), 1)
+            self.assertEqual(allowed.stdout, "")
 
             log.write_text("", encoding="utf-8")
             mixed = {"tool_name": "apply_patch", "tool_input": {"command": "*** Add File: .codex/memory/topic.md\n*** Update File: .codex/hooks.json"}}
             default_boundary = run([str(project_python), str(hooks / "hook_dispatcher.py"), "pre-tool"], root, mixed)
             self.assertEqual(default_boundary.returncode, 0, default_boundary.stderr)
-            self.assertNotIn("allow_memory_write.py", log.read_text(encoding="utf-8"))
-            mixed_output = json.loads(default_boundary.stdout)
-            self.assertNotIn("permissionDecision", mixed_output["hookSpecificOutput"])
-            self.assertIn("additionalContext", mixed_output["hookSpecificOutput"])
+            self.assertEqual(
+                log.read_text(encoding="utf-8").splitlines(),
+                [
+                    "cross_project_write_guard.py", "user_config_write_guard.py",
+                    "cross_project_write_guard.py", "user_config_write_guard.py",
+                ],
+            )
+            self.assertEqual(default_boundary.stdout, "")
 
     def test_move_to_is_checked_as_a_write_target(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
@@ -449,9 +462,6 @@ class HookSingleSourceTest(unittest.TestCase):
             for name in ("hook_dispatcher.py", "cross_project_write_guard.py", "user_config_write_guard.py"):
                 shutil.copy2(TEMPLATE / "hooks" / name, hooks / name)
             project_python = prepare_dispatcher_runtime(root)
-            for name in ("memory_dup_check.py", "allow_memory_write.py"):
-                (hooks / name).write_text("raise SystemExit(0)\n", encoding="utf-8")
-
             outside = root.parent / "outside-move.md"
             payload = {
                 "tool_name": "apply_patch",
@@ -536,25 +546,23 @@ class HookSingleSourceTest(unittest.TestCase):
                 "import os,sys\n"
                 f"open({str(log)!r}, 'a', encoding='utf-8').write(os.path.basename(__file__)+'\\n')\n"
                 "print('[session-step] '+os.path.basename(__file__))\n"
-                "sys.exit(7 if os.path.basename(__file__) == 'memory_context.py' else 0)\n"
+                "sys.exit(7 if os.path.basename(__file__) == 'config_health_check.py' else 0)\n"
             )
             for name in (
                 "config_health_check.py", "enforce_no_effortlevel.py",
                 "githooks_path_check.py", "show_state.py", "skill_sync_check.py",
             ):
                 (hooks / name).write_text(stub, encoding="utf-8")
-            (scripts / "memory_rebuild_index.py").write_text(stub, encoding="utf-8")
-            (scripts / "memory_context.py").write_text(stub, encoding="utf-8")
             result = run([str(project_python), str(hooks / "hook_dispatcher.py"), "session-start"], root, {})
             self.assertEqual(result.returncode, 7)
             order = log.read_text(encoding="utf-8").splitlines()
-            self.assertEqual(len(order), 7)
-            self.assertLess(order.index("memory_rebuild_index.py"), order.index("show_state.py"))
+            self.assertEqual(len(order), 5)
+            self.assertLess(order.index("config_health_check.py"), order.index("show_state.py"))
             output = json.loads(result.stdout)
             self.assertEqual(output["hookSpecificOutput"]["hookEventName"], "SessionStart")
             self.assertIn("show_state.py", output["hookSpecificOutput"]["additionalContext"])
 
-    def test_session_start_never_injects_stale_context_after_rebuild_failure(self) -> None:
+    def test_session_start_has_no_project_memory_steps(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)
             hooks = root / ".codex" / "hooks"
@@ -567,22 +575,80 @@ class HookSingleSourceTest(unittest.TestCase):
             stub = (
                 "import os,sys\n"
                 f"open({str(log)!r}, 'a', encoding='utf-8').write(os.path.basename(__file__)+'\\n')\n"
-                "sys.exit(9 if os.path.basename(__file__) == 'memory_rebuild_index.py' else 0)\n"
             )
             for name in (
                 "config_health_check.py", "enforce_no_effortlevel.py",
                 "githooks_path_check.py", "show_state.py", "skill_sync_check.py",
             ):
                 (hooks / name).write_text(stub, encoding="utf-8")
-            (scripts / "memory_rebuild_index.py").write_text(stub, encoding="utf-8")
-            (scripts / "memory_context.py").write_text(stub, encoding="utf-8")
             result = run([str(project_python), str(hooks / "hook_dispatcher.py"), "session-start"], root, {})
-            self.assertEqual(result.returncode, 9)
+            self.assertEqual(result.returncode, 0)
             order = log.read_text(encoding="utf-8").splitlines()
-            self.assertIn("memory_rebuild_index.py", order)
+            self.assertEqual(len(order), 5)
+            self.assertNotIn("memory_rebuild_index.py", order)
             self.assertNotIn("memory_context.py", order)
-            self.assertIn("memory_context skipped", result.stderr)
             self.assertIn("show_state.py", order)
+
+    def test_two_projects_and_sessions_do_not_recall_legacy_memory(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            base = Path(raw)
+            sentinels = {
+                "project-a": "SESSION_A_PROJECT_A_ONLY",
+                "project-b": "SESSION_B_PROJECT_B_ONLY",
+            }
+            outputs: list[str] = []
+            for project_name, sentinel in sentinels.items():
+                project = base / project_name
+                project.mkdir()
+                legacy = project / ".codex" / "memory" / "legacy.md"
+                legacy.parent.mkdir(parents=True)
+                legacy.write_text(sentinel + "\n", encoding="utf-8")
+                project_python = prepare_dispatcher_runtime(project)
+                dispatcher = project / ".codex" / "hooks" / "hook_dispatcher.py"
+                shutil.copy2(
+                    TEMPLATE / "hooks" / "hook_dispatcher.py",
+                    dispatcher,
+                )
+                log = project / "route.log"
+                route_stub = (
+                    "import os\n"
+                    f"open({str(log)!r}, 'a', encoding='utf-8').write("
+                    "os.path.basename(__file__)+'\\n')\n"
+                )
+                module = load_module(
+                    TEMPLATE / "hooks" / "hook_dispatcher.py",
+                    f"dispatcher_cross_project_{project_name}",
+                )
+                for relative in {
+                    item
+                    for targets in module.RUNTIME_ROUTES.values()
+                    for item in targets
+                }:
+                    (project / ".codex" / Path(relative)).write_text(
+                        route_stub,
+                        encoding="utf-8",
+                    )
+                prompt = run(
+                    [str(project_python), str(dispatcher), "user-prompt"],
+                    project,
+                    {"prompt": "回顾上一轮", "session_id": "first"},
+                )
+                self.assertEqual(prompt.returncode, 2, prompt.stderr)
+                self.assertIn("unknown hook event route", prompt.stderr)
+                started = run(
+                    [str(project_python), str(dispatcher), "session-start"],
+                    project,
+                    {"session_id": "third"},
+                )
+                self.assertEqual(started.returncode, 0, started.stderr)
+                outputs.append(started.stdout)
+                routes = log.read_text(encoding="utf-8").splitlines()
+                self.assertNotIn("focus_reminder.py", routes)
+                self.assertNotIn("memory_router.py", routes)
+                self.assertNotIn("memory_context.py", routes)
+            combined = "\n".join(outputs)
+            for sentinel in sentinels.values():
+                self.assertNotIn(sentinel, combined)
 
     def test_strict_health_gate_rejects_both_illegal_sources(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
@@ -611,10 +677,6 @@ class HookSingleSourceTest(unittest.TestCase):
             shutil.copy2(
                 TEMPLATE / "hooks" / "config_health_check.py",
                 codex / "hooks" / "config_health_check.py",
-            )
-            shutil.copy2(
-                TEMPLATE / "hooks" / "memory_lint.py",
-                codex / "hooks" / "memory_lint.py",
             )
             shutil.copy2(
                 TEMPLATE / "scripts" / "hook_config_policy.py",
@@ -688,10 +750,6 @@ class HookSingleSourceTest(unittest.TestCase):
                 shutil.copy2(
                     TEMPLATE / "hooks" / "config_health_check.py",
                     codex / "hooks" / "config_health_check.py",
-                )
-                shutil.copy2(
-                    TEMPLATE / "hooks" / "memory_lint.py",
-                    codex / "hooks" / "memory_lint.py",
                 )
                 shutil.copy2(
                     TEMPLATE / "scripts" / "hook_config_policy.py",

@@ -1,3 +1,8 @@
+---
+lifecycle: active
+validation_status: awaiting_validation
+---
+
 # BridgeForge Batch 双缺陷修复与真实批次恢复确认卡
 
 - 状态：实施、完整回归与独立审计完成，待发布和真实恢复

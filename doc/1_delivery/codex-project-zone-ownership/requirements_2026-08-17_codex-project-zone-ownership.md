@@ -1,5 +1,6 @@
 ---
-status: completed
+lifecycle: completed
+validation_status: verified
 date: 2026-08-17
 topic: codex-project-zone-ownership
 source: confirm-via-develop

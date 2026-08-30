@@ -1,5 +1,6 @@
 ---
-status: validating
+lifecycle: active
+validation_status: awaiting_validation
 scale: L
 date: 2026-08-16
 source: $confirm -> $develop

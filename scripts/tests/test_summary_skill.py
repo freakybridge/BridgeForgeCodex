@@ -1,132 +1,118 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import json
 import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 SKILL = ROOT / "skills" / "summary" / "SKILL.md"
-DEEP_STEPS = ROOT / "skills" / "summary" / "references" / "deep-steps.md"
+REFERENCES = ROOT / "skills" / "summary" / "references"
 
 
 class SummarySkillContractTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.skill = SKILL.read_text(encoding="utf-8")
-        cls.deep_steps = DEEP_STEPS.read_text(encoding="utf-8")
-        cls.all_text = cls.skill + "\n" + cls.deep_steps
+        cls.references = {
+            path.name: path.read_text(encoding="utf-8")
+            for path in sorted(REFERENCES.glob("*.md"))
+        }
+        cls.ordinary = cls.references["ordinary-mode.md"]
+        cls.acceptance = cls.references["acceptance-mode.md"]
+        cls.deep_steps = cls.references["deep-steps.md"]
+        cls.all_text = cls.skill + "\n" + "\n".join(cls.references.values())
 
-    def test_codex_memory_route_fails_closed(self) -> None:
+    def test_two_modes_have_distinct_bounded_write_surfaces(self) -> None:
         for marker in (
-            "bridgeforge-codex 只支持 Codex",
-            ".codex/.bridgeforge_codex_version",
-            ".codex/scripts/project_memory_writer.py",
-            ".codex/memory/",
-            ".codex/scripts/memory_rebuild_index.py",
-            ".codex/hooks/memory_lint.py",
-            "writer 能力本身授权受限的项目内",
-            "fail closed",
-            "无参数 `$bridgeforge-codex`",
-            "禁止回退到用户级 memory",
+            "`$summary` | 普通模式 | 零写入",
+            "`$summary 同意验收` | 验收模式",
+            "当前交付既有需求卡或 Bug 的 `lifecycle`",
         ):
             self.assertIn(marker, self.skill)
+        self.assertIn("普通模式只汇总阶段进展", self.ordinary)
+        self.assertIn("零写入", self.ordinary)
+        self.assertIn("只更新当前交付已经存在", self.acceptance)
+        self.assertIn("禁止为了收口新建文档", self.acceptance)
+        self.assertIn("`lifecycle: completed`", self.acceptance)
+        self.assertIn("`validation_status: verified`", self.acceptance)
 
-    def test_topic_has_one_canonical_summary_and_completion_needs_user_acceptance(self) -> None:
+    def test_summary_forbids_project_and_native_memory_writes(self) -> None:
         for marker in (
-            ".codex/memory/topics/<topic>/summary.md",
-            "后续总结只更新该 `summary.md`",
-            "禁止按日期、单次对话、里程碑子项或子任务新增",
-            "试用或明确验收",
-            "不能代替用户验收",
+            "禁止创建、更新、移动或删除项目 `.codex/memory/`",
+            "禁止直接写入 Codex 原生 `~/.codex/memories/`",
+            "禁止调用其 writer、rebuild、lint、检索或统计链",
         ):
             self.assertIn(marker, self.skill)
+        for retired_reference in ("writer-routing.md", "memory-targets.md"):
+            self.assertNotIn(retired_reference, self.references)
+            self.assertFalse((REFERENCES / retired_reference).exists())
 
-    def test_categories_and_metadata_contract_are_preserved(self) -> None:
+    def test_rule_and_hook_candidates_are_suggestions_only(self) -> None:
         for marker in (
-            "`architecture`、`engineering`、`domain`、",
-            "`operations`",
-            "`category` 必须是 `topic`",
-            "`topic: <exact-slug>`",
-            "`status` 只能是 `active`、`completed`、`superseded`",
-            "`description`",
-            "确认前禁止写入、",
+            "完整可见对话",
+            "等待用户采纳；未写入；未实现",
+            "用户在本次调用中同意验收，不等于采纳建议",
+            "其他开发方法单独确认范围、落盘和验证",
         ):
             self.assertIn(marker, self.skill)
-
-    def test_general_memory_requires_a_new_stable_question(self) -> None:
         for marker in (
-            "新的稳定问题门槛",
-            "正例",
-            "网关重连时怎样恢复订阅并避免重复订单",
-            "反例",
-            "今天的断线事故经过",
-            "本次 37 项测试数字",
-            "必须停止写入并用一个单题请求用户裁决",
-        ):
-            self.assertIn(marker, self.skill)
-
-    def test_old_fragments_only_produce_structured_candidates(self) -> None:
-        for marker in (
-            "建议的规范目标文件",
-            "来源文件",
-            "重复结论",
-            "冲突或疑似过时结论",
-            "建议保留内容",
-            "建议删除文件",
-            "只报告候选",
-            "禁止自动合并、删除、移动",
-        ):
-            self.assertIn(marker, self.deep_steps)
-        self.assertIn("交给独立整理任务", self.skill)
-
-    def test_independent_consolidation_short_circuits_before_lint(self) -> None:
-        rebuild = self.deep_steps.index(
-            "`.codex/scripts/memory_rebuild_index.py`"
-        )
-        lint = self.deep_steps.index(
-            "才运行 `.codex/hooks/memory_lint.py`"
-        )
-        self.assertLess(rebuild, lint)
-        for marker in (
-            "bridgeforge-codex 唯一宿主目录 `.codex`",
-            "writer 已返回成功 `rebuild_command` 时复用该收据",
-            "若当前宿主的 `memory_rebuild_index.py` 失败，立即停止",
-            "标记为“跳过”",
-            "继续 lint 或宣称整理成功",
+            "稳定触发条件",
+            "建议承载者",
+            "事实源关系",
+            "误伤风险与验证",
+            "本次建议不是实现授权",
         ):
             self.assertIn(marker, self.deep_steps)
 
-    def test_archive_user_memory_evidence_git_and_runtime_boundaries(self) -> None:
+    def test_acceptance_stays_with_current_delivery(self) -> None:
         for marker in (
-            "请另行调用 $archive-scan",
-            "不执行 `git mv`",
-            "用户级 memory 候选",
-            "只有用户明确批准后才能写入",
-            "不重新运行测试、build、审计",
-            "runtime trust 未验证",
+            "任一必要条件未满足或收据冲突",
+            "其他 topic、Bug 和项目级 TODO 保持不变",
+            "请另行调用 `$archive-scan`",
+            "禁止执行",
+            "`git mv`",
+        ):
+            self.assertIn(marker, self.acceptance)
+        self.assertIn("Rule、AGENTS、Hook、配置和测试始终零写入", self.acceptance)
+
+    def test_evidence_and_git_boundaries_are_preserved(self) -> None:
+        for marker in (
+            "禁止为了总结重新运行测试、build、审计或 smoke",
+            "缺少收据时标记“未验证”",
             "git status",
             "未暂存、未 commit、未 push",
             "$git-sync",
         ):
-            self.assertIn(marker, self.all_text)
-
-    def test_two_modes_have_distinct_and_bounded_write_surfaces(self) -> None:
-        for marker in (
-            "`$summary` | 普通模式",
-            "`$summary 同意验收` | 验收模式",
-            "普通模式禁止修改",
-            "一个当前主 memory + 自动索引",
-            "最多更新一个最相关模块",
-            "其他 topic 与项目级 TODO 不变",
-            "禁止自行创建文档、扩大目录",
-            "不自动归档、不调用 `$archive-scan`",
-        ):
             self.assertIn(marker, self.skill)
 
-    def test_retired_harvest_behavior_is_absent(self) -> None:
-        lowered = self.all_text.lower()
-        for retired_marker in ("harvest-inbox", "harvest candidate", "$harvest"):
-            self.assertNotIn(retired_marker, lowered)
+    def test_entry_is_small_and_routes_every_reference(self) -> None:
+        self.assertLessEqual(len(self.skill.splitlines()), 90)
+        self.assertEqual(
+            set(self.references),
+            {"ordinary-mode.md", "acceptance-mode.md", "deep-steps.md"},
+        )
+        for name in self.references:
+            self.assertIn(f"references/{name}", self.skill)
+
+        manifest = json.loads(
+            (ROOT / "bridgeforge-codex-manifest.json").read_text(encoding="utf-8")
+        )
+        summary = next(
+            item
+            for item in manifest["platforms"]["codex"]["skills"]
+            if item["name"] == "summary"
+        )
+        actual = {
+            path.relative_to(ROOT).as_posix()
+            for path in SKILL.parent.rglob("*")
+            if path.is_file() and "__pycache__" not in path.parts
+        }
+        declared = {item["source"] for item in summary["files"]}
+        self.assertEqual(declared, actual)
+
+    def test_harvest_alias_is_not_reintroduced(self) -> None:
+        self.assertNotIn("harvest", self.all_text.lower())
 
 
 if __name__ == "__main__":
