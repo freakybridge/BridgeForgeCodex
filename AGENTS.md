@@ -50,11 +50,13 @@
 - 下游业务版本必须以项目根 `VERSION` 为唯一事实源；原生 manifest 中的业务版本字段必须由项目发布流程同步，禁止让骨架版本戳代替业务版本。
 - bridgeforge-codex 骨架版本只记录在 `.codex/.bridgeforge_codex_version`，仅允许统一项目同步器修改；业务提交和项目本地定制禁止修改该戳。
 
-### 2.2 Codex 原生 Memory 与 legacy 项目 Memory
+### 2.2 Codex 原生 Memory 与 legacy 项目资产迁移
 
 - Codex 原生 `~/.codex/memories/` 只由官方机制生成和注入；BridgeForge 禁止语义读取、创建、改写或删除。跨电脑同步只把该目录视为不透明整树快照。
+- legacy `.codex/rules/*.md` 不是 Codex 指令源；必须逐源文件确认迁移包，将红线、命令策略、说明和废弃内容分别落到正确资产，禁止改扩展名后冒充 `.rules`。
 - 禁止新建或继续使用项目 `.codex/memory/`，也禁止注入、检索、索引、写入、lint、duplicate、usage 或 `$find-memory` 运行链。
-- 下游既有 `.codex/memory/` 必须作为 legacy 原样保留并报告待迁移；同步器不得直接删除。只有完成逐文件扫描、用户逐项确认和独立清理授权后，才允许在对应项目中迁移并删除。
+- 下游既有 `.codex/memory/` 必须逐源文件确认迁移包；`MEMORY.md`、`MEMORY_COLD.md` 与 `_stats.json` 固定退役，不做语义转换。
+- 全部 legacy Rule / Memory 确认前必须零写入；确认后，新资产、最新基线和已确认源文件删除必须在同一可回滚事务完成。逐文件确认同时构成对应删除授权，禁止再索取独立清理授权或删除未确认资产。
 - `$summary` 只做阶段总结和“同意验收”收口；Rule / Hook 只能提出等待用户采纳的候选，禁止写项目 Memory、直接写原生 Memory、自动写 Rule 或实现 Hook。
 
 ### 2.3 文档管理

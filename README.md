@@ -10,7 +10,7 @@ bridgeforge-codex 让 Codex 在不同项目中使用一致的基础规则、工�
 
 - 为项目安装或更新 `AGENTS.md`、`.codex/`、文档结构和提交前检查等协作设施。
 - 为用户安装 `confirm`、`develop`、`summary`、`git-sync` 等通用 Skills。
-- 更新前先检查现有项目；需要用户决定的保留或删除项会先停下来确认，无法安全判断的冲突直接停止，验证失败则不写入或回滚。
+- 每次以最新正式版为完整基线；旧 Rule / 项目 Memory 逐文件确认迁移，无法安全判断时停止，验证失败则不写入或完整回滚。
 
 bridgeforge-codex 只支持 Windows、Python 3.11+ 和 Codex。
 
@@ -53,12 +53,12 @@ $bridgeforge-codex
 - `.codex/hooks/` 与 pre-commit：执行可机器判定的安全检查。
 - `doc/`：以 `doc/README.md` 为索引的五层文档结构。
 - 项目自己的嵌套 `AGENTS.md`、项目规则和明确保留的定制资产仍归项目所有。
-- 旧项目已有的 `.codex/memory/`：只作为待迁移的 legacy 资产原样保留，不再安装或运行项目 Memory 链。
+- 旧项目的 `.codex/rules/*.md` 与 `.codex/memory/`：不再运行；`$bridgeforge-codex` 逐文件确认后迁往正确资产并在同一事务退役旧源。
 
 ## 更新时怎样保护项目
 
 - 新项目直接安装当前骨架。
-- 已有项目先生成更新计划；需要保留或删除项目资产时逐项询问，不会静默替用户做选择。
+- 已有项目直接面向最新完整基线生成计划；每个 legacy Rule / Memory 源只确认一次，确认前零写入，不会静默替用户做选择。
 - 公共区被人工修改、版本戳缺失或冲突、当前基线损坏时，整轮更新在写盘前停止。
 
 不同项目版本的具体处理方式见[安装与迁移说明](INSTALL.md#项目升级与异常诊断)；内部同步

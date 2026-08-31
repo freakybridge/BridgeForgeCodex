@@ -49,6 +49,8 @@ def cli(
     apply_fingerprint: str | None = None,
     preserve: tuple[str, ...] = (),
     delete: tuple[str, ...] = (),
+    migration_manifest: dict[str, object] | None = None,
+    confirmed_asset_migration: bool = False,
     allow_blocked: bool = False,
 ) -> dict[str, object]:
     command = [
@@ -73,9 +75,21 @@ def cli(
                 command.extend(["--preserve-project-asset", item])
             for item in delete:
                 command.extend(["--delete-project-asset", item])
+        if confirmed_asset_migration:
+            command.extend([
+                "--confirmed-risk",
+                "--confirmed-asset-migration",
+            ])
+    if migration_manifest is not None:
+        command.extend(["--asset-migration-manifest", "-"])
     result = subprocess.run(
         command,
         cwd=project,
+        input=(
+            json.dumps(migration_manifest, ensure_ascii=False)
+            if migration_manifest is not None
+            else None
+        ),
         capture_output=True,
         text=True,
         encoding="utf-8",
@@ -352,6 +366,101 @@ def project_skill_agent_routing_gap_check(base: Path) -> dict[str, object]:
     }
 
 
+def project_asset_migration_check(base: Path) -> dict[str, object]:
+    project = base / "project-asset-migration"
+    project.mkdir()
+    python = project_python(project)
+    initial = cli(python, project, "init")
+    cli(
+        python,
+        project,
+        "init",
+        apply_fingerprint=str(initial["aggregate_fingerprint"]),
+    )
+    rule = project / ".codex" / "rules" / "legacy.md"
+    memory = project / ".codex" / "memory"
+    rule.parent.mkdir(parents=True, exist_ok=True)
+    memory.mkdir(parents=True)
+    rule.write_text("# legacy rule\n", encoding="utf-8")
+    (memory / "note.md").write_text("# legacy note\n", encoding="utf-8")
+    (memory / "MEMORY.md").write_text("# derived\n", encoding="utf-8")
+    awaiting = cli(python, project, "update")
+    before = {
+        path.relative_to(project).as_posix(): path.read_bytes()
+        for path in project.rglob("*")
+        if path.is_file()
+    }
+    records = []
+    for source in awaiting["asset_migration"]["sources"]:
+        fixed = bool(source["fixed_retirement"])
+        decisions = []
+        if source["kind"] == "legacy-rule":
+            decisions.append({
+                "target": "src/AGENTS.md",
+                "asset_type": "agents",
+                "reason": "fixture confirmed project red line",
+                "target_before_sha256": None,
+                "content_utf8": "# migrated project rule\n",
+            })
+        elif source["kind"] == "legacy-memory":
+            decisions.append({
+                "target": "doc/3_reference/migrated-memory.md",
+                "asset_type": "documentation",
+                "reason": "fixture confirmed retained rationale",
+                "target_before_sha256": None,
+                "content_utf8": "# migrated project memory\n",
+            })
+        records.append({
+            "asset_id": source["asset_id"],
+            "source_path": source["source_path"],
+            "source_sha256": source["source_sha256"],
+            "kind": source["kind"],
+            "confirmed": True,
+            "retire_source": True,
+            "summary": "fixture complete package",
+            "retirement_reason": (
+                "fixed-derived-retirement"
+                if fixed
+                else "fixture user confirmed transactional retirement"
+            ),
+            "decisions": decisions,
+            "discarded": [],
+        })
+    manifest = {"schema_version": 1, "sources": records}
+    planned = cli(
+        python,
+        project,
+        "update",
+        migration_manifest=manifest,
+    )
+    unchanged_after_plans = all(
+        path.is_file() and path.read_bytes() == payload
+        for relative, payload in before.items()
+        for path in (project / relative,)
+    )
+    receipt = cli(
+        python,
+        project,
+        "update",
+        apply_fingerprint=str(planned["aggregate_fingerprint"]),
+        migration_manifest=manifest,
+        confirmed_asset_migration=True,
+    )
+    return {
+        "name": "project-asset-migration-transaction",
+        "ok": (
+            awaiting["asset_migration"]["status"] == "awaiting-confirmation"
+            and awaiting["asset_migration"]["source_count"] == 3
+            and unchanged_after_plans
+            and receipt["status"] == "completed"
+            and not (project / ".codex" / "memory").exists()
+            and not rule.exists()
+            and (project / "src" / "AGENTS.md").is_file()
+            and (project / "doc" / "3_reference" / "migrated-memory.md").is_file()
+        ),
+    }
+
+
 def main() -> int:
     with tempfile.TemporaryDirectory() as raw:
         base = Path(raw)
@@ -360,6 +469,7 @@ def main() -> int:
             rebuild_check(base),
             drift_check(base),
             project_skill_agent_routing_gap_check(base),
+            project_asset_migration_check(base),
         ]
     status = "passed" if all(bool(item["ok"]) for item in checks) else "failed"
     print(json.dumps({"status": status, "checks": checks}, ensure_ascii=False, indent=2))

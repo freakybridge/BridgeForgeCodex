@@ -19,7 +19,7 @@ function Write-HookReceipt {
     if (-not (Test-Path -LiteralPath $hookState -PathType Container)) {
         return
     }
-    $line = "handler_revision=3 event=$HookEvent stage=$Stage utc=$([DateTime]::UtcNow.ToString('o'))"
+    $line = "handler_revision=4 event=$HookEvent stage=$Stage utc=$([DateTime]::UtcNow.ToString('o'))"
     $log = Join-Path $hookState "hook-dispatch.log"
     try {
         [IO.File]::AppendAllText(

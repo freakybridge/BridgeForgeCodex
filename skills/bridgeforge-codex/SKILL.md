@@ -28,12 +28,12 @@ $BRIDGEFORGE_CODEX_HOME = Join-Path $env:USERPROFILE ".bridgeforge-codex"
 
 在创建 `.venv` 或运行 Python 前，只读检查版本戳并锁定唯一 `$MODE`：
 
-1. `.codex/.bridgeforge_codex_version` 与 `.codex/.bridgeforge_version` 双戳、非法戳，或已有骨架资产却没有可识别戳：零写阻断。
-2. 恰好一个合法戳且版本 `<1.4.31`：`adopt`。
-3. 恰好一个合法戳且版本 `>=1.4.31`：`update`。
+1. `.codex/.bridgeforge_codex_version` 与 `.codex/.bridgeforge_version` 双戳或非法戳：零写阻断。
+2. 恰好一个合法戳：`update`；版本只证明骨架身份，不选择历史升级代码。
+3. 没有合法戳但已有 `.codex/`、`AGENTS.md` 或其他骨架资产：`adopt`。
 4. 没有骨架身份的空白项目：`init`。
 
-禁止根据旧合同、目录内容或文件名猜项目身份。已有 `.venv/Scripts/python.exe` 时，用它运行：
+每轮只以刷新后的产品 home 为完整基线；禁止读取旧 manifest、旧 schema、旧 hash lineage 或逐版本迁移链来选择实现。已有 `.venv/Scripts/python.exe` 时，用它运行：
 
 ```powershell
 & .\.venv\Scripts\python.exe -B `
@@ -45,16 +45,16 @@ $BRIDGEFORGE_CODEX_HOME = Join-Path $env:USERPROFILE ".bridgeforge-codex"
 
 ## 3. 按需处理 Codex 原生 Memories
 
-锁定 `$HOOK_PYTHON` 后运行一次只读状态检查：
+锁定 `$HOOK_PYTHON` 后运行一次状态检查；`--emit-alert` 只确认并输出尚未展示过的持续失败或冲突告警，健康、pending、no-op 和已展示告警必须静默：
 
 ```powershell
 & $HOOK_PYTHON `
   (Join-Path $BRIDGEFORGE_CODEX_HOME "scripts\codex_memory_sync.py") `
-  status --project-root .
+  status --project-root . --emit-alert
 ```
 
 - `declined`：只记用户级 gap，禁止再次询问或改配置。
-- 当前策略的 `approved + enabled + hookInstalled + hookRuntimeVerified`：no-op。
+- 当前策略的 `approved + enabled + hookInstalled + hookRuntimeVerified`，且无未解决的 `degraded` / `failed` / `conflicted`：no-op。
 - 其他授权、安装、runtime 或 disabled 状态：执行任何动作前读取 [Native Memory 状态处理](references/native-memory.md)。
 
 Native Memory 的 safe/risk/gap 必须并入本轮唯一 accumulator；项目骨架更新禁止顺手执行完整 `reconcile`。
@@ -81,9 +81,11 @@ Native Memory 的 safe/risk/gap 必须并入本轮唯一 accumulator；项目骨
 
 plan 必须零写入。同步器 `machine` 区负责 fingerprint、safe、risk、gap、blocker 与一次性 `PreservationManifest`；`human` 区负责稳定的用户结果。blocker 必须立即停止；无 risk 的 current baseline 更新零确认。存在 risk 时，主对话只能把所有用户决策合并为本轮一次确认，确认前禁止执行 safe 或 risk 动作。
 
+若 `asset_migration.source_count > 0`，必须读取 [legacy Rule / Memory 逐文件迁移](references/project-asset-migration.md)，在同一连续流程中逐源文件确认完整迁移包，再以 stdin 重新规划。迁移确认本身就是对应旧源删除授权；禁止另问清理确认。
+
 ## 5. Apply 与用户结果
 
-准备 Apply 时必须重新生成 plan；fingerprint 漂移则零写停止并重新展示。只有 fingerprint 与用户选择仍有效时，才读取 [事务与回滚](references/transaction.md) 并按其唯一顺序执行；Apply 也必须传入 `--output-format combined`，禁止人工 copy、merge、删除或写版本戳。
+准备 Apply 时必须用同一份内存中的迁移 manifest 重新生成 plan；fingerprint 漂移则零写停止并重新展示。只有 fingerprint 与用户选择仍有效时，才读取 [事务与回滚](references/transaction.md) 并按其唯一顺序执行；Apply 也必须传入 `--output-format combined`，禁止人工 copy、merge、删除或写版本戳。
 
 默认结果必须逐项展示同步器 `human` 区的“结论、待处理事项、下一步”；结论只能使用“已完成、无需处理、可直接执行、等待确认、未完成、已完成但仍有待处理项”六类固定中文状态。safe-only 计划必须显示“可直接执行”，禁止把零确认更新说成“等待确认”。禁止自行改写结论或直接倾倒 `machine` 区的 safe/risk/gap、fingerprint、asset ID、内部枚举与验证流水。只有同步器未覆盖用户追问的背景时，主对话才补充说明；补充说明不得改变同步器结论。
 

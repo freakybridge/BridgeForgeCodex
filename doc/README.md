@@ -88,6 +88,7 @@ delivery_layout: flat
 | `template-root-flattening` | Codex-only 模板从 `templates/codex/**` 提升为 `templates/**`，保留 `0.86.0+` 历史 lineage 并同步同步器、schema、dogfood 与测试（2026-08-16） |
 | `factory-template-dogfood-contract` | Template 公共 AGENTS/Rules 单一事实源、bridgeforge-codex 项目定制区与工厂 Overlay，以及编辑/提交/发布防漂移硬闸（2026-08-16） |
 | `codex-rule-runtime-simplification` | 退役未实际加载的 Markdown path rule，将有效红线无损迁入原生 AGENTS、hook、skill 与文档，并安全保留下游定制（2026-08-16） |
+| `current-baseline-project-asset-migration-and-native-memory-sync` | 下游旧 Rule/项目 Memory 逐文件确认迁移、动态最新 current-only 基线，以及原生 Memory 无感双机同步、自愈和可验证 Git 历史；含[确认卡](1_delivery/current-baseline-project-asset-migration-and-native-memory-sync/requirements_2026-08-31_current-baseline-project-asset-migration-and-native-memory-sync.md)与[协作记录](1_delivery/current-baseline-project-asset-migration-and-native-memory-sync/collabs_2026-08-31_current-baseline-project-asset-migration-and-native-memory-sync.md)（2026-08-31） |
 | `codex-agents-structure-reorganization` | Codex AGENTS 信息架构重组、历史标题安全迁移、项目必填区双状态硬闸与 `ctx-budget` 完整退役（2026-08-16） |
 | `shared-skill-model-inheritance` | 删除 shared skill 的 Claude 专用 `model:` 覆盖，双宿主统一继承当前会话模型，并合并精简 Codex 模板的模型选择与执行分工说明（2026-08-16） |
 | `confirm-workflow`、`develop-demand-discovery`、`explain-skill` | 需求确认与通用 skill 演进；后两者含 `research/` |

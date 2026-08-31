@@ -14,9 +14,9 @@ Claude 骨架已经退役。遗留 `.claude/` 只报告存在，不读取正文�
 ## 2. 唯一流程
 
 1. 在目标项目运行 `$bridgeforge-codex`。
-2. 入口在 `.venv` bootstrap 前验证版本戳：缺戳、双戳、非法戳立即零写停止。
-3. 恰好一个合法版本戳且版本 `<1.4.31` 时进入独立审计；用户逐项确认 rules、AGENTS 项目区、pre-commit 项目扩展与 `.codex/hooks/project_XXXX/` Hook 目录的保留或删除后，再做一次破坏性重建风险确认。
-4. `>=1.4.31` 先由 schema 3 current baseline 验证真实公共资产；任一漂移或合同损坏阻断，禁止吸收或强制覆盖。旧文件名验证通过后在同一事务迁移为当前戳。
+2. 入口在 `.venv` bootstrap 前验证版本戳：双戳、非法戳立即零写停止；无戳但已有骨架资产进入 adopt。
+3. 任意合法旧版本直接进入 latest current-only rebuild；版本只证明身份，禁止运行旧 schema、旧 manifest 或逐版本兼容链。
+4. `.codex/rules/*.md` 与 `.codex/memory/**` 逐源文件确认完整迁移包；中断不保存决定，全部确认前零写入。确认同时授权在同一事务删除对应源，不再追加清理确认。
 5. apply 前重算聚合 fingerprint。任何漂移、验证失败或运行错误都必须零写入或事务回滚。
 6. validators 与真实磁盘 current baseline 全部通过后，最后写新版本戳；旧项目成功时同事务删除旧戳。
 
@@ -27,7 +27,7 @@ Claude 骨架已经退役。遗留 `.claude/` 只报告存在，不读取正文�
 - 项目 Hook 以 `.codex/hooks/project_XXXX/` 自包含 Python 目录为原子所有权单位，目录与 `.codex/hooks.json` 注册必须成对。
 - 散落 Hook 先阻断；独立 Agent 只能在临时副本或受控前置步骤中完成目录正规化，随后重新生成 `PreservationManifest`。
 - `seed` 只在缺失时创建，既有内容归项目。
-- `.codex/skills/` 自动保留正文并执行当前兼容检查；既有 `.codex/memory/` 仅作为 legacy 原样保留并报告待迁移，禁止注入、索引、语义检查或直接删除；其他未登记旧内容阻断，不得静默删除。
+- `.codex/skills/` 自动保留正文并执行当前兼容检查；legacy Rule / Memory 只能按已确认 manifest 迁移，机器不得猜语义；其他未登记旧内容阻断，不得静默删除。
 
 ## 4. 验收收据
 
@@ -46,7 +46,7 @@ Claude 骨架已经退役。遗留 `.claude/` 只报告存在，不读取正文�
 
 - 禁止手工 `copy`/`cp` 覆盖下游骨架。
 - 禁止用旧 `bridgeforge_project_finalize.py` 或多脚本串联写戳。
-- 禁止自动覆盖项目自定义 rules、AGENTS 区块、memory 或 doc。
+- 禁止覆盖未确认的项目 rules、AGENTS 项目区、memory 或 doc；确认迁移目标必须与 latest 公共受管区确定性组合。
 - 禁止在同一轮重复索要确认。
 - 禁止把 Claude 遗留目录当作 Codex 模板来源。
 

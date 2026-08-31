@@ -99,6 +99,7 @@ class SharedSkillDistributionTests(unittest.TestCase):
                 "references/adopt.md",
                 "references/init.md",
                 "references/native-memory.md",
+                "references/project-asset-migration.md",
                 "references/runtime-preflight.md",
                 "references/technical-receipts.md",
                 "references/transaction.md",

@@ -123,8 +123,8 @@ class InstructionSourceCheckTests(unittest.TestCase):
                 for phrase in (
                     "Codex 原生 `~/.codex/memories/` 只由官方机制生成和注入",
                     "禁止新建或继续使用项目 `.codex/memory/`",
-                    "必须作为 legacy 原样保留并报告待迁移",
-                    "同步器不得直接删除",
+                    "必须逐源文件确认迁移包",
+                    "确认后，新资产、最新基线和已确认源文件删除必须在同一可回滚事务完成",
                     "`$summary` 只做阶段总结和“同意验收”收口",
                 ):
                     self.assertIn(phrase, text)

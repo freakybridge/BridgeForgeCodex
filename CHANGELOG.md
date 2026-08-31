@@ -15,6 +15,28 @@
 
 > **追溯说明**：v0.1.0 - v0.7.0 基于 git log 历史回溯标记，**git tag 仅从 v0.8.0 开始打**。早期未启用版本号管理是 setup_agent 自打脸问题（要求下游用但自己没用），v0.8.0 修补。
 
+## [1.7.0] - 2026-09-01
+
+### Added
+
+- [product][repo][meta] 完成项目资产迁移与原生 Memory 同步闭环
+
+## [1.6.0] - 2026-09-01
+
+### Added
+
+- [product][repo][meta] `$bridgeforge-codex` 增加 legacy `.codex/rules/*.md` 与项目 `.codex/memory/**` 的逐源文件确认式迁移：语义由主对话提出，机器验证完整覆盖、hash、目标职责、受管区组合、Hook 注册、文档索引和整体事务；新资产、latest 基线与旧源退役在一次可回滚事务完成。
+
+### Changed
+
+- [product][repo][meta] 项目升级改为 dynamic latest current-only；任意旧版本只用于识别骨架身份，不再选择旧 schema、旧 manifest 或逐版本兼容路径。
+- [product][repo][meta] Native Memory 生命周期 Hook 改为 pending + 单 worker 调度，使用普通父子 Git 历史和逐文件三方合并；死亡锁自动修复，同文件双改保全冲突，五分钟未完成进入 degraded / failed，并对同一状态只告警一次。
+- [product][repo] Native Memory 的 private 仓库校验在 `gh` 未安装或登录失效时，无感复用系统 Git 凭证访问 GitHub API；凭证不落盘、不进入日志，仓库身份与 private 硬闸保持不变。
+
+### Fixed
+
+- [product][repo][meta] 修复 Native Memory 冲突决议与旧 Hook 并发时的安全竞态：新远端只有逐字节等于 captured local 才允许把已确认决议重放为其子提交，其他远端变化继续 fail-closed；正常 no-op 等成功路径同时清除过期 active conflict。
+
 ## [1.5.34] - 2026-08-31
 
 ### Changed

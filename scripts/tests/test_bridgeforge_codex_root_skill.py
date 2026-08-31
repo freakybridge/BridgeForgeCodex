@@ -148,10 +148,10 @@ class BridgeForgeCodexRootSkillTests(unittest.TestCase):
             ]
         )
         for marker in (
-            "destructive rebuild 计划",
+            "latest current-only rebuild",
             "`review-auditor`",
             "`implementation-worker`",
-            "逐项确认可以组成本轮唯一确认",
+            "每个非派生源只问一次",
             "plan-fingerprint",
             "--confirmed-preservation-manifest",
             "--confirmed-risk",
@@ -160,11 +160,11 @@ class BridgeForgeCodexRootSkillTests(unittest.TestCase):
             "禁止把零确认更新说成“等待确认”",
             "`repair-hook` 只能修改用户 hooks",
             "项目骨架更新禁止顺手执行完整 `reconcile`",
-            "本地较新自动上传",
-            "远端较新自动恢复",
-            "日常同步和 hook 修复不得重复询问",
+            "不同路径修改自动合并",
+            "单一隐藏 worker",
+            "日常同步、自愈、重试、no-op 和 hook 修复不得重复询问",
             "user_native_memory_readiness",
-            "remote_reconcile=applied/declined/not_requested",
+            "`syncHealth`",
             ".codex/.bridgeforge_codex_version",
             ".codex/.bridgeforge_version",
         ):
@@ -272,6 +272,7 @@ class BridgeForgeCodexRootSkillTests(unittest.TestCase):
             "user-skill-maintenance.md",
             "runtime-preflight.md",
             "native-memory.md",
+            "project-asset-migration.md",
             "init.md",
             "adopt.md",
             "update.md",
@@ -321,13 +322,18 @@ class BridgeForgeCodexRootSkillTests(unittest.TestCase):
             ),
             "native-memory.md": (
                 "`consent=null + disabled`",
-                "本地较新自动上传",
+                "不同路径修改自动合并",
                 "`repair-hook` 只能修改用户 hooks",
             ),
             "adopt.md": (
                 "`--confirmed-preservation-manifest`",
-                "显式分派给 `review-auditor`",
                 "显式分派给 `implementation-worker`",
+                "无合法版本戳",
+            ),
+            "project-asset-migration.md": (
+                "`review-auditor`",
+                "对话中断、用户停止",
+                "`fixed-derived-retirement`",
             ),
             "transaction.md": (
                 "版本戳写入顺序的唯一操作 owner",
@@ -358,8 +364,8 @@ class BridgeForgeCodexRootSkillTests(unittest.TestCase):
                         [owner],
                     )
 
-        self.assertNotIn("<1.4.31", reference_text["update.md"])
-        self.assertIn("<1.4.31", reference_text["adopt.md"])
+        self.assertNotIn("<1.4.31", "\n".join(reference_text.values()))
+        self.assertIn("任意不高于产品 home 的合法单戳", reference_text["update.md"])
 
     def test_shared_skills_inherit_session_model(self) -> None:
         skill_files = sorted((ROOT / "skills").glob("*/SKILL.md"))

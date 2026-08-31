@@ -1,6 +1,6 @@
 {
   "schema_version": 3,
-  "release_version": "1.5.34",
+  "release_version": "1.7.0",
   "host": "codex",
   "stamp": ".codex/.bridgeforge_codex_version",
   "contract_target": ".codex/managed-skeleton.json",
@@ -31,7 +31,7 @@
         "public": {
           "begin": "<!-- BRIDGEFORGE:PUBLIC:BEGIN -->",
           "end": "<!-- BRIDGEFORGE:PUBLIC:END -->",
-          "current_sha256": "sha256:b9382d884080677f13ef63f7e44dac9d8a628c2e8d2f01d303c972d3c55e1d3a"
+          "current_sha256": "sha256:70550cd8b952dfaa62c34436d21f4eb1b82ab6c167f13218d40958f60c0b6b27"
         },
         "project": {
           "begin": "<!-- BRIDGEFORGE:PROJECT:BEGIN -->",
@@ -51,7 +51,7 @@
           ]
         }
       },
-      "current_sha256": "sha256:6185c814f29c34c51da11470d12094fc0d2c425e3d4c0270926d969effd20693",
+      "current_sha256": "sha256:151cd0c9dcbf155e266bd41a2d4105756023c527d8796d3459c0458a97275762",
       "render": "project-name"
     },
     {
@@ -552,7 +552,7 @@
       "source": "templates/scripts/current_baseline.py",
       "target": ".codex/scripts/current_baseline.py",
       "strategy": "whole",
-      "current_sha256": "sha256:7d2f054e682d14fe42ee9f24950eb4a71f82d16a392308f8e3e94e308986ce65"
+      "current_sha256": "sha256:4a0c87c10445c67c816297ff6e624b50e9e2b3f65d0ceaa3034bf30f92746385"
     },
     {
       "id": "codex.script.codex-git-sync",

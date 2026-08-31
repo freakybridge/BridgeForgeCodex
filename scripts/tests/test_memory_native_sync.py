@@ -12,6 +12,7 @@ import sys
 import tempfile
 import time
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
 
@@ -305,6 +306,58 @@ class NativeMemorySyncTests(unittest.TestCase):
             }
             self.assertEqual(after, before)
 
+    def test_status_emit_alert_acknowledges_the_same_failure_only_once(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            codex = Path(raw) / ".codex"
+            self._write_ledger(
+                codex,
+                sync_mod._authorization_payload("declined", None),
+            )
+            state = codex / ".bridgeforge-codex/memory-sync"
+            state.mkdir(parents=True)
+            sync_mod._record_health(state, "failed", error="fixture network failure")
+            output = io.StringIO()
+            errors = io.StringIO()
+            with mock.patch.dict(
+                sync_mod.os.environ,
+                {"CODEX_HOME": str(codex)},
+            ), contextlib.redirect_stdout(output), contextlib.redirect_stderr(errors):
+                self.assertEqual(sync_mod.main(self._args("status", "--emit-alert")), 0)
+                self.assertEqual(sync_mod.main(self._args("status", "--emit-alert")), 0)
+            self.assertEqual(errors.getvalue().count("fixture network failure"), 1)
+            health = json.loads((state / "health.json").read_text(encoding="utf-8"))
+            self.assertEqual(health["alertedId"], health["alertId"])
+
+    def test_status_emit_alert_is_quiet_and_zero_write_when_healthy(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            codex = Path(raw) / ".codex"
+            self._write_ledger(
+                codex,
+                sync_mod._authorization_payload("declined", None),
+            )
+            state = codex / ".bridgeforge-codex/memory-sync"
+            state.mkdir(parents=True)
+            sync_mod._record_health(state, "healthy", action="noop")
+            before = {
+                path.relative_to(codex).as_posix(): path.read_bytes()
+                for path in codex.rglob("*")
+                if path.is_file()
+            }
+            output = io.StringIO()
+            errors = io.StringIO()
+            with mock.patch.dict(
+                sync_mod.os.environ,
+                {"CODEX_HOME": str(codex)},
+            ), contextlib.redirect_stdout(output), contextlib.redirect_stderr(errors):
+                self.assertEqual(sync_mod.main(self._args("status", "--emit-alert")), 0)
+            after = {
+                path.relative_to(codex).as_posix(): path.read_bytes()
+                for path in codex.rglob("*")
+                if path.is_file()
+            }
+            self.assertEqual(errors.getvalue(), "")
+            self.assertEqual(after, before)
+
     def test_hook_run_records_success_and_failure_without_invalid_stdout(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             base = Path(raw)
@@ -331,8 +384,8 @@ class NativeMemorySyncTests(unittest.TestCase):
             )
             with common[0], common[1], common[2], common[3], mock.patch.object(
                 sync_mod,
-                "reconcile",
-                return_value="noop",
+                "launch_background_reconcile",
+                return_value="worker-started",
             ), contextlib.redirect_stdout(output), contextlib.redirect_stderr(errors):
                 self.assertEqual(
                     sync_mod.main(
@@ -351,13 +404,13 @@ class NativeMemorySyncTests(unittest.TestCase):
             receipt = json.loads(
                 (state / "hook-runtime-sessionstart.json").read_text(encoding="utf-8")
             )
-            self.assertEqual(receipt["status"], "succeeded")
-            self.assertEqual(receipt["action"], "noop")
+            self.assertEqual(receipt["status"], "queued")
+            self.assertEqual(receipt["action"], "worker-started")
             self.assertTrue(sync_mod.hook_runtime_verified(receipt))
 
             with common[0], common[1], common[2], common[3], mock.patch.object(
                 sync_mod,
-                "reconcile",
+                "launch_background_reconcile",
                 side_effect=sync_mod.SyncError("fixture failure"),
             ), contextlib.redirect_stderr(errors):
                 self.assertEqual(
@@ -438,7 +491,7 @@ class NativeMemorySyncTests(unittest.TestCase):
             receipt = json.loads(
                 (state / "hook-runtime-sessionstart.json").read_text(encoding="utf-8")
             )
-            self.assertEqual(receipt["status"], "succeeded")
+            self.assertEqual(receipt["status"], "disabled")
             self.assertEqual(receipt["action"], "disabled")
 
     def test_approved_enabled_repair_is_local_only(self) -> None:
@@ -803,6 +856,91 @@ class NativeMemorySyncTests(unittest.TestCase):
                     run=run,
                 )
 
+    def test_private_repository_verification_falls_back_to_git_credentials(self) -> None:
+        secret = "never-print-this-token"
+        calls: list[list[str]] = []
+
+        def run(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+            calls.append(command)
+            if command[0] == "gh":
+                return subprocess.CompletedProcess(command, 1, "", "expired login")
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                f"protocol=https\nhost=github.com\nusername=example\npassword={secret}\n",
+                "",
+            )
+
+        response = mock.MagicMock()
+        response.__enter__.return_value.read.return_value = json.dumps({
+            "private": True,
+            "full_name": "example/bridgeforge-codex-memories",
+        }).encode("utf-8")
+        with mock.patch.object(sync_mod.shutil, "which", return_value="gh"), mock.patch.object(
+            sync_mod.urllib.request,
+            "urlopen",
+            return_value=response,
+        ) as urlopen:
+            sync_mod.verify_private_github_repository(
+                "https://github.com/example/bridgeforge-codex-memories",
+                run=run,
+            )
+        credential_call = next(command for command in calls if command[0] == "git")
+        self.assertEqual(
+            credential_call,
+            ["git", "-c", "credential.interactive=never", "credential", "fill"],
+        )
+        request = urlopen.call_args.args[0]
+        self.assertEqual(request.get_header("Authorization"), f"Bearer {secret}")
+
+    def test_git_credential_fallback_rejects_public_repository(self) -> None:
+        def run(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                "protocol=https\nhost=github.com\npassword=secret\n",
+                "",
+            )
+
+        response = mock.MagicMock()
+        response.__enter__.return_value.read.return_value = json.dumps({
+            "private": False,
+            "full_name": "example/bridgeforge-codex-memories",
+        }).encode("utf-8")
+        with mock.patch.object(sync_mod.shutil, "which", return_value=None), mock.patch.object(
+            sync_mod.urllib.request,
+            "urlopen",
+            return_value=response,
+        ):
+            with self.assertRaisesRegex(sync_mod.SyncError, "no longer private"):
+                sync_mod.verify_private_github_repository(
+                    "git@github.com:example/bridgeforge-codex-memories.git",
+                    run=run,
+                )
+
+    def test_git_credential_fallback_does_not_expose_secret_on_api_failure(self) -> None:
+        secret = "never-print-this-token"
+
+        def run(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                f"protocol=https\nhost=github.com\npassword={secret}\n",
+                "",
+            )
+
+        with mock.patch.object(sync_mod.shutil, "which", return_value=None), mock.patch.object(
+            sync_mod.urllib.request,
+            "urlopen",
+            side_effect=sync_mod.urllib.error.URLError("offline"),
+        ):
+            with self.assertRaises(sync_mod.SyncError) as caught:
+                sync_mod.verify_private_github_repository(
+                    "https://github.com/example/bridgeforge-codex-memories",
+                    run=run,
+                )
+        self.assertNotIn(secret, str(caught.exception))
+
     def test_config_merge_requires_confirmation_and_preserves_other_toml(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             config = Path(raw) / "config.toml"
@@ -999,15 +1137,23 @@ class NativeMemorySyncTests(unittest.TestCase):
             self.assertEqual(path.read_bytes(), external)
 
     def test_session_end_kick_detaches_reconciliation(self) -> None:
-        with mock.patch.object(sync_mod.subprocess, "Popen") as popen:
-            sync_mod.launch_background_reconcile("session-end", ROOT)
+        with tempfile.TemporaryDirectory() as raw:
+            codex = Path(raw) / ".codex"
+            state = codex / ".bridgeforge-codex/memory-sync"
+            state.mkdir(parents=True)
+            process = mock.Mock(pid=12345)
+            with mock.patch.dict(sync_mod.os.environ, {"CODEX_HOME": str(codex)}), mock.patch.object(
+                sync_mod.subprocess, "Popen", return_value=process
+            ) as popen:
+                self.assertEqual(
+                    sync_mod.launch_background_reconcile("session-end", ROOT),
+                    "worker-started",
+                )
         command = popen.call_args.args[0]
         kwargs = popen.call_args.kwargs
         self.assertEqual(command[0], str(Path(sync_mod.sys.executable).resolve()))
-        self.assertEqual(
-            command[-5:],
-            ["reconcile", "--trigger", "session-end", "--project-root", str(ROOT.resolve())],
-        )
+        self.assertEqual(command[2], "worker")
+        self.assertEqual(command[-2:], ["--project-root", str(ROOT.resolve())])
         self.assertEqual(kwargs["cwd"], ROOT.resolve())
         self.assertIs(kwargs["stdout"], subprocess.DEVNULL)
         if sync_mod.os.name == "nt":
@@ -1071,7 +1217,7 @@ class NativeMemorySyncTests(unittest.TestCase):
                     local_updated_at="2026-08-14T12:00:00+00:00",
                     remote_updated_at="2026-08-14T11:00:00+00:00",
                 ),
-                "push",
+                "merge",
             )
             self.assertEqual(
                 sync_mod.choose_action(
@@ -1079,7 +1225,7 @@ class NativeMemorySyncTests(unittest.TestCase):
                     local_updated_at="1970-01-01T00:00:00+00:00",
                     remote_updated_at="2026-08-14T11:00:00+00:00",
                 ),
-                "restore",
+                "merge",
             )
 
     def test_reconcile_does_not_create_native_memories_without_local_or_remote_content(self) -> None:
@@ -1217,6 +1363,152 @@ class NativeMemorySyncTests(unittest.TestCase):
             sync_mod._release_reconcile_lock(state, descriptor)
             self.assertFalse(lock.exists())
 
+    def test_dead_reconcile_owner_cleans_only_recorded_managed_workdir(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            state = Path(raw)
+            lock = state / "reconcile.lock"
+            lock.write_text(json.dumps({"pid": 424242, "utc": sync_mod.utc_now()}), encoding="utf-8")
+            stranded = Path(tempfile.mkdtemp(prefix=sync_mod.WORKDIR_PREFIX))
+            (stranded / "opaque.bin").write_bytes(b"native-memory")
+            sync_mod._record_workdir(state, stranded)
+            with mock.patch.object(sync_mod, "_process_alive", return_value=False):
+                descriptor = sync_mod._acquire_reconcile_lock(state)
+            self.assertIsNotNone(descriptor)
+            self.assertFalse(stranded.exists())
+            self.assertFalse((state / "transient-workdir.json").exists())
+            sync_mod._release_reconcile_lock(state, descriptor)
+
+    def test_background_launch_reuses_the_single_live_worker(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            codex = Path(raw) / ".codex"
+            state = codex / ".bridgeforge-codex/memory-sync"
+            state.mkdir(parents=True)
+            process = mock.Mock(pid=24680)
+            with mock.patch.dict(sync_mod.os.environ, {"CODEX_HOME": str(codex)}), mock.patch.object(
+                sync_mod.subprocess,
+                "Popen",
+                return_value=process,
+            ) as popen, mock.patch.object(
+                sync_mod,
+                "_process_alive",
+                side_effect=lambda pid: pid in {os.getpid(), 24680},
+            ):
+                first = sync_mod.launch_background_reconcile("stop", ROOT)
+                second = sync_mod.launch_background_reconcile("session-end", ROOT)
+            self.assertEqual(first, "worker-started")
+            self.assertEqual(second, "worker-reused")
+            self.assertEqual(popen.call_count, 1)
+
+    def test_worker_marks_five_minute_busy_as_degraded_not_succeeded(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            base = Path(raw)
+            codex = base / ".codex"
+            state = codex / ".bridgeforge-codex/memory-sync"
+            state.mkdir(parents=True)
+            token = "worker-token"
+            sync_mod._atomic_json(
+                state / "worker.json",
+                {"token": token, "pid": 0, "launcherPid": os.getpid(), "startedUtc": sync_mod.utc_now()},
+            )
+            sync_mod.mark_pending(state, "stop")
+            with mock.patch.object(
+                sync_mod,
+                "validated_runtime_state",
+                return_value=(state, {"remote": "unused"}),
+            ), mock.patch.object(
+                sync_mod,
+                "verify_private_github_repository",
+            ), mock.patch.object(
+                sync_mod,
+                "reconcile",
+                return_value="busy",
+            ), mock.patch.object(
+                sync_mod,
+                "_pending_age_seconds",
+                return_value=301.0,
+            ):
+                self.assertEqual(
+                    sync_mod.run_sync_worker(codex, codex / "memories", state, codex / "ledger.json", token),
+                    0,
+                )
+            receipt = json.loads((state / "last-worker.json").read_text(encoding="utf-8"))
+            health = json.loads((state / "health.json").read_text(encoding="utf-8"))
+            self.assertEqual(receipt["status"], "degraded")
+            self.assertEqual(health["status"], "degraded")
+            self.assertTrue((state / "pending.json").is_file())
+
+    def test_failure_alert_is_emitted_once_per_unchanged_state(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            state = Path(raw)
+            sync_mod._record_health(state, "failed", error="network unavailable")
+            errors = io.StringIO()
+            with contextlib.redirect_stderr(errors):
+                sync_mod._emit_alert_once(state)
+                sync_mod._emit_alert_once(state)
+            self.assertEqual(errors.getvalue().count("network unavailable"), 1)
+
+    def test_overdue_pending_is_persisted_and_alerted_exactly_once(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            state = Path(raw)
+            old = (
+                datetime.now(timezone.utc)
+                - timedelta(seconds=sync_mod.SYNC_DEADLINE_SECONDS + 1)
+            ).isoformat().replace("+00:00", "Z")
+            (state / "pending.json").write_text(
+                json.dumps({
+                    "schemaVersion": 2,
+                    "firstPendingUtc": old,
+                    "updatedUtc": old,
+                    "trigger": "sessionstart",
+                    "triggers": ["sessionstart"],
+                }),
+                encoding="utf-8",
+            )
+            errors = io.StringIO()
+            with contextlib.redirect_stderr(errors):
+                sync_mod._persist_overdue_pending_health(state)
+                sync_mod._emit_alert_once(state)
+                sync_mod._persist_overdue_pending_health(state)
+                sync_mod._emit_alert_once(state)
+            health = json.loads((state / "health.json").read_text(encoding="utf-8"))
+            self.assertEqual(health["status"], "degraded")
+            self.assertEqual(health["alertedId"], health["alertId"])
+            self.assertEqual(errors.getvalue().count("more than five minutes"), 1)
+
+    def test_conflict_resolution_fails_closed_while_worker_holds_lock(self) -> None:
+        with tempfile.TemporaryDirectory() as raw, mock.patch.object(
+            sync_mod,
+            "_acquire_reconcile_lock",
+            return_value=None,
+        ):
+            with self.assertRaisesRegex(sync_mod.SyncError, "busy"):
+                sync_mod.resolve_conflict(
+                    Path(raw) / "memories",
+                    Path(raw) / "state",
+                    "https://github.com/example/bridgeforge-codex-memories.git",
+                    "a" * 64,
+                    [],
+                )
+
+    def test_overdue_health_does_not_race_a_live_worker_lock(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            state = Path(raw)
+            old = (
+                datetime.now(timezone.utc)
+                - timedelta(seconds=sync_mod.SYNC_DEADLINE_SECONDS + 1)
+            ).isoformat().replace("+00:00", "Z")
+            (state / "pending.json").write_text(
+                json.dumps({"schemaVersion": 2, "firstPendingUtc": old}),
+                encoding="utf-8",
+            )
+            with mock.patch.object(
+                sync_mod,
+                "_acquire_reconcile_lock",
+                return_value=None,
+            ):
+                self.assertIsNone(sync_mod._persist_overdue_pending_health(state))
+            self.assertFalse((state / "health.json").exists())
+
     def test_recorded_transient_snapshot_is_cleaned_on_the_next_run(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             state = Path(raw)
@@ -1281,7 +1573,7 @@ class NativeMemorySyncTests(unittest.TestCase):
             self.assertEqual(sync_mod.reconcile(local, base / "state", str(remote)), "push")
             count = subprocess.run(["git", f"--git-dir={remote}", "rev-list", "--count", "main"], check=True, text=True, capture_output=True).stdout.strip()
             manifest = subprocess.run(["git", f"--git-dir={remote}", "show", "main:snapshot-manifest.json"], check=True, text=True, capture_output=True).stdout
-            self.assertEqual(count, "1")
+            self.assertEqual(count, "2")
             self.assertEqual(json.loads(manifest)["schema_version"], 1)
 
     @unittest.skipUnless(shutil.which("git"), "git required")
@@ -1332,7 +1624,176 @@ class NativeMemorySyncTests(unittest.TestCase):
             push.assert_not_called()
 
     @unittest.skipUnless(shutil.which("git"), "git required")
-    def test_new_machine_restores_newer_whole_remote_snapshot_without_backup(self) -> None:
+    def test_two_computers_merge_different_opaque_files_with_shared_baseline(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            base = Path(raw)
+            remote = base / "remote.git"
+            subprocess.run(["git", "init", "--bare", str(remote)], check=True, capture_output=True)
+            machine_a = base / "machine-a"
+            machine_a.mkdir()
+            (machine_a / "common.bin").write_bytes(b"base\x00")
+            state_a = base / "state-a"
+            self.assertEqual(sync_mod.reconcile(machine_a, state_a, str(remote)), "push")
+
+            machine_b = base / "machine-b"
+            machine_b.mkdir()
+            state_b = base / "state-b"
+            self.assertEqual(sync_mod.reconcile(machine_b, state_b, str(remote)), "restore")
+
+            (machine_a / "from-a.bin").write_bytes(b"A\r\n")
+            self.assertEqual(sync_mod.reconcile(machine_a, state_a, str(remote)), "push")
+            (machine_b / "from-b.bin").write_bytes(b"B\n")
+            self.assertEqual(sync_mod.reconcile(machine_b, state_b, str(remote)), "merge")
+
+            self.assertEqual((machine_b / "from-a.bin").read_bytes(), b"A\r\n")
+            self.assertEqual((machine_b / "from-b.bin").read_bytes(), b"B\n")
+            verify = base / "verify"
+            verify.mkdir()
+            manifest, extracted, _commit = sync_mod._read_remote_snapshot(verify, str(remote))
+            self.assertIsNotNone(manifest)
+            self.assertEqual((extracted / "memories/from-a.bin").read_bytes(), b"A\r\n")
+            self.assertEqual((extracted / "memories/from-b.bin").read_bytes(), b"B\n")
+            count = subprocess.run(
+                ["git", f"--git-dir={remote}", "rev-list", "--count", "main"],
+                check=True,
+                text=True,
+                capture_output=True,
+            ).stdout.strip()
+            self.assertEqual(count, "3")
+
+    @unittest.skipUnless(shutil.which("git"), "git required")
+    def test_same_path_dual_change_preserves_both_and_controlled_resolve(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            base = Path(raw)
+            remote = base / "remote.git"
+            subprocess.run(["git", "init", "--bare", str(remote)], check=True, capture_output=True)
+            machine_a = base / "machine-a"
+            machine_a.mkdir()
+            (machine_a / "same.bin").write_bytes(b"base")
+            state_a = base / "state-a"
+            sync_mod.reconcile(machine_a, state_a, str(remote))
+
+            machine_b = base / "machine-b"
+            machine_b.mkdir()
+            state_b = base / "state-b"
+            sync_mod.reconcile(machine_b, state_b, str(remote))
+
+            (machine_a / "same.bin").write_bytes(b"from-a")
+            sync_mod.reconcile(machine_a, state_a, str(remote))
+            (machine_b / "same.bin").write_bytes(b"from-b")
+            self.assertEqual(sync_mod.reconcile(machine_b, state_b, str(remote)), "conflicted")
+            active = json.loads((state_b / "active-conflict.json").read_text(encoding="utf-8"))
+            evidence = Path(active["path"])
+            self.assertEqual((evidence / "local/memories/same.bin").read_bytes(), b"from-b")
+            self.assertEqual((evidence / "remote/memories/same.bin").read_bytes(), b"from-a")
+            self.assertEqual((machine_b / "same.bin").read_bytes(), b"from-b")
+
+            commit = sync_mod.resolve_conflict(
+                machine_b,
+                state_b,
+                str(remote),
+                active["conflictId"],
+                ["same.bin=local"],
+            )
+            self.assertEqual((machine_b / "same.bin").read_bytes(), b"from-b")
+            self.assertFalse((state_b / "active-conflict.json").exists())
+            metadata = json.loads((evidence / "conflict.json").read_text(encoding="utf-8"))
+            self.assertEqual(metadata["resolvedCommit"], commit)
+            verify = base / "verify"
+            verify.mkdir()
+            _manifest, extracted, remote_commit = sync_mod._read_remote_snapshot(verify, str(remote))
+            self.assertEqual(remote_commit, commit)
+            self.assertEqual((extracted / "memories/same.bin").read_bytes(), b"from-b")
+
+    @unittest.skipUnless(shutil.which("git"), "git required")
+    def test_conflict_resolution_rebases_when_remote_became_captured_local(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            base = Path(raw)
+            remote = base / "remote.git"
+            subprocess.run(["git", "init", "--bare", str(remote)], check=True, capture_output=True)
+            machine_a = base / "machine-a"
+            machine_a.mkdir()
+            (machine_a / "same.bin").write_bytes(b"base")
+            state_a = base / "state-a"
+            sync_mod.reconcile(machine_a, state_a, str(remote))
+
+            machine_b = base / "machine-b"
+            machine_b.mkdir()
+            state_b = base / "state-b"
+            sync_mod.reconcile(machine_b, state_b, str(remote))
+            (machine_a / "same.bin").write_bytes(b"remote-version")
+            sync_mod.reconcile(machine_a, state_a, str(remote))
+            (machine_b / "same.bin").write_bytes(b"local-version")
+            self.assertEqual(sync_mod.reconcile(machine_b, state_b, str(remote)), "conflicted")
+            active = json.loads((state_b / "active-conflict.json").read_text(encoding="utf-8"))
+
+            captured_local = Path(active["path"]) / "local"
+            raced_commit = sync_mod._push_snapshot(
+                captured_local,
+                base / "race-state",
+                str(remote),
+                active["remoteCommit"],
+            )
+            resolved_commit = sync_mod.resolve_conflict(
+                machine_b,
+                state_b,
+                str(remote),
+                active["conflictId"],
+                ["same.bin=remote"],
+            )
+            self.assertNotEqual(resolved_commit, raced_commit)
+            self.assertEqual((machine_b / "same.bin").read_bytes(), b"remote-version")
+            parents = subprocess.run(
+                ["git", f"--git-dir={remote}", "rev-list", "--parents", "-n", "1", resolved_commit],
+                check=True,
+                text=True,
+                capture_output=True,
+            ).stdout.split()
+            self.assertEqual(parents, [resolved_commit, raced_commit])
+
+    @unittest.skipUnless(shutil.which("git"), "git required")
+    def test_successful_noop_clears_stale_active_conflict(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            base = Path(raw)
+            remote = base / "remote.git"
+            subprocess.run(["git", "init", "--bare", str(remote)], check=True, capture_output=True)
+            memories = base / "memories"
+            memories.mkdir()
+            (memories / "stable.bin").write_bytes(b"stable")
+            state = base / "state"
+            self.assertEqual(sync_mod.reconcile(memories, state, str(remote)), "push")
+            (state / "active-conflict.json").write_text("{}\n", encoding="utf-8")
+            self.assertEqual(sync_mod.reconcile(memories, state, str(remote)), "noop")
+            self.assertFalse((state / "active-conflict.json").exists())
+
+    @unittest.skipUnless(shutil.which("git"), "git required")
+    def test_no_content_change_does_not_create_an_empty_commit(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            base = Path(raw)
+            remote = base / "remote.git"
+            subprocess.run(["git", "init", "--bare", str(remote)], check=True, capture_output=True)
+            memories = base / "memories"
+            memories.mkdir()
+            (memories / "stable.bin").write_bytes(b"stable")
+            state = base / "state"
+            self.assertEqual(sync_mod.reconcile(memories, state, str(remote)), "push")
+            first = subprocess.run(
+                ["git", f"--git-dir={remote}", "rev-parse", "main"],
+                check=True,
+                text=True,
+                capture_output=True,
+            ).stdout.strip()
+            self.assertEqual(sync_mod.reconcile(memories, state, str(remote)), "noop")
+            second = subprocess.run(
+                ["git", f"--git-dir={remote}", "rev-parse", "main"],
+                check=True,
+                text=True,
+                capture_output=True,
+            ).stdout.strip()
+            self.assertEqual(second, first)
+
+    @unittest.skipUnless(shutil.which("git"), "git required")
+    def test_new_machine_with_nonempty_local_and_remote_requires_bootstrap_resolution(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             base = Path(raw)
             remote = base / "remote.git"
@@ -1347,19 +1808,21 @@ class NativeMemorySyncTests(unittest.TestCase):
             local.mkdir()
             stale = local / "stale.md"
             stale.write_text("stale", encoding="utf-8")
-            old = time.time() - 3600
-            sync_mod.os.utime(stale, (old, old))
             action = sync_mod.reconcile(local, base / "local-state", str(remote))
 
-            self.assertEqual(action, "restore")
-            self.assertEqual((local / "cloud.md").read_text(encoding="utf-8"), "cloud")
-            self.assertFalse((local / "stale.md").exists())
+            self.assertEqual(action, "conflicted")
+            self.assertEqual(stale.read_text(encoding="utf-8"), "stale")
+            self.assertFalse((local / "cloud.md").exists())
+            active = json.loads(
+                (base / "local-state/active-conflict.json").read_text(encoding="utf-8")
+            )
+            self.assertIn("bootstrap conflict", active["reason"])
             self.assertFalse((base / ".local-memories.bridgeforge-codex-replaced").exists())
-            for state in (base / "cloud-state", base / "local-state"):
-                self.assertFalse(any(path.is_dir() for path in state.iterdir()))
+            self.assertTrue((Path(active["path"]) / "local/memories/stale.md").is_file())
+            self.assertTrue((Path(active["path"]) / "remote/memories/cloud.md").is_file())
 
     @unittest.skipUnless(shutil.which("git"), "git required")
-    def test_force_lease_replaces_with_one_parentless_commit(self) -> None:
+    def test_push_preserves_parent_history_and_never_uses_force(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             base = Path(raw)
             remote = base / "remote.git"
@@ -1370,14 +1833,39 @@ class NativeMemorySyncTests(unittest.TestCase):
             (snapshot / "memories").mkdir(parents=True)
             (snapshot / "memories/a.md").write_text("one", encoding="utf-8")
             (snapshot / "snapshot-manifest.json").write_text('{}\n', encoding="utf-8")
-            first = sync_mod._push_snapshot(snapshot, state, str(remote), None)
-            (snapshot / "memories/a.md").write_text("two", encoding="utf-8")
-            second = sync_mod._push_snapshot(snapshot, state, str(remote), first)
+            calls: list[list[str]] = []
+            actual_git = sync_mod._git
+
+            def recording_git(
+                command: list[str],
+                cwd: Path,
+                *,
+                env: dict[str, str] | None = None,
+            ) -> str:
+                calls.append(command)
+                return actual_git(command, cwd, env=env)
+
+            with mock.patch.object(sync_mod, "_git", side_effect=recording_git):
+                first = sync_mod._push_snapshot(snapshot, state, str(remote), None)
+                (snapshot / "memories/a.md").write_text("two", encoding="utf-8")
+                second = sync_mod._push_snapshot(snapshot, state, str(remote), first)
             self.assertNotEqual(first, second)
+            self.assertFalse(
+                any("--force" in argument for command in calls for argument in command)
+            )
+            pushes = [command for command in calls if command[:1] == ["push"]]
+            self.assertEqual(
+                pushes,
+                [
+                    ["push", "origin", "refs/heads/main:refs/heads/main"],
+                    ["push", "origin", "refs/heads/main:refs/heads/main"],
+                ],
+            )
             count = subprocess.run(["git", f"--git-dir={remote}", "rev-list", "--count", "main"], check=True, text=True, capture_output=True).stdout.strip()
             parents = subprocess.run(["git", f"--git-dir={remote}", "rev-list", "--parents", "-1", "main"], check=True, text=True, capture_output=True).stdout.split()
-            self.assertEqual(count, "1")
-            self.assertEqual(len(parents), 1)
+            self.assertEqual(count, "2")
+            self.assertEqual(len(parents), 2)
+            self.assertEqual(parents[1], first)
 
     def test_public_repository_needs_explicit_confirmation(self) -> None:
         calls: list[list[str]] = []

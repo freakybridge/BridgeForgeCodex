@@ -49,21 +49,17 @@ bridgeforge-codex 只支持 Windows、Python 3.11+ 和 Codex。请按自己的�
 
 ## 项目升级与异常诊断
 
-项目骨架版本记录在 `.codex/.bridgeforge_codex_version`。同步器先区分空白项目和已有骨架：
+项目骨架版本记录在 `.codex/.bridgeforge_codex_version`。每次 `$bridgeforge-codex` 先刷新官方产品 home，再只按“空白 / 已有骨架”区分：
 
 - 没有骨架身份和骨架资产的空白项目：直接初始化，不要求预先存在版本戳。
-- 版本 `>=1.4.31`：按当前资产归属清单格式（schema 3）更新受管资产，不重放历史迁移链。
-- 版本 `<1.4.31`：先独立审计旧项目，再进行一次确认式重建。
-- 已存在骨架资产但缺少可识别版本戳、同时存在多个版本戳或版本戳非法：在创建 `.venv` 和生成更新计划前停止，保持零写入。
+- 任意合法旧版本：版本只用于证明骨架身份，直接安装运行时最新完整基线，不读取旧 schema、旧 manifest 或逐版本兼容链。
+- 已存在骨架资产但没有版本戳：进入受控接入；双戳或非法戳在写入前停止。
 
-旧项目重建时会逐项检查项目 Rules、`AGENTS.md` 项目区、pre-commit 项目扩展和
-`.codex/hooks/project_XXXX/` 自包含 Hook 目录。散落 Hook 必须先由独立 Agent 在临时副本
-或受控步骤中整理；项目 Memory 和 Skills 自动保留并检查。
+旧项目接入时会逐文件整理 `.codex/rules/*.md` 和 `.codex/memory/**`。每个源文件展示完整迁移包并由用户确认：红线进 `AGENTS.md`，命令策略进 `.rules`，流程进 Skill，机械约束进 Hook / test，工作与设计资料进 `doc/`。`MEMORY.md`、`MEMORY_COLD.md`、`_stats.json` 固定退役，不做语义转换。
 
-每个可选项目资产都必须明确选择保留或删除。这个临时确认单在内部称为
-`PreservationManifest`：它只服务本次事务，不会长期写入项目。所有写入和验证通过后，
-同步器才删除旧戳并最后写入当前版本戳；`1.4.31+` 项目的
-`.codex/managed-skeleton.json` 只保存当前 schema 3 的资产归属和内容哈希。
+确认必须在一次连续流程中完成，中断后不保存选择并从第一个源重来。全部确认前项目零写入；确认后的新资产、最新基线、旧 Rule / Memory 删除和验证属于同一事务，失败时完整回滚。逐文件迁移确认已经授权删除对应源，不会再弹出第二次清理确认。
+
+其他可选项目资产仍通过一次性 `PreservationManifest` 明确保留或删除；它和迁移 manifest 都不长期写入项目。同步器最后才写当前版本戳，`.codex/managed-skeleton.json` 只保存当次最新 schema 3 的资产归属和内容哈希。
 
 ## 维护者协议
 

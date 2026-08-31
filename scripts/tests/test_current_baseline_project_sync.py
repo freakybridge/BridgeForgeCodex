@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import hashlib
 import json
 import os
 import shutil
@@ -317,9 +318,14 @@ class CurrentBaselineContractTests(unittest.TestCase):
         self.assertEqual(contract["schema_version"], 3)
         self.assertEqual(contract["release_version"], CURRENT_VERSION)
         self.assertEqual(contract["baseline_model"], "current-only")
-        self.assertEqual(BASELINE.MINIMUM_CURRENT_BASELINE, (1, 4, 31))
+        self.assertFalse(hasattr(BASELINE, "MINIMUM_CURRENT_BASELINE"))
         self.assertNotIn("minimum_supported_version", contract)
         text = path.read_text(encoding="utf-8")
+        baseline_text = (ROOT / "templates" / "scripts" / "current_baseline.py").read_text(
+            encoding="utf-8"
+        )
+        self.assertNotIn("MINIMUM_CURRENT_BASELINE", baseline_text)
+        self.assertNotIn("predates 1.4.31", baseline_text)
         self.assertLessEqual(len(text.splitlines()), 2148)
         for token in (
             "historical_sha256",
@@ -390,6 +396,36 @@ class CurrentProjectSyncTests(unittest.TestCase):
             if path.is_file()
         }
         return directories, files
+
+    def confirmed_retirement_manifest(self) -> dict[str, object]:
+        migration = SYNC._trusted_asset_migration_module()
+        records = []
+        for source in migration.inventory(self.project)["sources"]:
+            fixed = bool(source["fixed_retirement"])
+            records.append({
+                "asset_id": source["asset_id"],
+                "source_path": source["source_path"],
+                "source_sha256": source["source_sha256"],
+                "kind": source["kind"],
+                "confirmed": True,
+                "retire_source": True,
+                "summary": "test-confirmed complete source package",
+                "retirement_reason": (
+                    migration.FIXED_DERIVED_RETIREMENT
+                    if fixed
+                    else "test user confirmed this source is obsolete"
+                ),
+                "decisions": [],
+                "discarded": (
+                    []
+                    if fixed
+                    else [{
+                        "summary": "obsolete test content",
+                        "reason": "test user explicitly confirmed deletion",
+                    }]
+                ),
+            })
+        return {"schema_version": 1, "sources": records}
 
     def write_project_hook_bundle(self, name: str = "project_risk") -> Path:
         bundle = self.project / ".codex" / "hooks" / name
@@ -590,6 +626,25 @@ class CurrentProjectSyncTests(unittest.TestCase):
             CURRENT_VERSION,
         )
 
+    def test_clean_old_project_rebuilds_to_latest_without_confirmation(self) -> None:
+        codex = self.project / ".codex"
+        codex.mkdir()
+        (codex / ".bridgeforge_version").write_text(
+            LEGACY_VERSION + "\n",
+            encoding="utf-8",
+        )
+        plan = SYNC.build_plan(self.project, ROOT, "auto")
+        self.assertEqual(plan.mode, "rebuild")
+        self.assertFalse(plan.risk_actions)
+        self.assertFalse(plan.preservation_entries)
+        self.assertFalse(SYNC._plan_payload(plan)["confirmation_required"])
+        receipt = self.apply(plan)
+        self.assertEqual(receipt.status, "completed")
+        BASELINE.verify_current_baseline(
+            self.project,
+            expected_version=CURRENT_VERSION,
+        )
+
     def test_explicit_init_rejects_existing_unstamped_skeleton(self) -> None:
         (self.project / ".codex").mkdir()
         plan = SYNC.build_plan(self.project, ROOT, "init")
@@ -678,14 +733,12 @@ class CurrentProjectSyncTests(unittest.TestCase):
         doc_readme_path.parent.mkdir()
         doc_readme_path.write_text(doc_readme, encoding="utf-8")
         skill_before = project_skill.read_bytes()
-        memory_before = memory.read_bytes()
-
         plan = SYNC.build_plan(self.project, ROOT, "auto")
         self.assertEqual(plan.mode, "rebuild")
         self.assertEqual(plan.previous_version, LEGACY_VERSION)
         with self.assertRaisesRegex(
             SYNC.SyncBlocked,
-            "confirmed-preservation-manifest",
+            "requires one confirmed migration package",
         ):
             self.apply(plan)
         self.assertEqual(
@@ -693,6 +746,12 @@ class CurrentProjectSyncTests(unittest.TestCase):
             LEGACY_VERSION,
         )
 
+        plan = SYNC.build_plan(
+            self.project,
+            ROOT,
+            "auto",
+            migration_manifest=self.confirmed_retirement_manifest(),
+        )
         preserve = tuple(
             item["id"]
             for item in plan.preservation_entries
@@ -700,7 +759,6 @@ class CurrentProjectSyncTests(unittest.TestCase):
             in {
                 "AGENTS.md",
                 ".codex/hooks/project_only",
-                ".codex/rules/project_only.md",
             }
         )
         delete = tuple(
@@ -721,6 +779,7 @@ class CurrentProjectSyncTests(unittest.TestCase):
         receipt = self.apply(
             plan,
             confirmed_preservation_manifest=True,
+            confirmed_asset_migration=True,
             confirmed_risk=True,
             preserved_project_asset_ids=preserve,
             deleted_project_asset_ids=delete,
@@ -730,9 +789,9 @@ class CurrentProjectSyncTests(unittest.TestCase):
         self.assertFalse(old_stamp.exists())
         self.assertTrue((project_hook / "entrypoint.py").is_file())
         self.assertTrue((project_hook / "helper.py").is_file())
-        self.assertTrue(project_rule.is_file())
+        self.assertFalse(project_rule.exists())
         self.assertEqual(project_skill.read_bytes(), skill_before)
-        self.assertEqual(memory.read_bytes(), memory_before)
+        self.assertFalse(memory.exists())
         self.assertIn("after-preservation-manifest-clear", checkpoints)
         self.assertIn(
             "PROJECT-ZONE-SENTINEL",
@@ -787,6 +846,32 @@ class CurrentProjectSyncTests(unittest.TestCase):
         self.assertEqual(plan.actions, [])
         receipt = self.apply(plan)
         self.assertEqual(receipt.applied, ())
+
+    def test_latest_rebuild_preserves_gitattributes_project_exceptions(self) -> None:
+        self.apply(SYNC.build_plan(self.project, ROOT, "init"))
+        attributes = self.project / ".gitattributes"
+        attributes.write_bytes(
+            b"* text=auto eol=lf\r\n"
+            b".githooks/** text eol=lf\r\n"
+            b"*.bat text eol=crlf\r\n"
+        )
+        stamp = self.project / SYNC.CURRENT_STAMP
+        stamp.write_text("0.0.0\n", encoding="utf-8")
+
+        plan = SYNC.build_plan(self.project, ROOT, "auto")
+
+        self.assertFalse(plan.blockers)
+        self.assertEqual(plan.mode, "rebuild")
+        receipt = self.apply(
+            plan,
+            confirmed_preservation_manifest=True,
+            confirmed_risk=True,
+        )
+        self.assertEqual(receipt.mode, "rebuild")
+        result = attributes.read_text(encoding="utf-8")
+        self.assertIn("* text=auto eol=lf", result)
+        self.assertIn(".githooks/** text eol=lf", result)
+        self.assertIn("*.bat text eol=crlf", result)
 
     def test_new_whole_asset_collision_requires_confirmed_risk(self) -> None:
         asset_id = "codex.doc.hook-signals"
@@ -1240,7 +1325,7 @@ class CurrentProjectSyncTests(unittest.TestCase):
         with self.assertRaisesRegex(BASELINE.BaselineError, "identity set"):
             BASELINE.verify_current_baseline(self.project)
 
-    def test_rebuild_drops_every_unselected_project_surface(self) -> None:
+    def test_rebuild_drops_selected_surfaces_but_preserves_merge_extensions(self) -> None:
         codex = self.project / ".codex"
         (codex / "hooks").mkdir(parents=True)
         (codex / ".bridgeforge_version").write_text(
@@ -1295,7 +1380,7 @@ class CurrentProjectSyncTests(unittest.TestCase):
         settings = json.loads(
             (self.project / ".codex" / "settings.json").read_text(encoding="utf-8")
         )
-        self.assertNotIn("projectOnly", settings)
+        self.assertIs(settings["projectOnly"], True)
         hooks = json.loads(
             (self.project / ".codex" / "hooks.json").read_text(encoding="utf-8")
         )
@@ -1507,13 +1592,17 @@ class CurrentProjectSyncTests(unittest.TestCase):
         plan = SYNC.build_plan(self.project, baseline_template, "auto")
 
         self.assertFalse(plan.blockers)
-        self.assertEqual(plan.mode, "update")
+        self.assertEqual(plan.mode, "rebuild")
         self.assertIn(
             "stamp.remove-obsolete",
             [item.asset_id for item in plan.actions],
         )
-        receipt = self.apply(plan)
-        self.assertEqual(receipt.mode, "update")
+        receipt = self.apply(
+            plan,
+            confirmed_preservation_manifest=True,
+            confirmed_risk=True,
+        )
+        self.assertEqual(receipt.mode, "rebuild")
         self.assertFalse(obsolete.exists())
         self.assertEqual(
             current.read_text(encoding="utf-8").strip(),
@@ -1723,7 +1812,7 @@ class CurrentProjectSyncTests(unittest.TestCase):
         )
         self.assertFalse((self.project / SYNC.CURRENT_STAMP).exists())
 
-    def test_rebuild_preserves_legacy_memory_and_reports_gap(self) -> None:
+    def test_rebuild_reports_each_legacy_memory_and_requires_manifest(self) -> None:
         stamp = self.project / SYNC.OBSOLETE_STAMP
         stamp.parent.mkdir(parents=True)
         stamp.write_text(LEGACY_VERSION + "\n", encoding="utf-8")
@@ -1739,55 +1828,33 @@ class CurrentProjectSyncTests(unittest.TestCase):
         plan = SYNC.build_plan(self.project, ROOT, "auto")
 
         self.assertFalse(plan.blockers)
-        entry = next(
-            item
-            for item in plan.preservation_entries
-            if item.get("id") == "R:legacy-project-memory"
+        migration = plan.asset_migration
+        self.assertEqual(migration["status"], "awaiting-confirmation")
+        self.assertEqual(migration["source_count"], 1)
+        scanned = migration["sources"][0]
+        self.assertEqual(scanned["source_path"], ".codex/memory/note.md")
+        self.assertEqual(
+            scanned["source_sha256"],
+            "sha256:" + hashlib.sha256(expected).hexdigest(),
         )
-        self.assertEqual(entry["status"], "legacy-gap")
-        self.assertEqual(entry["disposition"], "required-preserve")
-        self.assertEqual(entry["file_count"], 1)
-        self.assertIn("pending per-project migration", entry["reason"])
-        self.assertEqual(len(entry["files"]), 1)
-        scanned = entry["files"][0]
-        self.assertEqual(scanned["source_path"], "note.md")
-        self.assertEqual(scanned["size_bytes"], len(expected))
-        self.assertEqual(scanned["sha256"], SYNC._sha256_bytes(expected))
-        self.assertEqual(scanned["information_type"], "body")
-        self.assertEqual(scanned["ledger_status"], "discovered")
-        self.assertEqual(scanned["disposition"], "hold")
-        self.assertEqual(scanned["metadata"]["category"], "engineering")
+        self.assertEqual(scanned["kind"], "legacy-memory")
+        self.assertFalse(scanned["fixed_retirement"])
         machine = SYNC._plan_payload(plan)
-        self.assertEqual(machine["status"], "planned_with_gaps")
+        self.assertEqual(machine["status"], "planned")
         self.assertEqual(machine["readiness"], "action_required")
         human = SYNC._plan_human_result(machine)
         self.assertIn(human["conclusion"], SYNC.USER_CONCLUSIONS)
         self.assertTrue(any(
-            "1 个 legacy" in item and "尚未迁移" in item
+            "逐文件确认 1 个旧 Rule/Memory" in item
             for item in human["pending_items"]
         ))
-
-        receipt = self.apply(
-            plan,
-            confirmed_preservation_manifest=True,
-            confirmed_risk=True,
-        )
-
+        with self.assertRaisesRegex(SYNC.SyncBlocked, "requires one confirmed"):
+            self.apply(
+                plan,
+                confirmed_preservation_manifest=True,
+                confirmed_risk=True,
+            )
         self.assertEqual(note.read_bytes(), expected)
-        self.assertEqual(receipt.status, "completed_with_gaps")
-        self.assertEqual(receipt.readiness, "action_required")
-        receipt_human = SYNC._receipt_human_result(SYNC.asdict(receipt))
-        self.assertEqual(
-            receipt_human["conclusion"],
-            SYNC.USER_CONCLUSION_COMPLETED_WITH_ACTIONS,
-        )
-        self.assertIn("未迁移、未删除", receipt_human["pending_items"][-1])
-        repeated = SYNC.build_plan(self.project, ROOT, "update")
-        self.assertFalse(repeated.blockers)
-        self.assertTrue(any(
-            item.get("status") == "legacy-gap"
-            for item in repeated.preservation_entries
-        ))
 
     def test_retired_memory_runtime_removal_plan_excludes_legacy_tree(self) -> None:
         runtime = self.project / ".codex" / "scripts" / "memory_router.py"
@@ -1820,7 +1887,7 @@ class CurrentProjectSyncTests(unittest.TestCase):
         self.assertEqual(actions[0].classification, "safe")
         self.assertEqual(legacy.read_bytes(), b"legacy project memory\n")
 
-    def test_legacy_ledger_progress_and_damage_are_reported_read_only(self) -> None:
+    def test_ephemeral_manifest_hash_drift_is_reported_read_only(self) -> None:
         stamp = self.project / SYNC.OBSOLETE_STAMP
         stamp.parent.mkdir(parents=True)
         stamp.write_text(LEGACY_VERSION + "\n", encoding="utf-8")
@@ -1832,92 +1899,29 @@ class CurrentProjectSyncTests(unittest.TestCase):
         )
         expected = note.read_bytes()
 
-        initial = SYNC.build_plan(self.project, ROOT, "auto")
-        entry = next(
-            item for item in initial.preservation_entries
-            if item.get("id") == "R:legacy-project-memory"
+        manifest = self.confirmed_retirement_manifest()
+        confirmed = SYNC.build_plan(
+            self.project,
+            ROOT,
+            "auto",
+            migration_manifest=manifest,
         )
-        self.assertEqual(entry["ledger"]["status"], "absent")
-        scanned = entry["files"][0]
-        ledger_path = self.project / SYNC.LEGACY_MEMORY_LEDGER
-        ledger_path.parent.mkdir(parents=True)
-        ledger_path.write_text(
-            json.dumps({
-                "schema_version": 1,
-                "scan_fingerprint": entry["scan_fingerprint"],
-                "records": {
-                    scanned["asset_id"]: {
-                        "source_path": scanned["source_path"],
-                        "source_sha256": scanned["sha256"],
-                        "migration_status": "verified",
-                        "proposed_target": "doc/0_architecture/topic.md",
-                        "disposition": "migrate",
-                        "user_decision": "approve",
-                        "cleanup_decision": None,
-                    },
-                },
-            }, ensure_ascii=False, indent=2) + "\n",
-            encoding="utf-8",
-        )
-
-        current = SYNC.build_plan(self.project, ROOT, "auto")
-        current_entry = next(
-            item for item in current.preservation_entries
-            if item.get("id") == "R:legacy-project-memory"
-        )
-        self.assertFalse(current.blockers)
-        self.assertEqual(current_entry["ledger"]["status"], "current")
-        self.assertEqual(current_entry["ledger"]["progress"], {"verified": 1})
-        self.assertEqual(current_entry["files"][0]["user_decision"], "approve")
+        self.assertFalse(confirmed.blockers)
+        self.assertEqual(confirmed.asset_migration["status"], "confirmed")
         self.assertEqual(note.read_bytes(), expected)
 
-        ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
-        ledger["records"][scanned["asset_id"]]["source_sha256"] = "sha256:" + "0" * 64
-        ledger_path.write_text(
-            json.dumps(ledger, ensure_ascii=False, indent=2) + "\n",
-            encoding="utf-8",
+        note.write_text("changed after confirmation\n", encoding="utf-8")
+        drifted = SYNC.build_plan(
+            self.project,
+            ROOT,
+            "auto",
+            migration_manifest=manifest,
         )
-        source_drift = SYNC.build_plan(self.project, ROOT, "auto")
-        source_drift_entry = next(
-            item for item in source_drift.preservation_entries
-            if item.get("id") == "R:legacy-project-memory"
-        )
-        self.assertEqual(source_drift_entry["ledger"]["status"], "drifted")
-        self.assertEqual(source_drift_entry["files"][0]["ledger_status"], "drifted")
         self.assertTrue(any(
-            "ledger source drift" in error
-            for error in source_drift_entry["ledger"]["errors"]
+            "source hash drifted" in blocker
+            for blocker in drifted.blockers
         ))
-        self.assertEqual(note.read_bytes(), expected)
-
-        ledger["records"][scanned["asset_id"]]["source_sha256"] = scanned["sha256"]
-        ledger["scan_fingerprint"] = "sha256:" + "f" * 64
-        ledger_path.write_text(
-            json.dumps(ledger, ensure_ascii=False, indent=2) + "\n",
-            encoding="utf-8",
-        )
-        fingerprint_drift = SYNC.build_plan(self.project, ROOT, "auto")
-        fingerprint_entry = next(
-            item for item in fingerprint_drift.preservation_entries
-            if item.get("id") == "R:legacy-project-memory"
-        )
-        self.assertEqual(fingerprint_entry["ledger"]["status"], "drifted")
-        self.assertTrue(any(
-            "scan_fingerprint" in error
-            for error in fingerprint_entry["ledger"]["errors"]
-        ))
-        self.assertEqual(note.read_bytes(), expected)
-
-        ledger_path.write_text("{damaged\n", encoding="utf-8")
-        damaged = SYNC.build_plan(self.project, ROOT, "auto")
-        damaged_entry = next(
-            item for item in damaged.preservation_entries
-            if item.get("id") == "R:legacy-project-memory"
-        )
-        self.assertFalse(damaged.blockers)
-        self.assertEqual(damaged_entry["ledger"]["status"], "invalid")
-        self.assertTrue(damaged_entry["ledger"]["errors"])
-        self.assertEqual(note.read_bytes(), expected)
+        self.assertEqual(note.read_text(encoding="utf-8"), "changed after confirmation\n")
 
     def test_reparse_codex_directory_blocks_rebuild_without_writes(self) -> None:
         stamp = self.project / SYNC.OBSOLETE_STAMP
@@ -2040,7 +2044,12 @@ class CurrentProjectSyncTests(unittest.TestCase):
                 raise RuntimeError("injected obsolete-stamp failure")
 
         with self.assertRaisesRegex(SYNC.SyncBlocked, "rolled back"):
-            self.apply(plan, checkpoint=fail_after_obsolete_delete)
+            self.apply(
+                plan,
+                confirmed_preservation_manifest=True,
+                confirmed_risk=True,
+                checkpoint=fail_after_obsolete_delete,
+            )
         self.assertEqual(self.snapshot_tree(), before)
         self.assertFalse(current.exists())
         self.assertEqual(
@@ -2258,7 +2267,7 @@ class CurrentProjectSyncTests(unittest.TestCase):
         self.assertFalse((self.project / "AGENTS.md").exists())
         self.assertFalse((self.project / ".codex" / "memory").exists())
 
-    def test_legacy_memory_drift_survives_managed_rollback(self) -> None:
+    def test_legacy_memory_drift_after_confirmation_blocks_zero_write(self) -> None:
         note = self.project / ".codex" / "memory" / "legacy.md"
         note.parent.mkdir(parents=True)
         note.write_bytes(b"original legacy memory\n")
@@ -2266,19 +2275,20 @@ class CurrentProjectSyncTests(unittest.TestCase):
             LEGACY_VERSION + "\n",
             encoding="utf-8",
         )
-        plan = SYNC.build_plan(self.project, ROOT, "auto")
+        plan = SYNC.build_plan(
+            self.project,
+            ROOT,
+            "auto",
+            migration_manifest=self.confirmed_retirement_manifest(),
+        )
         self.assertFalse(plan.blockers)
-
-        def drift_memory_after_preserve(label: str) -> None:
-            if label == "after-legacy-memory-preserve":
-                note.write_bytes(b"drifted legacy memory\n")
-
-        with self.assertRaisesRegex(SYNC.SyncBlocked, "without restoring"):
+        note.write_bytes(b"drifted legacy memory\n")
+        with self.assertRaisesRegex(SYNC.SyncBlocked, "fingerprint drifted"):
             self.apply(
                 plan,
                 confirmed_preservation_manifest=True,
+                confirmed_asset_migration=True,
                 confirmed_risk=True,
-                checkpoint=drift_memory_after_preserve,
             )
 
         self.assertEqual(note.read_bytes(), b"drifted legacy memory\n")

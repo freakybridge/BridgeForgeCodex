@@ -2,9 +2,9 @@
 
 仅在根入口需要核对字段级成功条件、解释异常、证明回滚或回答用户技术追问时读取。默认用户结果必须来自同步器 `human` 区，不得倾倒本文件或 `machine` 区的字段清单。
 
-项目骨架收据必须核对：用户级刷新 commit、`execution_status`、applied、preserved project asset IDs、blockers 原文、版本戳路径与终态、rollback 字段、验证命令和逐文件工作区清单。
+项目骨架收据必须核对：用户级刷新 commit、`execution_status`、applied、迁移 manifest hash、每个源/目标、preserved project asset IDs、blockers 原文、版本戳路径与终态、rollback 字段、验证命令和逐文件工作区清单。
 
-Native Memory 收据必须核对：`project_readiness`、`user_native_memory_readiness`、长期授权状态、`hookInstalled`、`hookRuntimeVerified`、最近运行收据、Hook 修复结果和 `remote_reconcile=applied/declined/not_requested`。
+Native Memory 收据必须核对：`project_readiness`、`user_native_memory_readiness`、长期授权状态、`hookInstalled`、`hookRuntimeVerified`、`pendingAgeSeconds`、`syncHealth`、`workerActive`、`activeConflict`、最近 worker 收据、Hook 修复结果和一次性告警 ID。`busy` / `pending` 不得证明健康；只有实际普通父子提交或 no-op 收据可以证明同步完成。
 
 用户结论必须使用固定中文状态；`ready`、`gap`、`reconcile` 等英文只属于本页技术收据。禁止用项目 `ready` 掩盖用户级同步 `gap`，也禁止把本轮未执行的 `reconcile` 描述成已完成。只有用户追问原因、证据或技术细节时，才按问题范围展开对应字段；禁止一次性补发整份技术清单。
 

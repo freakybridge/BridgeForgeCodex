@@ -100,6 +100,17 @@ class Plan:
     gaps: list[Gap]
     blockers: list[str]
     preservation_entries: list[dict[str, Any]]
+    asset_migration: dict[str, Any]
+    migration_manifest: dict[str, Any] | None = field(
+        default=None,
+        repr=False,
+        compare=False,
+    )
+    validated_migration: Any | None = field(
+        default=None,
+        repr=False,
+        compare=False,
+    )
     aggregate_fingerprint: str = ""
 
     @property
@@ -285,6 +296,10 @@ def _sha256_path(path: Path) -> str:
     return _sha256_bytes(path.read_bytes())
 
 
+def _sha256_raw_path(path: Path) -> str:
+    return "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
+
+
 def _sha256_tree(path: Path) -> str:
     if not path.is_dir() or _is_reparse(path):
         raise SyncBlocked(f"project asset bundle is not a plain directory: {path}")
@@ -435,15 +450,12 @@ def _target_hash(payload: bytes, asset: dict[str, Any], project_root: Path) -> s
 def load_contract(template_root: Path) -> tuple[dict[str, Any], Path]:
     contract_path = template_root / "templates" / "managed-skeleton.json"
     checker = _trusted_current_baseline_module(template_root)
-    minimum_baseline = _minimum_current_baseline(checker)
     try:
         contract = checker.load_contract(contract_path)
     except Exception as exc:
         raise SyncBlocked(f"cannot read current-only Codex asset contract: {exc}") from exc
     release = str(contract.get("release_version", ""))
-    if _semver(release, "contract release version") < minimum_baseline:
-        rendered = ".".join(str(item) for item in minimum_baseline)
-        raise SyncBlocked(f"current-only contract must start at {rendered}")
+    _semver(release, "contract release version")
     for asset in contract["assets"]:
         source = _inside(
             template_root,
@@ -997,6 +1009,7 @@ def _fingerprint(plan: Plan) -> str:
         "gaps": [asdict(item) for item in plan.gaps],
         "blockers": plan.blockers,
         "preservation_entries": plan.preservation_entries,
+        "asset_migration": plan.asset_migration,
     }
     return _sha256_bytes(_canonical_json(payload))
 
@@ -1041,15 +1054,28 @@ def _trusted_current_baseline_module(template_root: Path) -> Any:
     return module
 
 
-def _minimum_current_baseline(checker: Any) -> tuple[int, int, int]:
-    value = getattr(checker, "MINIMUM_CURRENT_BASELINE", None)
-    if (
-        not isinstance(value, tuple)
-        or len(value) != 3
-        or any(not isinstance(item, int) or item < 0 for item in value)
-    ):
-        raise SyncBlocked("current baseline checker has an invalid minimum baseline")
-    return value
+def _trusted_asset_migration_module() -> Any:
+    path = Path(__file__).resolve().with_name("project_asset_migration.py")
+    if not path.is_file():
+        raise SyncBlocked(f"project asset migration module is missing: {path}")
+    module_name = "_bridgeforge_project_asset_migration"
+    spec = importlib.util.spec_from_file_location(module_name, path)
+    if spec is None or spec.loader is None:
+        raise SyncBlocked("project asset migration module cannot be loaded")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    previous = sys.dont_write_bytecode
+    sys.dont_write_bytecode = True
+    try:
+        spec.loader.exec_module(module)
+    except Exception as exc:
+        sys.modules.pop(module_name, None)
+        raise SyncBlocked(
+            f"project asset migration module cannot be loaded: {exc}"
+        ) from exc
+    finally:
+        sys.dont_write_bytecode = previous
+    return module
 
 
 def _marker_block(payload: bytes, begin: str, end: str) -> tuple[int, int, bytes]:
@@ -1275,6 +1301,16 @@ def _desired_payload(
     return _render_source(source, asset, project_root)
 
 
+def _asset_supports_migration_composition(asset: dict[str, Any]) -> bool:
+    """Whether migration content can occupy only project-owned portions."""
+
+    return bool(
+        asset.get("agents_zones") is not None
+        or isinstance(asset.get("managed_blocks"), dict)
+        or str(asset.get("strategy")) in {"merge", "region", "seed"}
+    )
+
+
 def _legacy_memory_inventory(memory: Path) -> list[dict[str, Any]]:
     inventory: list[dict[str, Any]] = []
     derived_names = {"MEMORY.md", "MEMORY_COLD.md", "_stats.json"}
@@ -1395,6 +1431,7 @@ def _project_asset_candidates(
     root: Path,
     agents_asset: dict[str, Any],
     desired_targets: set[str],
+    canonical_agents: bytes,
 ) -> tuple[list[dict[str, Any]], list[str]]:
     candidates: list[dict[str, Any]] = []
     blockers: list[str] = []
@@ -1415,14 +1452,20 @@ def _project_asset_candidates(
                 str(agents_asset["agents_zones"]["project"]["begin"]),
                 str(agents_asset["agents_zones"]["project"]["end"]),
             )
-            candidates.append({
-                "id": "P:agents-project-zone",
-                "kind": "agents-project-zone",
-                "target": "AGENTS.md",
-                "sha256": _sha256_bytes(block),
-                "recommended": "preserve",
-                "disposition": "user-decision",
-            })
+            _canonical_start, _canonical_stop, canonical_block = _marker_block(
+                canonical_agents,
+                str(agents_asset["agents_zones"]["project"]["begin"]),
+                str(agents_asset["agents_zones"]["project"]["end"]),
+            )
+            if _git_blob_bytes(block) != _git_blob_bytes(canonical_block):
+                candidates.append({
+                    "id": "P:agents-project-zone",
+                    "kind": "agents-project-zone",
+                    "target": "AGENTS.md",
+                    "sha256": _sha256_bytes(block),
+                    "recommended": "preserve",
+                    "disposition": "user-decision",
+                })
         except SyncBlocked as exc:
             blockers.append(f"AGENTS project markers are invalid: {exc}")
 
@@ -1568,6 +1611,10 @@ def _project_asset_candidates(
             relative = path.relative_to(root).as_posix()
             if relative in desired_targets:
                 continue
+            if path.suffix.casefold() == ".md":
+                # Retired Claude-style Markdown Rules are owned by the
+                # per-source migration manifest, not preserve/delete guesses.
+                continue
             candidates.append({
                 "id": f"P:rule:{relative}",
                 "kind": "rule",
@@ -1577,43 +1624,6 @@ def _project_asset_candidates(
                 "disposition": "user-decision",
             })
 
-    memory = root / ".codex" / "memory"
-    if memory.exists():
-        try:
-            tree_hash = _sha256_tree(memory)
-        except SyncBlocked as exc:
-            blockers.append(str(exc))
-        else:
-            try:
-                files = _legacy_memory_inventory(memory)
-            except SyncBlocked as exc:
-                blockers.append(str(exc))
-                files = []
-            if not files and blockers:
-                return candidates, blockers
-            scan_fingerprint = _sha256_bytes(_canonical_json(files))
-            ledger = _reconcile_legacy_memory_ledger(
-                root,
-                files,
-                scan_fingerprint,
-            )
-            candidates.append({
-                "id": "R:legacy-project-memory",
-                "kind": "legacy-project-memory",
-                "target": ".codex/memory",
-                "sha256": tree_hash,
-                "file_count": len(files),
-                "files": files,
-                "scan_fingerprint": scan_fingerprint,
-                "ledger": ledger,
-                "recommended": "preserve",
-                "disposition": "required-preserve",
-                "status": "legacy-gap",
-                "reason": (
-                    "legacy project memory pending per-project migration; "
-                    "preserve the complete tree byte-for-byte"
-                ),
-            })
     skills = root / ".codex" / "skills"
     if skills.exists():
         try:
@@ -1789,12 +1799,18 @@ def _current_contract_removals(
     return actions, blockers, removed_targets
 
 
-def build_plan(project_root: Path, template_root: Path, mode: str = "auto") -> Plan:
+def build_plan(
+    project_root: Path,
+    template_root: Path,
+    mode: str = "auto",
+    *,
+    migration_manifest: dict[str, Any] | None = None,
+) -> Plan:
     root = _plain_root(project_root, "project root")
     template = _plain_root(template_root, "template root")
     contract, contract_path = load_contract(template)
     checker = _trusted_current_baseline_module(template)
-    minimum_baseline = _minimum_current_baseline(checker)
+    migration_module = _trusted_asset_migration_module()
     selected_mode = _detect_mode(root, mode)
     current_version = (template / "VERSION").read_text(
         encoding="utf-8-sig"
@@ -1808,6 +1824,40 @@ def build_plan(project_root: Path, template_root: Path, mode: str = "auto") -> P
     blockers: list[str] = []
     previous_version: str | None = None
     current_stamp_before_sha256: str | None = None
+    validated_migration: Any | None = None
+    reserved_migration_targets = {
+        str(contract["contract_target"]),
+        CURRENT_STAMP,
+        OBSOLETE_STAMP,
+        *(
+            str(asset["target"])
+            for asset in contract["assets"]
+            if not _asset_supports_migration_composition(asset)
+        ),
+    }
+    try:
+        if migration_manifest is None:
+            asset_migration = migration_module.inventory(root)
+        else:
+            validated_migration = migration_module.validate_manifest(
+                root,
+                migration_manifest,
+                reserved_targets=reserved_migration_targets,
+            )
+            asset_migration = validated_migration.public()
+    except migration_module.MigrationBlocked as exc:
+        blockers.append(f"project asset migration blocked: {exc}")
+        try:
+            asset_migration = migration_module.inventory(root)
+        except migration_module.MigrationBlocked:
+            asset_migration = {
+                "status": "blocked",
+                "schema_version": migration_module.SCHEMA_VERSION,
+                "source_count": 0,
+                "target_count": 0,
+                "sources": [],
+                "targets": [],
+            }
 
     def blocked_plan() -> Plan:
         plan = Plan(
@@ -1822,6 +1872,9 @@ def build_plan(project_root: Path, template_root: Path, mode: str = "auto") -> P
             gaps=[],
             blockers=blockers,
             preservation_entries=[],
+            asset_migration=asset_migration,
+            migration_manifest=migration_manifest,
+            validated_migration=validated_migration,
         )
         plan.aggregate_fingerprint = _fingerprint(plan)
         return plan
@@ -1873,7 +1926,7 @@ def build_plan(project_root: Path, template_root: Path, mode: str = "auto") -> P
         previous_version = old_stamp.read_text(encoding="utf-8-sig").strip()
     elif stamp_present:
         previous_version = stamp.read_text(encoding="utf-8-sig").strip()
-    elif selected_mode != "init":
+    elif selected_mode not in {"init", "adopt"}:
         blockers.append(
             "existing project has no recognized version stamp; zero writes performed"
         )
@@ -1892,9 +1945,16 @@ def build_plan(project_root: Path, template_root: Path, mode: str = "auto") -> P
             blockers.append(
                 f"project version {previous_version} is newer than {current_version}"
             )
+    # Current-only means every older or obsolete identity receives one clean
+    # installation of the latest product home.  No historical baseline or
+    # schema selects an incremental compatibility path.
     rebuild = bool(
-        previous_semver is not None
-        and previous_semver < minimum_baseline
+        selected_mode == "adopt"
+        or old_stamp_present
+        or (
+            previous_semver is not None
+            and previous_semver < current_semver
+        )
     )
     if blockers:
         return blocked_plan()
@@ -1988,6 +2048,10 @@ def build_plan(project_root: Path, template_root: Path, mode: str = "auto") -> P
                 not rebuild
                 or asset.get("strategy") == "seed"
                 or isinstance(asset.get("managed_blocks"), dict)
+                or (
+                    asset.get("strategy") == "merge"
+                    and asset.get("merge_policy") != "codex-hooks"
+                )
             )
             else None
         )
@@ -2055,17 +2119,29 @@ def build_plan(project_root: Path, template_root: Path, mode: str = "auto") -> P
         root,
         agents_asset,
         desired_targets | removed_current_targets,
+        _inside(
+            template,
+            str(agents_asset["source"]),
+            "canonical AGENTS source",
+        ).read_bytes(),
     )
     blockers.extend(candidate_blockers)
     candidates: list[dict[str, Any]] = (
         inspected_candidates
         if rebuild
-        else [
-            item
-            for item in inspected_candidates
-            if item.get("kind") == "legacy-project-memory"
-        ]
+        else []
     )
+    migration_source_paths = {
+        str(item["source_path"])
+        for item in asset_migration.get("sources", [])
+        if isinstance(item, dict) and isinstance(item.get("source_path"), str)
+    }
+    managed_source_collisions = sorted(migration_source_paths & desired_targets)
+    if managed_source_collisions:
+        blockers.append(
+            "legacy migration source collides with current baseline: "
+            + ", ".join(managed_source_collisions)
+        )
     if rebuild:
         codex_root = root / ".codex"
         if codex_root.is_dir() and not _is_reparse(codex_root):
@@ -2086,6 +2162,7 @@ def build_plan(project_root: Path, template_root: Path, mode: str = "auto") -> P
             known_targets = (
                 desired_targets
                 | candidate_targets
+                | migration_source_paths
                 | {
                     OBSOLETE_STAMP,
                     ".codex/memory",
@@ -2126,7 +2203,7 @@ def build_plan(project_root: Path, template_root: Path, mode: str = "auto") -> P
                 if (
                     relative in desired_targets
                     or relative == OBSOLETE_STAMP
-                    or relative.startswith(".codex/memory/")
+                    or relative in migration_source_paths
                     or relative.startswith(".codex/skills/")
                     or any(
                         relative == target or relative.startswith(target + "/")
@@ -2157,10 +2234,120 @@ def build_plan(project_root: Path, template_root: Path, mode: str = "auto") -> P
                     payload=None,
                 ))
         selected_mode = "rebuild"
+    if validated_migration is not None:
+        existing_action_targets = {action.target.casefold() for action in actions}
+        contract_asset_by_target = {
+            str(asset["target"]).casefold(): asset
+            for asset in contract["assets"]
+        }
+        for index, target_write in enumerate(validated_migration.targets):
+            folded_target = target_write.target.casefold()
+            contract_asset = contract_asset_by_target.get(folded_target)
+            payload = target_write.payload
+            if contract_asset is not None:
+                if not _asset_supports_migration_composition(contract_asset):
+                    blockers.append(
+                        "migration target is fully owned by the current baseline: "
+                        + target_write.target
+                    )
+                    continue
+                source = _inside(
+                    template,
+                    str(contract_asset["source"]),
+                    f"migration composition source {contract_asset['id']}",
+                ).read_bytes()
+                try:
+                    payload = _desired_payload(
+                        contract_asset,
+                        source,
+                        target_write.payload,
+                        root,
+                    )
+                except (OSError, UnicodeDecodeError, json.JSONDecodeError, SyncBlocked) as exc:
+                    blockers.append(
+                        "migration content overlaps or damages the managed portion of "
+                        f"{target_write.target}: {exc}"
+                    )
+                    continue
+                actions = [
+                    action
+                    for action in actions
+                    if action.target.casefold() != folded_target
+                ]
+                existing_action_targets.discard(folded_target)
+            elif folded_target in existing_action_targets:
+                blockers.append(
+                    "migration target duplicates another planned action: "
+                    + target_write.target
+                )
+                continue
+            if payload is None:
+                blockers.append(
+                    "migration composition produced no deterministic payload: "
+                    + target_write.target
+                )
+                continue
+            current_target = root / target_write.target
+            current_payload = (
+                current_target.read_bytes()
+                if current_target.is_file()
+                else None
+            )
+            if (
+                current_payload is not None
+                and _git_blob_bytes(current_payload) == _git_blob_bytes(payload)
+            ):
+                continue
+            actions.append(Action(
+                asset_id=(
+                    f"migration.compose.{index}"
+                    if contract_asset is not None
+                    else f"migration.write.{index}"
+                ),
+                target=target_write.target,
+                action=(
+                    "create"
+                    if target_write.before_sha256 is None
+                    else "replace"
+                ),
+                classification="risk",
+                reason=target_write.reason,
+                before_sha256=target_write.before_sha256,
+                after_sha256=_sha256_bytes(payload),
+                local_impact=(
+                    "migrate confirmed project knowledge from "
+                    + ", ".join(target_write.source_asset_ids)
+                ),
+                payload=payload,
+            ))
+            existing_action_targets.add(folded_target)
+        for source in validated_migration.sources:
+            if source.source_path.casefold() in existing_action_targets:
+                blockers.append(
+                    "legacy source duplicates another planned action: "
+                    + source.source_path
+                )
+                continue
+            actions.append(Action(
+                asset_id="migration.retire." + source.asset_id,
+                target=source.source_path,
+                action="delete",
+                classification="risk",
+                reason="retire one fully covered and user-confirmed legacy source",
+                before_sha256=source.source_sha256,
+                after_sha256=None,
+                local_impact="delete the confirmed legacy source in the same transaction",
+                payload=None,
+            ))
+            existing_action_targets.add(source.source_path.casefold())
     forbidden_action_targets = sorted({
         action.target
         for action in actions
         if _targets_retired_project_memory(action.target)
+        and not (
+            action.action == "delete"
+            and action.asset_id.startswith("migration.retire.")
+        )
     })
     if forbidden_action_targets:
         blockers.append(
@@ -2179,6 +2366,9 @@ def build_plan(project_root: Path, template_root: Path, mode: str = "auto") -> P
         gaps=gaps,
         blockers=blockers,
         preservation_entries=candidates,
+        asset_migration=asset_migration,
+        migration_manifest=migration_manifest,
+        validated_migration=validated_migration,
     )
     plan.aggregate_fingerprint = _fingerprint(plan)
     return plan
@@ -2258,8 +2448,6 @@ class _Transaction:
                         f"transaction tree contains a non-plain file: {candidate}"
                     )
                 candidate.unlink()
-            for name in dirnames:
-                (current_path / name).rmdir()
             current_path.rmdir()
 
     def _rollback_tree(
@@ -2376,6 +2564,7 @@ def _run_current_validators(project_root: Path, actions: Iterable[Action]) -> No
     result = subprocess.run(
         [sys.executable, str(health), "--strict", "--post-apply"],
         cwd=project_root,
+        env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
         capture_output=True,
         text=True,
         encoding="utf-8",
@@ -2389,8 +2578,13 @@ def _run_current_validators(project_root: Path, actions: Iterable[Action]) -> No
         )
 
 
-def _preserved_knowledge_snapshots(project_root: Path) -> dict[Path, bytes]:
+def _preserved_knowledge_snapshots(
+    project_root: Path,
+    *,
+    excluded_relatives: Iterable[str] = (),
+) -> dict[Path, bytes]:
     snapshots: dict[Path, bytes] = {}
+    excluded = {str(item).casefold() for item in excluded_relatives}
     for folder_name in ("memory", "skills"):
         folder = project_root / ".codex" / folder_name
         if not folder.is_dir() or _is_reparse(folder):
@@ -2398,6 +2592,9 @@ def _preserved_knowledge_snapshots(project_root: Path) -> dict[Path, bytes]:
         for target in sorted(item for item in folder.rglob("*") if item.is_file()):
             if _is_reparse(target):
                 raise SyncBlocked(f"project knowledge contains a linked file: {target}")
+            relative = target.relative_to(project_root).as_posix().casefold()
+            if relative in excluded:
+                continue
             snapshots[target] = target.read_bytes()
     return snapshots
 
@@ -2501,6 +2698,7 @@ def apply_plan(
     plan_fingerprint: str,
     confirmed_risk: bool = False,
     confirmed_preservation_manifest: bool = False,
+    confirmed_asset_migration: bool = False,
     preserved_project_asset_ids: tuple[str, ...] = (),
     deleted_project_asset_ids: tuple[str, ...] = (),
     checkpoint: Callable[[str], None] | None = None,
@@ -2511,6 +2709,7 @@ def apply_plan(
         Path(planned.project_root),
         Path(planned.template_root),
         planned.mode,
+        migration_manifest=planned.migration_manifest,
     )
     replan_ms = (time.perf_counter() - replan_started) * 1000
     return _apply_rebuilt_plan(
@@ -2519,6 +2718,7 @@ def apply_plan(
         plan_fingerprint=plan_fingerprint,
         confirmed_risk=confirmed_risk,
         confirmed_preservation_manifest=confirmed_preservation_manifest,
+        confirmed_asset_migration=confirmed_asset_migration,
         preserved_project_asset_ids=preserved_project_asset_ids,
         deleted_project_asset_ids=deleted_project_asset_ids,
         checkpoint=checkpoint,
@@ -2534,13 +2734,14 @@ def _apply_rebuilt_plan(
     plan_fingerprint: str,
     confirmed_risk: bool = False,
     confirmed_preservation_manifest: bool = False,
+    confirmed_asset_migration: bool = False,
     preserved_project_asset_ids: tuple[str, ...] = (),
     deleted_project_asset_ids: tuple[str, ...] = (),
     checkpoint: Callable[[str], None] | None = None,
     replan_ms: float,
     apply_started: float,
 ) -> Receipt:
-    if planned.blockers or rebuilt.blockers:
+    if planned.blockers:
         raise SyncBlocked("plan contains blockers")
     if plan_fingerprint != planned.aggregate_fingerprint:
         raise SyncBlocked(
@@ -2548,8 +2749,26 @@ def _apply_rebuilt_plan(
         )
     if rebuilt.aggregate_fingerprint != plan_fingerprint:
         raise SyncBlocked("aggregate fingerprint drifted; zero writes performed")
+    if rebuilt.blockers:
+        raise SyncBlocked("plan contains blockers")
     if rebuilt.gaps:
         raise SyncBlocked("plan contains unresolved gaps; zero writes performed")
+    migration_required = bool(rebuilt.asset_migration.get("source_count"))
+    if migration_required:
+        if rebuilt.asset_migration.get("status") != "confirmed":
+            raise SyncBlocked(
+                "every legacy Rule/Memory source requires one confirmed migration package; "
+                "zero writes performed"
+            )
+        if not confirmed_asset_migration:
+            raise SyncBlocked(
+                "confirmed migration manifest requires --confirmed-asset-migration; "
+                "zero writes performed"
+            )
+    elif confirmed_asset_migration:
+        raise SyncBlocked(
+            "--confirmed-asset-migration was supplied but no legacy source exists"
+        )
     candidate_by_id = {
         str(item["id"]): item
         for item in rebuilt.preservation_entries
@@ -2558,15 +2777,20 @@ def _apply_rebuilt_plan(
     preserve_ids = tuple(dict.fromkeys(preserved_project_asset_ids))
     delete_ids = tuple(dict.fromkeys(deleted_project_asset_ids))
     preservation_manifest: PreservationManifest | None = None
+    user_decision_ids = {
+        item_id
+        for item_id, item in candidate_by_id.items()
+        if item.get("disposition") == "user-decision"
+    }
     if rebuilt.mode == "rebuild":
-        if not confirmed_preservation_manifest:
+        if user_decision_ids and not confirmed_preservation_manifest:
             raise SyncBlocked(
-                "destructive rebuild requires --confirmed-preservation-manifest "
+                "project asset decisions require --confirmed-preservation-manifest "
                 "after independent audit"
             )
-        if not confirmed_risk:
+        if rebuilt.risk_actions and not confirmed_risk:
             raise SyncBlocked(
-                "destructive rebuild requires the single --confirmed-risk decision"
+                "current-only rebuild risk actions require the single --confirmed-risk decision"
             )
     elif confirmed_preservation_manifest or preserve_ids or delete_ids:
         raise SyncBlocked("project asset decisions are only valid for old-project rebuild")
@@ -2668,7 +2892,16 @@ def _apply_rebuilt_plan(
         for asset in contract["assets"]
         if isinstance(asset, dict) and asset.get("strategy") == "seed"
     }
-    knowledge_before = _preserved_knowledge_snapshots(root)
+    migration_relatives: set[str] = set()
+    if rebuilt.validated_migration is not None:
+        migration_relatives.update(rebuilt.validated_migration.source_paths)
+        migration_relatives.update(
+            item.target for item in rebuilt.validated_migration.targets
+        )
+    knowledge_before = _preserved_knowledge_snapshots(
+        root,
+        excluded_relatives=migration_relatives,
+    )
     transaction = _Transaction(root)
     _verify_required_preserve_files(root, candidate_by_id.values())
     deleted_bundle_paths = tuple(
@@ -2682,6 +2915,13 @@ def _apply_rebuilt_plan(
     )
     for bundle_path in deleted_bundle_paths:
         transaction.snapshot_tree(bundle_path)
+    migration_memory = root / RETIRED_PROJECT_MEMORY_ROOT
+    migration_rules = root / ".codex" / "rules"
+    if rebuilt.validated_migration is not None:
+        if migration_memory.exists():
+            transaction.snapshot_tree(migration_memory)
+        if migration_rules.exists():
+            transaction.snapshot_tree(migration_rules)
     stamp = _lexical_inside(root, CURRENT_STAMP, "version stamp")
     stamp_present = _optional_plain_file(root, stamp, "version stamp path")
     stamp_before_sha256 = _sha256_path(stamp) if stamp_present else None
@@ -2713,7 +2953,11 @@ def _apply_rebuilt_plan(
                     raise SyncBlocked(
                         f"action target appeared after planning: {action.target}"
                     )
-            elif not target.is_file() or _sha256_path(target) != action.before_sha256:
+            elif not target.is_file() or (
+                _sha256_raw_path(target)
+                if action.asset_id.startswith("migration.")
+                else _sha256_path(target)
+            ) != action.before_sha256:
                 raise SyncBlocked(
                     f"action target drifted after planning: {action.target}"
                 )
@@ -2731,6 +2975,30 @@ def _apply_rebuilt_plan(
             transaction.delete_tree(bundle_path)
         if checkpoint is not None:
             checkpoint("after-project-hook-bundle-deletions")
+        if rebuilt.validated_migration is not None:
+            if migration_memory.exists():
+                transaction.delete_tree(migration_memory)
+            if migration_rules.is_dir():
+                for current, _dirnames, _filenames in os.walk(
+                    migration_rules,
+                    topdown=False,
+                    followlinks=False,
+                ):
+                    directory = Path(current)
+                    if directory != migration_rules and not any(directory.iterdir()):
+                        directory.rmdir()
+            remaining_sources = [
+                relative
+                for relative in rebuilt.validated_migration.source_paths
+                if (root / relative).exists()
+            ]
+            if remaining_sources:
+                raise SyncBlocked(
+                    "retired project asset still exists: "
+                    + ", ".join(remaining_sources)
+                )
+            if checkpoint is not None:
+                checkpoint("after-project-asset-migration")
         if checkpoint is not None:
             checkpoint("after-legacy-memory-preserve")
         _verify_actions(root, actions, mutable_targets=seed_targets)
@@ -2751,6 +3019,7 @@ def _apply_rebuilt_plan(
             root,
             expected_version=rebuilt.current_version,
             prospective_version=rebuilt.current_version,
+            use_git_anchor=rebuilt.mode != "rebuild",
         )
         _verify_required_preserve_files(root, candidate_by_id.values())
         if preservation_manifest is not None:
@@ -2803,7 +3072,17 @@ def _apply_rebuilt_plan(
         aggregate_fingerprint=rebuilt.aggregate_fingerprint,
         applied=applied,
         preserved_project_asset_ids=preserve_ids,
-        deleted_project_asset_ids=delete_ids,
+        deleted_project_asset_ids=(
+            delete_ids
+            + tuple(
+                item.asset_id
+                for item in (
+                    rebuilt.validated_migration.sources
+                    if rebuilt.validated_migration is not None
+                    else ()
+                )
+            )
+        ),
         stamp_written_last=stamp_written,
         rollback_performed=rollback_performed,
         timings_ms=timings,
@@ -2821,6 +3100,7 @@ def _plan_payload(
         for item in plan.preservation_entries
         if item.get("status") == "legacy-gap"
     ]
+    migration_required = bool(plan.asset_migration.get("source_count"))
     payload = {
         "status": (
             "blocked" if plan.blockers
@@ -2829,12 +3109,12 @@ def _plan_payload(
         ),
         "readiness": (
             "blocked" if plan.blockers
-            else "action_required" if legacy_gaps
+            else "action_required" if legacy_gaps or migration_required
             else "ready"
         ),
         "target_readiness": (
             "blocked" if plan.blockers
-            else "action_required" if legacy_gaps
+            else "action_required" if legacy_gaps or migration_required
             else "ready"
         ),
         "execution_status": "failed" if plan.blockers else "planned",
@@ -2861,8 +3141,16 @@ def _plan_payload(
         "gaps": [asdict(item) for item in plan.gaps],
         "blockers": plan.blockers,
         "preservation_manifest": plan.preservation_entries,
+        "asset_migration": plan.asset_migration,
         "legacy_gaps": legacy_gaps,
-        "confirmation_required": plan.mode == "rebuild" or bool(plan.risk_actions),
+        "confirmation_required": (
+            bool(plan.risk_actions)
+            or any(
+                item.get("disposition") == "user-decision"
+                for item in plan.preservation_entries
+            )
+            or bool(plan.asset_migration.get("source_count"))
+        ),
         "aggregate_fingerprint": plan.aggregate_fingerprint,
     }
     if timings_ms is not None:
@@ -2988,6 +3276,7 @@ def _plan_human_result(payload: dict[str, Any]) -> dict[str, Any]:
     risk = payload.get("risk") or []
     safe = payload.get("safe") or []
     preservation = payload.get("preservation_manifest") or []
+    migration = payload.get("asset_migration") or {}
     legacy = payload.get("legacy_gaps") or []
 
     if blockers:
@@ -3015,6 +3304,16 @@ def _plan_human_result(payload: dict[str, Any]) -> dict[str, Any]:
             pending.append(f"需要确认 {len(risk)} 项可能覆盖或删除现有内容的操作")
         if preservation:
             pending.append(f"需要确认 {len(preservation)} 项项目资产的保留或删除选择")
+        if migration.get("source_count"):
+            status = migration.get("status")
+            if status == "confirmed":
+                pending.append(
+                    f"{migration['source_count']} 个旧 Rule/Memory 已逐文件确认，等待事务执行"
+                )
+            else:
+                pending.append(
+                    f"需要逐文件确认 {migration['source_count']} 个旧 Rule/Memory 迁移包"
+                )
         if legacy:
             files = sum(int(item.get("file_count", 0)) for item in legacy)
             pending.append(
@@ -3156,6 +3455,22 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--confirmed-risk", action="store_true")
     parser.add_argument(
+        "--asset-migration-manifest",
+        type=Path,
+        help=(
+            "one ephemeral schema-v1 manifest covering every legacy Rule/Memory source; "
+            "use '-' to read UTF-8 JSON from stdin without persisting decisions"
+        ),
+    )
+    parser.add_argument(
+        "--confirmed-asset-migration",
+        action="store_true",
+        help=(
+            "confirm that every package in the supplied migration manifest "
+            "was reviewed"
+        ),
+    )
+    parser.add_argument(
         "--output-format",
         choices=("machine", "human", "combined"),
         default="machine",
@@ -3179,8 +3494,30 @@ def main(argv: list[str] | None = None) -> int:
                 "project runtime contract validation failed closed: "
                 f"{type(exc).__name__}: {exc}"
             ) from exc
+        migration_manifest = None
+        if args.asset_migration_manifest is not None:
+            try:
+                manifest_text = (
+                    sys.stdin.read()
+                    if str(args.asset_migration_manifest) == "-"
+                    else args.asset_migration_manifest.read_text(
+                        encoding="utf-8-sig"
+                    )
+                )
+                migration_manifest = _loads_json(
+                    manifest_text
+                )
+            except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+                raise SyncBlocked(
+                    f"asset migration manifest cannot be read: {exc}"
+                ) from exc
         plan_started = time.perf_counter()
-        plan = build_plan(args.project_root, args.template_root, args.mode)
+        plan = build_plan(
+            args.project_root,
+            args.template_root,
+            args.mode,
+            migration_manifest=migration_manifest,
+        )
         plan_ms = round((time.perf_counter() - plan_started) * 1000, 1)
         if not args.apply:
             machine = _plan_payload(plan, timings_ms={"plan": plan_ms})
@@ -3197,6 +3534,7 @@ def main(argv: list[str] | None = None) -> int:
             plan_fingerprint=args.plan_fingerprint,
             confirmed_risk=args.confirmed_risk,
             confirmed_preservation_manifest=args.confirmed_preservation_manifest,
+            confirmed_asset_migration=args.confirmed_asset_migration,
             preserved_project_asset_ids=tuple(args.preserve_project_asset),
             deleted_project_asset_ids=tuple(args.delete_project_asset),
         )

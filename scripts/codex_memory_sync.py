@@ -23,6 +23,9 @@ import sys
 import tempfile
 import time
 import tomllib
+import urllib.error
+import urllib.request
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from dataclasses import dataclass
@@ -37,7 +40,7 @@ CONSENT_SYNC_MODE = "bidirectional"
 HOOK_ID = "bridgeforge-codex.native-memory-sync.v1"
 HOOK_MARKER_KEY = "bridgeforgeCodexId"
 HOOK_EVENTS = ("SessionStart", "Stop", "SessionEnd")
-HOOK_RUNTIME_REVISION = 3
+HOOK_RUNTIME_REVISION = 4
 WINDOWS_HOOK_WRAPPER_NAME = "codex_memory_sync_hook.ps1"
 LEGACY_WINDOWS_HOOK_WRAPPER_NAME = "codex_memory_sync_hook.cmd"
 WORKDIR_PREFIX = "bridgeforge-codex-memory-sync-"
@@ -48,6 +51,10 @@ CONSENT_VALUES = {"approved", "declined"}
 HOOK_RUNTIME_CONTRACT = "git-root/.venv/Scripts/python.exe; CPython>=3.11"
 DYNAMIC_HOOK_RUNTIME = "<git-root>/.venv/Scripts/python.exe"
 HOOK_LOCK_TIMEOUT_SECONDS = 10.0
+SYNC_DEADLINE_SECONDS = 300.0
+WORKER_START_GRACE_SECONDS = 30.0
+WORKER_RETRY_SECONDS = 5.0
+CONFLICT_ID_RE = re.compile(r"^[0-9a-f]{16}$")
 
 
 def _load_hooks_ownership_module() -> object:
@@ -795,6 +802,7 @@ def choose_action(
     local_updated_at: str | None = None,
     remote_updated_at: str | None = None,
 ) -> str:
+    del local_updated_at, remote_updated_at
     if remote is None:
         return "push"
     if local == remote:
@@ -802,22 +810,112 @@ def choose_action(
     local_changed = synced is None or local != synced
     remote_changed = synced is None or remote != synced
     if local_changed and remote_changed:
-        if not local_updated_at or not remote_updated_at:
-            raise SyncError("local and remote snapshots both changed but update times are unavailable")
-        # A whole snapshot wins as a unit. On an exact tie, prefer the remote
-        # snapshot so a newly installed machine cannot overwrite cloud state.
-        return "push" if local_updated_at > remote_updated_at else "restore"
+        return "merge"
     return "push" if local_changed else "restore"
 
 
-def launch_background_reconcile(trigger: str, project_root: Path) -> None:
+def _parse_utc(value: object) -> datetime | None:
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _pending_payload(state_dir: Path) -> dict[str, object] | None:
+    path = state_dir / "pending.json"
+    if not path.is_file() or _is_link_or_reparse(path):
+        return None
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def _pending_age_seconds(state_dir: Path) -> float:
+    payload = _pending_payload(state_dir)
+    started = _parse_utc((payload or {}).get("firstPendingUtc") or (payload or {}).get("utc"))
+    if started is None:
+        return 0.0
+    return max(0.0, (datetime.now(timezone.utc) - started).total_seconds())
+
+
+def _worker_state_path(state_dir: Path) -> Path:
+    return state_dir / "worker.json"
+
+
+def _read_worker_state(state_dir: Path) -> dict[str, object] | None:
+    path = _worker_state_path(state_dir)
+    if not path.is_file() or _is_link_or_reparse(path):
+        return None
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def _worker_is_live(value: dict[str, object] | None) -> bool:
+    if not value:
+        return False
+    try:
+        pid = int(value.get("pid", 0) or value.get("launcherPid", 0) or 0)
+        recorded_pid = int(value.get("pid", 0) or 0)
+    except (TypeError, ValueError):
+        return False
+    if pid > 0 and _process_alive(pid):
+        return True
+    started = _parse_utc(value.get("startedUtc"))
+    return bool(
+        recorded_pid == 0
+        and started is not None
+        and (datetime.now(timezone.utc) - started).total_seconds() < WORKER_START_GRACE_SECONDS
+    )
+
+
+def launch_background_reconcile(trigger: str, project_root: Path) -> str:
+    del trigger
     root = project_root.resolve()
+    _codex, _memories, state_dir = codex_paths()
+    _real_directory(state_dir, create=True)
+    worker_path = _worker_state_path(state_dir)
+    for _attempt in range(2):
+        current = _read_worker_state(state_dir)
+        if _worker_is_live(current):
+            return "worker-reused"
+        if current is not None:
+            worker_path.unlink(missing_ok=True)
+        token = uuid.uuid4().hex
+        reservation = {
+            "schemaVersion": 1,
+            "token": token,
+            "pid": 0,
+            "launcherPid": os.getpid(),
+            "startedUtc": utc_now(),
+        }
+        try:
+            descriptor = os.open(worker_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        except FileExistsError:
+            continue
+        try:
+            os.write(descriptor, (json.dumps(reservation, sort_keys=True) + "\n").encode("utf-8"))
+        finally:
+            os.close(descriptor)
+        break
+    else:
+        return "worker-reused"
+
     command = [
         str(Path(sys.executable).resolve()),
         str(Path(__file__).resolve()),
-        "reconcile",
-        "--trigger",
-        trigger,
+        "worker",
+        "--token",
+        token,
         "--project-root",
         str(root),
     ]
@@ -829,10 +927,22 @@ def launch_background_reconcile(trigger: str, project_root: Path) -> None:
         "close_fds": True,
     }
     if os.name == "nt":
-        kwargs["creationflags"] = 0x00000008 | 0x00000200  # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
+        kwargs["creationflags"] = 0x08000000 | 0x00000008 | 0x00000200
     else:
         kwargs["start_new_session"] = True
-    subprocess.Popen(command, **kwargs)
+    try:
+        process = subprocess.Popen(command, **kwargs)
+        reservation["pid"] = process.pid
+        reservation["launcherPid"] = os.getpid()
+        current = _read_worker_state(state_dir)
+        if current and current.get("token") == token:
+            _atomic_json(worker_path, reservation)
+    except Exception:
+        current = _read_worker_state(state_dir)
+        if current and current.get("token") == token:
+            worker_path.unlink(missing_ok=True)
+        raise
+    return "worker-started"
 
 
 def _hook_runtime_receipt_path(state_dir: Path, event: str) -> Path:
@@ -865,7 +975,8 @@ def hook_runtime_verified(receipt: dict[str, object] | None) -> bool:
     return bool(
         receipt
         and receipt.get("handlerRevision") == HOOK_RUNTIME_REVISION
-        and receipt.get("status") == "succeeded"
+        and receipt.get("status") == "queued"
+        and receipt.get("action") in {"worker-started", "worker-reused"}
     )
 
 
@@ -891,22 +1002,19 @@ def run_hook_event(
         enabled, _ = memory_switches(codex / "config.toml")
         if not enabled:
             action = "disabled"
-        elif event == "SessionEnd":
-            validated_runtime_state(codex, state_dir, ledger_path)
-            mark_pending(state_dir, "session-end")
-            launch_background_reconcile("session-end", project_root)
-            action = "kicked"
         else:
-            state_dir, authorization = validated_runtime_state(
+            state_dir, _authorization = validated_runtime_state(
                 codex,
                 state_dir,
                 ledger_path,
             )
-            remote = str(authorization["remote"])
-            verify_private_github_repository(remote)
-            action = reconcile(memories, state_dir, remote)
+            mark_pending(state_dir, event.lower())
+            if event == "SessionStart":
+                _persist_overdue_pending_health(state_dir)
+                _emit_alert_once(state_dir)
+            action = launch_background_reconcile(event.lower(), project_root)
         receipt.update({
-            "status": "succeeded",
+            "status": "disabled" if action == "disabled" else "queued",
             "action": action,
             "completedUtc": utc_now(),
         })
@@ -979,6 +1087,77 @@ def ensure_github_repository(
     return remote, action
 
 
+def _github_repository_identity(remote: str) -> str:
+    normalized = _normalize_remote(remote).replace("\\", "/")
+    patterns = (
+        r"https?://github\.com/([^/\s]+/[^/\s]+)$",
+        r"ssh://git@github\.com/([^/\s]+/[^/\s]+)$",
+        r"git@github\.com:([^/\s]+/[^/\s]+)$",
+    )
+    for pattern in patterns:
+        match = re.fullmatch(pattern, normalized, flags=re.IGNORECASE)
+        if match:
+            return match.group(1)
+    raise SyncError("approved memories repository is not a supported GitHub remote")
+
+
+def _github_metadata_via_git_credential(
+    remote: str,
+    *,
+    run: Run,
+) -> dict[str, object]:
+    name_with_owner = _github_repository_identity(remote)
+    environment = os.environ.copy()
+    environment.update({
+        "GIT_TERMINAL_PROMPT": "0",
+        "GCM_INTERACTIVE": "Never",
+    })
+    credential = run(
+        ["git", "-c", "credential.interactive=never", "credential", "fill"],
+        input=(
+            "protocol=https\n"
+            "host=github.com\n"
+            f"path={name_with_owner}\n\n"
+        ),
+        env=environment,
+    )
+    if credential.returncode:
+        raise SyncError("approved memories repository identity cannot be verified non-interactively")
+    fields = dict(
+        line.split("=", 1)
+        for line in credential.stdout.splitlines()
+        if "=" in line
+    )
+    token = fields.get("password", "")
+    if not token:
+        raise SyncError("approved memories repository identity cannot be verified non-interactively")
+    request = urllib.request.Request(
+        f"https://api.github.com/repos/{name_with_owner}",
+        headers={
+            "Accept": "application/vnd.github+json",
+            "Authorization": f"Bearer {token}",
+            "User-Agent": "bridgeforge-codex-native-memory-sync",
+            "X-GitHub-Api-Version": "2022-11-28",
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=EXTERNAL_COMMAND_TIMEOUT) as response:
+            payload = response.read().decode("utf-8")
+        data = json.loads(payload)
+    except (
+        OSError,
+        TimeoutError,
+        UnicodeDecodeError,
+        json.JSONDecodeError,
+        urllib.error.HTTPError,
+        urllib.error.URLError,
+    ) as exc:
+        raise SyncError("approved memories repository identity cannot be verified non-interactively") from exc
+    if not isinstance(data, dict):
+        raise SyncError("approved memories repository returned invalid metadata")
+    return data
+
+
 def verify_private_github_repository(
     remote: str,
     *,
@@ -986,33 +1165,156 @@ def verify_private_github_repository(
 ) -> None:
     if not _remote_targets_managed_repository(remote):
         raise SyncError("native memories remote is outside the approved repository scope")
-    if shutil.which("gh") is None:
-        raise SyncError("gh is not installed; automatic memories synchronization stopped")
-    view = run(
-        [
-            "gh",
-            "repo",
-            "view",
-            remote,
-            "--json",
-            "visibility,url,nameWithOwner",
-        ]
-    )
-    if view.returncode:
-        raise SyncError("approved memories repository identity cannot be verified")
-    try:
-        data = json.loads(view.stdout)
-    except json.JSONDecodeError as exc:
-        raise SyncError("approved memories repository returned invalid metadata") from exc
-    if str(data.get("visibility", "")).upper() != "PRIVATE":
+    data: dict[str, object] | None = None
+    if shutil.which("gh") is not None:
+        view = run(
+            [
+                "gh",
+                "repo",
+                "view",
+                remote,
+                "--json",
+                "visibility,url,nameWithOwner",
+            ]
+        )
+        if not view.returncode:
+            try:
+                loaded = json.loads(view.stdout)
+            except json.JSONDecodeError as exc:
+                raise SyncError("approved memories repository returned invalid metadata") from exc
+            if not isinstance(loaded, dict):
+                raise SyncError("approved memories repository returned invalid metadata")
+            data = loaded
+    if data is None:
+        data = _github_metadata_via_git_credential(remote, run=run)
+    visibility = str(data.get("visibility", "")).upper()
+    if not visibility and data.get("private") is True:
+        visibility = "PRIVATE"
+    if visibility != "PRIVATE":
         raise SyncError("approved memories repository is no longer private")
-    if str(data.get("nameWithOwner", "")).split("/")[-1].lower() != REPOSITORY.lower():
+    identity = str(data.get("nameWithOwner") or data.get("full_name") or "")
+    if identity.lower() != _github_repository_identity(remote).lower():
         raise SyncError("approved memories repository identity changed")
 
 
 def mark_pending(state_dir: Path, trigger: str) -> None:
     _real_directory(state_dir, create=True)
-    _atomic_json(state_dir / "pending.json", {"trigger": trigger, "utc": utc_now()})
+    now = utc_now()
+    current = _pending_payload(state_dir) or {}
+    triggers = [str(value) for value in current.get("triggers", []) if isinstance(value, str)]
+    if trigger not in triggers:
+        triggers.append(trigger)
+    _atomic_json(state_dir / "pending.json", {
+        "schemaVersion": 2,
+        "firstPendingUtc": current.get("firstPendingUtc") or current.get("utc") or now,
+        "updatedUtc": now,
+        "trigger": trigger,
+        "triggers": triggers[-16:],
+    })
+
+
+def _health_path(state_dir: Path) -> Path:
+    return state_dir / "health.json"
+
+
+def _record_health(
+    state_dir: Path,
+    status: str,
+    *,
+    action: str | None = None,
+    error: str | None = None,
+    conflict_id: str | None = None,
+) -> dict[str, object]:
+    if status not in {"healthy", "pending", "degraded", "failed", "conflicted"}:
+        raise SyncError(f"invalid sync health status: {status}")
+    previous: dict[str, object] = {}
+    path = _health_path(state_dir)
+    if path.is_file() and not _is_link_or_reparse(path):
+        try:
+            value = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(value, dict):
+                previous = value
+        except (OSError, json.JSONDecodeError):
+            pass
+    fingerprint = hashlib.sha256(
+        json.dumps(
+            {"status": status, "error": error, "conflictId": conflict_id},
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    payload: dict[str, object] = {
+        "schemaVersion": 1,
+        "status": status,
+        "updatedUtc": utc_now(),
+        "pendingAgeSeconds": round(_pending_age_seconds(state_dir), 3),
+        "alertId": fingerprint if status in {"degraded", "failed", "conflicted"} else None,
+        "alertedId": previous.get("alertedId") if previous.get("alertId") == fingerprint else None,
+    }
+    if action:
+        payload["action"] = action
+    if error:
+        payload["error"] = error
+    if conflict_id:
+        payload["conflictId"] = conflict_id
+    _atomic_json(path, payload)
+    return payload
+
+
+def _persist_overdue_pending_health(state_dir: Path) -> dict[str, object] | None:
+    pending = state_dir / "pending.json"
+    if not pending.is_file() or _pending_age_seconds(state_dir) < SYNC_DEADLINE_SECONDS:
+        return None
+    descriptor = _acquire_reconcile_lock(state_dir)
+    if descriptor is None:
+        return None
+    try:
+        if not pending.is_file() or _pending_age_seconds(state_dir) < SYNC_DEADLINE_SECONDS:
+            return None
+        current: dict[str, object] = {}
+        path = _health_path(state_dir)
+        if path.is_file() and not _is_link_or_reparse(path):
+            try:
+                value = json.loads(path.read_text(encoding="utf-8"))
+                if isinstance(value, dict):
+                    current = value
+            except (OSError, json.JSONDecodeError):
+                pass
+        if current.get("status") in {"failed", "conflicted"}:
+            return current
+        return _record_health(
+            state_dir,
+            "degraded",
+            action="overdue-pending",
+            error="synchronization remained pending for more than five minutes",
+        )
+    finally:
+        _release_reconcile_lock(state_dir, descriptor)
+
+
+def _emit_alert_once(state_dir: Path) -> None:
+    path = _health_path(state_dir)
+    if not path.is_file() or _is_link_or_reparse(path):
+        return
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return
+    if not isinstance(payload, dict):
+        return
+    alert_id = payload.get("alertId")
+    if not isinstance(alert_id, str) or payload.get("alertedId") == alert_id:
+        return
+    status = str(payload.get("status") or "failed")
+    reason = str(payload.get("error") or "native memory synchronization needs attention")
+    print(
+        f"[memory-sync] WARNING: status={status}; {reason}; "
+        "run $bridgeforge-codex to inspect and repair",
+        file=sys.stderr,
+    )
+    payload["alertedId"] = alert_id
+    payload["alertedUtc"] = utc_now()
+    _atomic_json(path, payload)
 
 
 def _workdir_marker(state_dir: Path) -> Path:
@@ -1040,6 +1342,8 @@ def _cleanup_recorded_workdir(state_dir: Path) -> None:
     if parent != temp_root or not work_dir.name.startswith(WORKDIR_PREFIX):
         raise SyncError(f"refusing to clean untrusted transient workdir: {work_dir}")
     if work_dir.exists():
+        if _is_link_or_reparse(work_dir):
+            raise SyncError(f"refusing to clean linked transient workdir: {work_dir}")
         _remove_tree(work_dir)
     marker.unlink()
 
@@ -1047,6 +1351,26 @@ def _cleanup_recorded_workdir(state_dir: Path) -> None:
 def _process_alive(pid: int) -> bool:
     if pid <= 0:
         return False
+    if os.name == "nt":
+        process_query_limited_information = 0x1000
+        still_active = 259
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.OpenProcess.argtypes = [ctypes.c_ulong, ctypes.c_int, ctypes.c_ulong]
+        kernel32.OpenProcess.restype = ctypes.c_void_p
+        kernel32.GetExitCodeProcess.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_ulong)]
+        kernel32.GetExitCodeProcess.restype = ctypes.c_int
+        kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
+        kernel32.CloseHandle.restype = ctypes.c_int
+        handle = kernel32.OpenProcess(process_query_limited_information, False, pid)
+        if not handle:
+            return False
+        try:
+            exit_code = ctypes.c_ulong()
+            if not kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
+                return True
+            return exit_code.value == still_active
+        finally:
+            kernel32.CloseHandle(handle)
     try:
         os.kill(pid, 0)
         return True
@@ -1074,10 +1398,12 @@ def _acquire_reconcile_lock(state_dir: Path) -> int | None:
                 if _process_alive(int(owner.get("pid", 0))):
                     return None
                 lock.unlink()
+                _cleanup_recorded_workdir(state_dir)
             except (OSError, ValueError, TypeError, json.JSONDecodeError):
                 try:
                     if time.time() - lock.stat().st_mtime > 60:
                         lock.unlink()
+                        _cleanup_recorded_workdir(state_dir)
                         continue
                 except OSError:
                     pass
@@ -1183,11 +1509,22 @@ def _push_snapshot(snapshot: Path, state_dir: Path, remote: str, expected: str |
     tree = _git(["write-tree"], publish)
     env = os.environ.copy()
     env.update({"GIT_AUTHOR_NAME": "bridgeforge-codex Memory Sync", "GIT_AUTHOR_EMAIL": "bridgeforge-codex@invalid", "GIT_COMMITTER_NAME": "bridgeforge-codex Memory Sync", "GIT_COMMITTER_EMAIL": "bridgeforge-codex@invalid"})
-    commit = _git(["commit-tree", tree, "-m", "bridgeforge-codex memories snapshot"], publish, env=env)
-    _git(["update-ref", "refs/heads/main", commit], publish)
     _git(["remote", "add", "origin", remote], publish)
-    lease = f"--force-with-lease=refs/heads/main:{expected}" if expected else "--force-with-lease=refs/heads/main:"
-    _git(["push", lease, "origin", "refs/heads/main:refs/heads/main"], publish)
+    parent_args: list[str] = []
+    if expected:
+        fetched = _git(["fetch", "--no-tags", "origin", expected], publish)
+        del fetched
+        actual = _git(["rev-parse", "FETCH_HEAD"], publish)
+        if actual != expected:
+            raise SyncError("remote HEAD changed before snapshot commit was created")
+        parent_args = ["-p", expected]
+    commit = _git(
+        ["commit-tree", tree, *parent_args, "-m", "bridgeforge-codex memories snapshot"],
+        publish,
+        env=env,
+    )
+    _git(["update-ref", "refs/heads/main", commit], publish)
+    _git(["push", "origin", "refs/heads/main:refs/heads/main"], publish)
     return commit
 
 
@@ -1214,6 +1551,262 @@ def _restore_snapshot(extracted: Path, memories: Path) -> None:
             _remove_tree(old)
 
 
+def _snapshot_bytes(snapshot: Path) -> dict[str, bytes]:
+    manifest_path = snapshot / "snapshot-manifest.json"
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise SyncError(f"cannot read snapshot manifest: {manifest_path}") from exc
+    if not isinstance(manifest, dict):
+        raise SyncError(f"snapshot manifest is not an object: {manifest_path}")
+    verify_snapshot(snapshot, manifest)
+    result: dict[str, bytes] = {}
+    for item in manifest["files"]:
+        relative = str(item["path"])
+        result[relative] = (snapshot / "memories" / Path(relative)).read_bytes()
+    return result
+
+
+def _write_snapshot_from_bytes(
+    destination: Path,
+    files: dict[str, bytes],
+    revision: int,
+) -> dict[str, object]:
+    if destination.exists():
+        _remove_tree(destination)
+    source = destination.parent / f".{destination.name}-source"
+    if source.exists():
+        _remove_tree(source)
+    source.mkdir(parents=True)
+    try:
+        for relative, payload in sorted(files.items()):
+            path = Path(relative)
+            if path.is_absolute() or ".." in path.parts:
+                raise SyncError(f"unsafe native memory path: {relative}")
+            target = source / path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(payload)
+        return build_snapshot(source, destination, revision)
+    finally:
+        if source.exists():
+            _remove_tree(source)
+
+
+def _baseline_snapshot_path(state_dir: Path) -> Path:
+    return state_dir / "last-synced-snapshot"
+
+
+def _save_baseline_snapshot(state_dir: Path, snapshot: Path) -> None:
+    verify_snapshot(
+        snapshot,
+        json.loads((snapshot / "snapshot-manifest.json").read_text(encoding="utf-8")),
+    )
+    target = _baseline_snapshot_path(state_dir)
+    stage = state_dir / ".last-synced-snapshot-new"
+    old = state_dir / ".last-synced-snapshot-old"
+    for path in (target, stage, old):
+        if path.exists() and _is_link_or_reparse(path):
+            raise SyncError(f"refusing unsafe native memory baseline path: {path}")
+    for path in (stage, old):
+        if path.exists():
+            _remove_tree(path)
+    shutil.copytree(snapshot, stage)
+    if target.exists():
+        os.replace(target, old)
+    try:
+        os.replace(stage, target)
+    except Exception:
+        if old.exists():
+            os.replace(old, target)
+        raise
+    finally:
+        if old.exists():
+            _remove_tree(old)
+
+
+def _record_synced_snapshot(
+    state_dir: Path,
+    snapshot: Path,
+    manifest: dict[str, object],
+    commit: str | None,
+) -> None:
+    _save_baseline_snapshot(state_dir, snapshot)
+    _atomic_json(
+        state_dir / "last-synced.json",
+        {
+            "schemaVersion": 2,
+            "content_sha256": manifest["content_sha256"],
+            "revision": manifest["revision"],
+            "commit": commit,
+            "utc": utc_now(),
+        },
+    )
+
+
+def _load_baseline_snapshot(state_dir: Path) -> tuple[Path | None, dict[str, bytes] | None]:
+    snapshot = _baseline_snapshot_path(state_dir)
+    if not snapshot.is_dir() or _is_link_or_reparse(snapshot):
+        return None, None
+    try:
+        files = _snapshot_bytes(snapshot)
+        manifest = json.loads((snapshot / "snapshot-manifest.json").read_text(encoding="utf-8"))
+        state = json.loads((state_dir / "last-synced.json").read_text(encoding="utf-8"))
+        if manifest.get("content_sha256") != state.get("content_sha256"):
+            return None, None
+        return snapshot, files
+    except (OSError, SyncError, json.JSONDecodeError):
+        return None, None
+
+
+def _conflicts_root(state_dir: Path) -> Path:
+    return state_dir / "conflicts"
+
+
+def _active_conflict_path(state_dir: Path) -> Path:
+    return state_dir / "active-conflict.json"
+
+
+def _read_active_conflict(state_dir: Path) -> dict[str, object] | None:
+    path = _active_conflict_path(state_dir)
+    if not path.is_file() or _is_link_or_reparse(path):
+        return None
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def _create_conflict(
+    state_dir: Path,
+    local_snapshot: Path,
+    remote_snapshot: Path,
+    base_snapshot: Path | None,
+    merged_files: dict[str, bytes],
+    conflict_paths: list[str],
+    remote_commit: str | None,
+    revision: int,
+    *,
+    reason: str,
+) -> str:
+    local_manifest = json.loads((local_snapshot / "snapshot-manifest.json").read_text(encoding="utf-8"))
+    remote_manifest = json.loads((remote_snapshot / "snapshot-manifest.json").read_text(encoding="utf-8"))
+    identity = json.dumps(
+        {
+            "local": local_manifest.get("content_sha256"),
+            "remote": remote_manifest.get("content_sha256"),
+            "base": (
+                json.loads((base_snapshot / "snapshot-manifest.json").read_text(encoding="utf-8")).get("content_sha256")
+                if base_snapshot is not None
+                else None
+            ),
+            "paths": sorted(conflict_paths),
+            "remoteCommit": remote_commit,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    conflict_id = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:16]
+    conflicts = _real_directory(_conflicts_root(state_dir), create=True)
+    root = conflicts / conflict_id
+    if root.exists():
+        if not root.is_dir() or _is_link_or_reparse(root):
+            raise SyncError(f"native memory conflict evidence is unsafe: {root}")
+        active = {
+            "schemaVersion": 1,
+            "conflictId": conflict_id,
+            "path": str(root),
+            "reason": reason,
+            "conflictPaths": sorted(conflict_paths),
+            "remoteCommit": remote_commit,
+        }
+        _atomic_json(_active_conflict_path(state_dir), active)
+        _record_health(
+            state_dir,
+            "conflicted",
+            error=reason,
+            conflict_id=conflict_id,
+        )
+        return conflict_id
+    stage = state_dir / f".conflict-{conflict_id}-new"
+    if stage.exists():
+        _remove_tree(stage)
+    stage.mkdir(parents=True)
+    try:
+        shutil.copytree(local_snapshot, stage / "local")
+        shutil.copytree(remote_snapshot, stage / "remote")
+        if base_snapshot is not None:
+            shutil.copytree(base_snapshot, stage / "base")
+        _write_snapshot_from_bytes(stage / "merged", merged_files, revision)
+        payload = {
+            "schemaVersion": 1,
+            "conflictId": conflict_id,
+            "createdUtc": utc_now(),
+            "reason": reason,
+            "conflictPaths": sorted(conflict_paths),
+            "remoteCommit": remote_commit,
+        }
+        _atomic_json(stage / "conflict.json", payload)
+        os.replace(stage, root)
+    finally:
+        if stage.exists():
+            _remove_tree(stage)
+    active = {
+        **payload,
+        "path": str(root),
+    }
+    _atomic_json(_active_conflict_path(state_dir), active)
+    _record_health(
+        state_dir,
+        "conflicted",
+        error=reason,
+        conflict_id=conflict_id,
+    )
+    return conflict_id
+
+
+def _three_way_merge(
+    base: dict[str, bytes],
+    local: dict[str, bytes],
+    remote: dict[str, bytes],
+) -> tuple[dict[str, bytes], list[str]]:
+    merged: dict[str, bytes] = {}
+    conflicts: list[str] = []
+    missing = object()
+    for path in sorted(set(base) | set(local) | set(remote)):
+        before = base.get(path, missing)
+        ours = local.get(path, missing)
+        theirs = remote.get(path, missing)
+        chosen: object
+        if ours == theirs:
+            chosen = ours
+        elif ours == before:
+            chosen = theirs
+        elif theirs == before:
+            chosen = ours
+        else:
+            conflicts.append(path)
+            continue
+        if chosen is not missing:
+            assert isinstance(chosen, bytes)
+            merged[path] = chosen
+    return merged, conflicts
+
+
+def _bootstrap_merge(
+    local: dict[str, bytes],
+    remote: dict[str, bytes],
+) -> tuple[dict[str, bytes], list[str]]:
+    merged: dict[str, bytes] = {}
+    conflicts: list[str] = []
+    for path in sorted(set(local) | set(remote)):
+        if path in local and path in remote and local[path] == remote[path]:
+            merged[path] = local[path]
+        else:
+            conflicts.append(path)
+    return merged, conflicts
+
+
 def _reconcile_in_work(
     memories: Path,
     state_dir: Path,
@@ -1235,46 +1828,109 @@ def _reconcile_in_work(
             _restore_snapshot(extracted, memories)
         else:
             action = "noop"
-        _atomic_json(state_file, {
-            "content_sha256": remote_manifest["content_sha256"],
-            "revision": remote_manifest["revision"],
-            "commit": remote_commit,
-            "utc": utc_now(),
-        })
+        _record_synced_snapshot(state_dir, extracted, remote_manifest, remote_commit)
         _clear_pending_if_unchanged(state_dir, pending_before)
         return action
     _real_directory(memories)
-    local_manifest = capture_manifest(memories, 0)
+    local_snapshot = work_dir / "local-snapshot"
+    local_manifest = build_snapshot(memories, local_snapshot, 0)
     remote_digest = str(remote_manifest.get("content_sha256")) if remote_manifest else None
     local_digest = str(local_manifest["content_sha256"])
-    remote_updated_at = None
-    if remote_manifest:
-        remote_updated_at = str(remote_manifest.get("updated_at_utc") or remote_manifest.get("captured_at_utc") or "")
-    action = choose_action(
-        local_digest,
-        remote_digest,
-        str(state.get("content_sha256")) if state.get("content_sha256") else None,
-        local_updated_at=str(local_manifest["updated_at_utc"]),
-        remote_updated_at=remote_updated_at,
-    )
-    if action == "push":
-        revision = max(
-            int(state.get("revision", 0)),
-            int(remote_manifest.get("revision", 0)) if remote_manifest else 0,
-        ) + 1
-        snapshot = work_dir / "local-snapshot"
-        local_manifest = build_snapshot(memories, snapshot, revision)
-        commit = _push_snapshot(snapshot, work_dir, remote, remote_commit)
-        result_manifest = local_manifest
-    elif action == "restore":
-        assert extracted is not None and remote_manifest is not None
+    synced_digest = str(state.get("content_sha256")) if state.get("content_sha256") else None
+    revision = max(
+        int(state.get("revision", 0)),
+        int(remote_manifest.get("revision", 0)) if remote_manifest else 0,
+    ) + 1
+
+    if remote_manifest is None:
+        if remote_commit is not None and not local_manifest["files"]:
+            raise SyncError("remote snapshot is corrupt and local memories are empty")
+        published = work_dir / "publish-snapshot"
+        local_manifest = build_snapshot(memories, published, revision)
+        commit = _push_snapshot(published, work_dir, remote, remote_commit)
+        _record_synced_snapshot(state_dir, published, local_manifest, commit)
+        _clear_pending_if_unchanged(state_dir, pending_before)
+        return "push"
+
+    assert extracted is not None
+    if local_digest == remote_digest:
+        _record_synced_snapshot(state_dir, extracted, remote_manifest, remote_commit)
+        _clear_pending_if_unchanged(state_dir, pending_before)
+        return "noop"
+
+    if synced_digest is None and not remote_manifest["files"]:
+        published = work_dir / "publish-snapshot"
+        local_manifest = build_snapshot(memories, published, revision)
+        commit = _push_snapshot(published, work_dir, remote, remote_commit)
+        _record_synced_snapshot(state_dir, published, local_manifest, commit)
+        _clear_pending_if_unchanged(state_dir, pending_before)
+        return "push"
+    if synced_digest is None and not local_manifest["files"]:
         _restore_snapshot(extracted, memories)
-        commit = remote_commit
-        result_manifest = remote_manifest
+        _record_synced_snapshot(state_dir, extracted, remote_manifest, remote_commit)
+        _clear_pending_if_unchanged(state_dir, pending_before)
+        return "restore"
+
+    local_changed = synced_digest is None or local_digest != synced_digest
+    remote_changed = synced_digest is None or remote_digest != synced_digest
+    if local_changed and not remote_changed:
+        published = work_dir / "publish-snapshot"
+        local_manifest = build_snapshot(memories, published, revision)
+        commit = _push_snapshot(published, work_dir, remote, remote_commit)
+        _record_synced_snapshot(state_dir, published, local_manifest, commit)
+        action = "push"
+    elif remote_changed and not local_changed:
+        _restore_snapshot(extracted, memories)
+        _record_synced_snapshot(state_dir, extracted, remote_manifest, remote_commit)
+        action = "restore"
     else:
-        commit = remote_commit
-        result_manifest = remote_manifest or local_manifest
-    _atomic_json(state_file, {"content_sha256": result_manifest["content_sha256"], "revision": result_manifest["revision"], "commit": commit, "utc": utc_now()})
+        base_snapshot, base_files = _load_baseline_snapshot(state_dir)
+        local_files = _snapshot_bytes(local_snapshot)
+        remote_files = _snapshot_bytes(extracted)
+        if base_snapshot is None or base_files is None:
+            bootstrap_merged, bootstrap_conflicts = _bootstrap_merge(
+                local_files,
+                remote_files,
+            )
+            _create_conflict(
+                state_dir,
+                local_snapshot,
+                extracted,
+                None,
+                bootstrap_merged,
+                bootstrap_conflicts,
+                remote_commit,
+                revision,
+                reason="bootstrap conflict: both sides changed without a trusted three-way baseline",
+            )
+            return "conflicted"
+        merged_files, conflict_paths = _three_way_merge(base_files, local_files, remote_files)
+        if conflict_paths:
+            _create_conflict(
+                state_dir,
+                local_snapshot,
+                extracted,
+                base_snapshot,
+                merged_files,
+                conflict_paths,
+                remote_commit,
+                revision,
+                reason="the same native memory path changed differently on both computers",
+            )
+            return "conflicted"
+        merged_snapshot = work_dir / "merged-snapshot"
+        merged_manifest = _write_snapshot_from_bytes(merged_snapshot, merged_files, revision)
+        merged_digest = str(merged_manifest["content_sha256"])
+        if merged_digest == remote_digest:
+            commit = remote_commit
+            action = "restore"
+        else:
+            commit = _push_snapshot(merged_snapshot, work_dir, remote, remote_commit)
+            action = "merge"
+        if merged_digest != local_digest:
+            _restore_snapshot(merged_snapshot, memories)
+        _record_synced_snapshot(state_dir, merged_snapshot, merged_manifest, commit)
+    _active_conflict_path(state_dir).unlink(missing_ok=True)
     _clear_pending_if_unchanged(state_dir, pending_before)
     return action
 
@@ -1310,9 +1966,210 @@ def reconcile(memories: Path, state_dir: Path, remote: str) -> str:
     descriptor = _acquire_reconcile_lock(state_dir)
     if descriptor is None:
         mark_pending(state_dir, "deduplicated")
+        _record_health(state_dir, "pending", action="busy")
         return "busy"
     try:
-        return _reconcile_unlocked(memories, state_dir, remote, pending_before)
+        action = _reconcile_unlocked(memories, state_dir, remote, pending_before)
+        if action == "conflicted":
+            return action
+        if action in {"cleanup-pending", "busy"}:
+            _record_health(state_dir, "pending", action=action)
+        else:
+            _active_conflict_path(state_dir).unlink(missing_ok=True)
+            _record_health(state_dir, "healthy", action=action)
+        return action
+    finally:
+        _release_reconcile_lock(state_dir, descriptor)
+
+
+def _worker_receipt_path(state_dir: Path) -> Path:
+    return state_dir / "last-worker.json"
+
+
+def run_sync_worker(
+    codex: Path,
+    memories: Path,
+    state_dir: Path,
+    ledger_path: Path,
+    token: str,
+) -> int:
+    worker_path = _worker_state_path(state_dir)
+    current = _read_worker_state(state_dir)
+    if not current or current.get("token") != token:
+        return 0
+    current["pid"] = os.getpid()
+    current["workerStartedUtc"] = utc_now()
+    _atomic_json(worker_path, current)
+    receipt: dict[str, object] = {
+        "schemaVersion": 1,
+        "token": token,
+        "pid": os.getpid(),
+        "startedUtc": utc_now(),
+        "status": "running",
+    }
+    _atomic_json(_worker_receipt_path(state_dir), receipt)
+    try:
+        while (state_dir / "pending.json").is_file():
+            try:
+                state_dir, authorization = validated_runtime_state(
+                    codex,
+                    state_dir,
+                    ledger_path,
+                )
+                remote = str(authorization["remote"])
+                verify_private_github_repository(remote)
+                action = reconcile(memories, state_dir, remote)
+            except Exception as exc:
+                age = _pending_age_seconds(state_dir)
+                status = "failed" if age >= SYNC_DEADLINE_SECONDS else "pending"
+                _record_health(state_dir, status, error=str(exc))
+                if age >= SYNC_DEADLINE_SECONDS:
+                    receipt.update({"status": "failed", "error": str(exc), "completedUtc": utc_now()})
+                    _atomic_json(_worker_receipt_path(state_dir), receipt)
+                    return 0
+                time.sleep(WORKER_RETRY_SECONDS)
+                continue
+            if action == "conflicted":
+                receipt.update({"status": "conflicted", "action": action, "completedUtc": utc_now()})
+                _atomic_json(_worker_receipt_path(state_dir), receipt)
+                return 0
+            if action in {"busy", "cleanup-pending"}:
+                age = _pending_age_seconds(state_dir)
+                if age >= SYNC_DEADLINE_SECONDS:
+                    _record_health(
+                        state_dir,
+                        "degraded",
+                        action=action,
+                        error="synchronization remained pending for more than five minutes",
+                    )
+                    receipt.update({"status": "degraded", "action": action, "completedUtc": utc_now()})
+                    _atomic_json(_worker_receipt_path(state_dir), receipt)
+                    return 0
+                time.sleep(WORKER_RETRY_SECONDS)
+                continue
+            if not (state_dir / "pending.json").exists():
+                receipt.update({"status": "succeeded", "action": action, "completedUtc": utc_now()})
+                _atomic_json(_worker_receipt_path(state_dir), receipt)
+                return 0
+        receipt.update({"status": "succeeded", "action": "noop", "completedUtc": utc_now()})
+        _atomic_json(_worker_receipt_path(state_dir), receipt)
+        return 0
+    except Exception as exc:
+        age = _pending_age_seconds(state_dir)
+        status = "failed" if age >= SYNC_DEADLINE_SECONDS else "pending"
+        _record_health(state_dir, status, error=str(exc))
+        receipt.update({"status": status, "error": str(exc), "completedUtc": utc_now()})
+        _atomic_json(_worker_receipt_path(state_dir), receipt)
+        return 0
+    finally:
+        current = _read_worker_state(state_dir)
+        if current and current.get("token") == token:
+            worker_path.unlink(missing_ok=True)
+
+
+def _resolve_conflict_unlocked(
+    memories: Path,
+    state_dir: Path,
+    remote: str,
+    conflict_id: str,
+    choices: list[str],
+) -> str:
+    if not CONFLICT_ID_RE.fullmatch(conflict_id):
+        raise SyncError("invalid native memory conflict id")
+    active_path = _active_conflict_path(state_dir)
+    if not active_path.is_file() or _is_link_or_reparse(active_path):
+        raise SyncError("no active native memory conflict")
+    active = json.loads(active_path.read_text(encoding="utf-8"))
+    if not isinstance(active, dict) or active.get("conflictId") != conflict_id:
+        raise SyncError("native memory conflict is no longer active")
+    root = _conflicts_root(state_dir) / conflict_id
+    if not root.is_dir() or _is_link_or_reparse(root):
+        raise SyncError("native memory conflict evidence is missing or unsafe")
+    expected_paths = [str(value) for value in active.get("conflictPaths", [])]
+    decisions: dict[str, str] = {}
+    for item in choices:
+        path, separator, side = item.rpartition("=")
+        if not separator or side not in {"local", "remote"} or not path:
+            raise SyncError("each conflict choice must be PATH=local or PATH=remote")
+        if path in decisions:
+            raise SyncError(f"duplicate native memory conflict choice: {path}")
+        decisions[path] = side
+    if sorted(decisions) != sorted(expected_paths):
+        raise SyncError("conflict choices must cover every conflicting path exactly once")
+
+    merged_files = _snapshot_bytes(root / "merged")
+    local_files = _snapshot_bytes(root / "local")
+    remote_files = _snapshot_bytes(root / "remote")
+    missing = object()
+    for path, side in decisions.items():
+        selected = (local_files if side == "local" else remote_files).get(path, missing)
+        if selected is missing:
+            merged_files.pop(path, None)
+        else:
+            assert isinstance(selected, bytes)
+            merged_files[path] = selected
+
+    work_dir = Path(tempfile.mkdtemp(prefix=WORKDIR_PREFIX))
+    try:
+        remote_manifest, _extracted, remote_commit = _read_remote_snapshot(work_dir, remote)
+        expected_commit = active.get("remoteCommit")
+        if remote_commit != expected_commit:
+            if _extracted is None or _snapshot_bytes(_extracted) != local_files:
+                raise SyncError("remote changed after conflict capture; rerun synchronization")
+        state_path = state_dir / "last-synced.json"
+        state = json.loads(state_path.read_text(encoding="utf-8")) if state_path.exists() else {}
+        revision = max(
+            int(state.get("revision", 0)),
+            int(remote_manifest.get("revision", 0)) if remote_manifest else 0,
+        ) + 1
+        resolved = _write_snapshot_from_bytes(work_dir / "resolved", merged_files, revision)
+        if (
+            remote_manifest is not None
+            and resolved["content_sha256"] == remote_manifest.get("content_sha256")
+        ):
+            commit = remote_commit
+            resolved = remote_manifest
+        else:
+            commit = _push_snapshot(work_dir / "resolved", work_dir, remote, remote_commit)
+        _restore_snapshot(work_dir / "resolved", memories)
+        _record_synced_snapshot(state_dir, work_dir / "resolved", resolved, commit)
+        _clear_pending_if_unchanged(
+            state_dir,
+            (state_dir / "pending.json").read_bytes()
+            if (state_dir / "pending.json").is_file()
+            else None,
+        )
+        active_path.unlink(missing_ok=True)
+        metadata_path = root / "conflict.json"
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        metadata.update({"resolvedUtc": utc_now(), "resolvedCommit": commit, "decisions": decisions})
+        _atomic_json(metadata_path, metadata)
+        _record_health(state_dir, "healthy", action="resolved")
+        return commit
+    finally:
+        if work_dir.exists():
+            _remove_tree(work_dir)
+
+
+def resolve_conflict(
+    memories: Path,
+    state_dir: Path,
+    remote: str,
+    conflict_id: str,
+    choices: list[str],
+) -> str:
+    _real_directory(state_dir, create=True)
+    descriptor = _acquire_reconcile_lock(state_dir)
+    if descriptor is None:
+        raise SyncError("native memory synchronization is busy; retry conflict resolution")
+    try:
+        return _resolve_conflict_unlocked(
+            memories,
+            state_dir,
+            remote,
+            conflict_id,
+            choices,
+        )
     finally:
         _release_reconcile_lock(state_dir, descriptor)
 
@@ -1445,13 +2302,19 @@ def main(argv: list[str] | None = None) -> int:
     project_command("repair-hook")
     reconcile_cmd = project_command("reconcile")
     reconcile_cmd.add_argument("--trigger", default="bridgeforge-codex")
+    worker = project_command("worker")
+    worker.add_argument("--token", required=True)
+    resolve = project_command("resolve")
+    resolve.add_argument("--conflict-id", required=True)
+    resolve.add_argument("--choose", action="append", default=[])
     hook_run = project_command("hook-run")
     hook_run.add_argument("--event", choices=HOOK_EVENTS, required=True)
     mark = project_command("mark")
     mark.add_argument("--trigger", required=True)
     kick = project_command("kick")
     kick.add_argument("--trigger", required=True)
-    project_command("status")
+    status = project_command("status")
+    status.add_argument("--emit-alert", action="store_true")
     args = parser.parse_args(argv)
     codex, memories, current_state_dir = codex_paths()
     state_dir = current_state_dir
@@ -1461,6 +2324,9 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "status":
             if not codex.is_dir() or _is_link_or_reparse(codex):
                 raise SyncError(f"Codex home is missing or unsafe: {codex}")
+            if args.emit_alert:
+                _persist_overdue_pending_health(state_dir)
+                _emit_alert_once(state_dir)
             runtime_drift_reason: str | None = None
             try:
                 project_root, _expected_python = _validated_project_runtime(args.project_root)
@@ -1476,12 +2342,29 @@ def main(argv: list[str] | None = None) -> int:
                     Path(__file__).resolve(),
                 )
                 hook_runtime = latest_hook_runtime_receipt(state_dir)
+                health: dict[str, object] | None = None
+                health_path = _health_path(state_dir)
+                if health_path.is_file() and not _is_link_or_reparse(health_path):
+                    try:
+                        value = json.loads(health_path.read_text(encoding="utf-8"))
+                        if isinstance(value, dict):
+                            health = value
+                    except (OSError, json.JSONDecodeError):
+                        pass
+                pending = (state_dir / "pending.json").exists()
+                pending_age = _pending_age_seconds(state_dir) if pending else 0.0
+                effective_health = dict(health or {})
+                worker_state = _read_worker_state(state_dir)
             print(json.dumps({
                 "enabled": enabled,
                 "hookInstalled": hook_installed,
                 "hookRuntimeVerified": hook_runtime_verified(hook_runtime),
                 "hookRuntimeReceipt": hook_runtime,
-                "pending": (state_dir / "pending.json").exists(),
+                "pending": pending,
+                "pendingAgeSeconds": round(pending_age, 3),
+                "syncHealth": effective_health or None,
+                "workerActive": _worker_is_live(worker_state),
+                "activeConflict": _read_active_conflict(state_dir),
                 "projectRoot": str(project_root),
                 "runtimeContract": HOOK_RUNTIME_CONTRACT,
                 "configuredRuntime": DYNAMIC_HOOK_RUNTIME,
@@ -1528,6 +2411,14 @@ def main(argv: list[str] | None = None) -> int:
                 ledger_path,
                 project_root,
             )
+        if args.command == "worker":
+            return run_sync_worker(
+                codex,
+                memories,
+                current_state_dir,
+                ledger_path,
+                args.token,
+            )
         if args.command in {"maintain", "repair-hook"}:
             receipt = repair_user_hooks(
                 codex,
@@ -1557,6 +2448,26 @@ def main(argv: list[str] | None = None) -> int:
                 mark_pending(state_dir, args.trigger)
                 if args.command == "kick":
                     launch_background_reconcile(args.trigger, project_root)
+            return 0
+        if args.command == "resolve":
+            enabled, _ = memory_switches(codex / "config.toml")
+            if not enabled:
+                raise SyncError("native memories are disabled")
+            state_dir, authorization = validated_runtime_state(
+                codex,
+                current_state_dir,
+                ledger_path,
+            )
+            remote = str(authorization["remote"])
+            verify_private_github_repository(remote)
+            commit = resolve_conflict(
+                memories,
+                state_dir,
+                remote,
+                args.conflict_id,
+                args.choose,
+            )
+            print(f"[memory-sync] conflict resolved; commit={commit}")
             return 0
         if args.command == "setup":
             hooks_path = codex / "hooks.json"
