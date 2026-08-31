@@ -603,6 +603,55 @@ class ProjectSyncMigrationTests(unittest.TestCase):
         self.assertIn("## 文档生命周期", result_readme)
         self.assertIn("## 项目迁移索引", result_readme)
 
+    def test_old_rebuild_upgrades_header_during_migration_composition(self) -> None:
+        note = self.project / ".codex" / "memory" / "note.md"
+        note.parent.mkdir(parents=True)
+        note.write_text("legacy knowledge\n", encoding="utf-8")
+        readme = self.project / "doc" / "README.md"
+        old_readme = readme.read_text(encoding="utf-8").replace(
+            "## 3_reference/\n\n| 文件 | 说明 |",
+            "## 3_reference/\n\n| 文件 / 子目录 | 说明 |",
+            1,
+        )
+        readme.write_text(old_readme, encoding="utf-8")
+        (self.project / SYNC.CURRENT_STAMP).write_text(
+            "1.5.7\n",
+            encoding="utf-8",
+        )
+        proposed_readme = (
+            old_readme
+            + "\n## 项目迁移索引\n\n- [迁移说明](3_reference/migrated.md)\n"
+        )
+        manifest = self.one_source_manifest([{
+            "target": "doc/README.md",
+            "asset_type": "documentation",
+            "reason": "登记项目迁移文档索引",
+            "target_before_sha256": MIGRATION._sha256_path(readme),
+            "content_utf8": proposed_readme,
+        }])
+
+        plan = SYNC.build_plan(
+            self.project,
+            self.template_root,
+            "update",
+            migration_manifest=manifest,
+        )
+
+        self.assertFalse(plan.blockers)
+        SYNC.apply_plan(
+            plan,
+            plan_fingerprint=plan.aggregate_fingerprint,
+            confirmed_risk=True,
+            confirmed_asset_migration=True,
+        )
+        result = readme.read_text(encoding="utf-8")
+        self.assertIn("## 3_reference/\n\n| 文件 | 说明 |", result)
+        self.assertNotIn(
+            "## 3_reference/\n\n| 文件 / 子目录 | 说明 |",
+            result,
+        )
+        self.assertIn("## 项目迁移索引", result)
+
     def test_hook_migration_requires_entrypoint_and_registration_and_composes_hooks(self) -> None:
         note = self.project / ".codex" / "memory" / "hook.md"
         note.parent.mkdir(parents=True)

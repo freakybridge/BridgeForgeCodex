@@ -837,6 +837,114 @@ class CurrentProjectSyncTests(unittest.TestCase):
 
         self.assertEqual(self.snapshot_tree(), before)
 
+    def test_old_rebuild_upgrades_keyed_table_header_and_preserves_project_rows(
+        self,
+    ) -> None:
+        self.apply(SYNC.build_plan(self.project, ROOT, "init"))
+        doc_readme_path = self.project / "doc" / "README.md"
+        project_note = self.project / "doc" / "3_reference" / "project-note.md"
+        project_note.write_text("# Project note\n", encoding="utf-8")
+        readme = doc_readme_path.read_text(encoding="utf-8")
+        managed_row = (
+            "| [`codex-hook-signals.md`](3_reference/codex-hook-signals.md) | "
+            "Agent 原生主动澄清的响应边界、例外和调试方法；"
+            "自动 Clarify / Focus Hook 已退役 |\n"
+        )
+        project_row = (
+            "| [`project-note.md`](3_reference/project-note.md) | "
+            "PROJECT-OWNED-ROW |\n"
+        )
+        self.assertIn(managed_row, readme)
+        readme = readme.replace(
+            "| 文件 | 说明 |\n|---|---|\n" + managed_row,
+            "| 文件 / 子目录 | 说明 |\n|---|---|\n"
+            + managed_row
+            + project_row,
+            1,
+        )
+        doc_readme_path.write_text(readme, encoding="utf-8")
+        (self.project / SYNC.CURRENT_STAMP).write_text(
+            LEGACY_VERSION + "\n",
+            encoding="utf-8",
+        )
+
+        plan = SYNC.build_plan(self.project, ROOT, "update")
+
+        self.assertFalse(plan.blockers)
+        self.assertEqual(
+            [item.target for item in plan.risk_actions],
+            ["doc/README.md"],
+        )
+        self.apply(plan, confirmed_risk=True)
+        upgraded = doc_readme_path.read_text(encoding="utf-8")
+        self.assertIn("## 3_reference/\n\n| 文件 | 说明 |", upgraded)
+        self.assertNotIn(
+            "## 3_reference/\n\n| 文件 / 子目录 | 说明 |",
+            upgraded,
+        )
+        self.assertIn(project_row.strip(), upgraded)
+        BASELINE.verify_current_baseline(self.project)
+
+    def test_unstamped_adopt_rejects_custom_keyed_table_header(self) -> None:
+        self.apply(SYNC.build_plan(self.project, ROOT, "init"))
+        (self.project / SYNC.CURRENT_STAMP).unlink()
+        doc_readme_path = self.project / "doc" / "README.md"
+        readme = doc_readme_path.read_text(encoding="utf-8").replace(
+            "## 3_reference/\n\n| 文件 | 说明 |",
+            "## 3_reference/\n\n| 自定义文件 | 自定义说明 |",
+            1,
+        )
+        doc_readme_path.write_text(readme, encoding="utf-8")
+
+        with self.assertRaisesRegex(
+            SYNC.SyncBlocked,
+            "managed keyed-table ownership is ambiguous",
+        ):
+            SYNC.build_plan(self.project, ROOT, "adopt")
+
+    def test_current_update_rejects_keyed_table_header_drift(self) -> None:
+        self.apply(SYNC.build_plan(self.project, ROOT, "init"))
+        doc_readme_path = self.project / "doc" / "README.md"
+        readme = doc_readme_path.read_text(encoding="utf-8").replace(
+            "## 3_reference/\n\n| 文件 | 说明 |",
+            "## 3_reference/\n\n| 自定义文件 | 自定义说明 |",
+            1,
+        )
+        doc_readme_path.write_text(readme, encoding="utf-8")
+
+        with self.assertRaisesRegex(
+            SYNC.SyncBlocked,
+            "managed Markdown table header drifted",
+        ):
+            SYNC.build_plan(self.project, ROOT, "update")
+
+    def test_old_rebuild_rejects_keyed_table_column_count_change(self) -> None:
+        source = (
+            b"## Index\n\n"
+            b"| File | Description |\n"
+            b"|---|---|\n"
+            b"| alpha | current |\n"
+        )
+        target = (
+            b"## Index\n\n"
+            b"| File | Description | Owner |\n"
+            b"|---|---|---|\n"
+            b"| alpha | legacy | project |\n"
+        )
+
+        with self.assertRaisesRegex(
+            SYNC.SyncBlocked,
+            "managed Markdown table column count changed",
+        ):
+            SYNC._merge_keyed_table(
+                target,
+                source,
+                heading="## Index",
+                managed_keys=("alpha",),
+                selected_keys=set(),
+                allow_header_upgrade=True,
+            )
+
     def test_current_update_is_idempotent(self) -> None:
         self.apply(SYNC.build_plan(self.project, ROOT, "init"))
         plan = SYNC.build_plan(self.project, ROOT, "update")

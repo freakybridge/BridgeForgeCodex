@@ -714,13 +714,19 @@ def _merge_keyed_table(
     heading: str,
     managed_keys: tuple[str, ...],
     selected_keys: set[str],
+    allow_header_upgrade: bool = False,
 ) -> tuple[bytes, tuple[str, ...], tuple[str, ...]]:
     source = _parse_keyed_table(desired, heading)
     target = _parse_keyed_table(before, heading)
     source_header = _markdown_table_cells(source.header)
     target_header = _markdown_table_cells(target.header)
     if source_header != target_header:
-        raise SyncBlocked(f"managed Markdown table header drifted: {heading}")
+        if not allow_header_upgrade:
+            raise SyncBlocked(f"managed Markdown table header drifted: {heading}")
+        if len(source_header) != len(target_header):
+            raise SyncBlocked(
+                f"managed Markdown table column count changed: {heading}"
+            )
 
     normalized_contract = tuple(_markdown_table_key(item) for item in managed_keys)
     if len(set(normalized_contract)) != len(normalized_contract):
@@ -756,7 +762,15 @@ def _merge_keyed_table(
         for key, row, _cells in target.rows
         if key not in managed_set
     )
-    rendered = target.header + target.separator + b"".join(rows)
+    header = source.header if source_header != target_header else target.header
+    separator = (
+        source.separator if source_header != target_header else target.separator
+    )
+    rendered = (
+        _render_table_row(header, target.newline)
+        + _render_table_row(separator, target.newline)
+        + b"".join(rows)
+    )
     after = before[:target.start] + rendered + before[target.end:]
     return after, missing, conflicts
 
@@ -820,6 +834,8 @@ def _plan_managed_markdown_blocks(
     before: bytes,
     target: Path,
     project_root: Path,
+    *,
+    allow_header_upgrade: bool = False,
 ) -> tuple[list[Action], list[Gap]]:
     block_contract = asset.get("managed_blocks")
     headings = tuple(str(item) for item in block_contract.get("headings", []))
@@ -951,6 +967,7 @@ def _plan_managed_markdown_blocks(
                 heading=heading,
                 managed_keys=managed_keys,
                 selected_keys=set(),
+                allow_header_upgrade=allow_header_upgrade,
             )
             all_after, _all_missing, _all_conflicts = _merge_keyed_table(
                 all_after,
@@ -958,6 +975,7 @@ def _plan_managed_markdown_blocks(
                 heading=heading,
                 managed_keys=managed_keys,
                 selected_keys=set(conflicts),
+                allow_header_upgrade=allow_header_upgrade,
             )
             del conflicts
     except SyncBlocked as exc:
@@ -1259,6 +1277,8 @@ def _desired_payload(
     source: bytes,
     current: bytes | None,
     project_root: Path,
+    *,
+    allow_managed_header_upgrade: bool = False,
 ) -> bytes | None:
     strategy = str(asset["strategy"])
     if strategy == "seed" and current is not None:
@@ -1277,6 +1297,7 @@ def _desired_payload(
             current,
             target,
             project_root,
+            allow_header_upgrade=allow_managed_header_upgrade,
         )
         if gaps:
             raise SyncBlocked(gaps[0].reason)
@@ -1956,6 +1977,13 @@ def build_plan(
             and previous_semver < current_semver
         )
     )
+    allow_managed_header_upgrade = bool(
+        old_stamp_present
+        or (
+            previous_semver is not None
+            and previous_semver < current_semver
+        )
+    )
     if blockers:
         return blocked_plan()
     if previous_semver is not None and not rebuild and not blockers:
@@ -2056,7 +2084,13 @@ def build_plan(
             else None
         )
         try:
-            desired = _desired_payload(asset, source, merge_current, root)
+            desired = _desired_payload(
+                asset,
+                source,
+                merge_current,
+                root,
+                allow_managed_header_upgrade=allow_managed_header_upgrade,
+            )
         except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise SyncBlocked(f"cannot render {asset['id']}: {exc}") from exc
         if desired == current:
@@ -2262,6 +2296,7 @@ def build_plan(
                         source,
                         target_write.payload,
                         root,
+                        allow_managed_header_upgrade=allow_managed_header_upgrade,
                     )
                 except (OSError, UnicodeDecodeError, json.JSONDecodeError, SyncBlocked) as exc:
                     blockers.append(
