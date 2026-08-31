@@ -19,8 +19,15 @@ REQUIRED_DOC_LAYERS = {
     "4_archive",
 }
 ALLOWED_DOC_ENTRIES = REQUIRED_DOC_LAYERS | {"README.md"}
-CLOSED_DELIVERY_STATUSES = {"completed", "superseded"}
-CLOSED_BUG_STATUSES = {"resolved", "fixed"}
+LIFECYCLES = {"active", "completed", "superseded", "archived"}
+VALIDATION_STATUSES = {
+    "not_started",
+    "in_progress",
+    "awaiting_validation",
+    "awaiting_user_acceptance",
+    "verified",
+}
+ARCHIVE_READY_LIFECYCLES = {"completed", "superseded"}
 MD_LINK_RE = re.compile(r"(?<!!)\[[^\]\n]+\]\(([^)\n]+)\)")
 URI_SCHEME_RE = re.compile(r"^[a-z][a-z0-9+.-]*:", re.IGNORECASE)
 FROZEN_DOC_SUBTREES = {
@@ -53,10 +60,64 @@ def _delivery_layout(readme: str) -> str | None:
     return match.group(1) if match else None
 
 
-def _status(path: Path) -> str | None:
-    head = "\n".join(_read_text(path).splitlines()[:40])
-    match = re.search(r"(?im)^(?:[-*]\s*)?(?:\*\*)?status(?:\*\*)?\s*[:：]\s*([^\s]+)", head)
-    return match.group(1).strip().casefold() if match else None
+def _frontmatter_fields(path: Path) -> dict[str, str]:
+    lines = _read_text(path).splitlines()
+    if not lines or lines[0].strip() != "---":
+        return {}
+    try:
+        end = next(
+            index
+            for index, line in enumerate(lines[1:], start=1)
+            if line.strip() == "---"
+        )
+    except StopIteration:
+        return {}
+    fields: dict[str, str] = {}
+    for line in lines[1:end]:
+        key, separator, value = line.partition(":")
+        if separator:
+            fields[key.strip()] = value.strip().strip("\"'")
+    return fields
+
+
+def _lifecycle(
+    path: Path,
+    root: Path,
+    errors: list[dict[str, str]],
+) -> str | None:
+    fields = _frontmatter_fields(path)
+    raw_lifecycle = fields.get("lifecycle")
+    if raw_lifecycle is None:
+        return None
+    lifecycle = raw_lifecycle.casefold()
+    relative = path.relative_to(root).as_posix()
+    if lifecycle not in LIFECYCLES:
+        errors.append({
+            "code": "invalid-document-lifecycle",
+            "path": relative,
+            "message": f"lifecycle 不是允许值：{raw_lifecycle}",
+        })
+        return None
+    validation_status = fields.get("validation_status", "").casefold()
+    if validation_status not in VALIDATION_STATUSES:
+        errors.append({
+            "code": "invalid-document-validation-status",
+            "path": relative,
+            "message": "声明 lifecycle 的文档必须同时提供合法 validation_status",
+        })
+    if lifecycle == "completed" and validation_status != "verified":
+        errors.append({
+            "code": "completed-document-not-verified",
+            "path": relative,
+            "message": "lifecycle: completed 必须同时为 validation_status: verified",
+        })
+    if lifecycle == "superseded" and not fields.get("superseded_by"):
+        errors.append({
+            "code": "superseded-document-missing-target",
+            "path": relative,
+            "message": "lifecycle: superseded 必须同时提供 superseded_by",
+        })
+    return lifecycle
 
 
 def _unsafe_entry(
@@ -285,34 +346,76 @@ def inspect_project(root: Path) -> dict[str, list[dict[str, str]]]:
             if not _contains_markdown(topic, root, errors):
                 continue
             relative = topic.relative_to(delivery).as_posix()
-            if relative not in readme and topic.name not in readme:
+            requirements = sorted(topic.glob("requirements_*.md"))
+            lifecycles = [
+                _lifecycle(requirement, root, errors)
+                for requirement in requirements
+            ]
+            if any(lifecycle == "archived" for lifecycle in lifecycles):
+                errors.append({
+                    "code": "archived-document-in-current-layer",
+                    "path": topic.relative_to(root).as_posix(),
+                    "message": "lifecycle: archived 的交付文档不得留在 doc/1_delivery",
+                })
+            if (
+                "active" in lifecycles
+                and relative not in readme
+                and topic.name not in readme
+            ):
                 errors.append({
                     "code": "unindexed-delivery-topic",
                     "path": topic.relative_to(root).as_posix(),
                     "message": f"活跃 delivery topic 未进入 doc/README.md：{relative}",
                 })
-            for requirement in topic.glob("requirements_*.md"):
-                if _status(requirement) in CLOSED_DELIVERY_STATUSES:
-                    advisories.append({
-                        "code": "delivery-archive-candidate",
-                        "path": requirement.relative_to(root).as_posix(),
-                        "message": "交付状态已关闭，可经 $archive-scan 确认归档",
-                    })
+            if requirements and all(
+                lifecycle in ARCHIVE_READY_LIFECYCLES
+                for lifecycle in lifecycles
+            ):
+                advisories.append({
+                    "code": "delivery-archive-candidate",
+                    "path": topic.relative_to(root).as_posix(),
+                    "message": "全部需求卡 lifecycle 已完成或被替代，可经 $archive-scan 确认归档",
+                })
 
     bugs = doc / "2_bugs"
     if bugs.is_dir() and not _is_reparse(bugs):
-        for bug in sorted(bugs.glob("BUG-*.md"), key=lambda item: item.name.casefold()):
-            if bug.name not in readme:
+        bug_records: list[tuple[Path, Path]] = []
+        for source in sorted(bugs.glob("BUG-*"), key=lambda value: value.name.casefold()):
+            if _is_reparse(source):
+                _unsafe_entry(errors, source, root)
+                continue
+            if source.is_file() and source.suffix.casefold() == ".md":
+                bug_records.append((source, source))
+                continue
+            if not source.is_dir():
+                continue
+            evidence = source / "README.md"
+            if _is_reparse(evidence):
+                _unsafe_entry(errors, evidence, root)
+            elif evidence.is_file():
+                bug_records.append((source, evidence))
+        for source, evidence in sorted(
+            bug_records,
+            key=lambda item: item[0].name.casefold(),
+        ):
+            lifecycle = _lifecycle(evidence, root, errors)
+            if lifecycle == "active" and source.name not in readme:
                 errors.append({
                     "code": "unindexed-bug",
-                    "path": bug.relative_to(root).as_posix(),
-                    "message": f"活跃 Bug 未进入 doc/README.md：{bug.name}",
+                    "path": source.relative_to(root).as_posix(),
+                    "message": f"活跃 Bug 未进入 doc/README.md：{source.name}",
                 })
-            if _status(bug) in CLOSED_BUG_STATUSES:
+            if lifecycle in ARCHIVE_READY_LIFECYCLES:
                 advisories.append({
                     "code": "bug-archive-candidate",
-                    "path": bug.relative_to(root).as_posix(),
-                    "message": "Bug 状态已解决，可经 $archive-scan 确认归档",
+                    "path": source.relative_to(root).as_posix(),
+                    "message": "Bug lifecycle 已完成或被替代，可经 $archive-scan 确认归档",
+                })
+            elif lifecycle == "archived":
+                errors.append({
+                    "code": "archived-document-in-current-layer",
+                    "path": source.relative_to(root).as_posix(),
+                    "message": "lifecycle: archived 的 Bug 不得留在 doc/2_bugs",
                 })
 
     archive = doc / "4_archive"

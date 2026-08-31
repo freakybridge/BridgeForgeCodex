@@ -1,3 +1,9 @@
+---
+lifecycle: superseded
+validation_status: verified
+superseded_by: ../0_architecture/design/codex-project-sync.md
+---
+
 # BUG：finalizer 在受保护宿主目录创建临时文件时近似无限重试
 
 ## 状态

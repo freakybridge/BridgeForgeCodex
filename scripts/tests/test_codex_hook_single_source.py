@@ -154,6 +154,173 @@ class HookSingleSourceTest(unittest.TestCase):
                 self.assertIn("project .venv is missing", result.stderr)
                 self.assertEqual(sentinel.read_text(encoding="utf-8"), "unchanged\n")
 
+    def test_precommit_required_checks_fail_closed(self) -> None:
+        shell = shutil.which("sh")
+        if shell is None:
+            git = shutil.which("git")
+            if git is not None:
+                git_root = Path(git).resolve().parent.parent
+                for candidate in (
+                    git_root / "bin" / "sh.exe",
+                    git_root / "usr" / "bin" / "sh.exe",
+                ):
+                    if candidate.is_file():
+                        shell = str(candidate)
+                        break
+        if shell is None:
+            self.skipTest("POSIX shell is required to exercise pre-commit hooks")
+        precommits = (
+            ROOT / ".githooks" / "pre-commit",
+            ROOT / "templates" / ".githooks" / "pre-commit",
+        )
+        required_checks = (
+            ".codex/hooks/instruction_source_check.py",
+            ".codex/hooks/config_health_check.py",
+            ".codex/scripts/current_baseline.py",
+            ".codex/hooks/encoding_check.py",
+            ".codex/hooks/project_structure_check.py",
+            ".codex/hooks/skill_metadata_check.py",
+            ".codex/scripts/factory_version_check.py",
+            "scripts/rebuild_shared_skill_manifest.py",
+        )
+        for precommit in precommits:
+            with self.subTest(precommit=precommit), tempfile.TemporaryDirectory() as raw:
+                project = Path(raw)
+                prepare_project_runtime(project)
+                validator = project / ".codex" / "scripts" / "project_runtime.py"
+                validator.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(TEMPLATE / "scripts" / "project_runtime.py", validator)
+                for relative in required_checks:
+                    target = project / relative
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.write_text("raise SystemExit(0)\n", encoding="utf-8")
+
+                passed = subprocess.run(
+                    [shell, str(precommit)],
+                    cwd=project,
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    check=False,
+                )
+                self.assertEqual(passed.returncode, 0, passed.stdout + passed.stderr)
+
+                first_check = project / required_checks[0]
+                first_check.unlink()
+                missing = subprocess.run(
+                    [shell, str(precommit)],
+                    cwd=project,
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    check=False,
+                )
+                self.assertEqual(missing.returncode, 2, missing.stdout + missing.stderr)
+                self.assertIn("required check is missing", missing.stderr)
+
+                first_check.write_text("raise SystemExit(1)\n", encoding="utf-8")
+                crashed = subprocess.run(
+                    [shell, str(precommit)],
+                    cwd=project,
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    check=False,
+                )
+                self.assertEqual(crashed.returncode, 1, crashed.stdout + crashed.stderr)
+                self.assertIn("required check failed with status 1", crashed.stderr)
+
+    def test_dispatcher_tool_payloads_fail_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            hooks = root / ".codex" / "hooks"
+            hooks.mkdir(parents=True)
+            shutil.copy2(
+                TEMPLATE / "hooks" / "hook_dispatcher.py",
+                hooks / "hook_dispatcher.py",
+            )
+            project_python = prepare_dispatcher_runtime(root)
+            command = [str(project_python), str(hooks / "hook_dispatcher.py")]
+            cases = (
+                ("pre-tool", "", "hook input is empty", "BLOCKED"),
+                ("pre-tool", "{broken", "not valid UTF-8 JSON", "BLOCKED"),
+                ("pre-tool", "[]", "must be a JSON object", "BLOCKED"),
+                ("pre-tool", json.dumps({"tool_input": {}}), "tool_name", "BLOCKED"),
+                (
+                    "pre-tool",
+                    json.dumps({"tool_name": "Bash", "tool_input": []}),
+                    "tool_input must be a JSON object",
+                    "BLOCKED",
+                ),
+                (
+                    "pre-tool",
+                    json.dumps({"tool_name": "Bash", "tool_input": {}}),
+                    "tool_input.command",
+                    "BLOCKED",
+                ),
+                (
+                    "pre-tool",
+                    json.dumps({"tool_name": "Edit", "tool_input": {}}),
+                    "tool_input.file_path",
+                    "BLOCKED",
+                ),
+                (
+                    "pre-tool",
+                    json.dumps({
+                        "tool_name": "apply_patch",
+                        "tool_input": {"command": "*** Begin Patch\n*** End Patch"},
+                    }),
+                    "no parseable target files",
+                    "BLOCKED",
+                ),
+                (
+                    "pre-tool",
+                    json.dumps({"tool_name": "FutureTool", "tool_input": {}}),
+                    "unsupported tool",
+                    "BLOCKED",
+                ),
+                ("post-edit", "[]", "must be a JSON object", "FAILED"),
+                (
+                    "post-shell",
+                    json.dumps({"tool_name": "Bash", "tool_input": {}}),
+                    "tool_input.command",
+                    "FAILED",
+                ),
+            )
+            env = {**os.environ, "PYTHONUTF8": "1"}
+            for event, payload, message, outcome in cases:
+                with self.subTest(event=event, message=message):
+                    completed = subprocess.run(
+                        [*command, event],
+                        cwd=root,
+                        input=payload,
+                        capture_output=True,
+                        text=True,
+                        encoding="utf-8",
+                        errors="replace",
+                        env=env,
+                        check=False,
+                    )
+                    self.assertEqual(completed.returncode, 2, completed.stderr)
+                    self.assertIn(f"[hook-dispatch] {outcome}:", completed.stderr)
+                    self.assertIn(message, completed.stderr)
+
+            lifecycle = subprocess.run(
+                [*command, "session-start"],
+                cwd=root,
+                input="",
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                env=env,
+                check=False,
+            )
+            self.assertEqual(lifecycle.returncode, 0, lifecycle.stderr)
+
     def test_dispatcher_routes_are_current_safe_runtime_files(self) -> None:
         dispatcher_path = TEMPLATE / "hooks" / "hook_dispatcher.py"
         dispatcher = load_module(dispatcher_path, "hook_dispatcher_audit")

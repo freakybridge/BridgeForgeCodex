@@ -1,3 +1,9 @@
+---
+lifecycle: superseded
+validation_status: verified
+superseded_by: ../1_delivery/project-memory-retirement/requirements_2026-08-30_project-memory-retirement.md
+---
+
 # `$summary` 将项目经验写入全局 memory 队列而非项目 memory
 
 **状态**：source-fixed-downstream-recovery-pending

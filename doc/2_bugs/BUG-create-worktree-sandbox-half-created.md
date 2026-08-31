@@ -1,3 +1,8 @@
+---
+lifecycle: active
+validation_status: awaiting_validation
+---
+
 # BUG：create-worktree 默认沙箱留下半创建状态
 
 > 日期：2026-08-15

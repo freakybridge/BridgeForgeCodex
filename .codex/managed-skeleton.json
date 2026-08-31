@@ -1,6 +1,6 @@
 {
   "schema_version": 3,
-  "release_version": "1.5.27",
+  "release_version": "1.5.34",
   "host": "codex",
   "stamp": ".codex/.bridgeforge_codex_version",
   "contract_target": ".codex/managed-skeleton.json",
@@ -31,7 +31,7 @@
         "public": {
           "begin": "<!-- BRIDGEFORGE:PUBLIC:BEGIN -->",
           "end": "<!-- BRIDGEFORGE:PUBLIC:END -->",
-          "current_sha256": "sha256:895702cf3ad2a7d95d1f551025ef9bbb84432f28827500bf370e89d396b93767"
+          "current_sha256": "sha256:b9382d884080677f13ef63f7e44dac9d8a628c2e8d2f01d303c972d3c55e1d3a"
         },
         "project": {
           "begin": "<!-- BRIDGEFORGE:PROJECT:BEGIN -->",
@@ -51,7 +51,7 @@
           ]
         }
       },
-      "current_sha256": "sha256:78b45798dd17f37e8935805933fc989b05d4f35524795b5755c79bbfa5941e09",
+      "current_sha256": "sha256:6185c814f29c34c51da11470d12094fc0d2c425e3d4c0270926d969effd20693",
       "render": "project-name"
     },
     {
@@ -393,11 +393,11 @@
       "source": "templates/.githooks/pre-commit",
       "target": ".githooks/pre-commit",
       "strategy": "region",
-      "current_sha256": "sha256:f5f2b7bf7fdb7c966274a20b4a411362939a36711e21af16d81e93b90fc409e4",
+      "current_sha256": "sha256:6339a1f7b010a7018c2c71b588afc0a7cbb0621af4c62c7443a006e02287896d",
       "region": {
         "begin": "# >>> BRIDGEFORGE_CODEX_MANAGED_BEGIN",
         "end": "# <<< BRIDGEFORGE_CODEX_MANAGED_END",
-        "current_sha256": "sha256:d329f6e5a02483b404dd7a52bca88e4fbeea01afe731bce09e06790e11845f94"
+        "current_sha256": "sha256:d34209d9ac0b95da9c55f83d8b70197311bdb1194ce6992383865240275dd83a"
       }
     },
     {
@@ -461,7 +461,7 @@
       "source": "templates/hooks/hook_dispatcher.py",
       "target": ".codex/hooks/hook_dispatcher.py",
       "strategy": "whole",
-      "current_sha256": "sha256:5ae1a81675ec51ed46b05634aeb9cfe12e3c0ad8e6c6f8af9b2af938307e0c56"
+      "current_sha256": "sha256:7c621eb7dc6c44de69f603a6ad206191d8c466c21fa1025dc02f65596a553c80"
     },
     {
       "id": "codex.hook.non-ascii-shell-guard",
@@ -482,14 +482,14 @@
       "source": "templates/hooks/instruction_source_check.py",
       "target": ".codex/hooks/instruction_source_check.py",
       "strategy": "whole",
-      "current_sha256": "sha256:461a80785c4158150a5abae17a1f543424a4b183cea1dfcc3e5d4c0461bf6d38"
+      "current_sha256": "sha256:7a375f9cf6a452a41cbce1b579554f5eb39786008955b32de9da045829c658ec"
     },
     {
       "id": "codex.hook.project-structure-check",
       "source": "templates/hooks/project_structure_check.py",
       "target": ".codex/hooks/project_structure_check.py",
       "strategy": "whole",
-      "current_sha256": "sha256:f2de4d6e4fcc71e7627e058325a21d4f775538a0e851909f1cd189bdeb9320e3"
+      "current_sha256": "sha256:8f4cf190c35ef943c61a30701f8eeccba039188d831b86df446e646cfc2a9fe7"
     },
     {
       "id": "codex.hook.session-snapshot",

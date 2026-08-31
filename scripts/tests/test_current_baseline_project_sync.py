@@ -594,6 +594,12 @@ class CurrentProjectSyncTests(unittest.TestCase):
         (self.project / ".codex").mkdir()
         plan = SYNC.build_plan(self.project, ROOT, "init")
         self.assertIn("no existing skeleton identity", " ".join(plan.blockers))
+        machine = SYNC._plan_payload(plan)
+        human = SYNC._plan_human_result(machine)
+        rendered = SYNC._render_human_result(human)
+        self.assertIn("已经存在协作骨架", rendered)
+        self.assertNotIn("init requires", rendered)
+        self.assertIn("init requires", machine["blockers"][0])
         with self.assertRaisesRegex(SYNC.SyncBlocked, "blockers"):
             self.apply(plan)
 
@@ -2252,7 +2258,7 @@ class CurrentProjectSyncTests(unittest.TestCase):
         self.assertFalse((self.project / "AGENTS.md").exists())
         self.assertFalse((self.project / ".codex" / "memory").exists())
 
-    def test_legacy_memory_drift_during_apply_is_rolled_back(self) -> None:
+    def test_legacy_memory_drift_survives_managed_rollback(self) -> None:
         note = self.project / ".codex" / "memory" / "legacy.md"
         note.parent.mkdir(parents=True)
         note.write_bytes(b"original legacy memory\n")
@@ -2267,7 +2273,7 @@ class CurrentProjectSyncTests(unittest.TestCase):
             if label == "after-legacy-memory-preserve":
                 note.write_bytes(b"drifted legacy memory\n")
 
-        with self.assertRaisesRegex(SYNC.SyncBlocked, "rolled back"):
+        with self.assertRaisesRegex(SYNC.SyncBlocked, "without restoring"):
             self.apply(
                 plan,
                 confirmed_preservation_manifest=True,
@@ -2275,7 +2281,43 @@ class CurrentProjectSyncTests(unittest.TestCase):
                 checkpoint=drift_memory_after_preserve,
             )
 
-        self.assertEqual(note.read_bytes(), b"original legacy memory\n")
+        self.assertEqual(note.read_bytes(), b"drifted legacy memory\n")
+        self.assertFalse((self.project / "AGENTS.md").exists())
+        self.assertEqual(
+            (self.project / SYNC.OBSOLETE_STAMP).read_text(encoding="utf-8").strip(),
+            LEGACY_VERSION,
+        )
+        self.assertFalse((self.project / SYNC.CURRENT_STAMP).exists())
+
+    def test_incoming_contract_cannot_target_retired_project_memory(self) -> None:
+        template = self.template_base / "retired-memory-target"
+        shutil.copytree(ROOT / "templates", template / "templates")
+        shutil.copy2(ROOT / "VERSION", template / "VERSION")
+        source = template / "templates" / "retired-memory-probe.md"
+        payload = b"must remain project-owned\n"
+        source.write_bytes(payload)
+        contract_path = template / "templates" / "managed-skeleton.json"
+        contract = json.loads(contract_path.read_text(encoding="utf-8"))
+        contract["assets"].append({
+            "id": "codex.invalid.retired-memory-probe",
+            "source": "templates/retired-memory-probe.md",
+            "target": ".codex/memory/probe.md",
+            "strategy": "whole",
+            "current_sha256": SYNC._sha256_bytes(payload),
+        })
+        contract_path.write_text(
+            json.dumps(contract, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+
+        plan = SYNC.build_plan(self.project, template, "init")
+
+        self.assertIn(
+            "current contract targets retired legacy project Memory",
+            " ".join(plan.blockers),
+        )
+        self.assertEqual(plan.actions, [])
+        self.assertFalse((self.project / ".codex").exists())
 
     def test_human_result_covers_noop_gap_blocker_and_failure(self) -> None:
         common = {
@@ -2289,6 +2331,16 @@ class CurrentProjectSyncTests(unittest.TestCase):
         noop = SYNC._plan_human_result(dict(common))
         self.assertEqual(noop["conclusion"], SYNC.USER_CONCLUSION_NO_ACTION)
         self.assertEqual(noop["pending_items"], [])
+
+        safe_payload = dict(common)
+        safe_payload["safe"] = [{"asset_id": "codex.safe-update"}]
+        safe = SYNC._plan_human_result(safe_payload)
+        self.assertEqual(
+            safe["conclusion"],
+            SYNC.USER_CONCLUSION_READY_TO_APPLY,
+        )
+        self.assertIn("无需用户确认", safe["next_step"])
+        self.assertNotIn("等待确认", SYNC._render_human_result(safe))
 
         gap_payload = dict(common)
         gap_payload["gaps"] = [{"reason": "unresolved gap in project skill"}]
@@ -2318,7 +2370,22 @@ class CurrentProjectSyncTests(unittest.TestCase):
         self.assertIn("本次写入已回滚", rendered)
         self.assertNotIn("traceback", rendered.casefold())
 
-        for result in (noop, gap, blocker, failure):
+        raw_unknown_error = "unexpected parser signal: internal detail"
+        unknown_machine = {
+            "error": raw_unknown_error,
+            "rollback_performed": False,
+        }
+        unknown_failure = SYNC._failure_human_result(unknown_machine)
+        unknown_rendered = SYNC._render_human_result(unknown_failure)
+        self.assertEqual(
+            SYNC._classify_sync_reason(raw_unknown_error).code,
+            "unclassified_sync_error",
+        )
+        self.assertIn("未分类错误", unknown_rendered)
+        self.assertNotIn(raw_unknown_error, unknown_rendered)
+        self.assertEqual(unknown_machine["error"], raw_unknown_error)
+
+        for result in (noop, safe, gap, blocker, failure, unknown_failure):
             self.assertIn(result["conclusion"], SYNC.USER_CONCLUSIONS)
 
 

@@ -1,14 +1,17 @@
 ---
-status: verified_pending_cleanup_authorization
+status: cleaned
 record_type: migration_ledger
-scope: refactored-project/.codex/memory
+scope: .codex/memory
 source_snapshot_disposition: deleted_after_factory_propagation_2026_08_31
 inventoried_at: 2026-08-30
 approved_for_migration: true
-approved_for_deletion: false
-reviewed_assets: 24
+approved_for_deletion: true
+cleanup_authorized_at: 2026-08-31
+cleanup_completed_at: 2026-08-31
+reviewed_assets: 25
 migrated_assets: 3
-no_migration_required_assets: 21
+no_migration_required_assets: 22
+deleted_source_assets: 25
 p1_validation: passed
 p2_runtime_retirement: implemented
 p2_candidate_validation: passed_with_external_gaps
@@ -21,17 +24,17 @@ product_requirement: doc/1_delivery/project-memory-retirement/requirements_2026-
 
 ## 结论
 
-候选工程 `.codex/memory/` 共 24 个资产：3 个派生索引/统计，7 个通用 Memory，14 个 delivery topic。逐文件审核后：
+工厂 `.codex/memory/` 最终共 25 个资产：3 个派生索引/统计，7 个通用 Memory，15 个 delivery topic。逐文件审核后：
 
 - 3 个派生资产没有正文价值，只列入 P2 清理候选，不迁移。
-- 18 个正文资产的有效信息已由现有 `AGENTS.md`、Hook/测试、交付需求、Bug 或归档文档覆盖；P1 已完成逐项去重核对，不再复制摘要。
+- 19 个正文资产的有效信息已由现有 `AGENTS.md`、Hook/测试、交付需求、Bug 或归档文档覆盖；P1 与最终清理预检已完成逐项去重核对，不再复制摘要。
 - 3 个资产的独有信息已按用户裁决迁入明确 owner 的文档，收据见下文。
-- P1/P2 没有修改或删除任何源资产；运行时已退役，但源资产清理仍须独立授权。
-- 退役实现已传播到真实工厂 `1.5.13`；根 `.codex/memory/` 25 个 legacy 文件保持原样，正式 Template、dogfood、manifest 与 dispatcher 不再运行或分发项目 Memory 链。
+- P1/P2 没有修改或删除任何源资产；运行时已退役。用户于 2026-08-31 明确要求先清理 Memory，形成最终独立删除授权，25 个源资产随后删除。
+- 退役实现已传播到真实工厂 `1.5.13`；正式 Template、dogfood、manifest 与 dispatcher 不再运行或分发项目 Memory 链，根 `.codex/memory/` 已完成清理。
 
 本账本只处理项目 `.codex/memory/`。Codex 原生 `~/.codex/memories/`、`scripts/codex_memory_sync.py`、用户级同步 Hook、私有 GitHub 整树快照、单写入设备模型及其测试不在退役范围。
 
-用户已于 2026-08-30 确认下游必须采用“程序扫描、Agent 语义审核、用户逐项确认、受控迁移、独立清理授权”机制。通用流程、账本字段和验收条件以 [`requirements_2026-08-30_project-memory-retirement.md`](../../1_delivery/project-memory-retirement/requirements_2026-08-30_project-memory-retirement.md) 为唯一事实源；本文件只记录候选工程 24 项资产的具体裁决。
+用户已于 2026-08-30 确认下游必须采用“程序扫描、Agent 语义审核、用户逐项确认、受控迁移、独立清理授权”机制。通用流程、账本字段和验收条件以 [`requirements_2026-08-30_project-memory-retirement.md`](../../1_delivery/project-memory-retirement/requirements_2026-08-30_project-memory-retirement.md) 为唯一事实源；本文件记录候选工程 24 项资产的原裁决及正式根新增第 25 项的最终清理复核。
 
 ## 判定规则
 
@@ -69,6 +72,7 @@ product_requirement: doc/1_delivery/project-memory-retirement/requirements_2026-
 | T-12 | `topics/create-worktree-skill/summary.md` | delivery / completed | `doc/4_archive/delivery/create-worktree-skill/requirements_2026-08-15_create-worktree-skill.md`；`doc/2_bugs/BUG-create-worktree-sandbox-half-created.md` | 删除（去重后） | **与 doc 的关系：Skill、脚本、测试、现有需求 doc 与 Bug 已完整，P1 不写 doc，只核对 owner。**位置参数、`codex/` 分支、沙箱外首跑、Windows 协议、部分成功码、13/13 与 aaa/bbb 清理均已有逐项记录。**用户裁决：`approve`（2026-08-30），核对通过后仅列入最终清理候选，非删除授权。** |
 | T-13 | `topics/memory-rule-organization/summary.md` | delivery / completed；其中项目 Memory 架构已被本任务替代 | `doc/0_architecture/design/codex-native-memory-sync.md`（新）；`doc/1_delivery/memory-rule-organization/requirements_2026-08-14_memory-governance-native-sync.md`（补充替代状态）；既有 native-memory Bug | 拆分迁移 | **与 doc 的关系：P1 要新建 native sync 当前架构 doc，并在既有混合需求卡标明项目 Memory 部分已退役；不再新建重复 archive doc。**迁移 opaque bytes、单写入设备、parentless 整树快照、`--force-with-lease`、空快照、wrapper 与 `hookRuntimeVerified`；项目索引、router、usage、writer、lint、duplicate、`$find-memory` 不迁移。**用户裁决：`approve`（2026-08-30），完成两处 doc 写入、逐项对账及 native sync 回归后仅列入最终清理候选，非删除授权。** |
 | T-14 | `topics/skill-runtime-efficiency/summary.md` | delivery / completed | `doc/1_delivery/skill-runtime-efficiency/requirements_2026-08-15_skill-runtime-efficiency.md`；相关 Skill/测试 | 删除（去重后） | **与 doc 的关系：非 Memory 性能机制已有需求 doc、代码与测试，P1 不写 doc；P2 只拆除 `$find-memory`、summary/todo writer/rebuild 等项目 Memory 分支。**fast path、Git 子进程合并、`show_state`/`archive_scan` 优化必须保留。**用户裁决：`approve`（2026-08-30），运行时退役并回归后仅列入最终清理候选，非删除授权。** |
+| T-15 | `topics/agents-md-simplification-review/summary.md` | delivery / active 标记已失真 | `doc/2_bugs/BUG-agents-ia/README.md`；`doc/1_delivery/agents-md-simplification-review/` | 删除（去重后） | 正文仍称“真实骨架暂不替换”，已被真实工厂 1.5.13～1.5.26 的传播与验收事实替代；V11 历史、候选边界、验证分层和后续收据均由 Bug 总账及同 topic 交付文档承接。**用户裁决：2026-08-31 的“先清理 memory”覆盖正式根全部 25 个 legacy 资产，构成独立清理授权。** |
 
 ## P1 迁移候选（须先完成 24 项逐项确认）
 
@@ -98,14 +102,14 @@ summary/Skill/manifest/AGENTS/结构 99 项，native Memory sync 51 项。
 
 ## P2 删除硬闸
 
-即使用户逐项确认 disposition，P2 删除仍须单独确认。通用清理流程以产品需求为准；本候选工程还必须同时满足：
+即使用户逐项确认 disposition，P2 删除仍须单独确认。通用清理流程以产品需求为准；本工厂还必须同时满足：
 
-1. 24 个源文件 SHA-256 与本账本基线一致；任一漂移则退回 P0 重新审核该文件。
+1. 25 个源文件 SHA-256 与本账本基线一致；任一漂移则退回 P0 重新审核该文件。
 2. 3 个独有资产已完成 doc 写入，逐句对账无遗漏。
-3. 17 个去重资产的目标文件仍存在，且关键语义检索命中；不得用 CHANGELOG 单独替代完整事实源。
+3. 18 个去重正文资产的目标文件仍存在，且关键语义检索命中；不得用 CHANGELOG 单独替代完整事实源。
 4. 同步器停止安装/调用项目 Memory 运行时，但下游既有 `.codex/memory/` 只标为 legacy/gap 并原样保留。
 5. native Memory 同步链、单写入设备与整树私有快照测试通过。
-6. 用户再次明确批准删除后，才允许删除候选工程这 24 个资产；本账本本身不构成删除授权。
+6. 用户再次明确批准删除后，才允许删除工厂这 25 个资产；本账本本身不构成删除授权。
 
 ## P0 内容指纹
 
@@ -113,7 +117,7 @@ summary/Skill/manifest/AGENTS/结构 99 项，native Memory sync 51 项。
 
 | 原路径 | SHA-256 |
 |---|---|
-| `_stats.json` | `86d31b9cec6c67095b013a37cb55aa9865f16ac92d9b3390699ccd62693b7460` |
+| `_stats.json` | `2095d6b2653670bfc7518acaadc8964cbe0a7af783ff9231077ffd4b86a35b0a` |
 | `architecture/bridgeforge-switch-direct-sync.md` | `7a658cee1257a1a7077ca65bc0685cdd1d9505f77addbf7c31978fa4d15b6d3b` |
 | `architecture/codex-model-routing-policy.md` | `2e2710ea13bdd6f180a2d50fa23c6cd9528cda58ca360e5f19dfd0aaa633d45d` |
 | `engineering/bom-free-encoding-gate.md` | `f12af962c66909d82e45b0651395ec128b51895fdbdd01a0219b7ef179c2fb2a` |
@@ -121,7 +125,7 @@ summary/Skill/manifest/AGENTS/结构 99 项，native Memory sync 51 项。
 | `engineering/confirm-workflow.md` | `e3d5ba6f7c75bddd2b4d81d223c6e32dd7543d0b480b56eeb58bea76bade2278` |
 | `engineering/skill-metadata-precommit-gate.md` | `c3487fcef713b46e420c808332f5d3976bca2e7749efeff6927c0008afcfe9c9` |
 | `MEMORY_COLD.md` | `208f87136b07c68784e75eb003b4733659d1d1b0a5eddf4e16a9e0c0983a5901` |
-| `MEMORY.md` | `947806f81f536648935d4d2d4805c965341f9ff867a930dd64f5291649bd0603` |
+| `MEMORY.md` | `8789d96971be4b129cf38cf956ef62464e16d24514077da0ba884055c9f8a1a2` |
 | `operations/codex-bridgeforge-slash-entry-debug.md` | `cad3945490e6acc3c97ceea5973d3fad2b8e2fc3c363edfd700121ed98fc3110` |
 | `topics/bridgeforge-actionable-readiness/summary.md` | `f74a5d0fcb58054c5dd1699e348ceb62dae50e9ef070eb56afbfbdc4b67148c6` |
 | `topics/bridgeforge-command-model/summary.md` | `04f17a4a735b82cc7641919a0120bcf13ec0c58d9f7aede0f0fbc1f7bb48dd36` |
@@ -137,11 +141,12 @@ summary/Skill/manifest/AGENTS/结构 99 项，native Memory sync 51 项。
 | `topics/create-worktree-skill/summary.md` | `71156fa39720f08d9f3747b9b8b0cf84d4f871c70890b182e342dd8661e082bf` |
 | `topics/memory-rule-organization/summary.md` | `d656e442d15d6b93d15725f52e5a7036d841a4a030c2b583b4de1903505a1d13` |
 | `topics/skill-runtime-efficiency/summary.md` | `837bd3aed3d8494978852d94ba799f1ddec201a176e9917e955a2687694fc469` |
+| `topics/agents-md-simplification-review/summary.md` | `386273284ceed3df9174add9f17d96cd74bd4f708655329eedd7eb0f889b9f9b` |
 
 ## 当前阶段收口
 
-- 已完成：24/24 资产盘点与用户裁决；O-01、T-03、T-13 迁移；21 项 no-migration-required 覆盖核对；项目 Memory 运行时、`$find-memory`、manifest/managed assets/Hook/git-sync 写入链退役。
+- 已完成：25/25 资产盘点与用户裁决；O-01、T-03、T-13 迁移；22 项 no-migration-required 覆盖核对；项目 Memory 运行时、`$find-memory`、manifest/managed assets/Hook/git-sync 写入链退役。
 - 已完成：下游逐文件扫描收据、`legacy-gap` / `action_required` 人类与机器结果、整树逐字节保护、旧 whole-owned runtime 安全删除计划及跨项目/跨会话零误召回测试。
-- 已验证：24/24 源 hash 匹配、Memory Git diff 为 0；审计修正后 146/146 定向回归、4/4 fixture、34/34 manifest/mirror/结构回归通过。
+- 已验证：原 24 项中 22 项 hash 匹配；`MEMORY.md` 与 `_stats.json` 的漂移经 Git 历史确认仅由 T-15 新增产生，T-15 正文已完成去重审核；目录无 reparse point。
 - 未验证：真实低/高定制下游扫描演练与真实 Codex runtime smoke；未取得目标路径和外部运行授权。
-- 未授权：源文件删除；`approved_for_deletion` 继续为 `false`。在外部验证缺口关闭且用户再次明确批准前，`.codex/memory/` 必须保持原样。
+- 已清理：用户于 2026-08-31 明确要求先清理 Memory，授权将清理顺序提前到外部验证之前；25 个 legacy 源文件已删除。外部验证缺口仍保留，不得因此宣称真实下游或 runtime 已通过。

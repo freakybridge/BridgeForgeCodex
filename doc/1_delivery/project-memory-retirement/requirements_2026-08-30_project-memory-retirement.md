@@ -171,7 +171,7 @@ verified -> cleanup-pending -> cleanup-approved -> retired
 - P2 legacy 行为已完成：update/rebuild 都将既有 `.codex/memory/` 报告为 `R:legacy-project-memory` / `legacy-gap`，计划与执行收据为 `action_required` / `completed_with_gaps`，整树逐字节快照、漂移检查和回滚均保留；同步器不 lint、不重建索引、不写入或直接删除 legacy。
 - P2 审计已完成：独立审计提出“人类收据误报 ready、扫描/持久账本闭环不足、跨会话/跨项目测试自证式”三项 P1 问题，均已修正并通过 146 项定向回归。
 - 外部验证仍有缺口：未在用户点名的真实低定制/高定制下游执行扫描演练，也未取得真实 Codex runtime smoke；当前只有隔离 fixture 和真实 dispatcher 子进程测试，禁止宣称真实下游/runtime 已通过。
-- 删除仍未授权：候选工程 `.codex/memory/` 必须保持原样，直到 P2 独立清理确认。
+- 工厂源清理已授权并完成：用户于 2026-08-31 明确要求先清理 Memory，25 个 legacy 文件完成最终复核后删除；该授权只覆盖本工厂，不覆盖任何真实下游。
 
 ## P1 实施计划与预算
 
@@ -199,3 +199,11 @@ verified -> cleanup-pending -> cleanup-approved -> retired
 - manifest/mirror/doc：manifest `--check` 无变化；shared distribution、project structure 与 dogfood mirror 34/34 通过；三个 Template/dogfood `git diff --no-index` 均为 0；`git diff --check` 为 0。结构检查只有既有 archive advisory，无硬失败。
 - 源资产边界：账本 24 项、实际文件 24 项、SHA-256 错误 0；`.codex/memory/` Git diff 为 0。`scripts/codex_memory_sync.py` 与 `scripts/codex_memory_hook.cmd` Git diff 为 0。
 - 未验证：真实下游扫描/人工确认演练、真实 Codex 原生 Memory 注入 runtime smoke。两项都需要超出候选工程的额外目标与运行授权。
+
+## 工厂源最终清理收据（2026-08-31）
+
+- 用户明确要求“先清理 memory”，形成独立清理授权，并明确把工厂源清理排在外部验证之前；真实下游仍必须逐项目重新取得授权。
+- 正式根相对候选账本新增 `topics/agents-md-simplification-review/summary.md`，最终清单因此为 25 项。该文件的有效历史已由 `BUG-agents-ia` 总账和同 topic 交付文档承接，不迁移过时摘要。
+- 原 24 项中 22 项 SHA-256 与账本一致；`MEMORY.md`、`_stats.json` 的两项漂移经提交 `b269f8a` 证明仅由新增第 25 项及其派生索引记录产生。第 25 项单独锁定 SHA-256 后纳入最终清单。
+- 删除前解析目标为 `D:\Quant\BridgeForgeCodex\.codex\memory`，reparse point 为 0；清理范围不包含 Codex 原生 `~/.codex/memories/`、native Memory 同步脚本或任何下游目录。
+- 25 个 legacy 文件已删除；外部低/高定制下游与真实 runtime 验证仍为缺口，不能用本次源清理冒充产品全链路验收。

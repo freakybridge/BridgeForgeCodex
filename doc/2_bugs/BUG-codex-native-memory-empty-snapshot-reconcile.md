@@ -1,3 +1,8 @@
+---
+lifecycle: active
+validation_status: awaiting_validation
+---
+
 # BUG：Codex 原生 memories 合法空快照无法完成 reconcile
 
 **状态**：source-and-fixture-fixed-installed-hook-smoke-pending

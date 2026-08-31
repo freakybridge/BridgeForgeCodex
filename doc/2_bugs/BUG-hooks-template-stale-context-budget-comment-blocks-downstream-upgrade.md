@@ -1,5 +1,6 @@
 ---
-status: superseded-current-only-awaiting-real-downstream-validation
+lifecycle: active
+validation_status: awaiting_validation
 severity: high
 scope: BridgeForgeCodex hooks template, managed hook merge, and downstream update readiness
 reported_at: 2026-08-18

@@ -1,5 +1,6 @@
 ---
-status: regression-fixed-awaiting-real-downstream
+lifecycle: active
+validation_status: awaiting_validation
 severity: high
 scope: downstream git-sync version classification after bridgeforge-codex contract migration
 reported_at: 2026-08-17

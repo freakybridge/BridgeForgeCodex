@@ -1,5 +1,6 @@
 ---
-status: source-fixed-awaiting-release-and-runtime
+lifecycle: active
+validation_status: awaiting_validation
 severity: high
 scope: factory-only bridgeforge-codex-batch pending target drift
 reported_at: 2026-08-27

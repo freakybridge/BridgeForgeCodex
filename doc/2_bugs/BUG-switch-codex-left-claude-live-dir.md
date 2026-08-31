@@ -1,3 +1,9 @@
+---
+lifecycle: superseded
+validation_status: verified
+superseded_by: ../0_architecture/design/sync-from-upstream-playbook.md
+---
+
 # switch codex 后残留 .claude live 目录问题报告
 
 > **状态**：`superseded`（2026-08-15）

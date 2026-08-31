@@ -1,5 +1,6 @@
 ---
-status: superseded-current-product-awaiting-real-downstream-validation
+lifecycle: active
+validation_status: awaiting_validation
 severity: high
 scope: BridgeForgeCodex 1.4.5 end-to-end update, git-sync handoff, and user-skill migration
 reported_at: 2026-08-17

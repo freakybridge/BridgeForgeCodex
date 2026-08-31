@@ -1,5 +1,6 @@
 ---
-status: product-fixed-awaiting-downstream-migration
+lifecycle: active
+validation_status: awaiting_validation
 severity: high
 scope: bridgeforge-codex core skeleton ownership and target_cleanup retirement
 reported_at: 2026-08-18

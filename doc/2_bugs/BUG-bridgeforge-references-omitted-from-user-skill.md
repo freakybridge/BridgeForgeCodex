@@ -1,3 +1,8 @@
+---
+lifecycle: active
+validation_status: awaiting_user_acceptance
+---
+
 # bridgeforge 重复更新中断导致 Codex command bundle 残缺
 
 **状态**：Resolved  

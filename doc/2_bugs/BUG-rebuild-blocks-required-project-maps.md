@@ -1,5 +1,6 @@
 ---
-status: fix-in-progress
+lifecycle: active
+validation_status: awaiting_validation
 severity: high
 scope: bridgeforge-codex old-project destructive rebuild
 reported_at: 2026-08-21

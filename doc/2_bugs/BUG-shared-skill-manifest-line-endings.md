@@ -1,3 +1,8 @@
+---
+lifecycle: active
+validation_status: awaiting_validation
+---
+
 # shared-skill manifest 换行符哈希不一致
 
 **状态**：fixed  

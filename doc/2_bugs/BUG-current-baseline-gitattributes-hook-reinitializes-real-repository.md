@@ -1,5 +1,6 @@
 ---
-status: source-fixed-awaiting-release-and-downstream-recovery
+lifecycle: active
+validation_status: awaiting_validation
 severity: critical
 scope: downstream pre-commit current-baseline gitattributes validation
 reported_at: 2026-08-27

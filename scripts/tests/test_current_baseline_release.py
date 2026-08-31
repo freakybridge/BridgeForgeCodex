@@ -126,7 +126,10 @@ class CurrentReleaseTests(unittest.TestCase):
         self.assertIn("--index", template)
         self.assertNotIn("memory_rebuild_index.py", template)
         self.assertNotIn("git add", template)
-        self.assertIn('[ "$rc" = 2 ] && exit 2\n    return 0', template)
+        self.assertIn('if [ "$rc" -ne 0 ]; then', template)
+        self.assertIn('exit "$rc"', template)
+        self.assertIn("required check is missing", template)
+        self.assertNotIn("run_exit2_hook", template)
         self.assertNotIn("factory_version_check.py", template)
 
     def test_index_verification_cannot_be_bypassed_by_worktree_restore(self) -> None:

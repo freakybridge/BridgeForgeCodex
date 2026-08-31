@@ -1,5 +1,6 @@
 ---
-status: product-fixed-awaiting-independent-audit
+lifecycle: active
+validation_status: awaiting_validation
 severity: high
 scope: bridgeforge-codex native memories permission classification and maintenance transaction
 reported_at: 2026-08-18

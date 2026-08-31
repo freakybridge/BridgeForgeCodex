@@ -1,3 +1,8 @@
+---
+lifecycle: completed
+validation_status: verified
+---
+
 # BUG：Windows Codex App 的 Native Memory PowerShell hook 未进入 Python
 
 **状态**：resolved-and-runtime-verified  

@@ -1,3 +1,8 @@
+---
+lifecycle: active
+validation_status: in_progress
+---
+
 # BUG：Codex 本地后端异常控制退出
 
 **状态**：investigating  

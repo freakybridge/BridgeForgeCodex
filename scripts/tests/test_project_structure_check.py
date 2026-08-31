@@ -81,7 +81,7 @@ class ProjectStructureCheckTests(unittest.TestCase):
         topic = project / "doc" / "1_delivery" / "missing-topic"
         topic.mkdir()
         (topic / "requirements_2026-08-16_missing.md").write_text(
-            "---\nstatus: active\n---\n",
+            "---\nlifecycle: active\nvalidation_status: in_progress\n---\n",
             encoding="utf-8",
         )
 
@@ -142,11 +142,12 @@ class ProjectStructureCheckTests(unittest.TestCase):
         topic = project / "doc" / "1_delivery" / "done-topic"
         topic.mkdir()
         requirement = topic / "requirements_2026-08-16_done.md"
-        requirement.write_text("---\nstatus: completed\n---\n", encoding="utf-8")
+        requirement.write_text(
+            "---\nlifecycle: completed\nvalidation_status: verified\n---\n",
+            encoding="utf-8",
+        )
         archive = project / "doc" / "4_archive" / "old-report.md"
         archive.write_text("# old\n", encoding="utf-8")
-        readme = project / "doc" / "README.md"
-        readme.write_text(readme.read_text(encoding="utf-8") + "\n- done-topic\n", encoding="utf-8")
 
         result = self.run_check(project, json_output=True)
 
@@ -161,7 +162,10 @@ class ProjectStructureCheckTests(unittest.TestCase):
         topic = project / "doc" / "1_delivery" / "unsafe-topic"
         topic.mkdir()
         marker = topic / "requirements_unsafe.md"
-        marker.write_text("---\nstatus: active\n---\n", encoding="utf-8")
+        marker.write_text(
+            "---\nlifecycle: active\nvalidation_status: in_progress\n---\n",
+            encoding="utf-8",
+        )
 
         original = PROJECT_STRUCTURE_CHECK._is_reparse
 
@@ -172,7 +176,124 @@ class ProjectStructureCheckTests(unittest.TestCase):
             payload = PROJECT_STRUCTURE_CHECK.inspect_project(project)
 
         self.assertIn("unsafe-doc-entry", {item["code"] for item in payload["errors"]})
-        self.assertEqual(marker.read_text(encoding="utf-8"), "---\nstatus: active\n---\n")
+        self.assertEqual(
+            marker.read_text(encoding="utf-8"),
+            "---\nlifecycle: active\nvalidation_status: in_progress\n---\n",
+        )
+
+    def test_reparse_bug_package_fails_closed_before_traversal(self) -> None:
+        project = self.make_project()
+        package = project / "doc" / "2_bugs" / "BUG-unsafe"
+        package.mkdir()
+        evidence = package / "README.md"
+        evidence.write_text(
+            "---\nlifecycle: active\nvalidation_status: in_progress\n---\n",
+            encoding="utf-8",
+        )
+
+        original = PROJECT_STRUCTURE_CHECK._is_reparse
+
+        def fake_is_reparse(path: Path) -> bool:
+            return path == package or original(path)
+
+        with mock.patch.object(PROJECT_STRUCTURE_CHECK, "_is_reparse", side_effect=fake_is_reparse):
+            payload = PROJECT_STRUCTURE_CHECK.inspect_project(project)
+
+        unsafe_paths = {
+            item["path"]
+            for item in payload["errors"]
+            if item["code"] == "unsafe-doc-entry"
+        }
+        self.assertEqual(unsafe_paths, {"doc/2_bugs/BUG-unsafe"})
+
+    def test_legacy_status_is_unclassified_and_does_not_drive_navigation(self) -> None:
+        project = self.make_project()
+        topic = project / "doc" / "1_delivery" / "legacy-topic"
+        topic.mkdir()
+        (topic / "requirements_legacy.md").write_text(
+            "---\nstatus: completed\n---\n",
+            encoding="utf-8",
+        )
+        bug = project / "doc" / "2_bugs" / "BUG-legacy.md"
+        bug.write_text("**状态**：resolved\n", encoding="utf-8")
+
+        result = self.run_check(project, json_output=True)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["errors"], [])
+        codes = {item["code"] for item in payload["advisories"]}
+        self.assertNotIn("delivery-archive-candidate", codes)
+        self.assertNotIn("bug-archive-candidate", codes)
+
+    def test_mixed_delivery_topic_with_active_card_remains_active(self) -> None:
+        project = self.make_project()
+        topic = project / "doc" / "1_delivery" / "mixed-topic"
+        topic.mkdir()
+        (topic / "requirements_active.md").write_text(
+            "---\nlifecycle: active\nvalidation_status: in_progress\n---\n",
+            encoding="utf-8",
+        )
+        (topic / "requirements_done.md").write_text(
+            "---\nlifecycle: completed\nvalidation_status: verified\n---\n",
+            encoding="utf-8",
+        )
+
+        result = self.run_check(project, json_output=True)
+
+        self.assertEqual(result.returncode, 2)
+        payload = json.loads(result.stdout)
+        self.assertIn(
+            "unindexed-delivery-topic",
+            {item["code"] for item in payload["errors"]},
+        )
+        self.assertNotIn(
+            "delivery-archive-candidate",
+            {item["code"] for item in payload["advisories"]},
+        )
+
+    def test_bug_lifecycle_controls_navigation_and_archive_advisory(self) -> None:
+        project = self.make_project()
+        active = project / "doc" / "2_bugs" / "BUG-active.md"
+        active.write_text(
+            "---\nlifecycle: active\nvalidation_status: in_progress\n---\n",
+            encoding="utf-8",
+        )
+        completed = project / "doc" / "2_bugs" / "BUG-done.md"
+        completed.write_text(
+            "---\nlifecycle: completed\nvalidation_status: verified\n---\n",
+            encoding="utf-8",
+        )
+
+        result = self.run_check(project, json_output=True)
+
+        self.assertEqual(result.returncode, 2)
+        payload = json.loads(result.stdout)
+        self.assertIn("unindexed-bug", {item["code"] for item in payload["errors"]})
+        candidates = {
+            item["path"]
+            for item in payload["advisories"]
+            if item["code"] == "bug-archive-candidate"
+        }
+        self.assertEqual(candidates, {"doc/2_bugs/BUG-done.md"})
+
+    def test_lifecycle_requires_valid_validation_status(self) -> None:
+        project = self.make_project()
+        topic = project / "doc" / "1_delivery" / "invalid-topic"
+        topic.mkdir()
+        (topic / "requirements_invalid.md").write_text(
+            "---\nlifecycle: active\nvalidation_status: someday\n---\n",
+            encoding="utf-8",
+        )
+
+        result = self.run_check(project, json_output=True)
+
+        self.assertEqual(result.returncode, 2)
+        payload = json.loads(result.stdout)
+        self.assertIn(
+            "invalid-document-validation-status",
+            {item["code"] for item in payload["errors"]},
+        )
 
     def test_reparse_project_root_fails_closed(self) -> None:
         project = self.make_project()

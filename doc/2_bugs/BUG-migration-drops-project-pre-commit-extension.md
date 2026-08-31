@@ -1,5 +1,6 @@
 ---
-status: bridgeforge-resolved-downstream-business-recovery-pending
+lifecycle: active
+validation_status: awaiting_validation
 scope: bridgeforge migration and downstream pre-commit extension preservation
 ---
 

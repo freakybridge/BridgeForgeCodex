@@ -103,13 +103,11 @@ delivery_layout: flat
 
 每个 topic 内以 `requirements_*.md` 保存确认卡；实现计划、验收方案、协作记录和正式讨论分别与该确认卡同域保存。仅 topic 内路径可作为该事项的工作上下文。
 
-## Bug records
+## 当前 Bug records
 
 - [`BUG-agents-ia/`](2_bugs/BUG-agents-ia/README.md)（当前状态与验证收据见该总账；IA-14 用户与 runtime 验收见 [`IA-14-user-runtime-acceptance.md`](2_bugs/BUG-agents-ia/IA-14-user-runtime-acceptance.md)）
 - [`BUG-codex-backend-unexpected-control-exit.md`](2_bugs/BUG-codex-backend-unexpected-control-exit.md)
-- [`BUG-project-memory-sessionstart-gbk-output.md`](2_bugs/BUG-project-memory-sessionstart-gbk-output.md)
 - [`BUG-windows-codex-hooks-open-visible-terminal.md`](2_bugs/BUG-windows-codex-hooks-open-visible-terminal.md)
-- [`BUG-codex-desktop-native-memory-powershell-hook-not-entering-python.md`](2_bugs/BUG-codex-desktop-native-memory-powershell-hook-not-entering-python.md)
 - [`BUG-legacy-head-contract-missing-release-blocks-rebuild.md`](2_bugs/BUG-legacy-head-contract-missing-release-blocks-rebuild.md)
 - [`BUG-rebuild-drops-project-doc-index.md`](2_bugs/BUG-rebuild-drops-project-doc-index.md)
 - [`BUG-rebuild-blocks-required-project-maps.md`](2_bugs/BUG-rebuild-blocks-required-project-maps.md)
@@ -117,7 +115,6 @@ delivery_layout: flat
 - [`BUG-native-memory-maintain-misclassified-safe-data-egress.md`](2_bugs/BUG-native-memory-maintain-misclassified-safe-data-egress.md)
 - [`BUG-target-cleanup-core-skeleton-ownership.md`](2_bugs/BUG-target-cleanup-core-skeleton-ownership.md)
 - [`BUG-aggressive-absorption-drops-downstream-rule-semantics.md`](2_bugs/BUG-aggressive-absorption-drops-downstream-rule-semantics.md)
-- [`BUG-switch-codex-left-claude-live-dir.md`](2_bugs/BUG-switch-codex-left-claude-live-dir.md)
 - [`BUG-git-sync-sandbox-permission.md`](2_bugs/BUG-git-sync-sandbox-permission.md)
 - [`BUG-git-sync-contract-transition-classification.md`](2_bugs/BUG-git-sync-contract-transition-classification.md)（1.5.5 修复已通过工厂验证与独立审计，等待 Batch restart 的真实下游复验）
 - [`BUG-current-baseline-gitattributes-hook-reinitializes-real-repository.md`](2_bugs/BUG-current-baseline-gitattributes-hook-reinitializes-real-repository.md)（源码与回归已修复，等待发布和 StratusAgent 真实恢复）
@@ -125,12 +122,9 @@ delivery_layout: flat
 - [`BUG-bridgeforge-codex-145-end-to-end-acceptance-gaps.md`](2_bugs/BUG-bridgeforge-codex-145-end-to-end-acceptance-gaps.md)
 - [`BUG-hooks-template-stale-context-budget-comment-blocks-downstream-upgrade.md`](2_bugs/BUG-hooks-template-stale-context-budget-comment-blocks-downstream-upgrade.md)
 - [`BUG-shared-skill-manifest-line-endings.md`](2_bugs/BUG-shared-skill-manifest-line-endings.md)
-- [`BUG-summary-writes-global-memory-instead-of-project-memory.md`](2_bugs/BUG-summary-writes-global-memory-instead-of-project-memory.md)
 - [`BUG-migration-drops-project-pre-commit-extension.md`](2_bugs/BUG-migration-drops-project-pre-commit-extension.md)
-- [`BUG-bridgeforge-references-omitted-from-user-skill.md`](2_bugs/BUG-bridgeforge-references-omitted-from-user-skill.md)
-- [`BUG-update-stamped-before-memory-migration.md`](2_bugs/BUG-update-stamped-before-memory-migration.md)
+- [`BUG-bridgeforge-references-omitted-from-user-skill.md`](2_bugs/BUG-bridgeforge-references-omitted-from-user-skill.md)（真实安装与回归已通过，等待用户验收）
 - [`BUG-codex-native-memory-empty-snapshot-reconcile.md`](2_bugs/BUG-codex-native-memory-empty-snapshot-reconcile.md)
-- [`BUG-finalizer-timeout-protected-host-tempfile.md`](2_bugs/BUG-finalizer-timeout-protected-host-tempfile.md)
 - [`BUG-create-worktree-sandbox-half-created.md`](2_bugs/BUG-create-worktree-sandbox-half-created.md)
 
 ## 归档与参考

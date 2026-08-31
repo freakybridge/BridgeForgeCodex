@@ -48,7 +48,7 @@ verify real baseline + trusted Git HEAD anchor
   -> immediate replan/fingerprint check
   -> temporary transaction snapshot
   -> apply current assets / selected preserved assets / obsolete-stamp deletion
-  -> rebuild memory derived indexes
+  -> verify legacy project memory was not targeted; on concurrent drift roll back managed changes without restoring legacy memory
   -> verify actions + preserved knowledge
   -> config health + text hygiene validators
   -> verify prospective current baseline on real disk

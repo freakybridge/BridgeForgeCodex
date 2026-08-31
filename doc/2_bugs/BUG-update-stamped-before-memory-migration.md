@@ -1,3 +1,9 @@
+---
+lifecycle: superseded
+validation_status: verified
+superseded_by: ../0_architecture/design/codex-project-sync.md
+---
+
 # BUG：既有项目 memory 未迁移却提前写入骨架版本戳
 
 > **状态**：`Resolved`（2026-08-15）

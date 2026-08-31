@@ -1,3 +1,8 @@
+---
+lifecycle: active
+validation_status: awaiting_validation
+---
+
 # git-sync 沙箱 Git 元数据权限验证报告
 
 **状态**：source-fixed-runtime-smoke-pending

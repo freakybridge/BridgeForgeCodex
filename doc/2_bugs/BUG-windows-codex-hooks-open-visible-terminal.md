@@ -1,3 +1,8 @@
+---
+lifecycle: active
+validation_status: awaiting_validation
+---
+
 # BUG：Windows Codex Hook 弹出可见终端窗口
 
 **状态**：fix-in-progress  

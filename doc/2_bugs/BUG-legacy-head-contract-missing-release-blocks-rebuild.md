@@ -1,3 +1,8 @@
+---
+lifecycle: active
+validation_status: awaiting_validation
+---
+
 # BUG：旧 HEAD 合同缺少发布版本时重建事务被误拦
 
 ## 状态

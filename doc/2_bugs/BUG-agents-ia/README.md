@@ -1,5 +1,6 @@
 ---
-status: open
+lifecycle: active
+validation_status: in_progress
 severity: high
 record_type: bug_topic
 scope: bridgeforge-codex 全部下游骨架、用户入口、运行时指令、Skill、Hook 信号、技术收据与文档导航
@@ -70,13 +71,15 @@ source: 用户体验反馈 + 只读静态审计
 | IA-13 | P2 | 现有体积闸无法防止不可理解文本 | 已传播真实工厂 1.5.17；待真实下游 / runtime |
 | IA-14 | P2 | 缺少真实用户理解度与运行时行为验收 | R2 / R6 已发布并受管安装 1.5.25，runtime 均为 2/2；待用户试用 / 真实下游 |
 
-## 真实工厂传播收据（2026-08-30）
+## 真实工厂与当前工作树收据（截至 2026-08-31）
 
 - `refactored-project` 已先合并 IA-08 Memory 退役、自动 Focus 退役与 IA-09 文档改造，再按候选相对可信基线的 119 项差异传播到根 `templates/`、`skills/`、`scripts/`、文档与 `.codex/` dogfood；根 `VERSION` 升至 `1.5.13`。正式根继续演进并发布至 1.5.26 后，用户于 2026-08-31 授权删除该候选快照。
+- 当前 Git `HEAD` 的根 `VERSION` 为 `1.5.27`，未提交工作树已继续演进至 `1.5.33`。`1.5.27～1.5.33` 依次收口候选镜像删除、legacy 项目 Memory 回滚所有权、Hook / pre-commit fail-closed、文档生命周期合同、safe-only 用户结论、同步器中文错误分类和公共 `AGENTS.md` 连续编号；逐版本事实以根 [`CHANGELOG.md`](../../../CHANGELOG.md) 为唯一明细。
 - 旧 `skill-routing.json`、Clarify / Focus 自动 Hook、项目 Memory Hook / 脚本、`$find-memory` 与 Summary 的项目 Memory 写入链已从正式产品面移除；Show State 只保留 `SessionStart` 路由。
-- 工厂既有 `.codex/memory/` 25 个 legacy 文件未修改、未删除，也未被活动 Hook、dispatcher、manifest 或 managed contract 引用；后续清理仍须独立授权。
-- `rebuild_shared_skill_manifest.py --check` 返回 `unchanged`；针对性测试 77/77、完整自动测试 333 项通过（1 项既有跳过）、下游 fixture 4/4、项目结构检查退出码 0，`git diff --check` 通过。
-- 本收据只证明真实工厂源码、Template、dogfood、fixture 与自动测试；真实业务下游升级、全新 Codex 会话 runtime smoke 和 IA-09 新用户试读尚未执行。下文各阶段中“待传播真实工厂”的句子是当时的历史收据，不再代表当前总状态。
+- 工厂既有 `.codex/memory/` 25 个 legacy 文件不被活动 Hook、dispatcher、manifest 或 managed contract 引用；用户于 2026-08-31 独立授权先行清理，逐项复核后已删除。该授权不覆盖真实下游。
+- 截至 `1.5.26` 的历史工厂收据为：`rebuild_shared_skill_manifest.py --check` 返回 `unchanged`，针对性测试 77/77、完整自动测试 333 项通过（1 项既有跳过）、下游 fixture 4/4、项目结构检查退出码 0，`git diff --check` 通过。该数字只代表当时版本，不冒充当前工作树收据。
+- `1.5.32` 工作树的最近一次完整回归为 360 项通过、1 项跳过，下游 fixture 4/4；`1.5.33` 连续编号与台账同步目前完成代码相关测试 51/51、文档生命周期测试 3/3、manifest `--check`、项目结构检查 `errors=[]` 和 `git diff --check`。完整回归与下游 fixture 尚未针对 `1.5.33` 重跑。
+- 已发布并受管安装的 `1.5.25` 上，IA-14 的 R2 / R6 runtime 均为 2/2；`1.5.33` 尚未安装或执行发布后 runtime。用户最终试用和真实业务下游仍未执行。下文各阶段中“待传播真实工厂”的句子是当时的历史收据，不再代表当前总状态。
 
 ## 逐项证据、影响与关闭条件
 
@@ -543,8 +546,8 @@ P0–P1 确定性基线（2026-08-30）：
 
 ## 当前方案草案
 
-- [`proposal/README.md`](proposal/README.md)：AGENTS 信息架构第十一版历史实施基线；曾由 `refactored-project` 候选快照承接，现已由真实工厂 `1.5.26` 取代，不参与运行时，也不再作为当前发布门。
-- [`project-memory-retirement-ledger.md`](project-memory-retirement-ledger.md)：项目 `.codex/memory/` 24 个资产的 P0 逐文件迁移账本；24/24 已审核，P1 迁移已授权，删除仍未授权。
+- [`proposal/README.md`](proposal/README.md)：AGENTS 信息架构第十一版历史实施基线；曾由 `refactored-project` 候选快照承接，自真实工厂 `1.5.26` 起已被正式实现取代，当前工作树继续演进至 `1.5.33`；该基线不参与运行时，也不再作为当前发布门。
+- [`project-memory-retirement-ledger.md`](project-memory-retirement-ledger.md)：项目 `.codex/memory/` 的逐文件迁移与清理账本；候选 24 项加正式根新增 1 项共 25/25 已审核，并于 2026-08-31 取得独立授权后完成删除。
 - [`../../1_delivery/project-memory-retirement/requirements_2026-08-30_project-memory-retirement.md`](../../1_delivery/project-memory-retirement/requirements_2026-08-30_project-memory-retirement.md)：下游通用的程序扫描、Agent 语义审核、用户逐项确认、受控迁移与独立清理授权合同。
 
 ### 2026-08-27 迭代中断进度

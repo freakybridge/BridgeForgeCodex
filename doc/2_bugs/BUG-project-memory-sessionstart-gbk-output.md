@@ -1,3 +1,9 @@
+---
+lifecycle: superseded
+validation_status: verified
+superseded_by: ../1_delivery/project-memory-retirement/requirements_2026-08-30_project-memory-retirement.md
+---
+
 # BUG：Windows GBK 阻断项目 Memory SessionStart 注入
 
 ## 状态

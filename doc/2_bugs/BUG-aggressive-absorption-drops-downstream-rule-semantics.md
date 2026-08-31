@@ -1,5 +1,6 @@
 ---
-status: bridgeforge-resolved-real-copy-verified-runtime-pending
+lifecycle: active
+validation_status: awaiting_validation
 severity: critical
 scope: bridgeforge project sync managed Markdown absorption
 reported_at: 2026-08-16

@@ -28,6 +28,10 @@ SCRIPT_DIR = HOST_DIR / "scripts"
 PATCH_FILE_RE = re.compile(r"^\*\*\* (Add|Update|Delete) File: (.+)$")
 PATCH_MOVE_RE = re.compile(r"^\*\*\* Move to: (.+)$")
 MIN_PYTHON = (3, 11)
+SHELL_TOOL_NAMES = frozenset({"Bash", "shell_command"})
+EDIT_TOOL_NAMES = frozenset({"Edit", "Write", "MultiEdit", "NotebookEdit"})
+PATCH_TOOL_NAMES = frozenset({"apply_patch"})
+TOOL_EVENTS = frozenset({"pre-tool", "post-edit", "post-shell"})
 
 RUNTIME_ROUTES = {
     "pre-shell": (
@@ -53,6 +57,10 @@ RUNTIME_ROUTES = {
         "hooks/show_state.py", "hooks/skill_sync_check.py",
     ),
 }
+
+
+class InvalidHookPayload(ValueError):
+    """A tool event cannot be routed safely from its stdin payload."""
 
 def runtime_route_errors(routes: dict[str, tuple[str, ...]] | None = None) -> list[str]:
     active_routes = routes if routes is not None else RUNTIME_ROUTES
@@ -110,18 +118,20 @@ def _project_runtime_error() -> str | None:
 
 def _read_payload() -> tuple[dict, bytes]:
     raw = sys.stdin.buffer.read()
-    if raw.strip():
-        try:
-            value = json.loads(raw)
-            if isinstance(value, dict):
-                return value, raw
-        except Exception:
-            pass
-    return {}, b"{}"
+    if not raw.strip():
+        raise InvalidHookPayload("hook input is empty")
+    try:
+        value = json.loads(raw)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise InvalidHookPayload("hook input is not valid UTF-8 JSON") from exc
+    if not isinstance(value, dict):
+        raise InvalidHookPayload("hook input must be a JSON object")
+    return value, raw
 
 
 def _tool_name(payload: dict) -> str:
-    return str(payload.get("tool_name") or payload.get("name") or "")
+    value = payload.get("tool_name") or payload.get("name")
+    return value.strip() if isinstance(value, str) else ""
 
 
 def _tool_input(payload: dict) -> dict:
@@ -157,6 +167,44 @@ def _virtual_edit_payloads(payload: dict) -> list[tuple[str, dict, bytes]]:
     if name in {"Edit", "Write", "MultiEdit", "NotebookEdit"}:
         return [(name, payload, json.dumps(payload, ensure_ascii=False).encode("utf-8"))]
     return []
+
+
+def _validate_tool_payload(event: str, payload: dict) -> None:
+    name = _tool_name(payload)
+    if not name:
+        raise InvalidHookPayload("tool_name is missing or is not a non-empty string")
+    data = payload.get("tool_input")
+    if not isinstance(data, dict):
+        raise InvalidHookPayload("tool_input must be a JSON object")
+
+    shell_event = event == "post-shell" or (
+        event == "pre-tool" and name in SHELL_TOOL_NAMES
+    )
+    edit_event = event == "post-edit" or (
+        event == "pre-tool" and name in EDIT_TOOL_NAMES | PATCH_TOOL_NAMES
+    )
+    if shell_event:
+        if name not in SHELL_TOOL_NAMES:
+            raise InvalidHookPayload(f"unsupported shell tool for {event}: {name}")
+        command = data.get("command")
+        if not isinstance(command, str) or not command.strip():
+            raise InvalidHookPayload("shell tool_input.command must be a non-empty string")
+        return
+    if edit_event:
+        if name in PATCH_TOOL_NAMES:
+            command = data.get("command")
+            if not isinstance(command, str) or not command.strip():
+                raise InvalidHookPayload("apply_patch tool_input.command must be a non-empty string")
+            if not _virtual_edit_payloads(payload):
+                raise InvalidHookPayload("apply_patch command contains no parseable target files")
+            return
+        if name not in EDIT_TOOL_NAMES:
+            raise InvalidHookPayload(f"unsupported edit tool for {event}: {name}")
+        file_path = data.get("file_path")
+        if not isinstance(file_path, str) or not file_path.strip():
+            raise InvalidHookPayload("edit tool_input.file_path must be a non-empty string")
+        return
+    raise InvalidHookPayload(f"unsupported tool for {event}: {name}")
 
 
 def _run(relative: str, payload: bytes, *args: str) -> subprocess.CompletedProcess[str]:
@@ -241,7 +289,7 @@ def _run_chain(event: str, items: list[tuple[str, bytes, tuple[str, ...]]]) -> i
 
 def _pre_tool(payload: dict, raw: bytes) -> int:
     name = _tool_name(payload)
-    if name in {"Bash", "shell_command"}:
+    if name in SHELL_TOOL_NAMES:
         return _run_chain(
             "PreToolUse",
             [(relative, raw, ()) for relative in RUNTIME_ROUTES["pre-shell"]],
@@ -249,7 +297,8 @@ def _pre_tool(payload: dict, raw: bytes) -> int:
 
     edits = _virtual_edit_payloads(payload)
     if not edits:
-        return 0
+        print("[hook-dispatch] BLOCKED: edit payload has no routable target", file=sys.stderr)
+        return 2
     output = _new_output()
     for _virtual_name, _virtual, encoded in edits:
         for relative in RUNTIME_ROUTES["pre-edit"]:
@@ -322,7 +371,21 @@ def main(version_info: object = sys.version_info) -> int:
             print(f"[hook-dispatch] route audit failed: {error}", file=sys.stderr)
         return 2
     event = sys.argv[1]
-    payload, raw = _read_payload()
+    allowed_events = TOOL_EVENTS | frozenset({"post-compact", "stop", "session-start"})
+    if event not in allowed_events:
+        print(f"unknown hook event route: {event}", file=sys.stderr)
+        return 2
+    if event in TOOL_EVENTS:
+        try:
+            payload, raw = _read_payload()
+            _validate_tool_payload(event, payload)
+        except InvalidHookPayload as exc:
+            outcome = "BLOCKED" if event == "pre-tool" else "FAILED"
+            print(f"[hook-dispatch] {outcome}: {exc}", file=sys.stderr)
+            return 2
+    else:
+        payload = {}
+        raw = sys.stdin.buffer.read()
     if event == "pre-tool":
         return _pre_tool(payload, raw)
     if event == "post-edit":
@@ -333,9 +396,6 @@ def main(version_info: object = sys.version_info) -> int:
     }
     if event == "session-start":
         return _session_start(raw)
-    if event not in {"post-shell", "post-compact", "stop"}:
-        print(f"unknown hook event route: {event}", file=sys.stderr)
-        return 2
     event_names = {
         "post-shell": "PostToolUse",
         "post-compact": "PostCompact",

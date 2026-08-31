@@ -1,5 +1,6 @@
 ---
-status: 1.4.37-product-fix-awaiting-real-downstream-validation
+lifecycle: active
+validation_status: awaiting_validation
 severity: high
 scope: bridgeforge-codex project release preflight and user-level native-memory hook ownership
 reported_at: 2026-08-19

@@ -42,6 +42,7 @@ GIT_ATTRIBUTES_DEFAULT_LF_PROBES = (
     ".codex/BRIDGEFORGE_DEFAULT_EOL_PROBE.py",
     "doc/BRIDGEFORGE_DEFAULT_EOL_PROBE.md",
 )
+RETIRED_PROJECT_MEMORY_ROOT = ".codex/memory"
 
 
 class SyncBlocked(RuntimeError):
@@ -336,6 +337,12 @@ def _lexical_inside(root: Path, relative: str, label: str) -> Path:
     except ValueError as exc:
         raise SyncBlocked(f"{label} escapes its root: {relative!r}") from exc
     return target
+
+
+def _targets_retired_project_memory(relative: str) -> bool:
+    normalized = relative.replace("\\", "/").rstrip("/").casefold()
+    retired_root = RETIRED_PROJECT_MEMORY_ROOT.casefold()
+    return normalized == retired_root or normalized.startswith(retired_root + "/")
 
 
 def _inside(root: Path, relative: str, label: str) -> Path:
@@ -1819,6 +1826,21 @@ def build_plan(project_root: Path, template_root: Path, mode: str = "auto") -> P
         plan.aggregate_fingerprint = _fingerprint(plan)
         return plan
 
+    forbidden_contract_targets = sorted({
+        relative
+        for relative in (
+            str(contract["contract_target"]),
+            *(str(asset["target"]) for asset in contract["assets"]),
+        )
+        if _targets_retired_project_memory(relative)
+    })
+    if forbidden_contract_targets:
+        blockers.append(
+            "current contract targets retired legacy project Memory; zero writes performed: "
+            + ", ".join(forbidden_contract_targets)
+        )
+        return blocked_plan()
+
     if selected_mode == "init" and (
         (root / ".codex").exists()
         or (root / "AGENTS.md").exists()
@@ -2135,6 +2157,16 @@ def build_plan(project_root: Path, template_root: Path, mode: str = "auto") -> P
                     payload=None,
                 ))
         selected_mode = "rebuild"
+    forbidden_action_targets = sorted({
+        action.target
+        for action in actions
+        if _targets_retired_project_memory(action.target)
+    })
+    if forbidden_action_targets:
+        blockers.append(
+            "planned action targets retired legacy project Memory; zero writes performed: "
+            + ", ".join(forbidden_action_targets)
+        )
     plan = Plan(
         project_root=str(root),
         template_root=str(template),
@@ -2374,7 +2406,8 @@ def _verify_preserved_knowledge(snapshots: dict[Path, bytes]) -> None:
     changed = [str(path) for path, payload in snapshots.items() if not path.is_file() or path.read_bytes() != payload]
     if changed:
         raise SyncBlocked(
-            "legacy project memory or Skill changed during update: "
+            "legacy project memory or Skill changed externally during update; "
+            "managed skeleton changes will be rolled back without restoring these files: "
             + ", ".join(changed)
         )
 
@@ -2637,8 +2670,6 @@ def _apply_rebuilt_plan(
     }
     knowledge_before = _preserved_knowledge_snapshots(root)
     transaction = _Transaction(root)
-    memory_root = root / ".codex" / "memory"
-    transaction.snapshot_tree(memory_root)
     _verify_required_preserve_files(root, candidate_by_id.values())
     deleted_bundle_paths = tuple(
         _inside(
@@ -2750,7 +2781,7 @@ def _apply_rebuilt_plan(
         transaction.rollback()
         rollback_performed = True
         raise SyncBlocked(
-            f"transaction failed and was rolled back: {exc}"
+            f"transaction failed and managed changes were rolled back: {exc}"
         ) from exc
     timings = {
         "replan": round(replan_ms, 1),
@@ -2841,47 +2872,114 @@ def _plan_payload(
 
 USER_CONCLUSION_COMPLETED = "已完成。"
 USER_CONCLUSION_NO_ACTION = "无需处理。"
+USER_CONCLUSION_READY_TO_APPLY = "可直接执行。"
 USER_CONCLUSION_AWAITING_CONFIRMATION = "等待确认。"
 USER_CONCLUSION_NOT_COMPLETED = "未完成。"
 USER_CONCLUSION_COMPLETED_WITH_ACTIONS = "已完成，但仍有待处理项。"
 USER_CONCLUSIONS = frozenset({
     USER_CONCLUSION_COMPLETED,
     USER_CONCLUSION_NO_ACTION,
+    USER_CONCLUSION_READY_TO_APPLY,
     USER_CONCLUSION_AWAITING_CONFIRMATION,
     USER_CONCLUSION_NOT_COMPLETED,
     USER_CONCLUSION_COMPLETED_WITH_ACTIONS,
 })
 
 
-def _humanize_sync_reason(reason: str) -> str:
+@dataclass(frozen=True)
+class _HumanSyncReason:
+    code: str
+    message: str
+    next_step: str
+
+
+_HUMAN_SYNC_REASON_RULES = (
+    (
+        ("init requires a project with no existing skeleton identity",),
+        _HumanSyncReason(
+            code="init_existing_skeleton",
+            message="当前项目已经存在协作骨架，不能再次执行初始化",
+            next_step="改用更新模式，或先确认现有骨架身份后再继续。",
+        ),
+    ),
+    (
+        ("unresolved gap",),
+        _HumanSyncReason(
+            code="unresolved_gap",
+            message="计划中仍有未解决缺口",
+            next_step="先处理计划中的缺口，再重新生成升级计划。",
+        ),
+    ),
+    (
+        ("--confirmed-risk",),
+        _HumanSyncReason(
+            code="risk_confirmation_required",
+            message="尚未确认可能覆盖或删除现有内容的操作",
+            next_step="确认本轮风险与项目资产选择后，再执行升级。",
+        ),
+    ),
+    (
+        ("--plan-fingerprint",),
+        _HumanSyncReason(
+            code="plan_fingerprint_required",
+            message="缺少刚刚生成的计划指纹",
+            next_step="重新生成计划，并使用最新计划继续升级。",
+        ),
+    ),
+    (
+        ("aggregate fingerprint",),
+        _HumanSyncReason(
+            code="plan_fingerprint_drifted",
+            message="计划生成后项目或模板发生了变化",
+            next_step="重新生成计划，并使用最新计划继续升级。",
+        ),
+    ),
+    (
+        ("project runtime contract",),
+        _HumanSyncReason(
+            code="project_runtime_invalid",
+            message="项目 Python 运行环境不符合骨架要求",
+            next_step="先修复项目 .venv，再重新运行骨架升级。",
+        ),
+    ),
+    (
+        ("preservationmanifest", "preservation manifest"),
+        _HumanSyncReason(
+            code="preservation_confirmation_required",
+            message="尚未确认项目资产的保留或删除选择",
+            next_step="确认本轮风险与项目资产选择后，再执行升级。",
+        ),
+    ),
+    (
+        ("rolled back",),
+        _HumanSyncReason(
+            code="transaction_rolled_back",
+            message="同步事务失败，本次写入已回滚",
+            next_step="保留当前现场并查看技术收据，确认原因后重新运行骨架升级。",
+        ),
+    ),
+)
+_UNKNOWN_HUMAN_SYNC_REASON = _HumanSyncReason(
+    code="unclassified_sync_error",
+    message="同步器遇到未分类错误，本次操作已停止",
+    next_step="保留当前现场并查看技术收据，确认原因后重新运行骨架升级。",
+)
+
+
+def _classify_sync_reason(reason: str) -> _HumanSyncReason:
     normalized = reason.casefold()
-    mappings = (
-        ("unresolved gap", "计划中仍有未解决缺口"),
-        ("--confirmed-risk", "尚未确认可能覆盖或删除现有内容的操作"),
-        ("--plan-fingerprint", "缺少刚刚生成的计划指纹"),
-        ("aggregate fingerprint", "计划生成后项目或模板发生了变化"),
-        ("project runtime contract", "项目 Python 运行环境不符合骨架要求"),
-        ("preservationmanifest", "尚未确认项目资产的保留或删除选择"),
-        ("preservation manifest", "尚未确认项目资产的保留或删除选择"),
-        ("rolled back", "同步事务失败，本次写入已回滚"),
-    )
-    for marker, message in mappings:
-        if marker in normalized:
-            return message
-    return f"同步器报告：{reason.strip()}" if reason.strip() else "同步器没有提供具体原因"
+    for markers, result in _HUMAN_SYNC_REASON_RULES:
+        if any(marker in normalized for marker in markers):
+            return result
+    return _UNKNOWN_HUMAN_SYNC_REASON
+
+
+def _humanize_sync_reason(reason: str) -> str:
+    return _classify_sync_reason(reason).message
 
 
 def _human_next_step(reason: str) -> str:
-    normalized = reason.casefold()
-    if "unresolved gap" in normalized:
-        return "先处理计划中的缺口，再重新生成升级计划。"
-    if "--confirmed-risk" in normalized or "preservation" in normalized:
-        return "确认本轮风险与项目资产选择后，再执行升级。"
-    if "--plan-fingerprint" in normalized or "aggregate fingerprint" in normalized:
-        return "重新生成计划，并使用最新计划继续升级。"
-    if "project runtime contract" in normalized:
-        return "先修复项目 .venv，再重新运行骨架升级。"
-    return "处理上述原因后，重新运行骨架升级。"
+    return _classify_sync_reason(reason).next_step
 
 
 def _plan_human_result(payload: dict[str, Any]) -> dict[str, Any]:
@@ -2943,9 +3041,9 @@ def _plan_human_result(payload: dict[str, Any]) -> dict[str, Any]:
         }
     if safe:
         return {
-            "conclusion": USER_CONCLUSION_AWAITING_CONFIRMATION,
+            "conclusion": USER_CONCLUSION_READY_TO_APPLY,
             "pending_items": [f"有 {len(safe)} 项骨架更新等待执行"],
-            "next_step": "执行刚刚生成的升级计划。",
+            "next_step": "直接执行刚刚生成的升级计划，无需用户确认。",
         }
     return {
         "conclusion": USER_CONCLUSION_NO_ACTION,

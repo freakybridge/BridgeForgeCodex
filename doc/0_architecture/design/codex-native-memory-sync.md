@@ -22,8 +22,10 @@ Codex 官方生成/读取 ~/.codex/memories/
 ```
 
 - `scripts/codex_memory_sync.py` 是同步实现；用户级 Hook 只负责触发，不解释 Memory 正文。
-- Windows `commandWindows` 只调用受管 `cmd.exe` wrapper；wrapper 动态解析当前 Git 根和
-  项目 `.venv`，禁止把项目 Python 绝对路径持久化到用户配置。
+- Windows `commandWindows` 只调用受管 PowerShell wrapper `codex_memory_sync_hook.ps1`，并以
+  `-NoProfile -NonInteractive -WindowStyle Hidden` 启动；wrapper 动态解析当前 Git 根和项目
+  `.venv`，禁止把项目 Python 绝对路径持久化到用户配置。旧 `cmd.exe` wrapper 只用于识别并
+  迁移历史 handler，不是当前正式入口。
 - 用户级 Hook merge 必须保留第三方 handler；BridgeForge 只能替换内容完全匹配的受管旧
   handler，遇到人工漂移时 fail-closed。
 
