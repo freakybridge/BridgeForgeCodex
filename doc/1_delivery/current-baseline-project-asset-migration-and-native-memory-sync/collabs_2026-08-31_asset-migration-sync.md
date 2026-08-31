@@ -2,7 +2,7 @@
 lifecycle: active
 validation_status: awaiting_validation
 record_type: collaboration
-requirements: requirements_2026-08-31_current-baseline-project-asset-migration-and-native-memory-sync.md
+requirements: requirements_2026-08-31_asset-migration-sync.md
 created_at: 2026-08-31
 ---
 
@@ -10,7 +10,7 @@ created_at: 2026-08-31
 
 ## 交付基线
 
-- 需求卡：[`requirements_2026-08-31_current-baseline-project-asset-migration-and-native-memory-sync.md`](requirements_2026-08-31_current-baseline-project-asset-migration-and-native-memory-sync.md)
+- 需求卡：[`requirements_2026-08-31_asset-migration-sync.md`](requirements_2026-08-31_asset-migration-sync.md)
 - 规模：L。
 - 预算：120 分钟、约 50k token（未实测）、最多 4 个 Agent、最多 3 轮验证。
 - 当前阶段：只读研读已完成，等待用户确认并行拆分；产品代码尚未修改。
