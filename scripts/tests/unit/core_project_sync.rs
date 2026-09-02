@@ -285,6 +285,225 @@ fn hook_removal_matches_path_boundaries_and_platform_commands() {
 }
 
 #[test]
+fn project_prefixed_files_use_exact_file_decisions_not_hook_bundles() {
+    let (root, project, factory) = upgrade_fixture("1.5.8", "1.8.7");
+    let bundle = project.join(".codex/hooks/project_business");
+    fs::create_dir_all(&bundle).unwrap();
+    fs::write(bundle.join("entrypoint.py"), b"business hook\r\n").unwrap();
+    let targets = [
+        ".codex/hooks/project_structure_check.py",
+        ".codex/hooks/project_notes",
+        ".codex/hooks/project_custom.rs",
+    ];
+    for target in targets {
+        fs::write(project.join(target), b"project file\r\n").unwrap();
+    }
+    let before = tree_sha(&project).unwrap();
+    let plan = build_plan(&project, &factory, SyncMode::Update).unwrap();
+    assert!(plan.blockers.is_empty(), "{:?}", plan.blockers);
+    for target in targets {
+        let entry = plan.preservation_manifest["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|entry| entry["target"] == target)
+            .unwrap();
+        assert_eq!(entry["kind"], "project-file");
+        assert_eq!(entry["id"], format!("P:project-file:{target}"));
+        assert_eq!(entry["disposition"], "user-decision");
+    }
+    assert!(apply_plan(plan.clone(), &plan.aggregate_fingerprint, true).is_err());
+    assert_eq!(tree_sha(&project).unwrap(), before);
+    assert!(!project.join(".runtime").exists());
+
+    let file_ids = targets.map(|target| format!("P:project-file:{target}"));
+    let bundle_id = "P:project-hook-bundle:.codex/hooks/project_business";
+    let mut preserve_ids = file_ids.to_vec();
+    preserve_ids.push(bundle_id.into());
+    let choices = json!({"preserve":preserve_ids});
+    let plan =
+        build_plan_with_inputs(&project, &factory, SyncMode::Update, None, Some(&choices)).unwrap();
+    assert!(plan.blockers.is_empty());
+    assert!(plan.gaps.is_empty());
+    fs::write(project.join(targets[0]), b"concurrent edit").unwrap();
+    assert!(apply_plan(plan.clone(), &plan.aggregate_fingerprint, true).is_err());
+    assert_eq!(
+        fs::read(project.join(targets[0])).unwrap(),
+        b"concurrent edit"
+    );
+    fs::write(project.join(targets[0]), b"project file\r\n").unwrap();
+    apply_plan(plan.clone(), &plan.aggregate_fingerprint, true).unwrap();
+    for target in targets {
+        assert_eq!(fs::read(project.join(target)).unwrap(), b"project file\r\n");
+    }
+
+    // Re-enter the below-baseline fixture to exercise explicitly confirmed file retirement.
+    fs::write(
+        project.join(".codex/.bridgeforge_codex_version"),
+        b"1.5.8\n",
+    )
+    .unwrap();
+    let choices = json!({"preserve":[bundle_id],"delete":file_ids});
+    let plan =
+        build_plan_with_inputs(&project, &factory, SyncMode::Update, None, Some(&choices)).unwrap();
+    assert!(plan.blockers.is_empty());
+    assert!(plan.gaps.is_empty());
+    let fail = |_: &Path, _: &Path| Err("injected file retirement failure".into());
+    assert!(
+        apply_plan_internal(plan.clone(), &plan.aggregate_fingerprint, true, Some(&fail))
+            .unwrap_err()
+            .contains("rolled back")
+    );
+    for target in targets {
+        assert_eq!(fs::read(project.join(target)).unwrap(), b"project file\r\n");
+    }
+    apply_plan(plan.clone(), &plan.aggregate_fingerprint, true).unwrap();
+    for target in targets {
+        assert!(!project.join(target).exists());
+    }
+    assert_eq!(
+        fs::read(bundle.join("entrypoint.py")).unwrap(),
+        b"business hook\r\n"
+    );
+    assert_eq!(
+        fs::read_to_string(project.join(".codex/.bridgeforge_codex_version")).unwrap(),
+        "1.8.7\n"
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn project_prefixed_file_retirement_removes_only_its_hook_registration_atomically() {
+    let (root, project, factory) = upgrade_fixture("1.5.8", "1.8.7");
+    let repository = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .ancestors()
+        .nth(4)
+        .unwrap();
+    let current: Value = serde_json::from_slice(
+        &fs::read(repository.join("templates/managed-skeleton.json")).unwrap(),
+    )
+    .unwrap();
+    let asset = current["assets"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|asset| asset["target"] == ".codex/hooks.json")
+        .unwrap()
+        .clone();
+    let source_path = asset["source"].as_str().unwrap();
+    let source = fs::read(repository.join(source_path)).unwrap();
+    fs::write(factory.join(source_path), &source).unwrap();
+    let contract_path = factory.join("templates/managed-skeleton.json");
+    let mut contract: Value = serde_json::from_slice(&fs::read(&contract_path).unwrap()).unwrap();
+    contract["assets"].as_array_mut().unwrap().push(asset);
+    fs::write(&contract_path, serde_json::to_vec(&contract).unwrap()).unwrap();
+    let deleted = ".codex/hooks/project_custom.py";
+    let kept = ".codex/hooks/project_custom.py.bak";
+    fs::create_dir_all(project.join(".codex/hooks")).unwrap();
+    for target in [deleted, kept] {
+        fs::write(project.join(target), b"custom script\r\n").unwrap();
+    }
+    let mut hooks: Value = serde_json::from_slice(&source).unwrap();
+    let groups = hooks["hooks"]["Stop"].as_array_mut().unwrap();
+    groups.push(
+        json!({"hooks":[{"type":"command","command":format!("run {deleted}"),
+        "commandWindows":format!("run \"{}\"", deleted.replace('/', "\\"))}]}),
+    );
+    groups.push(
+        json!({"hooks":[{"type":"command","command":format!("run {kept}"),
+        "commandWindows":format!("run \"{}\"", kept.replace('/', "\\"))}]}),
+    );
+    let original = serde_json::to_vec_pretty(&hooks).unwrap();
+    let hooks_path = project.join(".codex/hooks.json");
+    fs::write(&hooks_path, &original).unwrap();
+    let choices = json!({"preserve":[format!("P:project-file:{kept}")],
+        "delete":[format!("P:project-file:{deleted}")]});
+    let plan =
+        build_plan_with_inputs(&project, &factory, SyncMode::Update, None, Some(&choices)).unwrap();
+    assert!(plan.blockers.is_empty());
+    assert!(plan.gaps.is_empty());
+    let fail = |_: &Path, _: &Path| Err("injected registration failure".into());
+    assert!(
+        apply_plan_internal(plan.clone(), &plan.aggregate_fingerprint, true, Some(&fail))
+            .unwrap_err()
+            .contains("rolled back")
+    );
+    assert_eq!(fs::read(&hooks_path).unwrap(), original);
+    assert_eq!(
+        fs::read(project.join(deleted)).unwrap(),
+        b"custom script\r\n"
+    );
+    apply_plan(plan.clone(), &plan.aggregate_fingerprint, true).unwrap();
+    assert!(!project.join(deleted).exists());
+    assert_eq!(fs::read(project.join(kept)).unwrap(), b"custom script\r\n");
+    let result: Value = serde_json::from_slice(&fs::read(&hooks_path).unwrap()).unwrap();
+    let commands = result["hooks"]["Stop"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|group| group["hooks"].as_array().unwrap())
+        .flat_map(|handler| {
+            ["command", "commandWindows"]
+                .into_iter()
+                .filter_map(move |key| handler[key].as_str())
+        })
+        .map(|command| command.replace('\\', "/"))
+        .collect::<Vec<_>>();
+    assert!(
+        !commands
+            .iter()
+            .any(|command| command == &format!("run {deleted}")
+                || command == &format!("run \"{deleted}\""))
+    );
+    assert!(commands.contains(&format!("run {kept}")));
+    assert!(commands.contains(&format!("run \"{kept}\"")));
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+#[cfg(windows)]
+fn project_prefixed_junction_still_blocks_rebuild() {
+    let (root, project, factory) = upgrade_fixture("1.5.8", "1.8.7");
+    let external = root.join("external");
+    fs::create_dir_all(&external).unwrap();
+    fs::write(external.join("keep.txt"), b"external content").unwrap();
+    let link = project.join(".codex/hooks/project_structure_check.py");
+    fs::create_dir_all(link.parent().unwrap()).unwrap();
+    let mut request = ProcessRequest::new("cmd.exe", &root);
+    request.args = vec![
+        "/c".into(),
+        "mklink".into(),
+        "/J".into(),
+        link.to_string_lossy().replace('/', "\\").into(),
+        external.to_string_lossy().replace('/', "\\").into(),
+    ];
+    request.timeout = std::time::Duration::from_secs(10);
+    let output = crate::SystemProcessRunner.run(&request).unwrap();
+    assert!(!output.timed_out);
+    assert_eq!(
+        output.code,
+        0,
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(crate::memory::is_link_or_reparse(&link).unwrap());
+    let plan = build_plan(&project, &factory, SyncMode::Update).unwrap();
+    assert!(
+        plan.blockers
+            .iter()
+            .any(|item| item.contains("project hook bundle must be a plain"))
+    );
+    assert!(apply_plan(plan.clone(), &plan.aggregate_fingerprint, true).is_err());
+    assert!(!project.join(".runtime").exists());
+    assert_eq!(
+        fs::read(external.join("keep.txt")).unwrap(),
+        b"external content"
+    );
+    fs::remove_dir(&link).unwrap();
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn legacy_business_hook_bundle_is_language_neutral_and_fingerprinted() {
     let (root, project, factory) = upgrade_fixture("1.5.8", "1.8.6");
     let bundle = project.join(".codex/hooks/project_business");

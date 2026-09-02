@@ -106,7 +106,7 @@ Python 或 PowerShell 包装器。
 - 根 `AGENTS.md` 公共区由产品管理；项目区允许由 `PreservationManifest` 保留并由已确认迁移包追加，二者必须与 latest 公共区确定性组合。
 - `.codex/hooks.json` 只允许 canonical managed handler 与已确认的项目 Hook 注册；项目注册
   必须与一个 `.codex/hooks/project_XXXX/` 自包含业务 Hook 目录成对；既有业务 Hook 不限制语言，整体逐项确认保留或删除，未知 managed ID 阻断。迁移包新建 Hook 的目标约束仍由资产迁移合同规定。
-- 普通未知文件必须按精确路径确认保留或删除，禁止读取旧合同决定所有权。链接、非普通目录的项目 Hook 包、未知 Rule 格式仍阻断；需要执行的散落 Hook 先在受控副本整理为闭合目录，再重新规划。
+- 普通未知文件必须按精确路径确认保留或删除，禁止读取旧合同决定所有权。`project_` 文件名前缀不会把普通文件变成 Hook 目录；此类脚本确认删除后，已有 `hooks.json` 中匹配其完整路径的注册一并退役，文件与注册同一事务回滚，相似文件名注册保留。链接、非普通目录的项目 Hook 包、未知 Rule 格式仍阻断。
 - schema 4 merge/Markdown/region/AGENTS 都携带当前可验证 projection；真实下游不存在
   `templates/**` 时也不得跳过。
 - 项目 Skills 正文只有在对应源迁移包中逐项确认后才允许语义改写；legacy Rule / Memory 禁止派生索引、自动分类或未确认保留。

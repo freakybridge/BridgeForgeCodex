@@ -1089,9 +1089,13 @@ fn destructive_inventory(
                 continue;
             }
             let relative = relative_posix(project_root, &child)?;
-            if !child.is_dir()
-                || crate::memory::is_link_or_reparse(&child).map_err(|error| error.to_string())?
-            {
+            let linked =
+                crate::memory::is_link_or_reparse(&child).map_err(|error| error.to_string())?;
+            if child.is_file() && !linked {
+                // Plain project_* files are handled by the exact-file inventory below.
+                continue;
+            }
+            if !child.is_dir() || linked {
                 blockers.push(format!(
                     "project hook bundle must be a plain project_* directory: {relative}"
                 ));
@@ -1213,6 +1217,11 @@ fn destructive_inventory(
                 candidate_ids.insert(id.clone());
                 let before_sha = sha_git(&fs::read(entry.path()).map_err(|e| e.to_string())?);
                 let disposition = if delete_ids.contains(&id) {
+                    if relative.starts_with(".codex/hooks/project_")
+                        && project_root.join(".codex/hooks.json").is_file()
+                    {
+                        deleted_hook_prefixes.push(relative.clone());
+                    }
                     deletes.push(entry.path().to_path_buf());
                     actions.push(SyncAction {
                         id: format!("rebuild.remove:{id}"),

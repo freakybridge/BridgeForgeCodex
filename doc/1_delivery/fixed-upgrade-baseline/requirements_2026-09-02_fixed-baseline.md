@@ -146,3 +146,43 @@ M 级：版本分流、Markdown 结构和资产保护联动，边界已明确。
   均退出 0；保留既有归档候选提醒，不影响本次升级。
 - repo-local git-sync 会按现有自动升版规则将发布号从 1.8.6 升到 1.8.7；修复实现首版的
   固定兼容分界仍是 1.8.6，不随发布号上移。最终提交和推送结果以同步器真实收据为准。
+
+## 真实下游触发的文件类型误判修复（2026-09-02）
+
+1.8.7 已由 `6da99ae` 发布，官方 updater 取得同一提交；真实 BridgePersonalAssist 1.5.8
+只读计划因 `.codex/hooks/project_structure_check.py` 被当作目录而阻断。该路径实测为 9009
+字节普通文件、无 reparse 属性。同期盘点到 33 份旧 Memory，未作任何迁移或删除。
+
+用户在说明修复并发布新补丁后明确要求“那你开始吧”。本次为通用产品层小修复，进入
+Template 与 dogfood，补丁版本由本次 repo-local git-sync 自动升级；固定基线仍为 1.8.6。
+不修改真实下游旧脚本，不绕过其逐资产确认，不改原生 Memory 或业务知识库。
+
+- 普通 `project_*` 文件交给后续精确文件清单，不因名字要求其必须为目录。
+- 非普通对象和链接仍阻断；真实业务 Hook 目录继续按整包确认。
+- 独立审计指出已注册普通脚本删除时需同步清理注册；现已复用既有完整路径边界匹配，
+  只在明确删除且已有 hooks.json 时清理对应注册，文件和注册同一事务，保留相似文件名。
+- 新增普通 `.py`、`.rs`、无后缀文件的测试，修前真实复现三个目录误判；修后覆盖缺确认零
+  写入、原样保留、源漂移、明确删除、回滚和业务 Hook 保留。
+- 新增真实模板 Hook 合同测试，覆盖 `command`/`commandWindows` 注册精确退役与回滚、
+  `.py.bak` 相似名保留；新增 Windows junction 测试，确认链接仍在写盘前被阻断。
+- `cargo test --locked --config scripts/tests/factory-cargo.toml --manifest-path .codex/hooks/Cargo.toml -p bridgeforge-core project_prefixed_ -- --test-threads=1`
+  最终退出 0：3 passed。junction 夹具首次因 mklink 不接受混合斜杠失败，规范化参数后原断言
+  通过，未放宽链接保护。
+- 同一 `review-auditor` 已确认注册遗漏修复，最终代码审计通过，无未处理发现。
+- 完整 workspace 命令
+  `cargo test --locked --config scripts/tests/factory-cargo.toml --manifest-path .codex/hooks/Cargo.toml --workspace -- --test-threads=1`
+  退出 0：CLI 8、core 82、Hook 11 项通过，4 个子进程辅助入口 ignored。
+- 从安装目录执行 build-assets 曾遇到访问拒绝并完整回滚；改从独立构建目录执行
+  `.codex/hooks/target/release/bridgeforge.exe build-assets --project-root .` 后成功。
+  source tree 收据为 `89563c3956b9a4d944d8a7dcf56927117f3b54346e97b4ddfc0c5320671fceef`。
+- 首次完整集成为 69 passed、1 failed、1 ignored，因依赖工厂二进制的用例在产物更新前
+  执行，报 `planned target is missing from transaction: .codex/bin/bridgeforge-hook.exe`。
+  产物对齐后，该用例原样单独执行通过；随后不再并行更新测试输入，重新完整执行
+  `cargo test --locked --manifest-path scripts/tests/Cargo.toml -- --test-threads=1`，退出 0：
+  70 passed、0 failed、1 ignored，538.75 秒。未改失败断言或加入产品绕过逻辑。
+- `check baseline --root .` 为 clean；skill-metadata 无 issues/warnings；project-structure
+  无 errors，保留既有归档候选提醒；manifest --check 无漂移；config-health --strict、
+  instruction-source --pre-commit、cargo fmt --all -- --check 与 git diff --check 均退出 0。
+- 六类证据：源码、Template 传播、dogfood、fixture 与独立审计已完成；真实下游仍仅有
+  1.8.7 失败计划，修复版 planner 和安装结果待官方刷新后核验；真实下游 runtime 未验证。
+  最终发布、真实下游 planner 与安装结果分别以各自收据为准，不据测试宣称旧资产已迁移。
