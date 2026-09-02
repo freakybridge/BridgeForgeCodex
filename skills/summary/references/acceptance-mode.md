@@ -10,7 +10,8 @@
    `lifecycle: active`，并写 `validation_status: awaiting_validation`；禁止为了收口新建文档或猜测路径。
 3. 只结算当前交付 TODO；其他 topic、Bug 和项目级 TODO 保持不变。非阻塞后续事项只列为
    候选，等待用户另行决定。
-4. `同意验收` 只批准交付收口，不自动采纳 Rule / Hook 建议。建议仍必须标记
+4. 按 `deep-steps.md` 检索并阅读已有原生 Memory，结合上下文核对后提出 Rule / Hook / AGENTS.md 建议。
+   `同意验收` 只批准交付收口，不自动采纳建议。建议仍必须标记
    `等待用户采纳；未写入；未实现`，以后由其他开发方法落地。
 5. `lifecycle: completed` 的 delivery 或 Bug 只列归档候选并提示“请另行调用 `$archive-scan`”；禁止执行
    `git mv`、移动文档或更新归档索引。

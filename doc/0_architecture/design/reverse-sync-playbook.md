@@ -23,14 +23,14 @@
    - 用户级命令与通用 skill 写入 `skills/`；
    - bridgeforge-codex 自身说明写入 `doc/`；
    - 通用 hook/settings 同轮镜像到 `.codex/` dogfood。
-5. 更新 schema 3 current-only ownership/projection、manifest、VERSION 与 `[product]` CHANGELOG；禁止只改模板正文而遗漏派生哈希。
+5. 更新 schema 4 current-only ownership/projection、manifest、VERSION 与 `[product]` CHANGELOG；禁止只改模板正文而遗漏派生哈希。
 6. 运行定向测试、完整 fixture、manifest `--check`、mirror drift、结构检查和独立审计。
 
 ## 3. 仲裁原则
 
 - 上游模板是通用基线，不以某个下游的“内容更多”作为胜出依据。
 - 多个下游表达冲突时，先抽取共同不变量；仍需业务判断则不回灌。
-- rule 只保留“必须/禁止”的红线；事故复盘留在下游 memory 或 bridgeforge-codex 元文档。
+- rule 只保留“必须/禁止”的红线；事故复盘留在下游文档或 bridgeforge-codex 元文档，禁止重建项目 `.codex/memory/`。
 - 不确定所有权、通用性或脱敏完整性时，默认拒绝写入产品层。
 
 ## 4. 验收证据

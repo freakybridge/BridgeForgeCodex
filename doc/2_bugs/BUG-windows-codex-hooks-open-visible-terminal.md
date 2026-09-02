@@ -39,14 +39,15 @@ worktree 路径的空白黑色窗口；耗时数秒的 `Stop` 同步会让窗口
    `-NoProfile -NonInteractive -WindowStyle Hidden` 启动。
 3. 仅自动迁移内容完全匹配的官方旧 `cmd.exe` handler；第三方或人工修改的 handler 继续
    fail-closed，不静默覆盖。
-4. 项目级模板与工厂 dogfood Hook 统一使用隐藏 PowerShell，并显式
-   `exit $LASTEXITCODE`，保持原 Python 退出码。
-5. 旧 `.cmd` wrapper 暂时保留为精确迁移识别资产；本次不删除任何项目资产。
+4. 项目级模板与工厂 dogfood 的 6 个受管 Hook 改为直接执行 Rust GUI-subsystem 二进制；
+   不再经过 Python、PowerShell 或 `cmd.exe` 包装器，同时保留标准流与退出码。
+5. 用户级 Native Memory 的隐藏 launcher 与迁移识别继续独立处理；项目 Hook 的 Rust 化不代表
+   用户级 runtime 已完成真实桌面验证。
 
 ## 验收标准
 
-- Template 与 dogfood 的全部 Windows Hook 都声明 `NonInteractive`、`WindowStyle Hidden`，
-  并原样透传 Python 退出码。
+- Template 与 dogfood 的全部项目级 Windows Hook 直接指向 `bridgeforge-hook.exe`；PE 子系统、
+  stdin、stdout、stderr 与非零退出码均有真实子进程测试。
 - Native Memory 新 handler 不再直接启动 `cmd.exe`，旧官方 handler 可确定性迁移，漂移
   handler 保持拒绝覆盖。
 - Windows 真实子进程测试证明隐藏 PowerShell 能透传非零退出码。
@@ -57,10 +58,10 @@ worktree 路径的空白黑色窗口；耗时数秒的 `Stop` 同步会让窗口
 
 | 类别 | 当前状态 |
 |---|---|
-| 源码 | 无窗口 Native Memory launcher、旧版精确迁移、项目 Hook 退出码透传与公共红线已实现；定向 72 项与完整 287 项自动测试通过 |
-| 产品传播 | Template 已修改；版本、CHANGELOG、commit 与发布尚未生成 |
-| dogfood | 工厂 hooks、AGENTS 与 managed-skeleton 镜像一致；manifest `--check` unchanged |
-| fixture | 下游 fixture 3/3 通过：current init 幂等、旧项目确认重建、当前漂移零写入阻断 |
+| 源码 | 项目 6 个受管 Hook 已迁到 Rust，旧 Python Hook 已删除；用户级 Native Memory launcher 保持独立实现 |
+| 产品传播 | Template、schema 4、VERSION 与 CHANGELOG 已修改；commit 与发布未执行 |
+| dogfood | 工厂 hooks 已直接指向 Rust 二进制；最终完整验证待补 |
+| fixture | Rust 构建事务定向 fixture 已通过；完整下游 fixture 待补 |
 | 真实下游 | 未更新；本轮不直接修改 Stratus、M2、ClaudeBridgeAssist 或 causis_risk_suite |
 | runtime | 未验证；需发布并刷新用户级 Hook 后，在真实 Codex App 生命周期中观察 |
 

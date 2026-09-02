@@ -48,7 +48,7 @@
 - 可执行语义迁移：`contracts/semantic-contract.json`，逐项绑定来源行、目标文件和必需语义。
 - `$summary` 旧 Rule 分支：来源 `skills/summary/SKILL.md:139-140` 由 hash 锁定，目标路由和实施动作由语义合同强制。
 - 完整 Skill 候选：`contracts/bridgeforge-codex-skill-patch.json`；确定性 patch 后校验完整文件 hash。
-- README 专属 append、其他 region 失败关闭：`contracts/region_migration.py`。
+- README 专属 append、其他 region 失败关闭：`bridgeforge-core::project_sync`。
 - 实施输入：`contracts/implementation-patch.md`。
-- 自动验证：`contracts/validate_proposal.py`。
+- 自动验证：`bridgeforge check proposal`。
 - 尚未验证：真实 Codex 嵌套加载、真实下游 update/rollback、正式发布、runtime smoke 和用户本人试读。proposal 的临时工厂/下游验证不能替代这些实施后证据。

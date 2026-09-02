@@ -23,9 +23,9 @@
 - 工具返回出现同段重影、命中 0 与预期矛盾、不认识的文件名、`__unparsedToolInput` 时，禁止直接下结论或改盘，先用单命令二次验真。
 - 交付处或危险处的结论必须有真实工具返回作证；写“验证通过 / 测试通过 / 已验证”必须同时列出实际命令或收据、具体验证断言和覆盖场景，拿不到证据就标明“未验证”或“不知道”。
 - 使用文件、路径、字段、接口或配置前必须当次验证；禁止编造资源、静默换来源或归咎未发生的操作。发现自己的结论或操作错误时必须立即承认、更正并重新验证。
-- 依赖只能安装到项目自建的 CPython 3.11+ `.venv` 并同步可复现清单；骨架脚本与 Hook 只能使用该环境。仅 init/adopt 且 `.venv` 完全缺失时允许用 PATH 中经验证的 CPython 3.11+ 创建，随后必须立即切换，其他场景禁止回退 PATH 或隐式写用户级配置。
+- BridgeForge 骨架工具与 Hook 只能使用受管 Rust workspace 和锁定的 `Cargo.lock`；Cargo 缺失、版本不足、锁文件漂移或构建失败必须明确阻断，禁止回退 Python、脚本包装器或隐式写用户级配置。下游项目自身的业务语言依赖不受此条改变。
 - 非 ASCII 正文禁止经 shell 字符串中转写入或动态执行；配置、hook 与入口脚本的编码和注册必须通过项目硬闸。
-- Windows 上由 GUI、Codex Hook 或后台任务启动非交互、无人值守命令时，必须使用可验证的无可见控制台窗口入口，并保持 stdin、stdout、stderr、退出码与 timeout 语义；除非用户明确要求可见交互窗口，禁止让 cmd、PowerShell 或 Python 控制台弹到用户桌面。
+- Windows 上由 GUI、Codex Hook 或后台任务启动非交互、无人值守命令时，必须使用可验证的无可见控制台窗口入口，并保持 stdin、stdout、stderr、退出码与 timeout 语义；除非用户明确要求可见交互窗口，禁止让 shell 或 Rust 子进程控制台弹到用户桌面。
 
 ## 2 bridgeforge-codex 协作骨架
 
@@ -52,12 +52,12 @@
 
 ### 2.2 Codex 原生 Memory 与 legacy 项目资产迁移
 
-- Codex 原生 `~/.codex/memories/` 只由官方机制生成和注入；BridgeForge 禁止语义读取、创建、改写或删除。跨电脑同步只把该目录视为不透明整树快照。
+- Codex 原生 `~/.codex/memories/` 必须保留官方生成和注入机制；BridgeForge 对内容的检索、阅读与分析必须只读，禁止创建、改写或删除正文。跨电脑同步必须只把该目录视为不透明整树快照，禁止依赖内部语义。
 - legacy `.codex/rules/*.md` 不是 Codex 指令源；必须逐源文件确认迁移包，将红线、命令策略、说明和废弃内容分别落到正确资产，禁止改扩展名后冒充 `.rules`。
 - 禁止新建或继续使用项目 `.codex/memory/`，也禁止注入、检索、索引、写入、lint、duplicate、usage 或 `$find-memory` 运行链。
 - 下游既有 `.codex/memory/` 必须逐源文件确认迁移包；`MEMORY.md`、`MEMORY_COLD.md` 与 `_stats.json` 固定退役，不做语义转换。
 - 全部 legacy Rule / Memory 确认前必须零写入；确认后，新资产、最新基线和已确认源文件删除必须在同一可回滚事务完成。逐文件确认同时构成对应删除授权，禁止再索取独立清理授权或删除未确认资产。
-- `$summary` 只做阶段总结和“同意验收”收口；Rule / Hook 只能提出等待用户采纳的候选，禁止写项目 Memory、直接写原生 Memory、自动写 Rule 或实现 Hook。
+- `$summary` 必须按 Skill 流程检索并阅读相关原生 Memory 正文、结合当前上下文提出建议，同时完成阶段总结或“同意验收”收口；Rule / Hook / AGENTS.md 候选必须等待用户采纳，禁止写项目 Memory、直接写原生 Memory、自动写 Rule / AGENTS.md 或实现 Hook。
 
 ### 2.3 文档管理
 
@@ -77,7 +77,7 @@
 
 ### 3.1 换机首次启动 Checklist
 
-用户提到“换电脑 / 新机 clone / 重装”时，必须先按项目级“快速命令”恢复主语言依赖和 `.venv`，再调用 `$bridgeforge-codex` 核验骨架与 Hook；禁止照抄通用 clone 占位命令猜测仓库地址或项目名。
+用户提到“换电脑 / 新机 clone / 重装”时，必须先按项目级“快速命令”恢复主语言依赖和 Rust/Cargo，再调用 `$bridgeforge-codex` 核验骨架与 Hook；禁止照抄通用 clone 占位命令猜测仓库地址或项目名。
 
 ### 3.2 模型与 Skill 执行分工
 

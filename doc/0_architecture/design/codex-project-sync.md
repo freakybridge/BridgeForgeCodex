@@ -1,11 +1,12 @@
 # bridgeforge-codex 项目同步事务
 
 > 状态：implemented（dynamic latest current-only）
-> 入口：`scripts/bridgeforge_codex_project_sync.py`
+> 入口：`bridgeforge project-sync`
 
 bridgeforge-codex 只维护 Codex 当前产品面。公共资产 ownership 的唯一产品来源是
-`templates/managed-skeleton.json` schema 3；合同只保存当前版本的稳定 asset id、显式
-source/target、ownership strategy 和当前 hash/projection，禁止历史版本集合、retirement、
+`templates/managed-skeleton.json` schema 4；普通资产保存当前版本的稳定 asset id、显式
+source/target、ownership strategy 和当前 hash/projection；生成资产另保存源码树、锁文件、
+构建配方、自检合同、目标平台二进制路径与收据路径。合同禁止历史版本集合、retirement、
 adaptation proof 与 glob ownership。
 
 ## 版本分流
@@ -31,11 +32,11 @@ Rule / Memory 源存在
 
 latest rebuild 不读取旧 `.codex/managed-skeleton.json`，也不按版本选择历史 adapter。它先盘点项目资产，再只放回确认的 AGENTS 项目区、pre-commit 项目扩展、项目 Hook 与自动保留的 `.codex/skills/**`、
 `.codex/find-doc.map.md` 和 `.codex/sync-docs.map.md`。两个项目映射只按精确路径识别并作为
-required-preserve 原样保留；其他未知 `.codex/**` 仍 fail-closed。每个可选资产必须显式选择
+required-preserve 原样保留；未被当前合同覆盖的普通文件以 `P:project-file:<path>` 列为决策项；链接和危险 Hook 结构仍阻断。每个可选资产必须显式选择
 保留或删除；临时 `PreservationManifest` 只存在于本次事务内，在写最终戳前清空，不生成持久
 before 包或迁移账本。
 
-`.codex/rules/*.md` 与 `.codex/memory/**` 由 `project_asset_migration.py` 盘点和验证。Agent 逐源文件提出语义迁移包；机器只验证完整覆盖、source/target hash、目标职责、公共受管区、Hook 注册、文档索引和事务。`MEMORY.md`、`MEMORY_COLD.md`、`_stats.json` 固定退役。确认期间不得落盘 manifest；中断后从第一个源重来。
+`.codex/rules/*.md` 与 `.codex/memory/**` 由 Rust `project-sync` 盘点和验证。Agent 逐源文件提出语义迁移包；机器只验证完整覆盖、source/target hash、目标职责、公共受管区、Hook 注册、文档索引和事务。`MEMORY.md`、`MEMORY_COLD.md`、`_stats.json` 固定退役。确认期间不得落盘 manifest；中断后从第一个源重来。
 
 ## Current-only 事务
 
@@ -44,8 +45,9 @@ refresh product home + identify project
   -> build deterministic actions + aggregate fingerprint
   -> confirm every Rule / Memory source in one continuous session when required
   -> immediate replan/fingerprint check
+  -> 在仓库外临时目录构建并自检 Rust Hook 生成资产
   -> temporary transaction snapshot
-  -> combine latest assets / migration targets / selected project assets
+  -> combine latest assets / generated binary + receipt / migration targets / selected project assets
   -> remove confirmed Rule / Memory sources
   -> verify actions + preserved knowledge
   -> config health + text hygiene validators
@@ -54,15 +56,39 @@ refresh product home + identify project
 ```
 
 任一可捕获失败必须逐字恢复迁移前项目，包括已删除的 Rule / Memory。Planner、Apply、`$git-sync` 与
-pre-commit 直接复用 `current_baseline.py`。pre-commit 只读检查 worktree 与 Git index，
+pre-commit 直接复用 `bridgeforge check baseline`。编码门禁通过 NUL 文件列表与 Git 原始 blob 检查实际 index 内容，不能以工作区内容代替暂存字节；项目 Skill 检查覆盖 `.codex/skills`，工厂额外检查共享 `skills`。pre-commit 只读检查 worktree 与 Git index，
 不得生成文件或执行 `git add`；`$git-sync` 在写入前生成完整 `SyncWritePlan`，并在提交前失败时
-恢复自动写入和完整 index。公共资产漂移、合同损坏或同版本合同自证修改不能通过风险确认覆盖。
+恢复自动写入和完整 index。工厂 `git-sync` 的计划先将版本变更投影到仓库外快照，渲染 manifest，按锁定 Cargo 配方构建 Hook / CLI 并生成实测收据；完整计划包含版本、Cargo manifests / locks、CHANGELOG、三份清单、二进制和收据。构建后复核原始输入、源码文件集合、目标原值、仓库身份及 index，任何漂移均阻断写入。安装后先验证含生成产物的完整 baseline，再暂存和提交。构建与安装持有 project-sync 锁，整个同步仍持有 Git common-dir 锁；两者均由系统句柄持有，进程退出释放。
+
+Git 拉取上游与实际推送目标分别判定：上游负责快进更新；推送是否必要和最终 ahead/behind 使用实际 push 目标。两者不同时，先刷新实际推送 remote，再验证目标；仅上游 `0/0` 不能报告 synced。批量暂存前的敏感文件保护使用不折叠目录的 NUL 状态列表，覆盖新目录内的文件。
+
+Windows 上当前 CLI 的运行映像不能直接覆盖：新程序先写入同目录临时文件，旧映像移入已被 Git 忽略的 `.runtime/bridgeforge-codex/git-sync-images/` 后安装。旧进程继续执行，不启动额外 shell 或清理进程；后续工厂同步只清理该目录中名称格式正确且内容哈希匹配的旧映像，仍被占用者留到下次。安装失败立即移回原映像；提交前失败按原字节恢复二进制及其余自动资产。该缓存不进入提交。
+
+同版本修复也从可信产品目录重新生成目标，不信任项目内合同自证 ownership；已有 whole 资产替换须确认。版本戳内容未变化时仍可应用其他已确认动作，最后验证当前唯一版本戳与完整基线。
+
+Rust Hook 在 `init`、`adopt`、`update` 的计划物化及 apply 前构建；构建只写仓库外临时目录。Cargo 缺失、平台不受支持、源码或
+锁文件漂移、构建失败、自检不匹配均在产品写入前阻断；成功产物与包含真实 binary hash 的收据
+由同一事务写入。日常 Hook 直接执行 `.codex/bin/bridgeforge-hook[.exe]`，禁止现场调用 Cargo、
+Python 或 PowerShell 包装器。
+
+生成阶段先从实际受管 workspace 读取文件并建立仓库外独立快照，按 manifest 相同的规范化算法
+重新计算源码树与 Cargo.lock 哈希；构建配方必须与执行的锁定 Cargo 命令一致，自检合同也需重算。
+所有值与声明匹配后才从快照运行 Cargo；每个资产自检后和整个生成批次结束前，均逐字复核
+原始输入与快照，且自检不得改写二进制。任何漂移或失败都发生在安装资产写入之前。
+收据记录实测哈希，不再直接复制 manifest 的声明。此证据覆盖受管源码、锁文件、执行配方和
+自检合同，不表示已实现工具链、全局 Cargo 配置及环境变量的完全可复现构建。
+
+共享进程执行器从启动前开始计时，输入写入和两路输出读取并行运行，子进程退出并且标准流
+全部结束才算完成。Windows 使用挂起启动、加入禁止脱离的 Job Object、恢复执行的顺序，
+并保留 CREATE_NO_WINDOW；超时结束整个 Job，Unix 使用独立进程组。超时后清理最多等待
+两秒，清理未完成则返回显式错误，禁止无限等待 reader join。该进程组不是针对恶意进程、
+外部服务代为启动或 Unix 主动脱组的安全沙箱；相应外部行为不属于本次验证范围。
 
 ## 输出合同
 
 同步器把自动化收据与用户结果分成两个事实层：
 
-- `machine`：默认且向后兼容的 JSON，保留 plan、fingerprint、资产动作、版本与回滚字段，供测试、fixture、Hook 和其他程序读取。
+- `machine`：当前版本 JSON，包含 plan、fingerprint、资产动作、版本与回滚字段，不提供旧 JSON 兼容，供测试、fixture、Hook 和其他程序读取。
 - `human`：由同步器确定性生成的“结论、待处理事项、下一步”，不暴露 fingerprint、asset ID、内部枚举或 traceback。
 - `combined`：同一 JSON 中同时返回 `machine` 与 `human`；`bridgeforge-codex` Skill 必须使用该模式，按 `machine` 推进流程并原样展示 `human`。
 
@@ -72,10 +98,9 @@ pre-commit 直接复用 `current_baseline.py`。pre-commit 只读检查 worktree
 
 - 根 `AGENTS.md` 公共区由产品管理；项目区允许由 `PreservationManifest` 保留并由已确认迁移包追加，二者必须与 latest 公共区确定性组合。
 - `.codex/hooks.json` 只允许 canonical managed handler 与已确认的项目 Hook 注册；项目注册
-  必须与一个 `.codex/hooks/project_XXXX/entrypoint.py` 目录成对，未知 managed ID 阻断。
-- 散落 Hook、非 canonical 命令和未知 `.codex/**` 结构都必须零写阻断；独立 Agent 只能先在
-  临时副本或受控前置步骤中把 Hook 整理为闭合的自包含目录，再重新生成清单。
-- schema 3 merge/Markdown/region/AGENTS 都携带当前可验证 projection；真实下游不存在
+  必须与一个 `.codex/hooks/project_XXXX/` 自包含 Rust Hook 目录成对，未知 managed ID 阻断。
+- 普通未知文件必须按精确路径确认保留或删除，禁止读取旧合同决定所有权。链接、无入口的项目 Hook 包、未知 Rule 格式仍阻断；需要执行的散落 Hook 先在受控副本整理为闭合目录，再重新规划。
+- schema 4 merge/Markdown/region/AGENTS 都携带当前可验证 projection；真实下游不存在
   `templates/**` 时也不得跳过。
 - 项目 Skills 正文只有在对应源迁移包中逐项确认后才允许语义改写；legacy Rule / Memory 禁止派生索引、自动分类或未确认保留。
 - 项目 `find-doc` / `sync-docs` 映射是精确登记的 required-preserve 数据，重建前后必须字节不变。

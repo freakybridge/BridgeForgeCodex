@@ -15,6 +15,74 @@
 
 > **追溯说明**：v0.1.0 - v0.7.0 基于 git log 历史回溯标记，**git tag 仅从 v0.8.0 开始打**。早期未启用版本号管理是 setup_agent 自打脸问题（要求下游用但自己没用），v0.8.0 修补。
 
+## [1.8.5] - 2026-09-02
+
+### Changed
+
+- [product][repo][meta] 完成骨架 Rust 化并修复同步与迁移架构问题
+
+## [1.8.4] - 2026-09-02
+
+### Fixed
+
+- [product] 修复 Memory 冲突覆盖期间新增内容、显式参数绕过授权、Git attributes 改变快照字节、TOML 表重复和过期冲突标记；恢复保留原目录备份。
+- [product] 修复相似前缀 Hook 注册误删、退役目录阻断后续升级、Git 推送目标判定及项目 Skill 检查路径；编码检查读取真实 index 字节，敏感文件保护枚举完整文件，异步测试不再推断成功。
+- [product][repo] 项目、Git 和批次状态使用系统持有锁，修复异常退出遗留锁、并发回收与批次锁归属；公共故障禁止通过 retry 绕过 restart。
+- [product] 用户级 Home、CLI、Skills 和 ledger 采用统一持久提交点；提交后旧映像占用只延后备份清理，不拆分回滚组件。
+- [meta] 补充十七项架构问题的针对性回归、独立复核和传播记录；真实下游与跨电脑验证继续单独标记。
+
+## [1.8.3] - 2026-09-02
+
+### Fixed
+
+- [product] 修复工厂 git-sync 自动升级 Cargo 版本后运行产物和构建收据失效、被 pre-commit 阻断的问题：提交前在隔离快照中构建并自检，将版本、清单、二进制和实测收据纳入同一回滚事务。
+- [product] 支持 Windows 正在运行的同步器安全替换，旧映像暂存在受管运行缓存，下次维护按哈希清理；保留 stdin、输出、退出码和超时语义。
+- [meta] 补齐构建失败、输入漂移、提交失败回滚及真实 CLI / pre-commit / 本地远端完整同步回归。
+
+## [1.8.2] - 2026-09-02
+
+### Fixed
+
+- [product][repo] 修复 Rust 下发入口：doctor 明确检查产品 runtime；统一合法单戳识别、旧戳事务退役、同版本修复与终态验证；最低 Rust/Cargo 版本声明修正为 1.88。
+- [product][repo] 旧项目同步不再解析旧 manifest 或凭旧 hash 删除；未知普通文件按精确路径确认。Rule / Memory 支持迁入 AGENTS 项目区、Hook 注册和文档索引，并与最新公共基线、删除决定统一组合和回滚。
+- [product][repo] 三种 Memory 生命周期事件统一登记并复用隐藏 worker；保护 pending 与 worker 所有权并发，消费后续事件。gh 验证失败时以既有 Git 凭证重试 private 校验，不写入或回显凭证。
+- [product][repo] 修正 Memory 运行授权把目录当远端文件的参数错误；同步、队列及用户 Hook 配置改用进程退出自动释放的操作系统文件锁，消除过期锁回收竞态。
+- [product][meta] 同步安装恢复步骤、当前 JSON 收据与状态、schema 4 和 summary 原生 Memory 只读边界；不提供旧版本 JSON 兼容。
+
+## [1.8.1] - 2026-09-02
+
+### Fixed
+
+- [product][repo][meta] 修正原生 Memory 读取边界：`$summary` 在两种模式下检索并阅读相关记忆正文，必要时追溯历史记录，结合当前上下文与已有约束提出 Rule / Hook / AGENTS.md 建议；保留原生 Memory 零写入及建议待用户采纳的边界。同步器继续只处理不透明字节快照。
+- [product] 统一 `$summary` 入口与验收流程的写入范围，仅更新当前交付既有记录的验收状态与收据。
+
+## [1.8.0] - 2026-09-01
+
+### Changed
+
+- [product][repo][meta] BridgeForge 工厂与下发骨架全面退役 Python：Hook、pre-commit、project-sync、Git 同步、批量计划、Native Memory、归档、检查器和工厂测试统一由 Rust workspace 与 `bridgeforge` CLI 承载，仓库 `.py` 文件归零。
+- [product][repo] schema 4 受管合同新增两个生成资产：`init`、`adopt`、`update` 在产品写入前用锁定 Cargo 源码构建并自检 `bridgeforge-hook` 与 `bridgeforge`，二进制及可核验收据进入同一回滚事务。
+- [product][repo] `$git-sync` 的 Conventional Commit/SemVer、原生 manifest/lock、CHANGELOG、完整 index 与自动写入回滚迁入 Rust；pre-commit 同时验证 worktree 和 staged index，factory dogfood 复用同一 current baseline。
+- [product][repo][meta] Native Memory 改为 Rust 隐藏 worker、opaque-byte 快照、普通 Git 父子历史和三方冲突证据；用户级配置安装使用事务回滚，并在启用及 GitHub 同步时验证 private 仓库。
+- [product][repo][meta] Rust 源码统一进入 `templates/hooks/` 与 `.codex/hooks/`；旧 `hook-runtime`、Python wrappers、测试与 `codex.hook-runtime*` 资产 ID 退役，项目自有 Hook 继续使用 `project_*/` 扩展目录。
+- [product][repo][meta] 版本同步配置由零散的根 `.bridgeforge-version.json` 归入 `.codex/bridgeforge-version.json`；Skill 分发清单继续保留为独立根入口。
+
+### Fixed
+
+- [product][repo] project-sync apply 与独立 build-assets 共用项目级全程事务锁；git-sync 在读取状态和 fetch 前取得 Git common-dir 锁，使主仓库与关联 worktree 串行同步。
+- [product][repo] Hook 状态和测试收据写入失败明确报告，命令执行薄适配统一接入共享超时执行器；Native Memory 恢复只复制经过 manifest 核验的文件，不夹带未声明缓存或临时文件。
+- [product][repo] 已识别的旧 schema 1 build-receipt 在受管更新或构建事务中退役，失败可回滚；未知内容保留并阻断，不做猜测清理。
+- [product][repo] 私有单元测试与 Memory 集成测试实体统一迁入 scripts/tests；工厂专用 cfg 显式启用私有测试，下游默认及 all-features 构建不依赖工厂测试目录。
+- [repo][meta] 工厂版本配置补齐测试 crate 的 Cargo manifest/lock；旧 CPython 需求卡标为已替代并保留历史，现行开发与验证入口统一指向 Rust。
+- [product][repo] 进程超时覆盖 stdin 写入、stdout/stderr 排空和退出等待；Windows 先挂起启动并加入 Job Object，再恢复执行，超时终止整组后代，清理等待最多两秒，保留无窗口和标准流语义。
+- [product][repo] 生成资产从已核验的独立源码快照构建；收据写入实际源码、锁文件、执行配方与自检合同哈希，构建期间输入或产物漂移即阻断，不替换已安装资产。
+- [product][repo] Git 批量暂存守卫在状态查询启动失败、超时或非零退出时明确阻断；Native Memory 仅接受精确 GitHub HTTPS/SSH 身份，并在同步及冲突恢复前验证私有性，拦截 fetch/push 地址改写到其他仓库。
+- [repo] 将受影响的 Rust runtime 集成测试迁入 scripts/tests，使用仅测试可用的进程适配器保留真实本地 Git 收发、冲突与事务回归，不为生产同步保留本地远端绕过。
+
+- [product][repo] 统一 Hook 工具分类与注册覆盖：shell_command、PowerShell、MultiEdit、NotebookEdit、apply_patch 与既有入口执行同一组写保护；Notebook 路径统一规范化，缺失或冲突目标明确阻断；manifest 从注册源重建 handler 合同，避免工具名单与基线验证漂移。
+- [product][repo] 修复 Windows 上 `bridgeforge` CLI 被错误编译为 GUI subsystem，恢复 PowerShell 同步等待、标准流和退出码语义；仅后台 `bridgeforge-hook` 保持无窗口 subsystem。
+- [product][repo] generated runtime baseline 现在同时核对源码树、锁文件、构建配方与自检收据；pre-commit 通过 receipt schema 引导校验只读复用安装阶段生成的 `.codex/bin`，禁止旧 runtime 审批新源码或提交阶段现场构建。
+
 ## [1.7.2] - 2026-09-01
 
 ### Fixed

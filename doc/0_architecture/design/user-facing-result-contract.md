@@ -15,19 +15,22 @@ BridgeForge 的机器接口继续使用稳定英文枚举，面向用户的结�
 
 同步器错误必须先经过稳定分类，再进入用户结果。已分类错误使用确定的中文原因和下一步；
 未分类错误只能显示通用中文停止说明，禁止拼接原始异常。原始异常继续保留在 `machine`
-技术收据中，供诊断和兼容调用方使用。
+技术收据中，供诊断和当前版本调用方使用。
 
 ## 固定用户结论
 
 | 内部状态 | 用户结论 |
 |---|---|
-| `ready`、`completed` | `已完成。` |
-| `unchanged` | `无需处理。` |
+| `applied` 且 `execution_status=succeeded` | `已完成。` |
+| `current` 且无 gap/blocker | `无需处理。` |
 | `planned` 且 `confirmation_required=false` | `可直接执行。` |
 | `planned` 且 `confirmation_required=true` | `等待确认。` |
 | `blocked`、`failed` | `未完成。` |
-| `completed_with_gaps`、`degraded` | `已完成，但仍有待处理项。` |
+| plan 有 gap 或未完成决定 | `等待确认。` |
+| 项目成功但独立用户级检查有待处理项 | 主对话并列报告用户级事项，禁止把它伪装成项目收据字段 |
 | `advisory` | `提醒`，不算失败 |
+
+测试收据缺少明确退出码时保留 `exit_code=null`、`source=unknown`；进程仍运行、已返回 session_id 或仅无报错，都不能作为测试通过证据。
 
 结论可以通过“待处理事项”补充当前对象和原因，但不得另造近义状态词。`可直接执行。` 只表示计划已经具备执行条件，不表示更新已经完成。
 
@@ -44,7 +47,7 @@ Hook 和诊断脚本可以保留 `[component] BLOCKED`、`ADVISORY` 等稳定技
 
 ### 编码自检例外
 
-`config_health_check.py` 和 `encoding_check.py` 负责发现 UTF-8 环境或文本编码已经损坏的场景。
+Rust Hook 的 `config-health` 和 `encoding` 检查负责发现配置或文本编码已经损坏的场景。
 在 UTF-8 输出能力尚未被证明时，它们允许使用纯 ASCII 英文诊断，避免中文错误信息本身变成乱码。
 该例外只适用于编码自检的失败收据，不得扩展到普通同步器或业务 Hook。
 

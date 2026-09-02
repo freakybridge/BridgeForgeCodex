@@ -1,6 +1,7 @@
 # bridgeforge-codex 安装与迁移
 
-bridgeforge-codex 只支持 Windows、Python 3.11+ 和 Codex。请按自己的情况直接进入对应章节：
+bridgeforge-codex 只支持 Windows、Rust/Cargo 1.88+ 和 Codex。Cargo 在安装、升级及工厂同步提交时构建
+受管 Rust 工具；日常 Hook 不调用 Cargo 或脚本解释器。请按自己的情况直接进入对应章节：
 
 - 第一次使用：阅读“首次安装”。
 - 使用过旧 `$bridgeforge`：阅读“旧 BridgeForge 用户重新安装”。
@@ -16,9 +17,10 @@ bridgeforge-codex 只支持 Windows、Python 3.11+ 和 Codex。请按自己的�
    Set-Location "$env:USERPROFILE\tools\bridgeforge-codex"
    ```
 
-2. 在仓库根目录安装用户级入口和通用 Skills：
+2. 用锁定的 Cargo workspace 构建工厂 dogfood 工具，再安装用户级入口和通用 Skills：
 
    ```powershell
+   cargo build --locked --release --manifest-path .\templates\hooks\Cargo.toml
    & powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install-shared-skills.ps1
    ```
 
@@ -59,7 +61,7 @@ bridgeforge-codex 只支持 Windows、Python 3.11+ 和 Codex。请按自己的�
 
 确认必须在一次连续流程中完成，中断后不保存选择并从第一个源重来。全部确认前项目零写入；确认后的新资产、最新基线、旧 Rule / Memory 删除和验证属于同一事务，失败时完整回滚。逐文件迁移确认已经授权删除对应源，不会再弹出第二次清理确认。
 
-其他可选项目资产仍通过一次性 `PreservationManifest` 明确保留或删除；它和迁移 manifest 都不长期写入项目。同步器最后才写当前版本戳，`.codex/managed-skeleton.json` 只保存当次最新 schema 3 的资产归属和内容哈希。
+其他可选项目资产仍通过一次性 `PreservationManifest` 明确保留或删除；它和迁移 manifest 都不长期写入项目。同步器最后才写当前版本戳，`.codex/managed-skeleton.json` 只保存当次最新 schema 4 的资产归属和内容哈希。
 
 ## 维护者协议
 

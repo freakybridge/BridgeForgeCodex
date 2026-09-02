@@ -1,5 +1,6 @@
 ---
-lifecycle: active
+lifecycle: superseded
+superseded_by: ../rust-only-bridgeforge/requirements_2026-09-01_rust-only-bridgeforge.md
 validation_status: awaiting_user_acceptance
 product_version: 1.4.21
 delivery_size: L
@@ -11,6 +12,11 @@ next: user-acceptance
 ---
 
 # 项目 `.venv` Hook Runtime 单一规则需求卡
+
+> 2026-09-02：本卡已由 [Rust-only 需求卡](../rust-only-bridgeforge/requirements_2026-09-01_rust-only-bridgeforge.md)
+> 完整替代，仅保留历史需求及验证记录。BridgeForge 的 Hook、同步器、pre-commit、测试及
+> Native Memory 均已使用 Rust，不再要求 Python、CPython 或项目 `.venv`。
+> 下游自身的业务 Python 依赖不在本次退役范围。以下历史命令不得作为当前操作入口。
 
 ## 原始需求摘要
 

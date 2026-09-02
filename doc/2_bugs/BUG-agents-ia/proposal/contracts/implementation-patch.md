@@ -30,7 +30,7 @@ PUBLIC_REQUIRED_HEADINGS = (
 
 ## 3. README 首次安装
 
-- 以唯一函数锚点把 `contracts/region_migration.py` 的行为合入完整候选同步器，并继续使用同步器原有的 `SyncBlocked`；候选完整文件必须匹配 `instruction-contract.json.candidate_implementation.project_sync_sha256`，禁止运行时 monkeypatch。
+- 以唯一 Rust 模块边界把 region 行为合入 `bridgeforge-core::project_sync`，并继续使用同步器原有的阻断错误；候选完整文件必须匹配 `instruction-contract.json.candidate_implementation.project_sync_sha256`，禁止运行时替换实现。
 - 只有资产声明 `missing_marker: append` 时，无 marker 才在 EOF 后追加；`after[:len(before)]` 必须逐字等于原文件。其他 region 继续失败关闭，禁止 `rstrip` 或换行归一化项目内容。
 - 单 marker、重复或逆序 marker 必须零写阻断；已有 region 只替换 marker 内部；二次执行必须 byte-identical no-op。
 

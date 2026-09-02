@@ -20,7 +20,7 @@ argument: 无
 1. 主对话直接运行当前 agent 的确定性扫描脚本；此 fast path 禁止为执行脚本启动子 agent：
 
    ```bash
-   .venv/Scripts/python.exe .codex/scripts/archive_scan.py --json
+   .codex/bin/bridgeforge archive-scan --json
    ```
 
 2. 解析 JSON 中的 `source / target / kind / score / reasons / last_modified_days`，输出候选表。

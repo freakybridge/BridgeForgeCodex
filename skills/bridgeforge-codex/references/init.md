@@ -2,7 +2,7 @@
 
 仅在根 skill 判定为 `init` 后读取。
 
-1. 只运行 `bridgeforge_codex_project_sync.py --mode init` 生成计划。
+1. 只运行 `bridgeforge project-sync --mode init` 生成计划。
 2. 空项目的 current baseline 安装可零确认应用。
 3. apply 必须带紧邻 plan 的 aggregate fingerprint。
 4. 准备 apply 时返回根入口并读取 `references/transaction.md`，由它负责写入、验证、回滚和最后写戳顺序。

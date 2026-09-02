@@ -15,7 +15,7 @@ argument: 无
 
 - 当前仓库、分支、upstream、工作区与暂存区状态。
 - `git diff` / `git diff --cached` 的真实变更。
-- 当前宿主目录内 `.<host>/scripts/codex_git_sync.py` 及相关刷新脚本（存在时）。
+- 当前宿主目录内受管 `.codex/bin/bridgeforge[.exe]`。
 
 ## 核心流程
 
@@ -25,29 +25,28 @@ argument: 无
 2. 在运行同步脚本前，根据真实 diff 固化 1-3 条“代码变动效果”：说明增加的功能、修复的问题或改变的系统行为，以及它们带来的实际结果；禁止只罗列文件名、提交类型或“更新了代码”等空话。无法可靠判断时明确标记“未能从 diff 可靠判定”，禁止猜测。
 3. 生成简洁的简体中文消息：`<类型>: <描述>`；类型限 `feat`、`fix`、`refactor`、`perf`、`docs`、`chore`。
 
-### 2. 当前宿主确定性脚本路径
+### 2. 当前宿主确定性 Rust 入口
 
-Codex 项目使用 `.codex/scripts/codex_git_sync.py`。脚本存在时，主 agent 完成只读范围审查和提交消息决策后，必须直接且只运行该脚本：
+Codex 项目使用 `.codex/bin/bridgeforge[.exe] git-sync`。二进制存在时，主 agent 完成只读范围审查和提交消息决策后，必须直接且只运行该入口：
 
 ```text
-.venv/Scripts/python.exe .codex/scripts/codex_git_sync.py --message "<类型>: <描述>"
+.codex/bin/bridgeforge git-sync --message "<类型>: <描述>"
 ```
 
-需要审批时只为该项目脚本申请合理前缀，不分别为 fetch、add、commit 和 push 申请持久规则。脚本可执行 fetch、ahead / behind 判断、安全 stash、`pull --ff-only`、自动版本升级与原生版本同步、CHANGELOG 和衍生产物刷新、add、commit、push 和最终检查。它只在创建新提交时升级版本；纯 `$bridgeforge-codex` 骨架更新不升级项目版本。
+需要审批时只为该项目脚本申请合理前缀，不分别为 fetch、add、commit 和 push 申请持久规则。脚本可执行 fetch、ahead / behind 判断、安全 stash、`pull --ff-only`、自动版本升级与原生版本同步、CHANGELOG 和衍生产物刷新（工厂提交先在仓库外临时目录构建 Hook / CLI 并生成实测收据，将版本、manifest、二进制和收据纳入同一可回滚事务；pre-commit 只读验证）、add、commit、push 和最终检查。它只在创建新提交时升级版本；纯 `$bridgeforge-codex` 骨架更新不升级项目版本。
 
 若首次运行在 `git fetch`、`.git/FETCH_HEAD`、`Permission denied` 或 `Access is denied` 阶段失败，主 agent 必须立即以**完全相同的 repo-local 脚本命令**、`require_escalated` 重试。审批说明仅限：允许 Git 更新当前项目的 `.git/FETCH_HEAD` 等元数据，以完成用户已授权的同步。不得改走手工 Git 命令、修改 `.git` ACL 或扩大到无关目录。重试仍失败时保留原始错误与现场并停止；不得把网络、分叉或凭据错误伪报为权限恢复成功。
 
 除上述确定性的权限恢复外，任何分叉、冲突或失败必须返回主对话处理。
 
-脚本不存在、项目 `.venv` 不可用或当前解释器不属于该项目 `.venv` 时必须停止并报告；禁止回退
-PATH Python。即使用户要求逐条执行，也不得退化为手工 fetch、add、commit 或 push。
+受管二进制不存在、自检失败或当前项目 baseline 不健康时必须停止并报告；禁止回退 Python、PATH 脚本或手工 Git。即使用户要求逐条执行，也不得退化为手工 fetch、add、commit 或 push。
 
 ## 输出与收据
 
 - 当前分支、upstream、同步前后的 ahead / behind。
 - 实际提交消息、commit id 和 push 目标。
 - 同步成功后输出此前固化的“代码变动效果”，最多 3 条；若本轮无本地变更，则写“本轮没有代码变动，仅确认本地与远端已同步”。
-- 工作区最终状态；只有状态干净且 ahead / behind 为 `0 0` 才报告同步完成。
+- 工作区最终状态；只有状态干净且实际 push 目标的 ahead / behind 为 `0 0` 才报告同步完成。upstream 与 push 目标不同时，禁止以上游一致代替推送完成。
 - 失败时给出原始错误阶段和保留的现场状态。
 
 ## 停止条件

@@ -20,7 +20,7 @@ argument: 可选——本次 snapshot 的补充说明
 1. 运行当前 agent 的快照脚本：
 
    ```bash
-   .venv/Scripts/python.exe .codex/hooks/session_snapshot.py manual
+   .codex/bin/bridgeforge-hook snapshot manual
    ```
 
 2. 定位并读取刚生成的 `.runtime/session_state/<ts>.md`，确认路径和脚本写入的客观状态。

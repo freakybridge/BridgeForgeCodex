@@ -42,7 +42,7 @@ delivery_layout: flat
 | `0_architecture/` | 架构与设计依据 | `design/` |
 | `1_delivery/` | 需求确认、计划、验收、协作与专题讨论 | 见下方 topic 索引 |
 | `2_bugs/` | 已知故障及其修复记录 | 27 条故障记录 |
-| `3_reference/` | 外部资料与可复用参考实现 | `examples/antifab-deny-hook.py` |
+| `3_reference/` | 外部资料与可复用参考实现 | `examples/antifab-deny-hook.rs` |
 | `4_archive/` | 已完成或已失效的历史材料 | 既有历史档案；后续按 `delivery/`、`bugs/` 分类归档 |
 
 ## 架构
@@ -55,6 +55,8 @@ delivery_layout: flat
 
 | Topic | 主要记录 |
 |---|---|
+| `rust-only-bridgeforge` | BridgeForge 工厂与下发骨架整体退役 Python，以 Rust CLI 迁移检查、项目同步、Git、批处理、Native Memory 和测试，并最终删除全部 `.py` 与 `.venv` 依赖；含[确认卡](1_delivery/rust-only-bridgeforge/requirements_2026-09-01_rust-only-bridgeforge.md)与[协作记录](1_delivery/rust-only-bridgeforge/collabs_2026-09-01_rust-only-bridgeforge.md)（2026-09-01） |
+| `rust-hook-runtime` | 将项目骨架 6 个 Hook 的完整触发链迁移到 Rust，安装/升级时由 Cargo 构建，运行时零 Python，并保持跨平台、无窗口与失败语义等价；含[确认卡](1_delivery/rust-hook-runtime/requirements_2026-09-01_rust-hook-runtime.md)与[协作记录](1_delivery/rust-hook-runtime/collabs_2026-09-01_rust-hook-runtime.md)（2026-09-01） |
 | `agents-md-simplification-review` | AGENTS.md 优化草案的确认卡、11 版双 agent 辩论、V11 中断现场、有限验收边界及“根级目录路由 + 工厂嵌套指令 + 硬闸”的后续决定（2026-08-27、2026-08-28） |
 | `hook-utf8-memory-loading` | Windows GBK 环境下由公共 Hook dispatcher 强制 UTF-8，恢复项目 memory 的 SessionStart 加载，并以四个真实下游隔离 worktree 验证（2026-08-26） |
 | `bridgeforge-codex-batch` | BridgeForgeCodex 仓库专属的下游骨架批量升级、Git 同步、异常隔离与全量重跑；新增 1.5.6 Git 环境污染和 Batch 状态机死锁的修复、真实恢复需求（2026-08-21、2026-08-27） |
@@ -74,7 +76,7 @@ delivery_layout: flat
 | `project-sync-versioned-region-lineage` | pre-commit region 退役历史 marker/hash，只保留当前规则并要求旧项目显式适配（2026-08-19） |
 | `project-sync-agents-zones-single-rule` | 根 AGENTS 退役旧标题 projection，只保留 agents_zones 并要求旧项目显式适配（2026-08-19） |
 | `project-sync-hooks-zones-single-rule` | 用户级与项目级 hooks 统一为 managed/external 逻辑分区，受管 handler 唯一、canonical、独占 group（2026-08-19） |
-| `project-venv-hook-runtime-single-rule` | 所有骨架与用户级 Native Memory Hook 统一使用当前项目 CPython 3.11+ `.venv`，并为用户级 Hooks repair 增加锁与 CAS（2026-08-19） |
+| `project-venv-hook-runtime-single-rule` | 历史 CPython/.venv 方案，已由 `rust-only-bridgeforge` 完整替代；原需求和验证记录保留，不作为当前操作入口（2026-09-02） |
 | `project-sync-explicit-adaptation-transaction` | 精确选择 G 项并以 fingerprint 和一次性本地收据贯通 project-sync Apply 与后续 `$git-sync`（2026-08-19） |
 | `project-sync-four-project-zero-blocker-rollout` | 闭合 #1～#9 后按共享 Git 与 Native Memory 串行约束推进四项目骨架更新，并记录 M2/Causis 现场补出的 1.4.24～1.4.26 三态凭证与全程收据（2026-08-20） |
 | `cba-bridgeforge-1-4-26-clean-reinstall` | ClaudeBridgeAssist 以项目保留清单保存 vault hooks、skills、memory、映射和 AGENTS 项目区，放弃旧骨架谱系并一次性干净安装 BridgeForge 1.4.26（2026-08-20） |
@@ -89,7 +91,7 @@ delivery_layout: flat
 | `factory-template-dogfood-contract` | Template 公共 AGENTS/Rules 单一事实源、bridgeforge-codex 项目定制区与工厂 Overlay，以及编辑/提交/发布防漂移硬闸（2026-08-16） |
 | `codex-rule-runtime-simplification` | 退役未实际加载的 Markdown path rule，将有效红线无损迁入原生 AGENTS、hook、skill 与文档，并安全保留下游定制（2026-08-16） |
 | `current-baseline-project-asset-migration-and-native-memory-sync` | 下游旧 Rule/项目 Memory 逐文件确认迁移、动态最新 current-only 基线，以及原生 Memory 无感双机同步、自愈和可验证 Git 历史；含[确认卡](1_delivery/current-baseline-project-asset-migration-and-native-memory-sync/requirements_2026-08-31_asset-migration-sync.md)与[协作记录](1_delivery/current-baseline-project-asset-migration-and-native-memory-sync/collabs_2026-08-31_asset-migration-sync.md)（2026-08-31） |
-| `header-upgrade` | 旧版 current-only rebuild 安全升级 Markdown 受管表头并保留项目自有行；含[确认卡](1_delivery/header-upgrade/requirements_2026-09-01_header-upgrade.md)、[计划](1_delivery/header-upgrade/plan.md)与[验收](1_delivery/header-upgrade/acceptance.md)（2026-09-01） |
+| `header-upgrade` | 旧版 current-only rebuild 安全升级 Markdown 受管表头、补齐缺失受管标题并保留项目自有内容；含[确认卡](1_delivery/header-upgrade/requirements_2026-09-01_header-upgrade.md)、[计划](1_delivery/header-upgrade/plan.md)与[验收](1_delivery/header-upgrade/acceptance.md)（2026-09-01） |
 | `codex-agents-structure-reorganization` | Codex AGENTS 信息架构重组、历史标题安全迁移、项目必填区双状态硬闸与 `ctx-budget` 完整退役（2026-08-16） |
 | `shared-skill-model-inheritance` | 删除 shared skill 的 Claude 专用 `model:` 覆盖，双宿主统一继承当前会话模型，并合并精简 Codex 模板的模型选择与执行分工说明（2026-08-16） |
 | `confirm-workflow`、`develop-demand-discovery`、`explain-skill` | 需求确认与通用 skill 演进；后两者含 `research/` |

@@ -12,7 +12,7 @@
 
 ## 换机与依赖
 
-clone 后先建立项目虚拟环境，再从受版本控制的依赖清单安装。Python 使用 `.venv/Scripts/pip.exe` 或 `.venv/bin/pip`；Node 依赖写入 `package.json`；Rust 依赖写入 `Cargo.toml` 并用 `rust-toolchain.toml` 锁定 toolchain。目录改名或移动后重建 venv，不复用内含旧绝对路径的环境。
+clone 后先按项目主语言恢复受版本控制的依赖。BridgeForge 骨架只恢复锁定的 Cargo workspace；业务 Python 项目才建立自己的 `.venv`，Node 项目使用 `package.json`。语言环境不得混入骨架 Hook 运行链，目录改名后也不得复用含旧绝对路径的环境。
 
 禁止在用户目录保存项目才能运行的关键配置，禁止在依赖清单中写本机绝对路径。机器特定凭据只提供受版本控制的示例与重建步骤，不提交真实凭据。
 

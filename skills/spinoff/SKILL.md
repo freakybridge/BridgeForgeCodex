@@ -28,7 +28,7 @@ argument: 前置阻塞问题描述
 运行当前 agent 的 snapshot 脚本：
 
 ```text
-.venv/Scripts/python.exe .codex/hooks/session_snapshot.py manual
+.codex/bin/bridgeforge-hook snapshot manual
 ```
 
 读回新建的 `.runtime/session_state/<ts>.md`，在末尾追加：

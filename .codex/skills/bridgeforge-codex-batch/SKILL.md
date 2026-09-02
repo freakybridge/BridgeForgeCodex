@@ -8,15 +8,17 @@ argument: 每行一个下游项目绝对路径
 # bridgeforge-codex-batch
 
 本 Skill 只能由 bridgeforge-codex 工厂主对话执行。它负责编排，不复制骨架升级或 Git 写逻辑；
-辅助脚本仅做只读预检、串行状态控制与结论式汇总。
+受管 Rust CLI 仅做只读预检、串行状态控制与结论式汇总。
 
 ## 调用硬闸
 
 每次调用先把用户本次输入解析为绝对路径列表；禁止读取、推断或保存固定项目清单。然后在
-当前仓库使用项目 `.venv` 运行：
+当前仓库只使用受管 Rust CLI 运行：
 
 ```text
-.venv/Scripts/python.exe -B .codex/skills/bridgeforge-codex-batch/scripts/batch_control.py factory-check --factory-root .
+.codex/bin/bridgeforge check factory-version --root .
+.codex/bin/bridgeforge manifest --root . --check
+.codex/bin/bridgeforge check baseline --root .
 ```
 
 只有以下事实全部成立时才允许继续：当前 Git 根就是 bridgeforge-codex 工厂；`origin` 是
@@ -31,45 +33,40 @@ witness 与 current baseline 验证通过。任一事实失败都必须拒绝分
 
 ## 一次批次确认
 
-把全部用户输入路径放进同一次只读计划，按输入顺序重复传入 `--target`：
+把全部用户输入路径放进同一次只读计划，按输入顺序重复传入 `--project-root`：
 
 ```text
-.venv/Scripts/python.exe -B .codex/skills/bridgeforge-codex-batch/scripts/batch_control.py plan --factory-root . --target <path-1> --target <path-2>
+.codex/bin/bridgeforge batch plan --template-root . --project-root <path-1> --project-root <path-2>
 ```
 
 `plan` 锁定工厂 HEAD、骨架指纹，以及每个目标的 HEAD、分支、upstream、骨架版本、共享
 Git 仓库和已有改动摘要。路径缺失、重复或身份不清时先让用户修正，禁止写盘。默认不要向
-用户展示计划指纹、绝对路径、HEAD、改动摘要或其他内部收据。
+用户展示计划指纹、绝对路径、HEAD、改动摘要或其他内部收据；主对话必须在内存中保留本次
+`aggregate_fingerprint`，只用于后续启动校验。
 
 用白话展示项目清单、固定串行顺序、已有改动是否存在，以及“正常项目会升级、提交并推送”
-的结果，只统一确认一次。未取得确认时禁止运行 `start`，也禁止执行任何下游写入。确认后运行：
-
-```text
-.venv/Scripts/python.exe -B .codex/skills/bridgeforge-codex-batch/scripts/batch_control.py start --factory-root . --target <path> [--target <path> ...] --plan-fingerprint <confirmed-fingerprint>
-```
-
-`start` 必须重算计划；任何状态漂移都要重新展示结论并再次确认。状态只写入
-`.runtime/bridgeforge-codex-batch/<batch-id>.json`，只服务本次输入；禁止把路径写入配置、
-Skill、文档或其他长期项目清单。同一个工厂同时只允许一个 active batch。
+的结果，只统一确认一次。未取得确认时禁止执行任何下游写入。确认后以同一组路径参数运行
+`batch start --state <state> --template-root . --project-root <path-1> ... --plan-fingerprint
+<confirmed-aggregate-fingerprint>` 取得独占批次锁，再按输入顺序逐个重新运行 `bridgeforge
+project-sync`；plan fingerprint 漂移时必须重新展示结论并再次确认。批次路径禁止
+写入配置、Skill、文档或其他长期项目清单；同一个工厂同时只允许一个 active batch。活动锁固定属于工厂，禁止随 state 目录分裂；修改或释放前必须核验 batch_id，旧批次不得释放新批次的锁。
 
 ## 严格串行执行
 
 一次只能处理一个目标，严格按输入顺序完成全部首次处理，再按原顺序重试异常项目；共享 Git
 common dir 的 worktree 同样分别处理且绝不并行：
 
-1. 运行 `begin --state <state> --target <path>`。每次 `begin` 都重新核对锁定的工厂 HEAD、
-   骨架指纹、干净同步状态和目标现场；目标现场漂移或暂时不可读时必须原子标记为 deferred、
-   不新增 attempt、零下游写入，并继续处理后续 pending 目标。工厂漂移仍立即阻断整批。
-2. 把主对话工作目录切到该目标，完整执行现有官方 `$bridgeforge-codex`。禁止调用或复制其
-   内部 planner/apply 命令。
-3. 骨架升级成功后，在同一目标完整执行项目自己的 `$git-sync`。只能运行该项目
-   `.venv/Scripts/python.exe .codex/scripts/codex_git_sync.py`；禁止手工拆分 fetch、add、
-   commit 或 push。
-4. 正常流程结束后只运行 `finish ... --outcome succeeded`。辅助脚本必须亲自验证 current
-   baseline、版本戳一致、工作区干净、upstream 存在且 `ahead=0`、`behind=0`，再从真实收据
-   生成版本和 GitHub 保存结论；禁止由调用者传入版本或保存结果。
-5. 冲突、分叉、缺 upstream、验证失败或需要用户判断时，保留全部现场并运行
-   `finish ... --outcome deferred --problem-summary <一句白话原因>`；继续下一个正常项目。
+1. 每个目标开始前运行 `batch begin --state <state>`。Rust 控制器只会放行当前顺序的一个
+   目标；随后重新核对工厂 HEAD、骨架指纹、干净同步状态和目标现场；目标现场漂移或暂时
+   不可读时标记 deferred、零下游写入，并继续后续目标。工厂漂移仍立即阻断整批。
+2. 把主对话工作目录切到该目标，完整执行现有官方 `$bridgeforge-codex`。
+3. 骨架升级成功后，在同一目标完整执行项目自己的 `$git-sync`；只能运行该项目
+   `.codex/bin/bridgeforge[.exe] git-sync`，禁止手工拆分 fetch、add、commit 或 push。
+4. 正常流程结束后必须亲自验证 current baseline、版本戳一致、工作区干净、upstream 存在且
+   `ahead=0`、`behind=0`，再从真实收据生成版本和 GitHub 保存结论。
+5. 成功后运行 `batch finish --state <state> --status succeeded --result <单行结论>`。冲突、
+   分叉、缺 upstream、验证失败或需要用户判断时，保留全部现场并以 `--status deferred`
+   结束当前目标，再继续下一个正常项目。
 
 用户的一次批次确认只授权正常升级和 repo-local `$git-sync`。它不授权 force push、reset、
 rebase、merge、删除或丢弃改动，也不授权自动解决冲突。下游原有 dirty state 与项目定制必须
@@ -78,22 +75,25 @@ rebase、merge、删除或丢弃改动，也不授权自动解决冲突。下游
 ## 异常与共性阻断
 
 单项目异常不阻断其他项目。先完成其余正常目标，再留在当前对话逐个解决 deferred 项目。
-人工处理导致现场变化后，先运行 `refresh-plan` 生成新计划，用白话展示变化并取得一次异常项目
-确认，再运行 `reconfirm --plan-fingerprint <confirmed-fingerprint>`；`reconfirm` 必须把目标恢复为
-pending 并清除旧结果，随后才能 `begin` 重试并再次走完整的 `$bridgeforge-codex` 与 `$git-sync`。
-禁止静默吸收漂移。
+人工处理导致现场变化后，先对该目标运行 `batch plan` 生成新计划，用白话展示变化并取得一次
+异常项目确认，再运行 `batch retry --state <state> --order <序号> --plan-fingerprint
+<confirmed-fingerprint>`；`retry` 会重新计算并核对指纹，把目标恢复为 planned 并清除旧结果，
+随后才能 `begin` 重试并再次走完整的 `$bridgeforge-codex` 与 `$git-sync`。
+禁止静默吸收漂移。存在共性问题签名时禁止通过 retry 清除，只能走带修复证据的 restart。
 
 内部问题签名只能表示稳定根因类别，禁止包含项目路径、commit、逐文件差异或原始 traceback。
 只有 `bridgeforge:` 命名空间的同一签名出现在两个不同目标时，状态助手才自动停止分发；普通
 Git、网络或凭据问题重复出现也不得判为共性骨架问题。主对话有直接证据证明是通用骨架缺陷
-时，即使只有一个目标，也只能用 `bridgeforge:` 签名确认。禁止仅凭相似话术猜测共性。
+时，即使只有一个目标，也只能用 `bridgeforge:` 签名确认。签名通过 `batch finish
+--issue-signature <bridgeforge:...>` 写入；禁止仅凭相似话术猜测共性。
 
 自动识别共性问题后立即停止所有下游分发，并在 bridgeforge-codex 新建或补充
-`doc/2_bugs/*.md`、同步 `doc/README.md`，再运行 `link-common --bug-doc <relative-path>`；有直接
-证据时使用 `confirm-common --bug-doc <relative-path>`。没有真实 Bug 文档关联不得进入可修复
-阻断状态。先用结论式话术说明问题与修复影响，再单独取得修改工厂源码的确认。
+`doc/2_bugs/*.md`、同步 `doc/README.md`。没有真实 Bug 文档关联不得进入可修复阻断状态。
+先用结论式话术说明问题与修复影响，再单独取得修改工厂源码的确认。
 
-完成修复、验证和本仓库 `$git-sync` 后才能运行 `restart`。它必须证明 Bug 文档已进入新的
+完成修复、验证和本仓库 `$git-sync` 后才能运行 `batch restart --state <state> --bug-doc
+<doc/2_bugs/xxx.md>`。主对话必须先
+证明 Bug 文档已进入新的
 factory HEAD、工厂干净且为 `0/0`，并按问题签名验证对应修复见证：`bridgeforge:batch-*` 必须证明
 批次控制器的 tracked blob 已变化；其他共性骨架问题必须证明骨架 fingerprint 已变化。随后重新
 预检全部目标、增加 generation，并把包括此前成功项目在内的全部目标从头重跑。无新 HEAD、
@@ -101,14 +101,14 @@ factory HEAD、工厂干净且为 `0/0`，并按问题签名验证对应修复�
 
 ## 用户结果
 
-默认运行 `summary --state <state>`，只向用户报告：项目名称、当前骨架版本、是否已保存到
+默认运行 `batch summary --state <state>`，只向用户报告：项目名称、当前骨架版本、是否已保存到
 GitHub、未完成项目的最关键原因、现场是否保留，以及当前唯一下一步。不要复制辅助脚本的
 JSON 收据、内部状态枚举、问题签名、Git common dir、逐文件清单或 traceback。只有用户追问
-证据或技术细节时，才按其问题范围运行 `summary --technical` 并翻译相关字段。
+证据或技术细节时，才按其问题范围读取同一 summary 收据并翻译相关字段。
 
 异常说明必须是单行白话结论，禁止放入路径、traceback、内部字段或逐文件信息。同名项目使用
 分支等不敏感信息区分，禁止为区分名称而展示绝对路径。批次全部成功后先展示最终摘要，再运行
-`close --state <state>` 删除本次状态；完成时 active batch 必须已释放。
+`batch close --state <state>` 关闭本次状态并释放 active batch 锁；状态收据保留用于追溯。
 
 成功示例：`项目 A：骨架 1.4.40，已保存到 GitHub。`
 

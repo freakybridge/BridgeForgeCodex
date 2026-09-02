@@ -31,8 +31,10 @@ Markdown `paths:` 不是 Codex 的自动指令路由机制。项目不得建立�
 - `AGENTS.md`：公共区由 Template 管理，项目专区逐字保留；
 - `.githooks/pre-commit`：受管区由 Template 管理，项目扩展区逐字保留；
 - `.codex/hooks.json`：BridgeForge handler 与项目 handler 分开校验；
+- BridgeForge 受管 Hook：6 个 handler 直接调用同一个 `.codex/bin/bridgeforge-hook[.exe]`；
+  Rust 源码随 Template 下发，安装/升级事务负责构建、自检和收据，日常触发不依赖 Python；
 - legacy Rule：`.codex/rules/*.md` 逐源文件迁往 `AGENTS.md`、`.rules` 或文档；禁止改名冒充原生加载。
-- 项目 Hook：每个 Hook 独占 `.codex/hooks/project_XXXX/`，入口为 `entrypoint.py`，
+- 项目 Hook：每个 Hook 独占 `.codex/hooks/project_XXXX/`，入口为受管 Rust binary，
   私有代码、配置和数据都放在同一目录内；
 - legacy 项目 Memory：逐源文件迁往 AGENTS、Skill、Hook/test、Delivery/Bug/TODO 或文档；三个派生文件固定退役。机器不做语义判断，只执行经用户确认的 manifest。
 
@@ -45,23 +47,18 @@ Markdown `paths:` 不是 Codex 的自动指令路由机制。项目不得建立�
 
 任意合法旧戳只证明骨架身份，不选择旧实现；无戳但已有骨架资产进入 adopt。Planner 只读盘点项目资产，生成临时 `PreservationManifest` 与 Rule / Memory inventory；所有需要用户决策的项目必须明确选择，未选择不得默认为删除。
 
-重装不解析旧 `.codex/managed-skeleton.json` 恢复 ownership。未知 `.codex/**` 结构、散落 Hook
-或非 canonical 注册必须阻断；独立 Agent 只能先在临时副本或受控前置步骤中把 Hook 整理为
-`.codex/hooks/project_XXXX/entrypoint.py` 自包含目录，再重新规划并逐项确认。
+重装不解析旧 `.codex/managed-skeleton.json` 恢复 ownership。未被当前合同覆盖的普通文件逐路径确认保留或删除；链接、危险 Hook 包与未知 Rule 格式阻断。需要执行的旧 Hook 必须先整理为自包含目录，再重新规划。
 
 清单只服务本次升级：Apply 重新核对指纹、安装当前骨架、回灌确认资产、完成全部校验并
 写入最终版本戳后，清单即失效，不作为长期迁移状态保存。
 
 ### 4.2 同版本更新
 
-与产品 home 同版本的项目只接受 current-only 合同。公共资产漂移、合同损坏或身份不一致
-必须在写盘前阻断。
+同版本项目需要修复时，目标仍来自可信产品 home 的 current-only 合同。整文件覆盖需要确认；双戳、非法身份和计划后的文件漂移必须阻断。事务允许版本戳内容不变，并在最后核验完整基线和唯一版本戳。
 
 旧文件名在 latest rebuild 事务内删除并最终只写当前戳。双戳、非法戳和高于当前产品的版本仍然阻断。
 
-若新合同移除了资产，同步器只允许删除满足以下全部条件的旧资产：旧合同确实拥有、策略为
-`whole`、路径安全、目标内容仍精确匹配旧合同。部分 ownership、项目改动或无法证明的目标
-一律阻断，不靠历史 retirement 表猜测。
+当前合同未覆盖的旧文件不能依据旧 manifest 或旧 hash 自动删除。同步器只执行用户按精确路径确认的保留/删除决定；未决定时不写入。Rule / Memory 使用逐源迁移包。
 
 ## 5. 事务与失败边界
 
@@ -73,7 +70,7 @@ Markdown `paths:` 不是 Codex 的自动指令路由机制。项目不得建立�
 - hook、JSON、路径和合同解析均 fail-closed，禁止用宽松 fallback 吸收损坏状态。
 
 pre-commit 只验证当前工作树和 index。需要重建 manifest 或版本文件时，用户
-先运行 repo-local `$git-sync`，由单一写事务生成并暂存，pre-commit 不在 `git commit` 内暗写。
+先运行 repo-local `$git-sync`，在仓库外先完成版本投影、锁定 Cargo 构建和自检，再由单一写事务安装版本、manifest、Hook / CLI 和实测收据，并暂存可跟踪文件；二进制与收据留在被 Git 忽略的本地运行目录。提交前失败时恢复这些资产及完整 index；pre-commit 不在 `git commit` 内构建或暗写。
 
 ## 6. 工厂与 dogfood
 
@@ -91,7 +88,7 @@ Template 与 `.codex/` 的公共运行时必须保持当前投影一致。校验
 archive 与 Git 历史中。
 
 新骨架不再创建或运行项目 `.codex/memory/`。下游既有目录必须逐文件扫描、人工确认并在一次事务迁往正确资产；确认同时授权删除对应源，不另建清理任务。Codex 原生
-`~/.codex/memories/` 只由官方机制生成和注入；BridgeForge 只做不透明整树同步，见
+`~/.codex/memories/` 保留官方生成和注入机制；summary 可只读检索和阅读正文提出建议，同步器只做不透明整树同步，见
 `codex-native-memory-sync.md`。项目 Skill 保存在 `.codex/skills/<name>/SKILL.md`，必须满足
 当前 metadata、结构、引用和体积规则。
 

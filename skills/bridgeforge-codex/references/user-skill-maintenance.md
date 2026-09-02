@@ -7,7 +7,8 @@
 - 唯一刷新入口：Codex 薄入口内的 `scripts/bridgeforge_codex_shared_update.ps1`；每轮最多运行一次。
 - updater 只处理 `bridgeforge-codex-manifest.json` 登记的 Codex skills；第三方目录不得修改。
 - source 必须来自 GitHub `freakybridge/BridgeForgeCodex` 的 `main` 并逐文件验 hash。
-- 产品 home、skill stage/swap、ledger 和崩溃恢复必须处于同一可恢复事务。
+- 产品 home、用户级 `.codex/bin/bridgeforge.exe`、skill stage/swap 与 ledger 必须由同一持久日志决定提交或回滚；恢复时核对组件路径和原始内容哈希。
+- 统一提交前失败必须回滚全部组件；提交后备份清理失败不得单独回退 CLI。收据 `cleanup_pending=true` 表示分发已提交、旧备份待清理，后续维护先依据同一日志完成清理，禁止手工删除活动日志。
 
 旧 `$bridgeforge`、旧 Codex/Claude ledger、旧 `.bridgeforge` home 与旧 Claude Skill 均不再
 受支持。产品不得读取、接管或删除这些遗留资产；旧用户必须按当前安装说明重新安装

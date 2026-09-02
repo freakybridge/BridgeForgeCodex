@@ -1,26 +1,18 @@
-# 项目 Python preflight
+# Rust runtime preflight
 
-仅当根入口已经判定 `$MODE`，但项目 `.venv` 缺失或验证失败时读取。
+仅当根入口已经判定 `$MODE`，但受管 CLI 或产品 workspace 验证失败时读取。
 
-- 双戳、缺戳、非法戳或项目身份不明必须在创建 `.venv` 前零写阻断。
-- 每个项目只能使用自己的 CPython 3.11+ `.venv/Scripts/python.exe`。
-- `.venv` 缺失时，只有空白 `init` 或已识别旧戳的 `adopt` 可以从 PATH 选择一次经验证的 CPython 3.11+；`update` 禁止创建或重建 `.venv`。
-- 现有 `.venv` 损坏、低于 3.11、不是 CPython 或路径逃逸时必须阻断，禁止回退 PATH。
+- 双戳、非法戳必须阻断；无戳空项目允许 init，无戳已有资产允许 adopt，不要求下游已经安装 Rust 骨架。
+- 只检查刷新后的产品 home：`templates/hooks/Cargo.toml`、`Cargo.lock` 和 updater 安装的用户级二进制。
+- Cargo 与 rustc 必须满足 workspace 声明的最低版本；产品版本与 CLI 必须相同。缺失、版本不足、锁文件校验失败或 self-test 失败都必须停止。
+- 禁止使用 Python、旧脚本、其他 clone 或 PATH 中同名非受管二进制兜底。
 
-允许 bootstrap 时，PATH 解释器只能执行：
-
-```powershell
-& $BOOTSTRAP_PYTHON -B `
-  (Join-Path $BRIDGEFORGE_CODEX_HOME "templates\scripts\project_runtime.py") `
-  bootstrap --project-root . --mode $MODE --bootstrap-executable $BOOTSTRAP_PYTHON
-```
-
-创建成功后立即用新项目解释器运行：
+只读验证命令：
 
 ```powershell
-& .\.venv\Scripts\python.exe -B `
-  (Join-Path $BRIDGEFORGE_CODEX_HOME "templates\scripts\project_runtime.py") `
-  validate --project-root . --executable .\.venv\Scripts\python.exe
+& $BRIDGEFORGE doctor --product-root $BRIDGEFORGE_CODEX_HOME --json
 ```
 
-只有 validate 成功才允许把该解释器锁定为 `$HOOK_PYTHON`。本轮后续 Python 命令禁止使用裸 `python` 或切换解释器。
+doctor 检查工具链版本、`cargo metadata --locked --offline --no-deps` 和实际受管 CLI 的自检。收据须为 `schema=1`、`status=ok`，且 manifest/lockfile 位于当前产品 home。
+
+需要恢复时，先修复已报告的 Cargo/rustc 或文件问题，本轮停止；下一轮重新运行根入口。构建和替换只由官方 updater 完成：仓库外临时 target 构建 → 对新产物执行 `self-test --json` → 核对 `schema=1/name=bridgeforge/status=ok` → 事务替换用户级二进制，失败恢复原文件。禁止手工覆盖二进制，禁止用旧已安装产物的自检代替新构建产物自检，也禁止在同一轮再次刷新。

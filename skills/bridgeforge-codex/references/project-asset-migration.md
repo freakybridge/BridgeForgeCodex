@@ -42,7 +42,7 @@
 }
 ```
 
-同一源产生 Hook 时，`decisions` 必须同时包含 `hook` 的 `project_*/entrypoint.py` 和 `hook-registration` 的 `.codex/hooks.json`；新增文档必须同时包含 `doc/README.md` 的 `documentation` 决定。多个源可以引用同一最终目标，但各源必须给出逐字相同的完整 `content_utf8`、目标类型和 before hash；机器只物化一次，不同内容必须阻断并重新合并确认。已有复合目标的 `content_utf8` 表示用户确认后的完整目标，机器随后用 latest 公共区替换其中受管部分。
+同一源产生 Hook 时，`decisions` 必须同时包含 `hook` 的 `project_*/entrypoint.rs` 和 `hook-registration` 的 `.codex/hooks.json`；新增文档必须同时包含 `doc/README.md` 的 `documentation` 决定。多个源可以引用同一最终目标，但各源必须给出逐字相同的完整 `content_utf8`、目标类型和 before hash；机器只物化一次，不同内容必须阻断并重新合并确认。已有复合目标的 `content_utf8` 表示用户确认后的完整目标，机器随后用 latest 公共区替换其中受管部分。
 
 启动同步器时使用 `--asset-migration-manifest -`，通过进程 stdin 发送 UTF-8 JSON；禁止把 JSON 放入 shell 字符串、重定向或持久文件。
 

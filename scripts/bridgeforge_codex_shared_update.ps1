@@ -27,6 +27,7 @@ $OperationLogName = ".bridgeforge-codex-shared-update.json"
 $CommandHomeName = ".bridgeforge-codex"
 $CommandHomeLogName = ".bridgeforge-codex-home-update.json"
 $script:PhaseTimings = [ordered]@{}
+$script:CleanupPending = $false
 $script:UpdateTimer = [Diagnostics.Stopwatch]::StartNew()
 
 function Complete-PhaseTiming {
@@ -56,6 +57,7 @@ function Write-UpdateReceipt {
         mode = if ([string]::IsNullOrWhiteSpace($Mode)) { $null } else { $Mode }
         action_count = $ActionCount
         timings_ms = $script:PhaseTimings
+        cleanup_pending = $script:CleanupPending
     }
     if (-not [string]::IsNullOrWhiteSpace($ErrorMessage)) {
         $receipt["error"] = $ErrorMessage
@@ -855,6 +857,89 @@ function Remove-SafeTree {
     Remove-Item -LiteralPath $Path -Recurse -Force
 }
 
+function Get-BundleHash {
+    param($Plan, [string]$Path)
+    if ([string]$Plan.kind -eq "home") { return Get-DirectoryContentHash -Root $Path }
+    return Get-Sha256 -Path $Path
+}
+
+function Initialize-BundlePlan {
+    param($Plan, [string]$Kind)
+    if ($null -eq $Plan) { return }
+    $Plan["kind"] = $Kind
+    $Plan["original_hash"] = if ([bool]$Plan.had_original) { Get-BundleHash -Plan $Plan -Path ([string]$Plan.target) } else { $null }
+    $Plan["desired_hash"] = if ([bool]$Plan.needs_swap) { Get-BundleHash -Plan $Plan -Path ([string]$Plan.stage) } else { $Plan.original_hash }
+}
+
+function Assert-BundlePlan {
+    param($Plan, [string]$UserProfile, [string]$OperationId)
+    if ($null -eq $Plan) { return }
+    if ([string]$Plan.kind -eq "home") {
+        $stem = $CommandHomeName.TrimStart(".")
+        $target = Join-Path $UserProfile $CommandHomeName
+        $stage = Join-Path $UserProfile ".$stem-stage-$OperationId"
+        $backup = Join-Path $UserProfile ".$stem-backup-$OperationId"
+    }
+    elseif ([string]$Plan.kind -eq "cli") {
+        $bin = Join-Path $UserProfile ".codex\bin"
+        $target = Join-Path $bin "bridgeforge.exe"
+        $stage = Join-Path $bin ".bridgeforge-stage-$OperationId.exe"
+        $backup = Join-Path $bin ".bridgeforge-backup-$OperationId.exe"
+    }
+    else { throw "Invalid shared bundle component kind." }
+    if ([string]$Plan.target -ne $target -or [string]$Plan.stage -ne $stage -or [string]$Plan.backup -ne $backup) {
+        throw "Shared bundle recovery contains unexpected paths."
+    }
+    foreach ($path in @($target, $stage, $backup)) {
+        Assert-NoReparseUnderProfile -Path $path -UserProfile $UserProfile
+    }
+    if ([string]$Plan.desired_hash -notmatch "^(sha256:)?[0-9a-f]{64}$" -or
+        ([bool]$Plan.had_original -and [string]$Plan.original_hash -notmatch "^(sha256:)?[0-9a-f]{64}$")) {
+        throw "Shared bundle recovery lacks content hashes."
+    }
+}
+
+function Remove-BundlePath {
+    param($Plan, [string]$Path)
+    if (-not (Test-Path -LiteralPath $Path)) { return }
+    if ([string]$Plan.kind -eq "home") { Remove-SafeTree -Path $Path }
+    else { Remove-Item -LiteralPath $Path -Force }
+}
+
+function Restore-BundlePlan {
+    param($Plan, [bool]$Committed)
+    if ($null -eq $Plan -or -not [bool]$Plan.needs_swap) { return }
+    $target = [string]$Plan.target
+    $backup = [string]$Plan.backup
+    $stage = [string]$Plan.stage
+    if ($Committed) {
+        if (-not (Test-Path -LiteralPath $target) -or (Get-BundleHash -Plan $Plan -Path $target) -ne [string]$Plan.desired_hash) {
+            throw "Committed shared bundle target is missing or changed: $target"
+        }
+        Remove-BundlePath -Plan $Plan -Path $backup
+    }
+    elseif (Test-Path -LiteralPath $backup) {
+        if (-not [bool]$Plan.had_original -or (Get-BundleHash -Plan $Plan -Path $backup) -ne [string]$Plan.original_hash) {
+            throw "Shared bundle rollback backup differs from its witness: $backup"
+        }
+        if (Test-Path -LiteralPath $target) {
+            if ((Get-BundleHash -Plan $Plan -Path $target) -ne [string]$Plan.desired_hash) { throw "Shared bundle target changed; preserving external state: $target" }
+            Remove-BundlePath -Plan $Plan -Path $target
+        }
+        Move-Item -LiteralPath $backup -Destination $target
+    }
+    elseif ([bool]$Plan.had_original) {
+        if (-not (Test-Path -LiteralPath $target) -or (Get-BundleHash -Plan $Plan -Path $target) -ne [string]$Plan.original_hash) {
+            throw "Shared bundle original and rollback backup cannot be verified: $target"
+        }
+    }
+    elseif (Test-Path -LiteralPath $target) {
+        if ((Get-BundleHash -Plan $Plan -Path $target) -ne [string]$Plan.desired_hash) { throw "Shared bundle new target changed; preserving external state: $target" }
+        Remove-BundlePath -Plan $Plan -Path $target
+    }
+    Remove-BundlePath -Plan $Plan -Path $stage
+}
+
 function Restore-InterruptedOperation {
     param(
         [Parameter(Mandatory = $true)][string]$LogPath,
@@ -871,6 +956,9 @@ function Restore-InterruptedOperation {
     if ($operationId -notmatch "^[0-9a-f]{32}$") {
         throw "Invalid operation identifier in recovery log."
     }
+    $bundles = @()
+    if ($null -ne $log.PSObject.Properties["bundles"]) { $bundles = @($log.bundles) }
+    foreach ($bundle in $bundles) { Assert-BundlePlan -Plan $bundle -UserProfile $UserProfile -OperationId $operationId }
     $seenPlatforms = @{}
     foreach ($platformPlan in @($log.platforms)) {
         $platform = [string]$platformPlan.platform
@@ -977,6 +1065,15 @@ function Restore-InterruptedOperation {
     if (-not $seenPlatforms.ContainsKey("codex") -or $seenPlatforms.Count -ne 1) {
         throw "Recovery log must contain exactly the codex platform."
     }
+    foreach ($bundle in $bundles) { Restore-BundlePlan -Plan $bundle -Committed ([bool]$log.committed) }
+    if (@($bundles | Where-Object { [string]$_.kind -eq "home" }).Count -gt 0) {
+        $homeLog = Join-Path $UserProfile $CommandHomeLogName
+        if (Test-Path -LiteralPath $homeLog) {
+            $homeState = Read-JsonFile -Path $homeLog
+            if ([string]$homeState.operation_id -ne $operationId) { throw "Command-home journal belongs to another operation." }
+            Remove-Item -LiteralPath $homeLog -Force
+        }
+    }
     Remove-Item -LiteralPath $LogPath -Force
 }
 
@@ -1056,8 +1153,14 @@ function Invoke-UpdateTransaction {
         [Parameter(Mandatory = $true)][string]$UserProfile,
         [Parameter(Mandatory = $true)][string]$LogPath,
         [Parameter(Mandatory = $true)][string]$OperationId,
-        [Parameter(Mandatory = $true)]$PlatformPlans
+        [Parameter(Mandatory = $true)]$PlatformPlans,
+        $CommandHomePlan,
+        $RustCliPlan
     )
+    Initialize-BundlePlan -Plan $CommandHomePlan -Kind "home"
+    Initialize-BundlePlan -Plan $RustCliPlan -Kind "cli"
+    $bundles = @(@($CommandHomePlan, $RustCliPlan) | Where-Object { $null -ne $_ })
+    foreach ($bundle in $bundles) { Assert-BundlePlan -Plan $bundle -UserProfile $UserProfile -OperationId $OperationId }
     $log = [ordered]@{
         schema_version = 1
         operation_id = $OperationId
@@ -1066,11 +1169,15 @@ function Invoke-UpdateTransaction {
         started_at = [DateTime]::UtcNow.ToString("o")
         committed = $false
         platforms = $PlatformPlans
+        bundles = $bundles
     }
     Write-JsonAtomic -Path $LogPath -Value $log
     $completedActionCount = 0
 
     try {
+        if ($null -ne $CommandHomePlan) { Install-CommandHome -Plan $CommandHomePlan }
+        if ($null -ne $RustCliPlan) { Install-RustCli -Plan $RustCliPlan }
+        Write-JsonAtomic -Path $LogPath -Value $log
         foreach ($platformPlan in $PlatformPlans) {
             $platformManifest = Get-PlatformManifest -Manifest $Manifest -Platform ([string]$platformPlan.platform
             )
@@ -1153,7 +1260,6 @@ function Invoke-UpdateTransaction {
         }
         $log.committed = $true
         Write-JsonAtomic -Path $LogPath -Value $log
-        Restore-InterruptedOperation -LogPath $LogPath -UserProfile $UserProfile
     }
     catch {
         $failure = $_
@@ -1164,6 +1270,13 @@ function Invoke-UpdateTransaction {
             Write-Error "Shared skill update failed and automatic recovery also failed: $($_.Exception.Message)"
         }
         throw $failure
+    }
+    # The durable shared commit above covers Home, CLI, Skills and ledger together.
+    # Cleanup is recoverable housekeeping; it must never undo committed components.
+    try { Restore-InterruptedOperation -LogPath $LogPath -UserProfile $UserProfile }
+    catch {
+        $script:CleanupPending = $true
+        Write-Warning "Shared update committed; backup cleanup deferred: $($_.Exception.Message)"
     }
 }
 
@@ -1322,19 +1435,6 @@ function Undo-CommandHome {
     }
 }
 
-function Complete-CommandHome {
-    param([Parameter(Mandatory = $true)]$Plan)
-    if (-not [bool]$Plan.needs_swap) {
-        return
-    }
-    $Plan.status = "committed"
-    Write-JsonAtomic -Path ([string]$Plan.log) -Value $Plan
-    if (Test-Path -LiteralPath ([string]$Plan.backup) -PathType Container) {
-        Remove-SafeTree -Path ([string]$Plan.backup)
-    }
-    Remove-Item -LiteralPath ([string]$Plan.log) -Force
-}
-
 function Restore-CommandHomeOperation {
     param([Parameter(Mandatory = $true)][string]$UserProfile)
     $logPath = Join-Path $UserProfile $CommandHomeLogName
@@ -1390,6 +1490,116 @@ function Restore-CommandHomeOperation {
     Remove-Item -LiteralPath $logPath -Force
 }
 
+function New-RustCliPlan {
+    param(
+        [Parameter(Mandatory = $true)][string]$RepositoryRoot,
+        [Parameter(Mandatory = $true)][string]$UserProfile,
+        [Parameter(Mandatory = $true)][string]$OperationId
+    )
+    $manifest = Join-Path $RepositoryRoot "templates\hooks\Cargo.toml"
+    $lockfile = Join-Path $RepositoryRoot "templates\hooks\Cargo.lock"
+    if (-not (Test-Path -LiteralPath $manifest -PathType Leaf) -or
+        -not (Test-Path -LiteralPath $lockfile -PathType Leaf)) {
+        throw "Managed Rust workspace is incomplete."
+    }
+    $targetDirectory = Join-Path ([IO.Path]::GetTempPath()) "bridgeforge-cli-build-$OperationId"
+    if (Test-Path -LiteralPath $targetDirectory) {
+        Remove-SafeTree -Path $targetDirectory
+    }
+    $previousPreference = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        $output = & cargo build --locked --release --manifest-path $manifest --target-dir $targetDirectory 2>&1
+        $exitCode = $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $previousPreference
+    }
+    if ($exitCode -ne 0) {
+        if (Test-Path -LiteralPath $targetDirectory) {
+            Remove-SafeTree -Path $targetDirectory
+        }
+        throw "Managed Rust CLI build failed: $($output -join [Environment]::NewLine)"
+    }
+    $built = Join-Path $targetDirectory "release\bridgeforge.exe"
+    if (-not (Test-Path -LiteralPath $built -PathType Leaf)) {
+        Remove-SafeTree -Path $targetDirectory
+        throw "Managed Rust CLI build produced no bridgeforge.exe."
+    }
+    $selfTest = & $built self-test --json 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        Remove-SafeTree -Path $targetDirectory
+        throw "Managed Rust CLI self-test failed: $($selfTest -join [Environment]::NewLine)"
+    }
+    try {
+        $receipt = ($selfTest -join "`n") | ConvertFrom-Json
+    }
+    catch {
+        Remove-SafeTree -Path $targetDirectory
+        throw "Managed Rust CLI self-test did not return JSON."
+    }
+    if ([int]$receipt.schema -ne 1 -or [string]$receipt.name -ne "bridgeforge" -or
+        [string]$receipt.status -ne "ok") {
+        Remove-SafeTree -Path $targetDirectory
+        throw "Managed Rust CLI self-test identity is invalid."
+    }
+    $binRoot = Join-Path $UserProfile ".codex\bin"
+    if (-not (Test-Path -LiteralPath $binRoot -PathType Container)) {
+        New-Item -ItemType Directory -Path $binRoot -Force | Out-Null
+    }
+    $target = Join-Path $binRoot "bridgeforge.exe"
+    $stage = Join-Path $binRoot ".bridgeforge-stage-$OperationId.exe"
+    $backup = Join-Path $binRoot ".bridgeforge-backup-$OperationId.exe"
+    Copy-Item -LiteralPath $built -Destination $stage
+    Remove-SafeTree -Path $targetDirectory
+    $current = Test-Path -LiteralPath $target -PathType Leaf
+    $needsSwap = -not $current -or (Get-Sha256 -Path $target) -ne (Get-Sha256 -Path $stage)
+    if (-not $needsSwap) {
+        Remove-Item -LiteralPath $stage -Force
+    }
+    return [ordered]@{
+        target = $target
+        stage = $stage
+        backup = $backup
+        had_original = [bool]$current
+        needs_swap = [bool]$needsSwap
+        status = if ($needsSwap) { "staged" } else { "current" }
+    }
+}
+
+function Install-RustCli {
+    param([Parameter(Mandatory = $true)]$Plan)
+    if (-not [bool]$Plan.needs_swap) { return }
+    if ([bool]$Plan.had_original) {
+        Move-Item -LiteralPath ([string]$Plan.target) -Destination ([string]$Plan.backup)
+    }
+    try {
+        Move-Item -LiteralPath ([string]$Plan.stage) -Destination ([string]$Plan.target)
+        $Plan.status = "installed"
+    }
+    catch {
+        if ([bool]$Plan.had_original -and (Test-Path -LiteralPath ([string]$Plan.backup))) {
+            Move-Item -LiteralPath ([string]$Plan.backup) -Destination ([string]$Plan.target)
+        }
+        throw
+    }
+}
+
+function Undo-RustCli {
+    param([Parameter(Mandatory = $true)]$Plan)
+    if ([string]$Plan.status -eq "installed") {
+        if (Test-Path -LiteralPath ([string]$Plan.target)) {
+            Remove-Item -LiteralPath ([string]$Plan.target) -Force
+        }
+        if ([bool]$Plan.had_original -and (Test-Path -LiteralPath ([string]$Plan.backup))) {
+            Move-Item -LiteralPath ([string]$Plan.backup) -Destination ([string]$Plan.target)
+        }
+    }
+    if (Test-Path -LiteralPath ([string]$Plan.stage)) {
+        Remove-Item -LiteralPath ([string]$Plan.stage) -Force
+    }
+}
+
 function Invoke-Main {
     Assert-Windows
     $userProfile = [string]$env:USERPROFILE
@@ -1403,12 +1613,13 @@ function Invoke-Main {
         }
         $logPath = Join-Path $userProfile $OperationLogName
         $phase = [Diagnostics.Stopwatch]::StartNew()
-        Restore-CommandHomeOperation -UserProfile $userProfile
         Restore-InterruptedOperation -LogPath $logPath -UserProfile $userProfile
+        Restore-CommandHomeOperation -UserProfile $userProfile
         Complete-PhaseTiming -Name "recovery" -Stopwatch $phase
 
         $cloneRoot = $null
         $commandHomePlan = $null
+        $rustCliPlan = $null
         $commit = $null
         $resultMode = $null
         $actionCount = 0
@@ -1439,6 +1650,10 @@ function Invoke-Main {
                 -UserProfile $userProfile `
                 -OperationId $operationId `
                 -Commit $commit
+            $rustCliPlan = New-RustCliPlan `
+                -RepositoryRoot $repositoryRoot `
+                -UserProfile $userProfile `
+                -OperationId $operationId
             $phase = [Diagnostics.Stopwatch]::StartNew()
             $platformPlans = @(
                 New-UpdatePlan `
@@ -1453,20 +1668,25 @@ function Invoke-Main {
             if ([bool]$commandHomePlan.needs_swap) {
                 $actionCount += 1
             }
+            if ([bool]$rustCliPlan.needs_swap) {
+                $actionCount += 1
+            }
             $needsTransaction = [bool]($actionCount -gt 0 -or @(
                 $platformPlans | Where-Object { [bool]$_.ledger_needs_update }
             ).Count -gt 0)
             Complete-PhaseTiming -Name "target_plan" -Stopwatch $phase
 
-            $needsTransaction = [bool]($needsTransaction -or [bool]$commandHomePlan.needs_swap)
+            $needsTransaction = [bool](
+                $needsTransaction -or
+                [bool]$commandHomePlan.needs_swap -or
+                [bool]$rustCliPlan.needs_swap
+            )
             if (-not $needsTransaction) {
                 Write-Host "bridgeforge-codex shared skills already current at commit $commit."
                 $resultMode = "noop"
             }
             else {
                 $phase = [Diagnostics.Stopwatch]::StartNew()
-                try {
-                    Install-CommandHome -Plan $commandHomePlan
                     Invoke-UpdateTransaction `
                         -RepositoryRoot $repositoryRoot `
                         -Manifest $manifestResult.value `
@@ -1475,13 +1695,7 @@ function Invoke-Main {
                         -UserProfile $userProfile `
                         -LogPath $logPath `
                         -OperationId $operationId `
-                        -PlatformPlans $platformPlans
-                    Complete-CommandHome -Plan $commandHomePlan
-                }
-                catch {
-                    Undo-CommandHome -Plan $commandHomePlan
-                    throw
-                }
+                        -PlatformPlans $platformPlans -CommandHomePlan $commandHomePlan -RustCliPlan $rustCliPlan
                 Complete-PhaseTiming -Name "transaction" -Stopwatch $phase
                 Write-Host "bridgeforge-codex shared skills updated to commit $commit."
                 $resultMode = "updated"
@@ -1492,6 +1706,9 @@ function Invoke-Main {
             if ($null -ne $commandHomePlan -and
                 [string]$commandHomePlan.status -eq "staged") {
                 Undo-CommandHome -Plan $commandHomePlan
+            }
+            if ($null -ne $rustCliPlan -and [string]$rustCliPlan.status -eq "staged") {
+                Undo-RustCli -Plan $rustCliPlan
             }
             if ($cloneRoot -and (Test-Path -LiteralPath $cloneRoot)) {
                 Remove-SafeTree -Path $cloneRoot

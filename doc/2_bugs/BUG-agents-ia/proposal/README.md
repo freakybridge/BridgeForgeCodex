@@ -43,9 +43,9 @@
 | [`contracts/instruction-contract.json`](contracts/instruction-contract.json) | 标题、区域、资产和旧指针机器合同 |
 | [`contracts/semantic-contract.json`](contracts/semantic-contract.json) | 来源行、目标文件和必需语义的可执行合同 |
 | [`contracts/bridgeforge-codex-skill-patch.json`](contracts/bridgeforge-codex-skill-patch.json) | 完整 `$bridgeforge-codex` 候选的确定性 patch 与预期 hash |
-| [`contracts/region_migration.py`](contracts/region_migration.py) | README 专属追加、其他 region 失败关闭的实现候选 |
+| `bridgeforge-core::project_sync` | README 专属追加、其他 region 失败关闭的 Rust 实现 |
 | [`contracts/implementation-patch.md`](contracts/implementation-patch.md) | 真实实施时的精确改动清单 |
-| [`contracts/validate_proposal.py`](contracts/validate_proposal.py) | proposal 静态与临时覆盖验证器 |
+| `bridgeforge check proposal` | proposal 静态与临时覆盖验证器 |
 
 README 公共区使用 `BRIDGEFORGE:README:BEGIN/END` 标记。工厂和下游共用同一内容，标记外始终由各项目所有。
 
@@ -76,7 +76,7 @@ README 公共区使用 `BRIDGEFORGE:README:BEGIN/END` 标记。工厂和下游�
 运行：
 
 ```powershell
-.venv\Scripts\python.exe -B doc/2_bugs/BUG-agents-ia/proposal/contracts/validate_proposal.py
+.codex\bin\bridgeforge.exe check proposal --proposal-root doc/2_bugs/BUG-agents-ia/proposal
 ```
 
 验证器从候选路径加载完整生成的 schema 3 parser 与同步器，再执行 payload、plan/apply/no-op、结构化阻断和故障注入；其中 marker blocker 还通过真实子进程 CLI 核验退出码、唯一 JSON stdout、与 JSON error 严格一致的 `BLOCKED:` stderr 提示及零写。README 无 marker 可逐字追加；非 README region 使用 CRLF、LF、混合换行和无尾换行样例验证 marker 外 prefix/suffix 原始字节不变，二次执行 byte-identical。plan、阻断、no-op 和回滚比较“受管可见树”，明确排除 `.git`、`.venv` 与 `__pycache__`，不宣称覆盖这些边界。完整候选 Skill 通过 root-skill 测试和正式分发 manifest 检查。工厂 instruction Hook 对根项目区、Template 和三个嵌套指令执行工作树与 staged 的规范化全文 hash 破坏矩阵。语义合同锁定来源 hash，按章节检查可执行正文；HTML 注释、反引号 / 波浪线 fence 和缩进代码不能满足规则，未闭合注释或 fence 失败关闭。Template 项目占位注释另按“可见标题后紧邻指定注释”精确验证。

@@ -12,12 +12,12 @@
             {
               "source": "scripts/bridgeforge_codex_shared_update.ps1",
               "target": "scripts/bridgeforge_codex_shared_update.ps1",
-              "sha256": "sha256:e06817676167f5da56a0a0761f0d79bc6746aae09600a9b4965fbc6b226535bc"
+              "sha256": "sha256:8bccbec411695bee8f515d52f9add478f58ff3d93728328fbc3a5143fc3f42e7"
             },
             {
               "source": "skills/bridgeforge-codex/SKILL.md",
               "target": "SKILL.md",
-              "sha256": "sha256:9ab2e5faa110e24c8c4fafe0abdc9134098b9c6b0bb22b859332dc41ce95e89f"
+              "sha256": "sha256:c74e18abb089d1c668fa372edceeb98d757011a8c51e9331487a21d3565f0ec7"
             },
             {
               "source": "skills/bridgeforge-codex/agents/openai.yaml",
@@ -27,47 +27,47 @@
             {
               "source": "skills/bridgeforge-codex/references/adopt.md",
               "target": "references/adopt.md",
-              "sha256": "sha256:628b1db5da31a6c1938fc89a58208d540574a89cff7b62ba3cab285926ed0cd6"
+              "sha256": "sha256:12f12ad3d419f3779a9a71af7982b5890454d68d67fd50be6560c5e25742f683"
             },
             {
               "source": "skills/bridgeforge-codex/references/init.md",
               "target": "references/init.md",
-              "sha256": "sha256:2e38f9f287b59af694b4b906755a24e76ea73036a12d4878168558ab71be3c64"
+              "sha256": "sha256:7bddd30acaf8755163e7ff1435c71c4cdc98c2de022e0090783886b50a072ec1"
             },
             {
               "source": "skills/bridgeforge-codex/references/native-memory.md",
               "target": "references/native-memory.md",
-              "sha256": "sha256:fd3cde1d7d0a976ba3890b4b33ccfabe37ef2cba9435385b73ee502a6421474f"
+              "sha256": "sha256:152ffe059ef3401cf04726c5aba19d954ce48da8d4674d853090db403f591875"
             },
             {
               "source": "skills/bridgeforge-codex/references/project-asset-migration.md",
               "target": "references/project-asset-migration.md",
-              "sha256": "sha256:3d359c330b7e588b1b634104b2136366321bddb915f6171f04183bc35aa96cbb"
+              "sha256": "sha256:aec70503cfaa0830c50d4b5bc06ec5bb2d11f0a4e468e199656386ea25d5f799"
             },
             {
               "source": "skills/bridgeforge-codex/references/runtime-preflight.md",
               "target": "references/runtime-preflight.md",
-              "sha256": "sha256:4308a568e347c0e0b05e4e15ee1e6cde1d4d8d47c455ca9f2a20fd578768659c"
+              "sha256": "sha256:a1e896c192cebec132166241f577ca3aac0c5317f36cab958281675acc1ecd57"
             },
             {
               "source": "skills/bridgeforge-codex/references/technical-receipts.md",
               "target": "references/technical-receipts.md",
-              "sha256": "sha256:9493548aa9f9a5b06879c0dfe0c65f2561f9e2098b3dadef7b7b362ca38df902"
+              "sha256": "sha256:ff0145bd58f01b3757f1b114019f6fbf60a1611954dca7f9243ff48170629e77"
             },
             {
               "source": "skills/bridgeforge-codex/references/transaction.md",
               "target": "references/transaction.md",
-              "sha256": "sha256:1b2e04b30f6c13d8dba73047d96efa7e8d5a2f3d486db8f9b7d7f570af505704"
+              "sha256": "sha256:88c282b670b7fc1874e7ce5c18b4099dcd47c59aba7e224f2153b3ef4c4468f6"
             },
             {
               "source": "skills/bridgeforge-codex/references/update.md",
               "target": "references/update.md",
-              "sha256": "sha256:c422a11aef3cd273829c077046987287665e32967ee4536acc50f0e03028e2f3"
+              "sha256": "sha256:310022c438200d700e0a4fe032f8713098fb9074f93f7d1bac9b9a8cb6aa6f08"
             },
             {
               "source": "skills/bridgeforge-codex/references/user-skill-maintenance.md",
               "target": "references/user-skill-maintenance.md",
-              "sha256": "sha256:5ddc7f4bfeb60afbfda9b0ac4cadedf4928454817a7f8e21f6c7b12b6b1561ba"
+              "sha256": "sha256:e9a0798fe53a9ee5af8c1be6b150296710bbeaa34eaf4d16685f874ec1806693"
             }
           ]
         },
@@ -77,7 +77,7 @@
             {
               "source": "skills/archive-scan/SKILL.md",
               "target": "SKILL.md",
-              "sha256": "sha256:2385cbe5856fc92a8839f399a0fa715e70e66217f3bbfcbfd4a3c8f2d647cc0b"
+              "sha256": "sha256:71c52b9c0def5df843b8182f8cdf1e426f32417d609dabc4a6d03cfa87712dd9"
             }
           ]
         },
@@ -207,7 +207,7 @@
             {
               "source": "skills/git-sync/SKILL.md",
               "target": "SKILL.md",
-              "sha256": "sha256:7b4a7977e32587e001f55282b9f7ba7c73aae94857151678e002058766d6fea1"
+              "sha256": "sha256:56d683fda319ee0a8c3d663d4a9b6de2080febd8e0f7e133b0a58b7b38053e65"
             }
           ]
         },
@@ -237,7 +237,7 @@
             {
               "source": "skills/snapshot/SKILL.md",
               "target": "SKILL.md",
-              "sha256": "sha256:2a184ebc8ceb396a15b33e04250fef122b5cd91fecffbc7fda84d799407cfbf2"
+              "sha256": "sha256:7b3605da6e4d620ed551b28b5a07ee338376224231b95cfb1d16e5999ee57ba2"
             }
           ]
         },
@@ -247,7 +247,7 @@
             {
               "source": "skills/spinoff/SKILL.md",
               "target": "SKILL.md",
-              "sha256": "sha256:183f85ab8d7f2c1f6ee0f60cede125f78b2d6c9d18a947f75521af29da6d79f6"
+              "sha256": "sha256:29638bb9110f45d0c006b312c5b24637cb19f0871b2b046e8f6c7884531fd738"
             }
           ]
         },
@@ -257,22 +257,22 @@
             {
               "source": "skills/summary/references/acceptance-mode.md",
               "target": "references/acceptance-mode.md",
-              "sha256": "sha256:11b1d826a5f1e45df481c6cf35b0d5eb508b6e778f6fc09ecf31f917ac511249"
+              "sha256": "sha256:cffaaaf61f6eca791c7085dce7e6f9c406f8dc10e8c317a6f7508b78e3211461"
             },
             {
               "source": "skills/summary/references/deep-steps.md",
               "target": "references/deep-steps.md",
-              "sha256": "sha256:00cfd72e860be763eed99b4d7a962a6e9c16ca3a002025252aab2f11037e74d4"
+              "sha256": "sha256:2cb0a11f96f53703425023b8a1cfd9f6a8bcc50d19e4feecae9f952841d3ea2a"
             },
             {
               "source": "skills/summary/references/ordinary-mode.md",
               "target": "references/ordinary-mode.md",
-              "sha256": "sha256:395cd54fabb7abe8bd15c88eef651b0b7df19ffab271bb84e50ab0fdd979c7e7"
+              "sha256": "sha256:7b936a3786328260bffc1319bd3a3266e3eb957ba2a7ad6a38bb554f7864fa84"
             },
             {
               "source": "skills/summary/SKILL.md",
               "target": "SKILL.md",
-              "sha256": "sha256:fc2f0a4952261581137cb3f3a5f49f36c3936274f2cfd559e751ef6b627fc44f"
+              "sha256": "sha256:bccc6d2e8071845b8ceb952408b3d3131e2cdba147ddac4fa45383b6e13d9898"
             }
           ]
         },

@@ -1,11 +1,15 @@
 # 内部技术收据
 
-仅在根入口需要核对字段级成功条件、解释异常、证明回滚或回答用户技术追问时读取。默认用户结果必须来自同步器 `human` 区，不得倾倒本文件或 `machine` 区的字段清单。
+仅在需要核对成功条件、异常或回答技术追问时读取。默认用户结果来自同步器 `human` 区，不倾倒字段清单。
 
-项目骨架收据必须核对：用户级刷新 commit、`execution_status`、applied、迁移 manifest hash、每个源/目标、preserved project asset IDs、blockers 原文、版本戳路径与终态、rollback 字段、验证命令和逐文件工作区清单。
+当前项目合同：
 
-Native Memory 收据必须核对：`project_readiness`、`user_native_memory_readiness`、长期授权状态、`hookInstalled`、`hookRuntimeVerified`、`pendingAgeSeconds`、`syncHealth`、`workerActive`、`activeConflict`、最近 worker 收据、Hook 修复结果和一次性告警 ID。`busy` / `pending` 不得证明健康；只有实际普通父子提交或 no-op 收据可以证明同步完成。
+- plan：`schema`、`status=planned|current`、`readiness`、`mode`、版本、`safe/risk/gaps/blockers`、`asset_migration`、`preservation_manifest`、`confirmation_required`、`aggregate_fingerprint`。
+- apply 成功：`status=applied`、`execution_status=succeeded`、`project_readiness=ready`、`current_version`、`aggregate_fingerprint`、`applied`、`rollback_performed=false`、`stamp_written_last=true`、`asset_migration_manifest_sha256` 和 `preserved_asset_ids`。没有迁移时 manifest hash 为 null。
+- apply 失败：combined 的 `machine` 为 `status=blocked` 和 `error`；只有错误明确包含完整回滚结果时才能声明已回滚，不能从退出码推断。原始问题留在技术收据，用户显示稳定中文结果。
 
-用户结论必须使用固定中文状态；`ready`、`gap`、`reconcile` 等英文只属于本页技术收据。禁止用项目 `ready` 掩盖用户级同步 `gap`，也禁止把本轮未执行的 `reconcile` 描述成已完成。只有用户追问原因、证据或技术细节时，才按问题范围展开对应字段；禁止一次性补发整份技术清单。
+用户级 updater 的 commit 与刷新收据单独核对，不属于项目 apply JSON。迁移源/目标完整清单来自紧邻 apply 的 plan，并以指纹、manifest hash、实际文件终态相互核对。
 
-同步器输出合同：`machine` 保持旧 JSON 自动化合同；`human` 输出确定性的三段式用户结果；`combined` 返回两区供 Skill 同时判定流程和展示结果。主对话可以引用 `machine` 区核验事实，但不得用临场解释覆盖 `human` 区结论。
+Native Memory 使用独立 status 收据：`consent`、`enabled`、`hookInstalled`、`hookRuntimeVerified`、`remoteConfigured`、`pendingAgeSeconds`、`syncHealth`、`workerActive`、`activeConflict`、`lastReceipt`、`healthReceipt`、`alertId`。项目成功不证明用户级 Memory 健康；`busy/pending/gap` 不能证明同步完成。未执行的真实生命周期或 reconcile 必须写明未验证。
+
+`machine` 只提供当前版本 JSON，不保持旧版本字段或枚举兼容；`human` 提供确定性的“结论、待处理事项、下一步”；`combined` 同时提供两区。主对话按 machine 推进流程，原样展示 human，禁止补造缺失字段或用临场解释覆盖结论。
