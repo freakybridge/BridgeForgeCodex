@@ -1,6 +1,264 @@
 use super::*;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+fn upgrade_fixture(previous: &str, release: &str) -> (PathBuf, PathBuf, PathBuf) {
+    let (root, _) = transaction_fixture(true);
+    let factory = root.join("factory");
+    let project = root.join("project");
+    fs::create_dir_all(factory.join("templates")).unwrap();
+    fs::create_dir_all(project.join(".codex")).unwrap();
+    fs::write(
+        project.join(".codex/.bridgeforge_codex_version"),
+        format!("{previous}\n"),
+    )
+    .unwrap();
+    // Pre-baseline contracts may be arbitrary bytes; no compatibility parser may read them.
+    fs::write(
+        project.join(".codex/managed-skeleton.json"),
+        b"invalid legacy contract",
+    )
+    .unwrap();
+    fs::write(factory.join("templates/managed.txt"), b"new\n").unwrap();
+    let contract = json!({
+        "schema_version":4,"release_version":release,"compatibility_baseline":"1.8.6",
+        "baseline_model":"current-only","host":"codex",
+        "stamp":".codex/.bridgeforge_codex_version","contract_target":".codex/managed-skeleton.json",
+        "assets":[{"id":"managed.asset","source":"templates/managed.txt","target":"managed.txt",
+            "strategy":"whole","current_sha256":sha_git(b"new\n")}],"generated_assets":[]
+    });
+    fs::write(
+        factory.join("templates/managed-skeleton.json"),
+        serde_json::to_vec(&contract).unwrap(),
+    )
+    .unwrap();
+    (root, project, factory)
+}
+
+#[test]
+fn fixed_baseline_does_not_move_with_the_release() {
+    for (previous, release, rebuild) in [
+        ("1.0.0", "1.8.6", true),
+        ("1.8.5", "1.8.6", true),
+        ("1.8.6", "1.8.6", false),
+        ("1.8.6", "1.8.7", false),
+        ("1.8.7", "1.9.0", false),
+    ] {
+        let (root, project, factory) = upgrade_fixture(previous, release);
+        fs::write(
+            project.join(".codex/local-config.json"),
+            b"project-owned\r\n",
+        )
+        .unwrap();
+        let plan = build_plan(&project, &factory, SyncMode::Update).unwrap();
+        assert_eq!(plan.preservation_manifest["destructive_rebuild"], rebuild);
+        assert_eq!(
+            plan.preservation_manifest["compatibility_baseline"],
+            "1.8.6"
+        );
+        assert_eq!(!plan.gaps.is_empty(), rebuild);
+        if !rebuild {
+            apply_plan(plan.clone(), &plan.aggregate_fingerprint, true).unwrap();
+            assert_eq!(
+                fs::read(project.join(".codex/local-config.json")).unwrap(),
+                b"project-owned\r\n"
+            );
+            assert_eq!(
+                build_plan(&project, &factory, SyncMode::Update)
+                    .unwrap()
+                    .status,
+                "current"
+            );
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[test]
+fn fixed_baseline_rejects_missing_invalid_future_floor_and_downgrade() {
+    let (root, project, factory) = upgrade_fixture("1.8.8", "1.8.7");
+    assert!(
+        build_plan(&project, &factory, SyncMode::Update)
+            .unwrap_err()
+            .contains("newer than")
+    );
+    let path = factory.join("templates/managed-skeleton.json");
+    let original: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    for floor in [Value::Null, json!("invalid"), json!("2.0.0")] {
+        let mut contract = original.clone();
+        contract["compatibility_baseline"] = floor;
+        fs::write(&path, serde_json::to_vec(&contract).unwrap()).unwrap();
+        assert!(build_plan(&project, &factory, SyncMode::Update).is_err());
+        assert!(!project.join(".runtime").exists());
+    }
+    fs::remove_dir_all(root).unwrap();
+}
+
+fn confirmed_sources(project: &Path) -> Value {
+    let sources = crate::asset_migration::scan_sources(project).unwrap();
+    json!({"schema_version":1,"sources":sources.iter().enumerate().map(|(index, source)| {
+        json!({"asset_id":source.asset_id,"source_path":source.source_path,
+            "source_sha256":source.source_sha256,"kind":source.kind,"confirmed":true,
+            "retire_source":true,"retirement_reason":"migrated",
+            "decisions":[{"target":format!(".codex/rules/retained-{index}.rules"),
+                "asset_type":"command-rule","reason":"user confirmed exact content",
+                "target_before_sha256":null,"content_utf8":fs::read_to_string(project.join(&source.source_path)).unwrap()}],
+            "discarded":[]})
+    }).collect::<Vec<_>>()})
+}
+
+#[test]
+fn every_legacy_source_requires_confirmation_on_both_upgrade_routes() {
+    for previous in ["1.8.5", "1.8.6"] {
+        let (root, project, factory) = upgrade_fixture(previous, "1.8.7");
+        fs::create_dir_all(project.join(".codex/memory")).unwrap();
+        fs::create_dir_all(project.join(".codex/rules")).unwrap();
+        fs::write(
+            project.join(".codex/memory/one.md"),
+            b"memory knowledge\r\n",
+        )
+        .unwrap();
+        fs::write(project.join(".codex/rules/two.md"), b"rule knowledge\r\n").unwrap();
+        let before = tree_sha(&project).unwrap();
+        let plan = build_plan(&project, &factory, SyncMode::Update).unwrap();
+        assert_eq!(plan.asset_migration["source_count"], 2);
+        assert!(
+            apply_plan(plan.clone(), &plan.aggregate_fingerprint, true)
+                .unwrap_err()
+                .contains("gap")
+        );
+        assert_eq!(tree_sha(&project).unwrap(), before);
+        assert!(!project.join(".runtime").exists());
+        let manifest = confirmed_sources(&project);
+        let mut partial = manifest.clone();
+        partial["sources"].as_array_mut().unwrap().pop();
+        assert!(
+            build_plan_with_inputs(&project, &factory, SyncMode::Update, Some(&partial), None)
+                .is_err()
+        );
+        let mut unconfirmed = manifest.clone();
+        unconfirmed["sources"][0]["confirmed"] = json!(false);
+        assert!(
+            build_plan_with_inputs(
+                &project,
+                &factory,
+                SyncMode::Update,
+                Some(&unconfirmed),
+                None
+            )
+            .is_err()
+        );
+        assert_eq!(tree_sha(&project).unwrap(), before);
+        let plan =
+            build_plan_with_inputs(&project, &factory, SyncMode::Update, Some(&manifest), None)
+                .unwrap();
+        let fail = |_: &Path, _: &Path| Err("injected migration failure".into());
+        assert!(
+            apply_plan_internal(plan.clone(), &plan.aggregate_fingerprint, true, Some(&fail))
+                .unwrap_err()
+                .contains("rolled back")
+        );
+        assert_eq!(
+            fs::read(project.join(".codex/memory/one.md")).unwrap(),
+            b"memory knowledge\r\n"
+        );
+        assert_eq!(
+            fs::read(project.join(".codex/rules/two.md")).unwrap(),
+            b"rule knowledge\r\n"
+        );
+        assert!(!project.join(".codex/rules/retained-0.rules").exists());
+        apply_plan(plan.clone(), &plan.aggregate_fingerprint, true).unwrap();
+        assert!(!project.join(".codex/memory/one.md").exists());
+        assert!(!project.join(".codex/rules/two.md").exists());
+        assert_eq!(
+            fs::read(project.join(".codex/rules/retained-0.rules")).unwrap(),
+            b"memory knowledge\r\n"
+        );
+        assert_eq!(
+            fs::read(project.join(".codex/rules/retained-1.rules")).unwrap(),
+            b"rule knowledge\r\n"
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[test]
+fn new_or_changed_legacy_sources_invalidate_apply_without_writing() {
+    for previous in ["1.8.5", "1.8.6"] {
+        let (root, project, factory) = upgrade_fixture(previous, "1.8.7");
+        let plan = build_plan(&project, &factory, SyncMode::Update).unwrap();
+        fs::create_dir_all(project.join(".codex/memory")).unwrap();
+        let source = project.join(".codex/memory/one.md");
+        fs::write(&source, b"knowledge").unwrap();
+        let before = tree_sha(&project).unwrap();
+        assert!(
+            apply_plan(plan.clone(), &plan.aggregate_fingerprint, true)
+                .unwrap_err()
+                .contains("sources or confirmations drifted")
+        );
+        assert_eq!(tree_sha(&project).unwrap(), before);
+        let manifest = confirmed_sources(&project);
+        let plan =
+            build_plan_with_inputs(&project, &factory, SyncMode::Update, Some(&manifest), None)
+                .unwrap();
+        fs::write(&source, b"changed knowledge").unwrap();
+        let before = tree_sha(&project).unwrap();
+        assert!(
+            build_plan_with_inputs(&project, &factory, SyncMode::Update, Some(&manifest), None)
+                .is_err()
+        );
+        assert!(apply_plan(plan.clone(), &plan.aggregate_fingerprint, true).is_err());
+        assert_eq!(tree_sha(&project).unwrap(), before);
+        assert!(!project.join(".runtime").exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[test]
+fn markdown_upgrade_inserts_sections_and_preserves_project_content() {
+    let source = b"# Docs\n\n## Start\n| Task | Read |\n|---|---|\n| arch | new |\n\n## Lifecycle\ncanonical\n\n## Index\n| File | Purpose |\n|---|---|\n| managed | new |\n\n";
+    let current = b"# Custom\r\ndelivery_layout: milestone\r\n\r\n## Project\r\nkeep bytes\r\n\r\n## Index\r\n| Old | Header |\r\n|---|---|\r\n| custom | personal |\r\n| managed | old |\r\n\r\n";
+    let asset = json!({"managed_blocks":{"headings":["## Lifecycle"],"keyed_tables":[
+        {"heading":"## Start","managed_keys":["arch"]},{"heading":"## Index","managed_keys":["managed"]}]}});
+    let merged =
+        merge_managed_markdown(source, current, &asset, Path::new("Example"), true).unwrap();
+    let text = String::from_utf8(merged.clone()).unwrap();
+    assert!(text.contains("## Project\r\nkeep bytes\r\n\r\n"));
+    assert!(text.contains("| custom | personal |\r\n"));
+    assert!(text.contains("delivery_layout: milestone\r\n"));
+    assert!(text.find("## Start").unwrap() < text.find("## Lifecycle").unwrap());
+    assert!(text.find("## Lifecycle").unwrap() < text.find("## Index").unwrap());
+    assert_eq!(
+        merge_managed_markdown(source, &merged, &asset, Path::new("Example"), false).unwrap(),
+        merged
+    );
+    assert!(merge_managed_markdown(source, current, &asset, Path::new("Example"), false).is_err());
+    let duplicate = format!("{text}\n## Lifecycle\nambiguous");
+    assert!(
+        merge_managed_markdown(
+            source,
+            duplicate.as_bytes(),
+            &asset,
+            Path::new("Example"),
+            true
+        )
+        .is_err()
+    );
+    let changed_columns = text.replace(
+        "| File | Purpose |\n|---|---|",
+        "| File | Purpose | Extra |\n|---|---|---|",
+    );
+    assert!(
+        merge_managed_markdown(
+            source,
+            changed_columns.as_bytes(),
+            &asset,
+            Path::new("Example"),
+            true
+        )
+        .is_err()
+    );
+}
+
 #[test]
 fn hook_removal_matches_path_boundaries_and_platform_commands() {
     let payload = json!({"hooks":{"Stop":[{"hooks":[
@@ -23,6 +281,72 @@ fn hook_removal_matches_path_boundaries_and_platform_commands() {
         handlers
             .iter()
             .all(|handler| handler.to_string().contains("project_ab"))
+    );
+}
+
+#[test]
+fn legacy_business_hook_bundle_is_language_neutral_and_fingerprinted() {
+    let (root, project, factory) = upgrade_fixture("1.5.8", "1.8.6");
+    let bundle = project.join(".codex/hooks/project_business");
+    fs::create_dir_all(&bundle).unwrap();
+    fs::write(bundle.join("entrypoint.py"), b"project owned Python\r\n").unwrap();
+    let plan = build_plan(&project, &factory, SyncMode::Update).unwrap();
+    assert!(plan.blockers.is_empty(), "{:?}", plan.blockers);
+    assert!(!plan.gaps.is_empty());
+    let decisions = json!({"preserve":["P:project-hook-bundle:.codex/hooks/project_business"]});
+    let plan = build_plan_with_inputs(&project, &factory, SyncMode::Update, None, Some(&decisions))
+        .unwrap();
+    assert!(plan.gaps.is_empty());
+    fs::write(bundle.join("late.txt"), b"concurrent content").unwrap();
+    assert!(
+        apply_plan(plan.clone(), &plan.aggregate_fingerprint, true)
+            .unwrap_err()
+            .contains("preserved project asset drifted")
+    );
+    let plan = build_plan_with_inputs(&project, &factory, SyncMode::Update, None, Some(&decisions))
+        .unwrap();
+    apply_plan(plan.clone(), &plan.aggregate_fingerprint, true).unwrap();
+    assert_eq!(
+        fs::read(bundle.join("entrypoint.py")).unwrap(),
+        b"project owned Python\r\n"
+    );
+    assert_eq!(
+        fs::read(bundle.join("late.txt")).unwrap(),
+        b"concurrent content"
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn real_template_upgrades_legacy_markdown_without_old_contract_or_losing_index() {
+    let factory = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .ancestors()
+        .nth(4)
+        .unwrap();
+    let contract: Value =
+        serde_json::from_slice(&fs::read(factory.join("templates/managed-skeleton.json")).unwrap())
+            .unwrap();
+    let asset = contract["assets"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["id"] == "codex.doc.readme")
+        .unwrap();
+    let source = fs::read(factory.join("templates/doc/README.md")).unwrap();
+    let mut old = String::from_utf8(source.clone()).unwrap();
+    for heading in ["## 从这里开始", "## 文档生命周期"] {
+        let (start, end) = markdown_section(&old, heading).unwrap();
+        old.replace_range(start..end, "");
+    }
+    old = old.replace("| 文件 | 说明 |", "| 旧标题 | 项目说明 |");
+    old.push_str("\n## 项目自有\n不得丢失\n");
+    let merged =
+        merge_managed_markdown(&source, old.as_bytes(), asset, Path::new("Example"), true).unwrap();
+    assert!(String::from_utf8_lossy(&merged).contains("## 项目自有\n不得丢失\n"));
+    crate::baseline::verify_asset_payload(asset, &merged).unwrap();
+    assert_eq!(
+        merge_managed_markdown(&source, &merged, asset, Path::new("Example"), false).unwrap(),
+        merged
     );
 }
 
@@ -343,7 +667,7 @@ fn transaction_fixture(valid_asset_hash: bool) -> (PathBuf, SyncPlan) {
             "strategy": "whole",
             "current_sha256": current_sha,
         }],
-        "baseline_model": "current-only",
+        "baseline_model": "current-only", "compatibility_baseline": "1.0.0",
         "generated_assets": [],
     }))
     .unwrap();

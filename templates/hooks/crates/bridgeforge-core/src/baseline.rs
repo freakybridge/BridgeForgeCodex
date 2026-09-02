@@ -91,6 +91,21 @@ pub(crate) fn parse_unique_json(payload: &[u8], label: &str) -> Result<Value, St
         .map_err(|error| format!("{label} is invalid JSON: {error}"))
 }
 
+pub(crate) fn compatibility_baseline(contract: &Value) -> Result<crate::release::SemVer, String> {
+    let floor = contract["compatibility_baseline"]
+        .as_str()
+        .ok_or("managed contract compatibility_baseline is missing")?
+        .parse::<crate::release::SemVer>()?;
+    let release = contract["release_version"]
+        .as_str()
+        .ok_or("managed contract release_version is missing")?
+        .parse::<crate::release::SemVer>()?;
+    if floor > release {
+        return Err("compatibility_baseline is newer than the product release".into());
+    }
+    Ok(floor)
+}
+
 fn sha(payload: &[u8]) -> String {
     let normalized = if payload.contains(&0) {
         payload.to_vec()
@@ -203,6 +218,7 @@ fn validate_contract(value: &Value) -> Result<(), String> {
             "contract_target",
             "assets",
             "baseline_model",
+            "compatibility_baseline",
             "generated_assets",
         ],
         "current baseline top-level",
@@ -219,6 +235,7 @@ fn validate_contract(value: &Value) -> Result<(), String> {
         .as_str()
         .ok_or("current baseline release_version is missing")?
         .parse::<crate::release::SemVer>()?;
+    compatibility_baseline(value)?;
     let assets = value["assets"]
         .as_array()
         .filter(|assets| !assets.is_empty())

@@ -1,6 +1,6 @@
 # bridgeforge-codex 项目同步事务
 
-> 状态：implemented（dynamic latest current-only）
+> 状态：implemented（固定升级分界线 + latest current-only 目标）
 > 入口：`bridgeforge project-sync`
 
 bridgeforge-codex 只维护 Codex 当前产品面。公共资产 ownership 的唯一产品来源是
@@ -16,8 +16,8 @@ adaptation proof 与 glob ownership。
   -> 安装当前 Template
 
 恰好一个合法版本戳
-  -> 版本只证明骨架身份
-  -> 旧于产品 home 时直接 latest rebuild；同版本时验证 current baseline
+  -> 低于固定 compatibility_baseline 时直接 latest rebuild
+  -> 等于或高于基线时兼容更新；同版本验证 current baseline；高于产品版本拒绝降级
 
 无戳但存在骨架资产
   -> adopt + latest rebuild
@@ -30,13 +30,20 @@ Rule / Memory 源存在
   -> 零写阻断
 ```
 
-latest rebuild 不读取旧 `.codex/managed-skeleton.json`，也不按版本选择历史 adapter。它先盘点项目资产，再只放回确认的 AGENTS 项目区、pre-commit 项目扩展、项目 Hook 与自动保留的 `.codex/skills/**`、
+固定分界线在 `templates/managed-skeleton.json` 的 `compatibility_baseline` 声明，首版为
+1.8.6；manifest 重建只更新 `release_version`，不自动抬高分界线。两条路径均只安装最新目标，
+不积累逐版本 adapter。基线内兼容路径不枚举整个 `.codex` 做破坏性重建，按受管边界更新并
+保留项目文件、区域、Hook 和表格行；已有 whole 资产替换仍需确认。旧于目标版本时允许
+按照新模板顺序补齐受管 Markdown 章节、更新同列数表头；同版本缺失/漂移、无戳接入、
+重复标题/歧义表格和列数变化仍阻断。
+
+latest rebuild 不读取旧 `.codex/managed-skeleton.json` 的语义，也不按版本选择历史 adapter。它先盘点项目资产，再只放回确认的 AGENTS 项目区、pre-commit 项目扩展、项目 Hook 与自动保留的 `.codex/skills/**`、
 `.codex/find-doc.map.md` 和 `.codex/sync-docs.map.md`。两个项目映射只按精确路径识别并作为
 required-preserve 原样保留；未被当前合同覆盖的普通文件以 `P:project-file:<path>` 列为决策项；链接和危险 Hook 结构仍阻断。每个可选资产必须显式选择
 保留或删除；临时 `PreservationManifest` 只存在于本次事务内，在写最终戳前清空，不生成持久
 before 包或迁移账本。
 
-`.codex/rules/*.md` 与 `.codex/memory/**` 由 Rust `project-sync` 盘点和验证。Agent 逐源文件提出语义迁移包；机器只验证完整覆盖、source/target hash、目标职责、公共受管区、Hook 注册、文档索引和事务。`MEMORY.md`、`MEMORY_COLD.md`、`_stats.json` 固定退役。确认期间不得落盘 manifest；中断后从第一个源重来。
+`.codex/rules/*.md` 与 `.codex/memory/**` 在两条升级路径中都由 Rust `project-sync` 盘点和验证。Agent 逐源文件提出语义迁移包；机器验证完整覆盖、source/target hash、目标职责、公共受管区、Hook 注册、文档索引和事务。`MEMORY.md`、`MEMORY_COLD.md`、`_stats.json` 逐个确认固定退役。全部确认前零写入，禁止落盘 manifest 或创建项目锁；中断后从第一个源重来。Apply 前重新盘点，新增、消失或改动的源均使旧计划失效。
 
 ## Current-only 事务
 
@@ -98,8 +105,8 @@ Python 或 PowerShell 包装器。
 
 - 根 `AGENTS.md` 公共区由产品管理；项目区允许由 `PreservationManifest` 保留并由已确认迁移包追加，二者必须与 latest 公共区确定性组合。
 - `.codex/hooks.json` 只允许 canonical managed handler 与已确认的项目 Hook 注册；项目注册
-  必须与一个 `.codex/hooks/project_XXXX/` 自包含 Rust Hook 目录成对，未知 managed ID 阻断。
-- 普通未知文件必须按精确路径确认保留或删除，禁止读取旧合同决定所有权。链接、无入口的项目 Hook 包、未知 Rule 格式仍阻断；需要执行的散落 Hook 先在受控副本整理为闭合目录，再重新规划。
+  必须与一个 `.codex/hooks/project_XXXX/` 自包含业务 Hook 目录成对；既有业务 Hook 不限制语言，整体逐项确认保留或删除，未知 managed ID 阻断。迁移包新建 Hook 的目标约束仍由资产迁移合同规定。
+- 普通未知文件必须按精确路径确认保留或删除，禁止读取旧合同决定所有权。链接、非普通目录的项目 Hook 包、未知 Rule 格式仍阻断；需要执行的散落 Hook 先在受控副本整理为闭合目录，再重新规划。
 - schema 4 merge/Markdown/region/AGENTS 都携带当前可验证 projection；真实下游不存在
   `templates/**` 时也不得跳过。
 - 项目 Skills 正文只有在对应源迁移包中逐项确认后才允许语义改写；legacy Rule / Memory 禁止派生索引、自动分类或未确认保留。

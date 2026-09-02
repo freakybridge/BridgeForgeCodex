@@ -5,11 +5,11 @@
 ## 连续确认
 
 1. 按 planner 给出的稳定顺序处理每个 `.codex/rules/*.md` 与 `.codex/memory/**` 源文件。
-2. `MEMORY.md`、`MEMORY_COLD.md`、`_stats.json` 只展示“固定退役”，其 `retirement_reason` 必须是 `fixed-derived-retirement`，禁止语义读取或生成目标。
+2. `MEMORY.md`、`MEMORY_COLD.md`、`_stats.json` 逐个展示“固定退役”并等待用户明确接受，其 `retirement_reason` 必须是 `fixed-derived-retirement`，禁止语义读取或生成目标；未确认不得删除。
 3. 其他源文件必须读取正文并提出一个完整迁移包：源摘要、每段内容、目标资产、完整目标正文、废弃内容和理由。一个源可以拆到多个目标。
 4. 目标职责必须严格匹配：项目红线进根或最近目录的 `AGENTS.md`；命令执行策略进 `.codex/rules/*.rules`；用户调用流程进 Skill；机械硬闸进 Hook / test；当前工作进 Delivery / Bug / TODO；设计、历史和案例进 `doc/`。
 5. 迁入 `AGENTS.md`、`doc/README.md` 或 `.codex/hooks.json` 时只能更新项目自有或非受管区；必须同时满足最新公共基线，禁止用迁移正文覆盖公共受管区。Hook 包必须包含入口与注册，文档新增必须进入索引。
-6. 每个非派生源只问一次“接受当前完整迁移包 / 修改 / 停止”。用户未明确接受时不得标记 `confirmed`；判断不清时说明未知内容并请用户指定，禁止默认保留、迁移或删除。
+6. 每个源（包括固定退役的派生文件）只问一次“接受当前完整迁移包 / 修改 / 停止”。用户未明确接受时不得标记 `confirmed`；判断不清时说明未知内容并请用户指定，禁止默认保留、迁移或删除。
 7. 只有当前源确认后才能进入下一个。对话中断、用户停止或任一源未完成时，丢弃本轮全部内存决定；禁止写项目文件、`.runtime`、临时 manifest 或其他恢复点。下次从第一个源重新开始。
 
 可以让 `review-auditor` 只读复核候选归属和受管区边界，但它不得与用户对话、替用户确认或保存决定。

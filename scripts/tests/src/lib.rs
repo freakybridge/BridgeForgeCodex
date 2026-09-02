@@ -179,7 +179,7 @@ mod tests {
                 "strategy": "whole",
                 "current_sha256": sha(b"managed\n"),
             }],
-            "baseline_model": "current-only",
+            "baseline_model": "current-only", "compatibility_baseline": "1.0.0",
             "generated_assets": [{
                 "id": "codex.bridgeforge-cli",
                 "source_root": ".codex/hooks",
@@ -224,7 +224,7 @@ mod tests {
         let contract = json!({
             "schema_version": 4,
             "release_version": "1.0.0",
-            "baseline_model": "current-only",
+            "baseline_model": "current-only", "compatibility_baseline": "1.0.0",
             "host": "codex",
             "stamp": ".codex/.bridgeforge_codex_version",
             "contract_target": ".codex/managed-skeleton.json",

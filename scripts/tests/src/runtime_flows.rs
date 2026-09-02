@@ -182,7 +182,7 @@ fn project_sync_plan_apply_and_fingerprint_gate_are_transactional() {
         "host": "codex",
         "stamp": ".codex/.bridgeforge_codex_version",
         "contract_target": ".codex/managed-skeleton.json",
-        "baseline_model": "current-only",
+        "baseline_model": "current-only", "compatibility_baseline": "1.2.3",
         "assets": [{
             "id": "example",
             "source": "templates/example.txt",
@@ -304,7 +304,7 @@ fn project_sync_retired_assets_require_exact_preservation_decisions() {
         "host": "codex",
         "stamp": ".codex/.bridgeforge_codex_version",
         "contract_target": ".codex/managed-skeleton.json",
-        "baseline_model": "current-only",
+        "baseline_model": "current-only", "compatibility_baseline": "1.2.3",
         "assets": [{
             "id": "example",
             "source": "templates/example.txt",
@@ -330,7 +330,7 @@ fn project_sync_retired_assets_require_exact_preservation_decisions() {
         "host": "codex",
         "stamp": ".codex/.bridgeforge_codex_version",
         "contract_target": ".codex/managed-skeleton.json",
-        "baseline_model": "current-only",
+        "baseline_model": "current-only", "compatibility_baseline": "1.2.3",
         "assets": [{
             "id": "old-python-hook",
             "source": "templates/old.py",
@@ -429,7 +429,7 @@ fn destructive_rebuild_requires_unknown_file_decisions_and_preserves_required_pr
         "host": "codex",
         "stamp": ".codex/.bridgeforge_codex_version",
         "contract_target": ".codex/managed-skeleton.json",
-        "baseline_model": "current-only",
+        "baseline_model": "current-only", "compatibility_baseline": "1.2.3",
         "assets": [{
             "id": "example",
             "source": "templates/example.txt",
@@ -520,7 +520,7 @@ fn batch_confirmation_detects_target_identity_drift_before_write() {
         "host": "codex",
         "stamp": ".codex/.bridgeforge_codex_version",
         "contract_target": ".codex/managed-skeleton.json",
-        "baseline_model": "current-only",
+        "baseline_model": "current-only", "compatibility_baseline": "1.2.3",
         "assets": [{
             "id": "example",
             "source": "templates/example.txt",
@@ -594,7 +594,7 @@ fn batch_restart_requires_committed_bug_and_changed_controller_witness() {
         "host": "codex",
         "stamp": ".codex/.bridgeforge_codex_version",
         "contract_target": ".codex/managed-skeleton.json",
-        "baseline_model": "current-only",
+        "baseline_model": "current-only", "compatibility_baseline": "1.2.3",
         "assets": [{
             "id": "example",
             "source": "templates/example.txt",

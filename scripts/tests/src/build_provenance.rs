@@ -193,7 +193,7 @@ impl Fixture {
             fs::write(root.join(base).join("src/main.rs"), "fn main() {}\n").unwrap();
         }
         fs::write(root.join("VERSION"), "1.8.0\n").unwrap();
-        let initial = json!({"schema_version":4,"baseline_model":"current-only",
+        let initial = json!({"schema_version":4,"baseline_model": "current-only", "compatibility_baseline": "1.0.0",
             "assets":[],"generated_assets":[]});
         fs::write(
             root.join("templates/managed-skeleton.json"),

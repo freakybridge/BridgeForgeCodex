@@ -360,6 +360,11 @@ fn merge_agents(
 }
 
 fn markdown_section(text: &str, heading: &str) -> Result<(usize, usize), String> {
+    optional_markdown_section(text, heading)?
+        .ok_or_else(|| format!("managed Markdown heading is missing or duplicated: {heading}"))
+}
+
+fn optional_markdown_section(text: &str, heading: &str) -> Result<Option<(usize, usize)>, String> {
     let mut found = Vec::new();
     let mut offset = 0;
     for line in text.split_inclusive('\n') {
@@ -368,7 +373,10 @@ fn markdown_section(text: &str, heading: &str) -> Result<(usize, usize), String>
         }
         offset += line.len();
     }
-    if found.len() != 1 {
+    if found.is_empty() {
+        return Ok(None);
+    }
+    if found.len() > 1 {
         return Err(format!(
             "managed Markdown heading is missing or duplicated: {heading}"
         ));
@@ -383,7 +391,64 @@ fn markdown_section(text: &str, heading: &str) -> Result<(usize, usize), String>
         }
         cursor += line.len();
     }
-    Ok((start, end))
+    Ok(Some((start, end)))
+}
+
+fn ensure_markdown_section(
+    merged: &mut String,
+    source: &str,
+    heading: &str,
+    allow_upgrade: bool,
+) -> Result<(usize, usize), String> {
+    if let Some(span) = optional_markdown_section(merged, heading)? {
+        return Ok(span);
+    }
+    if !allow_upgrade {
+        return markdown_section(merged, heading);
+    }
+    let (start, end) = markdown_section(source, heading)?;
+    let mut insertion = merged.len();
+    for line in source[end..].lines().filter(|line| line.starts_with("## ")) {
+        if let Some((offset, _)) = optional_markdown_section(merged, line)? {
+            insertion = offset;
+            break;
+        }
+    }
+    let prefix = if insertion > 0 && !merged[..insertion].ends_with('\n') {
+        "\n\n"
+    } else {
+        ""
+    };
+    merged.insert_str(insertion, &format!("{prefix}{}", &source[start..end]));
+    markdown_section(merged, heading)
+}
+
+fn table_header(section: &str) -> Result<(&str, &str, usize), String> {
+    let lines = section.split_inclusive('\n').collect::<Vec<_>>();
+    let separators = lines
+        .iter()
+        .enumerate()
+        .filter(|(_, line)| {
+            let cells = line.trim().trim_matches('|').split('|').collect::<Vec<_>>();
+            line.trim_start().starts_with('|')
+                && cells.iter().all(|cell| {
+                    let cell = cell.trim().trim_matches(':');
+                    cell.len() >= 3 && cell.bytes().all(|byte| byte == b'-')
+                })
+        })
+        .collect::<Vec<_>>();
+    if separators.len() != 1 || separators[0].0 == 0 {
+        return Err("managed Markdown table is missing or ambiguous".into());
+    }
+    let (index, separator) = separators[0];
+    let header = lines[index - 1];
+    let columns = separator.trim().trim_matches('|').split('|').count();
+    if !header.trim_start().starts_with('|')
+        || header.trim().trim_matches('|').split('|').count() != columns
+    {
+        return Err("managed Markdown table header column count changed".into());
+    }
+    Ok((header, separator, columns))
 }
 
 fn table_key(line: &str) -> Option<String> {
@@ -405,7 +470,25 @@ fn merge_keyed_table(
     source_section: &str,
     current_section: &str,
     keys: &BTreeSet<String>,
+    allow_upgrade: bool,
 ) -> Result<String, String> {
+    let (source_header, source_separator, columns) = table_header(source_section)?;
+    let (current_header, current_separator, current_columns) = table_header(current_section)?;
+    if columns != current_columns {
+        return Err("managed Markdown table column count changed".into());
+    }
+    let upgraded;
+    let current_section = if allow_upgrade {
+        upgraded = current_section
+            .replacen(current_header, source_header, 1)
+            .replacen(current_separator, source_separator, 1);
+        upgraded.as_str()
+    } else {
+        if current_header.trim() != source_header.trim() {
+            return Err("managed Markdown table header drifted".into());
+        }
+        current_section
+    };
     let mut required = BTreeMap::<String, String>::new();
     for line in source_section.split_inclusive('\n') {
         if let Some(key) = table_key(line)
@@ -429,7 +512,7 @@ fn merge_keyed_table(
     let mut seen = BTreeSet::new();
     let mut insertion = None;
     for line in current_section.split_inclusive('\n') {
-        if insertion.is_none() && line.trim_start().starts_with("|---") {
+        if insertion.is_none() && line.trim() == source_separator.trim() {
             rendered.push(line.to_string());
             insertion = Some(rendered.len());
             continue;
@@ -459,6 +542,7 @@ fn merge_managed_markdown(
     current: &[u8],
     asset: &Value,
     project_root: &Path,
+    allow_upgrade: bool,
 ) -> Result<Vec<u8>, String> {
     let source = String::from_utf8(render_source(source, asset, project_root)?)
         .map_err(|_| "managed Markdown source is not UTF-8")?;
@@ -471,7 +555,8 @@ fn merge_managed_markdown(
         .filter_map(Value::as_str)
     {
         let (source_start, source_end) = markdown_section(&source, heading)?;
-        let (target_start, target_end) = markdown_section(&merged, heading)?;
+        let (target_start, target_end) =
+            ensure_markdown_section(&mut merged, &source, heading, allow_upgrade)?;
         merged.replace_range(target_start..target_end, &source[source_start..source_end]);
     }
     for contract in asset["managed_blocks"]["keyed_tables"]
@@ -490,11 +575,13 @@ fn merge_managed_markdown(
             .map(str::to_string)
             .collect::<BTreeSet<_>>();
         let (source_start, source_end) = markdown_section(&source, heading)?;
-        let (target_start, target_end) = markdown_section(&merged, heading)?;
+        let (target_start, target_end) =
+            ensure_markdown_section(&mut merged, &source, heading, allow_upgrade)?;
         let section = merge_keyed_table(
             &source[source_start..source_end],
             &merged[target_start..target_end],
             &keys,
+            allow_upgrade,
         )?;
         merged.replace_range(target_start..target_end, &section);
     }
@@ -601,6 +688,7 @@ fn render_asset(
     template_root: &Path,
     asset: &Value,
     migration_payload: Option<&[u8]>,
+    allow_structure_upgrade: bool,
 ) -> Result<(Vec<u8>, Option<Vec<u8>>), String> {
     let id = asset["id"].as_str().ok_or("asset id is missing")?;
     let source_raw = asset["source"]
@@ -628,6 +716,7 @@ fn render_asset(
             effective_current.unwrap(),
             asset,
             project_root,
+            allow_structure_upgrade,
         )?
     } else if asset["merge_policy"].as_str() == Some("codex-hooks") {
         merge_project_hooks(&source_payload, effective_current)?
@@ -681,13 +770,13 @@ fn read_contract(template_root: &Path) -> Result<(Value, Vec<u8>), String> {
     let path = template_root.join("templates/managed-skeleton.json");
     let bytes =
         fs::read(&path).map_err(|error| format!("cannot read managed contract: {error}"))?;
-    let value: Value = serde_json::from_slice(&bytes)
-        .map_err(|error| format!("managed contract is invalid: {error}"))?;
+    let value = crate::baseline::parse_unique_json(&bytes, "managed contract")?;
     if value["schema_version"].as_u64() != Some(4)
         || value["baseline_model"].as_str() != Some("current-only")
     {
         return Err("managed contract must use schema 4 current-only".into());
     }
+    crate::baseline::compatibility_baseline(&value)?;
     Ok((value, bytes))
 }
 
@@ -1000,9 +1089,11 @@ fn destructive_inventory(
                 continue;
             }
             let relative = relative_posix(project_root, &child)?;
-            if !child.is_dir() || !child.join("entrypoint.rs").is_file() {
+            if !child.is_dir()
+                || crate::memory::is_link_or_reparse(&child).map_err(|error| error.to_string())?
+            {
                 blockers.push(format!(
-                    "project hook bundle must be a plain project_*/entrypoint.rs directory: {relative}"
+                    "project hook bundle must be a plain project_* directory: {relative}"
                 ));
                 continue;
             }
@@ -1195,6 +1286,7 @@ pub fn build_plan_with_inputs(
         .ok_or("managed contract release_version is missing")?
         .to_string();
     let current_semver = version.parse::<crate::release::SemVer>()?;
+    let compatibility_baseline = crate::baseline::compatibility_baseline(&contract)?;
     let stamp_target = safe_join(
         &project_root,
         contract["stamp"]
@@ -1229,7 +1321,10 @@ pub fn build_plan_with_inputs(
         || legacy_stamp
         || previous_semver
             .as_ref()
-            .is_some_and(|value| value < &current_semver);
+            .is_some_and(|value| value < &compatibility_baseline);
+    let allow_structure_upgrade = previous_semver
+        .as_ref()
+        .is_some_and(|value| value < &current_semver);
     let migration_sources = crate::asset_migration::scan_sources(&project_root)?;
     let mut safe = Vec::new();
     let mut risk = Vec::new();
@@ -1269,7 +1364,13 @@ pub fn build_plan_with_inputs(
             .as_ref()
             .and_then(|m| m.targets.iter().find(|t| t.target == target_raw))
             .map(|t| t.payload.as_slice());
-        let (payload, before) = render_asset(&project_root, &template_root, asset, proposed)?;
+        let (payload, before) = render_asset(
+            &project_root,
+            &template_root,
+            asset,
+            proposed,
+            allow_structure_upgrade,
+        )?;
         if before.as_deref() == Some(payload.as_slice()) {
             continue;
         }
@@ -1393,6 +1494,7 @@ pub fn build_plan_with_inputs(
     let preservation_manifest = json!({
         "status": if preservation_entries.is_empty() { "not-required" } else if preservation_entries.iter().any(|entry| entry["disposition"].as_str() == Some("user-decision")) { "awaiting-confirmation" } else { "confirmed" },
         "destructive_rebuild": destructive_rebuild,
+        "compatibility_baseline": contract["compatibility_baseline"],
         "entries": preservation_entries,
     });
     for item in contract["generated_assets"]
@@ -1499,8 +1601,13 @@ pub fn build_plan_with_inputs(
                 .iter()
                 .find(|a| a["target"].as_str() == Some(&target.target))
             {
-                let (payload, _) =
-                    render_asset(&project_root, &template_root, asset, Some(&target.payload))?;
+                let (payload, _) = render_asset(
+                    &project_root,
+                    &template_root,
+                    asset,
+                    Some(&target.payload),
+                    allow_structure_upgrade,
+                )?;
                 target.payload = payload;
             }
             if target.target == ".codex/hooks.json" && !removed_hook_prefixes.is_empty() {
@@ -1646,6 +1753,25 @@ fn apply_plan_internal(
     confirmed_risk: bool,
     before_stamp: Option<&dyn Fn(&Path, &Path) -> Result<(), String>>,
 ) -> Result<SyncReceipt, String> {
+    // Rejected confirmation must not even create a lock file in the project.
+    if !plan.gaps.is_empty() || !plan.blockers.is_empty() {
+        return Err("unresolved gap or blocker prevents apply".into());
+    }
+    if !plan.risk.is_empty() && !confirmed_risk {
+        return Err("risk actions require --confirmed-risk".into());
+    }
+    let sources = crate::asset_migration::scan_sources(&plan.project_root)?;
+    let confirmed_sources = plan.asset_migration["sources"].as_array();
+    if !sources.is_empty() || confirmed_sources.is_some_and(|items| !items.is_empty()) {
+        if plan.asset_migration["status"] != "confirmed"
+            || serde_json::to_value(&sources).map_err(|error| error.to_string())?
+                != plan.asset_migration["sources"]
+        {
+            return Err(
+                "legacy asset sources or confirmations drifted; regenerate the plan".into(),
+            );
+        }
+    }
     let _lock = ProjectLock::acquire(&plan.project_root)?;
     let legacy = legacy_receipt(&plan.project_root)?;
     if legacy

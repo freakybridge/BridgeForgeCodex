@@ -17,7 +17,7 @@
             {
               "source": "skills/bridgeforge-codex/SKILL.md",
               "target": "SKILL.md",
-              "sha256": "sha256:c74e18abb089d1c668fa372edceeb98d757011a8c51e9331487a21d3565f0ec7"
+              "sha256": "sha256:031758e98021551746022fa1211a46e99b3b308784470c8cd389c057680ed4ed"
             },
             {
               "source": "skills/bridgeforge-codex/agents/openai.yaml",
@@ -42,7 +42,7 @@
             {
               "source": "skills/bridgeforge-codex/references/project-asset-migration.md",
               "target": "references/project-asset-migration.md",
-              "sha256": "sha256:aec70503cfaa0830c50d4b5bc06ec5bb2d11f0a4e468e199656386ea25d5f799"
+              "sha256": "sha256:ecdfcf5ab3d9c5a1f8c624ba00ebdb5ab37e172639cec1e394c5c3a96b8fe7e6"
             },
             {
               "source": "skills/bridgeforge-codex/references/runtime-preflight.md",
@@ -52,17 +52,17 @@
             {
               "source": "skills/bridgeforge-codex/references/technical-receipts.md",
               "target": "references/technical-receipts.md",
-              "sha256": "sha256:ff0145bd58f01b3757f1b114019f6fbf60a1611954dca7f9243ff48170629e77"
+              "sha256": "sha256:07f0c1568c916cfe4c0da35b6b9a78f477079b50eeb7e05817a1abe9d3e7c751"
             },
             {
               "source": "skills/bridgeforge-codex/references/transaction.md",
               "target": "references/transaction.md",
-              "sha256": "sha256:88c282b670b7fc1874e7ce5c18b4099dcd47c59aba7e224f2153b3ef4c4468f6"
+              "sha256": "sha256:d942f6b0e9a728f50034e9df28edde0c2f90c2a9040598c0d94c95544e0792a6"
             },
             {
               "source": "skills/bridgeforge-codex/references/update.md",
               "target": "references/update.md",
-              "sha256": "sha256:310022c438200d700e0a4fe032f8713098fb9074f93f7d1bac9b9a8cb6aa6f08"
+              "sha256": "sha256:c471d44b323a53063f1b1aefeed83fc9f773a379c94d4d53df3e1687a122cd52"
             },
             {
               "source": "skills/bridgeforge-codex/references/user-skill-maintenance.md",

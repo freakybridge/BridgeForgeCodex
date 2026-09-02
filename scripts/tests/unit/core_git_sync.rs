@@ -116,7 +116,7 @@ fn managed_contract(asset: &[u8]) -> Vec<u8> {
             "strategy": "whole",
             "current_sha256": payload_sha(asset),
         }],
-        "baseline_model": "current-only",
+        "baseline_model": "current-only", "compatibility_baseline": "1.0.0",
         "generated_assets": [],
     }))
     .unwrap()

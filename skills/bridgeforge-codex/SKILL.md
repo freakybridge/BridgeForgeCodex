@@ -29,11 +29,11 @@ $BRIDGEFORGE_CODEX_HOME = Join-Path $env:USERPROFILE ".bridgeforge-codex"
 在运行任何写操作前，只读检查版本戳并锁定唯一 `$MODE`：
 
 1. `.codex/.bridgeforge_codex_version` 与 `.codex/.bridgeforge_version` 双戳或非法戳：零写阻断。
-2. 恰好一个合法戳：`update`；版本只证明骨架身份，不选择历史升级代码。
+2. 恰好一个合法戳：`update`；由当前合同的固定 `compatibility_baseline` 判定低基线重建或基线内兼容更新。
 3. 没有合法戳但已有 `.codex/`、`AGENTS.md` 或其他骨架资产：`adopt`。
 4. 没有骨架身份的空白项目：`init`。
 
-每轮只以刷新后的产品 home 为完整基线；禁止读取旧 manifest、旧 schema、旧 hash lineage 或逐版本迁移链来选择实现。只允许使用 updater 安装并自检通过的受管 Rust CLI：
+每轮以刷新后的产品 home 为最新安装目标，固定升级分界线不得随发布上移。低于分界线时禁止读取旧 manifest、旧 schema、旧 hash lineage 或逐版本迁移链来选择实现；等于或高于分界线时兼容更新并保留项目定制。只允许使用 updater 安装并自检通过的受管 Rust CLI：
 
 ```powershell
 $BRIDGEFORGE = Join-Path $env:USERPROFILE ".codex\bin\bridgeforge.exe"
@@ -75,7 +75,7 @@ Native Memory 的 safe/risk/gap 必须并入本轮唯一 accumulator；项目骨
 
 plan 必须零写入。同步器 `machine` 区负责 fingerprint、safe、risk、gap、blocker 与一次性 `PreservationManifest`；`human` 区负责稳定的用户结果。blocker 必须立即停止；无 risk 的 current baseline 更新零确认。存在 risk 时，主对话只能把所有用户决策合并为本轮一次确认，确认前禁止执行 safe 或 risk 动作。
 
-若 `asset_migration.source_count > 0`，必须读取 [legacy Rule / Memory 逐文件迁移](references/project-asset-migration.md)，在同一连续流程中逐源文件确认完整迁移包，再以 stdin 重新规划。迁移确认本身就是对应旧源删除授权；禁止另问清理确认。
+两条升级路径只要 `asset_migration.source_count > 0`，都必须读取 [legacy Rule / Memory 逐文件迁移](references/project-asset-migration.md)，在同一连续流程中逐源文件确认完整迁移包；全部确认前禁止写入或删除，再以 stdin 重新规划。迁移确认本身就是对应旧源删除授权；禁止另问清理确认。
 
 ## 5. Apply 与用户结果
 

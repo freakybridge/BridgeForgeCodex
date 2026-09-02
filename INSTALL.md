@@ -51,13 +51,14 @@ bridgeforge-codex 只支持 Windows、Rust/Cargo 1.88+ 和 Codex。Cargo 在安�
 
 ## 项目升级与异常诊断
 
-项目骨架版本记录在 `.codex/.bridgeforge_codex_version`。每次 `$bridgeforge-codex` 先刷新官方产品 home，再只按“空白 / 已有骨架”区分：
+项目骨架版本记录在 `.codex/.bridgeforge_codex_version`。每次 `$bridgeforge-codex` 先刷新官方产品 home，再按身份和固定升级基线分流：
 
 - 没有骨架身份和骨架资产的空白项目：直接初始化，不要求预先存在版本戳。
-- 任意合法旧版本：版本只用于证明骨架身份，直接安装运行时最新完整基线，不读取旧 schema、旧 manifest 或逐版本兼容链。
+- 低于修复首版 `1.8.6`：盘点并确认项目资产后重建最新骨架，不读取旧 schema、旧 manifest 或逐版本兼容链。
+- 等于或高于 `1.8.6`：兼容更新并保留项目定制；升级分界线固定，不随最新发布版本自动上移。比产品 home 更新的版本拒绝降级。
 - 已存在骨架资产但没有版本戳：进入受控接入；双戳或非法戳在写入前停止。
 
-旧项目接入时会逐文件整理 `.codex/rules/*.md` 和 `.codex/memory/**`。每个源文件展示完整迁移包并由用户确认：红线进 `AGENTS.md`，命令策略进 `.rules`，流程进 Skill，机械约束进 Hook / test，工作与设计资料进 `doc/`。`MEMORY.md`、`MEMORY_COLD.md`、`_stats.json` 固定退役，不做语义转换。
+两条升级路径都会逐文件整理 `.codex/rules/*.md` 和 `.codex/memory/**`。每个源文件展示完整迁移包并由用户确认：红线进 `AGENTS.md`，命令策略进 `.rules`，流程进 Skill，机械约束进 Hook / test，工作与设计资料进 `doc/`。`MEMORY.md`、`MEMORY_COLD.md`、`_stats.json` 逐个确认固定退役，不做语义转换。
 
 确认必须在一次连续流程中完成，中断后不保存选择并从第一个源重来。全部确认前项目零写入；确认后的新资产、最新基线、旧 Rule / Memory 删除和验证属于同一事务，失败时完整回滚。逐文件迁移确认已经授权删除对应源，不会再弹出第二次清理确认。
 

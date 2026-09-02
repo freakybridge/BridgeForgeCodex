@@ -76,7 +76,7 @@ fn hash(data: impl AsRef<[u8]>) -> String {
 }
 fn contract() -> Value {
     json!({
-        "schema_version":4,"baseline_model":"current-only","host":"codex","release_version":"1.8.2",
+        "schema_version":4,"baseline_model": "current-only", "compatibility_baseline": "1.8.2","host":"codex","release_version":"1.8.2",
         "stamp":".codex/.bridgeforge_codex_version","contract_target":".codex/managed-skeleton.json",
         "assets":[{"id":"example","source":"templates/example.txt","target":".codex/example.txt","strategy":"whole","current_sha256":hash(b"managed\n")}],"generated_assets":[]
     })
@@ -198,6 +198,7 @@ fn composite_fixture(f: &Fixture, invalid: bool) -> (PathBuf, PathBuf, Value) {
     });
     current["generated_assets"] = json!([]);
     current["release_version"] = json!("1.8.2");
+    current["compatibility_baseline"] = json!("1.8.2");
     let mut decisions = Vec::new();
     for asset in current["assets"].as_array().unwrap() {
         let source = asset["source"].as_str().unwrap();
@@ -373,11 +374,15 @@ fn migrating_new_hook_does_not_resurrect_deleted_hook_registration() {
     let mut current: Value = serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
     current["release_version"] = json!("1.8.3");
     write(&manifest_path, current.to_string());
-    let choices = json!({"preserve":["P:project-hook-bundle:.codex/hooks/project_old_extra","P:project-hook-bundle:.codex/hooks/project_sample"],"delete":[]});
-    let next =
-        build_plan_with_inputs(&project, &factory, SyncMode::Update, None, Some(&choices)).unwrap();
+    let next = build_plan(&project, &factory, SyncMode::Update).unwrap();
+    assert_eq!(next.preservation_manifest["destructive_rebuild"], false);
     assert!(next.blockers.is_empty(), "{:?}", next.blockers);
     apply_plan(next.clone(), &next.aggregate_fingerprint, true).unwrap();
+    let hooks = fs::read_to_string(project.join(".codex/hooks.json")).unwrap();
+    assert!(!hooks.contains("project_old/entrypoint.rs"));
+    assert!(hooks.contains("project_old_extra/entrypoint.rs"));
+    assert!(hooks.contains("project_sample/entrypoint.rs"));
+    assert!(project.join(kept).is_file());
 }
 
 #[test]

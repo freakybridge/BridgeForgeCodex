@@ -4,7 +4,7 @@
 
 当前项目合同：
 
-- plan：`schema`、`status=planned|current`、`readiness`、`mode`、版本、`safe/risk/gaps/blockers`、`asset_migration`、`preservation_manifest`、`confirmation_required`、`aggregate_fingerprint`。
+- plan：`schema`、`status=planned|current`、`readiness`、`mode`、版本、`safe/risk/gaps/blockers`、`asset_migration`、`preservation_manifest`、`confirmation_required`、`aggregate_fingerprint`。`preservation_manifest.compatibility_baseline` 是固定分界线，`destructive_rebuild` 表示本次是否重建；不得用目标版本代替分界线。
 - apply 成功：`status=applied`、`execution_status=succeeded`、`project_readiness=ready`、`current_version`、`aggregate_fingerprint`、`applied`、`rollback_performed=false`、`stamp_written_last=true`、`asset_migration_manifest_sha256` 和 `preserved_asset_ids`。没有迁移时 manifest hash 为 null。
 - apply 失败：combined 的 `machine` 为 `status=blocked` 和 `error`；只有错误明确包含完整回滚结果时才能声明已回滚，不能从退出码推断。原始问题留在技术收据，用户显示稳定中文结果。
 

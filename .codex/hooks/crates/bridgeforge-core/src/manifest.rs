@@ -223,6 +223,7 @@ pub fn render_managed_contract(root: &Path) -> Result<Vec<u8>, String> {
             .trim()
             .to_string(),
     );
+    crate::baseline::compatibility_baseline(&contract)?;
     let sources = hook_sources(root)?;
     let existing = contract["assets"]
         .as_array()
