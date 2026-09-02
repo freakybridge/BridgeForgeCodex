@@ -553,15 +553,22 @@ fn real_template_upgrades_legacy_markdown_without_old_contract_or_losing_index()
         .unwrap();
     let source = fs::read(factory.join("templates/doc/README.md")).unwrap();
     let mut old = String::from_utf8(source.clone()).unwrap();
-    for heading in ["## 从这里开始", "## 文档生命周期"] {
+    for heading in ["## 文档生命周期"] {
         let (start, end) = markdown_section(&old, heading).unwrap();
         old.replace_range(start..end, "");
     }
     old = old.replace("| 文件 | 说明 |", "| 旧标题 | 项目说明 |");
     old.push_str("\n## 项目自有\n不得丢失\n");
+    old.push_str("\n## 项目知识库\n[my topic](5_project_knowledgebase/topic.md)\n");
+    old = old.replace(
+        "| 项目知识 | [`5_project_knowledgebase/`](5_project_knowledgebase/)；项目自有话题与长期资料 |",
+        "| 项目知识 | my existing knowledge navigation |",
+    );
     let merged =
         merge_managed_markdown(&source, old.as_bytes(), asset, Path::new("Example"), true).unwrap();
     assert!(String::from_utf8_lossy(&merged).contains("## 项目自有\n不得丢失\n"));
+    assert!(String::from_utf8_lossy(&merged).contains("## 项目知识库\n[my topic](5_project_knowledgebase/topic.md)\n"));
+    assert!(String::from_utf8_lossy(&merged).contains("my existing knowledge navigation"));
     crate::baseline::verify_asset_payload(asset, &merged).unwrap();
     assert_eq!(
         merge_managed_markdown(&source, &merged, asset, Path::new("Example"), false).unwrap(),

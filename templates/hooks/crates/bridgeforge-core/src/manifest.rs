@@ -254,6 +254,10 @@ pub fn render_managed_contract(root: &Path) -> Result<Vec<u8>, String> {
         let payload =
             fs::read(safe_join(root, source)?).map_err(|error| format!("{source}: {error}"))?;
         asset["current_sha256"] = Value::String(sha_git(&payload));
+        if let Some(blocks) = asset.get_mut("managed_blocks").filter(|value| value.is_object()) {
+            let projection = crate::baseline::markdown_projection(&payload, blocks)?;
+            blocks["current_projection_sha256"] = Value::String(canonical_sha(&projection)?);
+        }
         if asset["merge_policy"].as_str() == Some("codex-hooks") {
             let document = crate::baseline::parse_unique_json(&payload, "hooks.json")?;
             let handlers = crate::baseline::hook_handlers(&document)?;

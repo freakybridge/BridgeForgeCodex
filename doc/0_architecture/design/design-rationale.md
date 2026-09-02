@@ -83,7 +83,7 @@ Template 与 `.codex/` 的公共运行时必须保持当前投影一致。校验
 
 ## 7. 文档与项目知识
 
-项目文档固定使用 `0_architecture / 1_delivery / 2_bugs / 3_reference / 4_archive` 五层结构，
+项目文档固定使用 `0_architecture / 1_delivery / 2_bugs / 3_reference / 4_archive / 5_project_knowledgebase` 六层结构，
 `doc/README.md` 是唯一索引。活跃架构文档只描述当前行为；历史决策留在交付记录、Bug、
 archive 与 Git 历史中。
 

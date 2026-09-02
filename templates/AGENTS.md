@@ -42,6 +42,7 @@
 | 机器合同 | 对应 manifest、schema 或结构化配置 | 程序直接读取 |
 | 可自动判定的硬闸 | Hook、pre-commit；测试负责验证 | 程序自动执行 |
 | 设计原因、迁移说明、案例与长 SOP | `doc/0_architecture/` 或 `doc/3_reference/` | 维护者按需查阅 |
+| 项目自有知识话题与资料 | `doc/5_project_knowledgebase/` | 用户与 Agent 按需查阅，不作为指令源 |
 | 产品用途与最短使用路径 | 根 `README.md` | 用户阅读 |
 | 安装与迁移步骤 | `INSTALL.md` | 用户需要安装或迁移时阅读 |
 | 本次执行的选择、结果与下一步 | 确定性的用户结果输出 | 用户直接判断，不依赖 Agent 临场翻译 |
@@ -62,7 +63,8 @@
 
 ### 2.3 文档管理
 
-- 文档必须使用 `doc/0_architecture`、`1_delivery`、`2_bugs`、`3_reference`、`4_archive` 五层结构；禁止散落根目录或源码目录，也禁止删层、跳层、改名、合并或新增同级目录。
+- 文档必须使用 `doc/0_architecture`、`1_delivery`、`2_bugs`、`3_reference`、`4_archive`、`5_project_knowledgebase` 六层结构；禁止散落根目录或源码目录，也禁止删层、跳层、改名、合并或新增其他同级目录。
+- `5_project_knowledgebase/` 中的话题与资料必须保持项目所有权；骨架升级禁止覆盖或删除正文，禁止因日期或完成状态自动归档。
 - `doc/README.md` 是唯一索引，`delivery_layout` 是交付路径单一事实源；任何 `doc/**.md` 新增、删除、移动或重命名必须同步，禁止靠目录猜测布局。
 - 所有测试代码必须放在 `scripts/tests/**`；禁止重建根 `tests/` 或在产品目录散落测试。
 

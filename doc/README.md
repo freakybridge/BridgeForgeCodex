@@ -4,7 +4,7 @@ delivery_layout: flat
 
 # bridgeforge-codex Documents
 
-本仓库采用 bridgeforge-codex 五层文档体系。`1_delivery/` 采用扁平布局：每个 topic 直接位于该目录下；若未来交付规模需要里程碑，可改为 `milestone` 并迁入 `M1/<topic>/`。
+本仓库采用 bridgeforge-codex 六层文档体系。`1_delivery/` 采用扁平布局：每个 topic 直接位于该目录下；若未来交付规模需要里程碑，可改为 `milestone` 并迁入 `M1/<topic>/`。
 
 ## 从这里开始
 
@@ -15,6 +15,7 @@ delivery_layout: flat
 | 开放 Bug | [`2_bugs/`](2_bugs/)；只把尚未归档的问题作为当前问题 |
 | 项目操作 | 根 [`AGENTS.md`](../AGENTS.md) 和 [`3_reference/`](3_reference/) |
 | 历史记录 | [`4_archive/`](4_archive/)；历史材料不作为当前运行合同 |
+| 项目知识 | [`5_project_knowledgebase/`](5_project_knowledgebase/)；项目自有话题与长期资料 |
 | 本工厂当前架构 | [`design-rationale.md`](0_architecture/design/design-rationale.md) 和 [`codex-native-instruction-architecture.md`](0_architecture/design/codex-native-instruction-architecture.md) |
 | 本工厂当前重构 | [`BUG-agents-ia`](2_bugs/BUG-agents-ia/README.md) |
 | 本工厂操作手册 | [`INSTALL.md`](../INSTALL.md) 和 [`codex-project-operating-guide.md`](3_reference/codex-project-operating-guide.md) |
@@ -35,6 +36,14 @@ delivery_layout: flat
 - 只有 `$archive-scan` 在用户确认移动后才能写 `archived`；只有 `active` 事项进入当前交付导航。
 - 迁移前的 `status` 或正文状态只作为历史证据；缺少 `lifecycle` 的事项视为 `unclassified`，禁止自动当作 active 或 completed。
 
+### 项目知识库
+
+[`5_project_knowledgebase/`](5_project_knowledgebase/) 用于项目自有的长期知识话题、研究笔记与资料，可以为空；不是软件交付包，也不是 Agent 指令源。全局红线仍进 AGENTS，操作流程进 Skill，机器硬闸进 Hook。
+
+话题目录和正文由项目所有，必须在本索引登记；骨架只提供空目录占位，不接管或覆盖内容。知识资料不要求填写需求验收状态，也不会因日期或完成状态自动进入归档候选；需要整理历史副本时由用户确认具体路径与内容。
+
+已有外部知识库时必须明确唯一事实源；这里可以登记链接或用户确认的历史快照，禁止自动建立第二份持续维护副本。
+
 ## 索引
 
 | 目录 | 作用 | 当前内容 |
@@ -44,6 +53,7 @@ delivery_layout: flat
 | `2_bugs/` | 已知故障及其修复记录 | 27 条故障记录 |
 | `3_reference/` | 外部资料与可复用参考实现 | `examples/antifab-deny-hook.rs` |
 | `4_archive/` | 已完成或已失效的历史材料 | 既有历史档案；后续按 `delivery/`、`bugs/` 分类归档 |
+| `5_project_knowledgebase/` | 项目自有知识话题与长期资料 | 当前为空 |
 
 ## 架构
 
@@ -55,6 +65,7 @@ delivery_layout: flat
 
 | Topic | 主要记录 |
 |---|---|
+| `project-knowledgebase-layer` | 固定第六层项目知识库、项目内容保留与逐源迁移支持，见[确认卡](1_delivery/project-knowledgebase-layer/requirements_2026-09-03_project-knowledgebase-layer.md)（2026-09-03） |
 | `rust-only-bridgeforge` | BridgeForge 工厂与下发骨架整体退役 Python，以 Rust CLI 迁移检查、项目同步、Git、批处理、Native Memory 和测试，并最终删除全部 `.py` 与 `.venv` 依赖；含[确认卡](1_delivery/rust-only-bridgeforge/requirements_2026-09-01_rust-only-bridgeforge.md)与[协作记录](1_delivery/rust-only-bridgeforge/collabs_2026-09-01_rust-only-bridgeforge.md)（2026-09-01） |
 | `rust-hook-runtime` | 将项目骨架 6 个 Hook 的完整触发链迁移到 Rust，安装/升级时由 Cargo 构建，运行时零 Python，并保持跨平台、无窗口与失败语义等价；含[确认卡](1_delivery/rust-hook-runtime/requirements_2026-09-01_rust-hook-runtime.md)与[协作记录](1_delivery/rust-hook-runtime/collabs_2026-09-01_rust-hook-runtime.md)（2026-09-01） |
 | `agents-md-simplification-review` | AGENTS.md 优化草案的确认卡、11 版双 agent 辩论、V11 中断现场、有限验收边界及“根级目录路由 + 工厂嵌套指令 + 硬闸”的后续决定（2026-08-27、2026-08-28） |

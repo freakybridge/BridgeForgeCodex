@@ -723,6 +723,7 @@ fn render_asset(
     } else {
         match (strategy, effective_current) {
             ("seed", Some(payload)) => payload.to_vec(),
+            ("seed", None) => render_source(&source_payload, asset, project_root)?,
             ("whole", _) => render_source(&source_payload, asset, project_root)?,
             ("region", Some(payload)) => {
                 let region = &asset["region"];

@@ -598,7 +598,7 @@ fn table_rows(section: &[u8]) -> Result<BTreeMap<String, Vec<u8>>, String> {
     Ok(result)
 }
 
-fn markdown_projection(payload: &[u8], managed: &Value) -> Result<Value, String> {
+pub(crate) fn markdown_projection(payload: &[u8], managed: &Value) -> Result<Value, String> {
     let mut headings = serde_json::Map::new();
     for heading in managed["headings"].as_array().into_iter().flatten() {
         let heading = heading.as_str().ok_or("managed heading is invalid")?;

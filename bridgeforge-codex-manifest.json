@@ -42,7 +42,7 @@
             {
               "source": "skills/bridgeforge-codex/references/project-asset-migration.md",
               "target": "references/project-asset-migration.md",
-              "sha256": "sha256:ecdfcf5ab3d9c5a1f8c624ba00ebdb5ab37e172639cec1e394c5c3a96b8fe7e6"
+              "sha256": "sha256:8af2acfd42c7849e0944fe452f066522f890dfd9fe4cbfbe6de1c6f9bc7af0a6"
             },
             {
               "source": "skills/bridgeforge-codex/references/runtime-preflight.md",

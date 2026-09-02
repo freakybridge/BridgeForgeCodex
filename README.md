@@ -56,7 +56,7 @@ $bridgeforge-codex
   源码与编译产物；`init`、`adopt`、`update` 及工厂 `$git-sync` 维护提交时构建，日常入口不启动脚本解释器。项目自有 Hook 继续使用
   `.codex/hooks/project_*/` 扩展目录，不与受管 Rust 源码混写。
 - `.githooks/pre-commit`：执行提交前机器检查。
-- `doc/`：以 `doc/README.md` 为索引的五层文档结构。
+- `doc/`：以 `doc/README.md` 为索引的六层文档结构，包含项目自有知识库。
 - 项目自己的嵌套 `AGENTS.md`、项目规则和明确保留的定制资产仍归项目所有。
 - 旧项目的 `.codex/rules/*.md` 与 `.codex/memory/`：不再运行；`$bridgeforge-codex` 逐文件确认后迁往正确资产并在同一事务退役旧源。
 

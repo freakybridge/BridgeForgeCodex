@@ -145,6 +145,211 @@ fn current_version_repair_applies_and_receipt_proves_finalization() {
 }
 
 #[test]
+fn knowledge_structure_accepts_old_and_new_layout_and_never_auto_archives_topics() {
+    let f = Fixture::new();
+    write(
+        &f.0.join("doc/README.md"),
+        "---\ndelivery_layout: flat\n---\n",
+    );
+    for layer in [
+        "0_architecture",
+        "1_delivery",
+        "2_bugs",
+        "3_reference",
+        "4_archive",
+    ] {
+        fs::create_dir_all(f.0.join("doc").join(layer)).unwrap();
+    }
+    assert!(
+        bridgeforge_core::project_structure::inspect(&f.0)
+            .errors
+            .is_empty()
+    );
+    write(
+        &f.0.join("doc/5_project_knowledgebase/topic/note.md"),
+        "---\nlifecycle: completed\n---\n# 2000-01-01 topic\n",
+    );
+    assert!(
+        bridgeforge_core::project_structure::inspect(&f.0)
+            .errors
+            .is_empty()
+    );
+    assert!(
+        bridgeforge_core::archive_scan::scan(&f.0)
+            .unwrap()
+            .is_empty()
+    );
+    fs::create_dir_all(f.0.join("doc/6_unknown")).unwrap();
+    assert!(
+        bridgeforge_core::project_structure::inspect(&f.0)
+            .errors
+            .iter()
+            .any(|finding| finding.code == "unexpected-doc-entry")
+    );
+}
+
+#[test]
+fn knowledge_seed_initializes_and_upgrades_without_owning_topic_bytes() {
+    for existing in [false, true] {
+        let f = Fixture::new();
+        let (factory, project) = minimal(&f);
+        let mut current = contract();
+        current["release_version"] = json!("1.8.10");
+        current["compatibility_baseline"] = json!("1.8.6");
+        write(
+            &factory.join("templates/managed-skeleton.json"),
+            serde_json::to_vec(&current).unwrap(),
+        );
+        if existing {
+            let plan = build_plan(&project, &factory, SyncMode::Init).unwrap();
+            apply_plan(plan.clone(), &plan.aggregate_fingerprint, false).unwrap();
+        }
+        let repository = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .ancestors()
+            .nth(2)
+            .unwrap();
+        let real: Value = serde_json::from_slice(
+            &fs::read(repository.join("templates/managed-skeleton.json")).unwrap(),
+        )
+        .unwrap();
+        let seed = real["assets"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|asset| asset["id"] == "codex.doc.knowledgebase-seed")
+            .unwrap()
+            .clone();
+        assert_eq!(seed["strategy"], "seed");
+        current["assets"].as_array_mut().unwrap().push(seed.clone());
+        current["release_version"] = json!("1.9.0");
+        write(&factory.join(seed["source"].as_str().unwrap()), b"");
+        write(
+            &factory.join("templates/managed-skeleton.json"),
+            serde_json::to_vec(&current).unwrap(),
+        );
+        let plan = build_plan(&project, &factory, SyncMode::Auto).unwrap();
+        let target = project.join(seed["target"].as_str().unwrap());
+        assert!(!target.exists(), "planning must not create the seed");
+        apply_plan(plan.clone(), &plan.aggregate_fingerprint, false).unwrap();
+        assert!(target.is_file());
+        let topic = project.join("doc/5_project_knowledgebase/topic/note.md");
+        write(&topic, b"project knowledge\r\n");
+        write(&target, b"project-owned seed\r\n");
+        current["release_version"] = json!("1.9.1");
+        write(
+            &factory.join("templates/managed-skeleton.json"),
+            serde_json::to_vec(&current).unwrap(),
+        );
+        let plan = build_plan(&project, &factory, SyncMode::Update).unwrap();
+        apply_plan(plan.clone(), &plan.aggregate_fingerprint, false).unwrap();
+        assert_eq!(fs::read(&topic).unwrap(), b"project knowledge\r\n");
+        assert_eq!(fs::read(&target).unwrap(), b"project-owned seed\r\n");
+        assert_eq!(
+            build_plan(&project, &factory, SyncMode::Update)
+                .unwrap()
+                .status,
+            "current"
+        );
+    }
+}
+
+fn knowledge_migration_fixture(f: &Fixture, invalid: bool) -> (PathBuf, PathBuf, Value) {
+    let (factory, project, mut manifest) = composite_fixture(f, invalid);
+    for decision in manifest["sources"][0]["decisions"].as_array_mut().unwrap() {
+        if decision["target"] == "doc/3_reference/migrated.md" {
+            decision["target"] = json!("doc/5_project_knowledgebase/topic/migrated.md");
+        }
+        if decision["target"] == "doc/README.md" {
+            decision["content_utf8"] = json!(decision["content_utf8"].as_str().unwrap().replace(
+                "3_reference/migrated.md",
+                "5_project_knowledgebase/topic/migrated.md"
+            ));
+        }
+    }
+    write(
+        &project.join("doc/5_project_knowledgebase/other.md"),
+        b"keep exactly\r\n",
+    );
+    (factory, project, manifest)
+}
+
+#[test]
+fn knowledge_migration_is_indexed_atomic_and_preserves_existing_topics() {
+    for invalid in [false, true] {
+        let f = Fixture::new();
+        let (factory, project, manifest) = knowledge_migration_fixture(&f, invalid);
+        let plan =
+            build_plan_with_inputs(&project, &factory, SyncMode::Adopt, Some(&manifest), None)
+                .unwrap();
+        let target = project.join("doc/5_project_knowledgebase/topic/migrated.md");
+        assert!(!target.exists());
+        let result = apply_plan(plan.clone(), &plan.aggregate_fingerprint, true);
+        if invalid {
+            assert!(result.unwrap_err().contains("rolled back"));
+            assert!(!target.exists());
+            assert!(!project.join(".codex/.bridgeforge_codex_version").exists());
+            assert!(!project.join("doc/README.md").exists());
+            assert_eq!(
+                fs::read(project.join(".codex/rules/legacy.md")).unwrap(),
+                b"legacy rule\r\n"
+            );
+        } else {
+            assert!(result.unwrap().stamp_written_last);
+            assert_eq!(fs::read(target).unwrap(), b"# migrated\n");
+            assert!(!project.join(".codex/rules/legacy.md").exists());
+            assert!(
+                fs::read_to_string(project.join("doc/README.md"))
+                    .unwrap()
+                    .contains("5_project_knowledgebase/topic/migrated.md")
+            );
+        }
+        assert_eq!(
+            fs::read(project.join("doc/5_project_knowledgebase/other.md")).unwrap(),
+            b"keep exactly\r\n"
+        );
+    }
+}
+
+#[test]
+fn knowledge_migration_rejects_unindexed_unsafe_or_unconfirmed_targets_before_writing() {
+    for case in ["index", "sibling", "traversal", "confirmation", "hash"] {
+        let f = Fixture::new();
+        let (factory, project, mut manifest) = knowledge_migration_fixture(&f, false);
+        let source = &mut manifest["sources"][0];
+        if case == "confirmation" {
+            source["confirmed"] = json!(false);
+        }
+        for decision in source["decisions"].as_array_mut().unwrap() {
+            if case == "index" && decision["target"] == "doc/README.md" {
+                decision["content_utf8"] = json!("# no index\n");
+            }
+            if decision["target"] == "doc/5_project_knowledgebase/topic/migrated.md" {
+                if case == "sibling" {
+                    decision["target"] = json!("doc/6_other/migrated.md");
+                }
+                if case == "traversal" {
+                    decision["target"] = json!("doc/5_project_knowledgebase/../../outside.md");
+                }
+                if case == "hash" {
+                    decision["target_before_sha256"] = json!(hash(b"missing"));
+                }
+            }
+        }
+        assert!(
+            build_plan_with_inputs(&project, &factory, SyncMode::Adopt, Some(&manifest), None)
+                .is_err(),
+            "{case}"
+        );
+        assert_eq!(
+            fs::read(project.join(".codex/rules/legacy.md")).unwrap(),
+            b"legacy rule\r\n"
+        );
+        assert!(!project.join("doc/README.md").exists());
+        assert!(!project.join(".codex/.bridgeforge_codex_version").exists());
+    }
+}
+
+#[test]
 fn legacy_identity_is_validated_and_retired_atomically() {
     let f = Fixture::new();
     let (factory, project) = minimal(&f);

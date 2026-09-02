@@ -151,6 +151,7 @@ fn valid_target_type(kind: &str, target: &str) -> bool {
                 || target.starts_with("doc/0_architecture/")
                 || target.starts_with("doc/3_reference/")
                 || target.starts_with("doc/4_archive/")
+                || target.starts_with("doc/5_project_knowledgebase/")
         }
         _ => false,
     }

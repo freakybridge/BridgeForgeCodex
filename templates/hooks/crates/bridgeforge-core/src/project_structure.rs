@@ -5,12 +5,13 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
-const LAYERS: [&str; 5] = [
+const LAYERS: [&str; 6] = [
     "0_architecture",
     "1_delivery",
     "2_bugs",
     "3_reference",
     "4_archive",
+    "5_project_knowledgebase",
 ];
 const LIFECYCLES: [&str; 4] = ["active", "completed", "superseded", "archived"];
 const VALIDATION: [&str; 5] = [
@@ -242,7 +243,7 @@ pub fn inspect(root: &Path) -> StructureReport {
             report.errors.push(Finding {
                 code: "unexpected-doc-entry".into(),
                 path: relative(root, &entry.path()),
-                message: "doc/ 顶层只允许五层目录和 README.md".into(),
+                message: "doc/ 顶层只允许六层目录和 README.md".into(),
             });
         }
     }

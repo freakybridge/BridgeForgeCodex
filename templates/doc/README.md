@@ -17,6 +17,7 @@ delivery_layout: flat # flat | milestone；初始化时确认，已有项目不�
 | 开放 Bug | [`2_bugs/`](2_bugs/)；只把尚未归档的问题作为当前问题 |
 | 项目操作 | 根 [`AGENTS.md`](../AGENTS.md) 和 [`3_reference/`](3_reference/) |
 | 历史记录 | [`4_archive/`](4_archive/)；历史材料不作为当前运行合同 |
+| 项目知识 | [`5_project_knowledgebase/`](5_project_knowledgebase/)；项目自有话题与长期资料 |
 
 项目可以在本表追加自己的当前主线；详细状态只在目标文档维护，不在多个入口重复抄写。
 
@@ -36,6 +37,14 @@ delivery_layout: flat # flat | milestone；初始化时确认，已有项目不�
 - 只有 `$archive-scan` 在用户确认移动后才能写 `archived`；只有 `active` 事项进入当前交付导航。
 - 迁移前的 `status` 或正文状态只作为历史证据；缺少 `lifecycle` 的事项视为 `unclassified`，禁止自动当作 active 或 completed。
 
+### 项目知识库
+
+[`5_project_knowledgebase/`](5_project_knowledgebase/) 用于项目自有的长期知识话题、研究笔记与资料，可以为空；不是软件交付包，也不是 Agent 指令源。全局红线仍进 AGENTS，操作流程进 Skill，机器硬闸进 Hook。
+
+话题目录和正文由项目所有，必须在本索引登记；骨架只提供空目录占位，不接管或覆盖内容。知识资料不要求填写需求验收状态，也不会因日期或完成状态自动进入归档候选；需要整理历史副本时由用户确认具体路径与内容。
+
+已有外部知识库时必须明确唯一事实源；这里可以登记链接或用户确认的历史快照，禁止自动建立第二份持续维护副本。
+
 ---
 
 ## 目录职责
@@ -47,6 +56,7 @@ delivery_layout: flat # flat | milestone；初始化时确认，已有项目不�
 | [`2_bugs/`](2_bugs/) | 尚未归档的 Bug：现象、根因、修复和验证 | 活跃 |
 | [`3_reference/`](3_reference/) | 外部资料与 BridgeForge 公共参考 | 只读 |
 | [`4_archive/`](4_archive/) | 已完成归档 | 只读 |
+| [`5_project_knowledgebase/`](5_project_knowledgebase/) | 项目自有知识话题、研究笔记与资料 | 长期维护，可为空 |
 
 完整边界见根 `AGENTS.md` §2.3；长 SOP 由项目自行放入 `doc/3_reference/`。
 
@@ -94,3 +104,7 @@ delivery_layout: flat # flat | milestone；初始化时确认，已有项目不�
 ## 4_archive/
 
 <!-- TODO: 已完成的 delivery 保持原 milestone/topic 层级归档；已解决 Bug 归档至 bugs/。 -->
+
+## 5_project_knowledgebase/
+
+<!-- 项目在此登记自己的话题链接；本话题索引不是骨架受管区。 -->
