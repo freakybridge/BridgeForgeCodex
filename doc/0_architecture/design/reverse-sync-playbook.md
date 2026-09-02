@@ -4,6 +4,8 @@
 
 ## 1. 适用边界
 
+当前项目改动与上游写入的公共授权红线见根 `AGENTS.md` §1.1，产品源为 `templates/AGENTS.md` 的同一公共区；下游不必在项目专区重复填写。本文承载回灌步骤，不替代用户对上游产品改动的明确授权。
+
 允许候选来源：下游 `AGENTS.md`、嵌套 `AGENTS.md`、`.codex/hooks/`、`.codex/scripts/`、skills 与参考文档中已实测的通用机制。`.codex/rules/*.rules` 仅作为命令执行策略候选，不得把 Markdown path-rule 当成 Codex 指令来源。
 
 禁止直接回灌：

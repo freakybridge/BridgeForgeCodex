@@ -8,6 +8,33 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 static ID: AtomicU64 = AtomicU64::new(0);
 
+#[test]
+fn upstream_write_authorization_is_a_shared_public_rule() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .ancestors()
+        .nth(2)
+        .unwrap();
+    let public = |text: &str| {
+        text.split_once("<!-- BRIDGEFORGE:PUBLIC:BEGIN -->")
+            .unwrap()
+            .1
+            .split_once("<!-- BRIDGEFORGE:PUBLIC:END -->")
+            .unwrap()
+            .0
+            .replace("\r\n", "\n")
+    };
+    let template = fs::read_to_string(root.join("templates/AGENTS.md")).unwrap();
+    let dogfood = fs::read_to_string(root.join("AGENTS.md")).unwrap();
+    let shared = public(&template);
+    assert!(shared.contains("用户仅授权当前项目改动时，禁止修改 BridgeForge 上游模板或其他项目"));
+    assert!(
+        shared
+            .contains("反哺上游必须先说明对其他项目与未来初始化的影响、收益和风险，并取得明确授权")
+    );
+    assert!(shared.contains("未获授权时必须仅作为后续候选记录，禁止执行上游写入"));
+    assert_eq!(shared, public(&dogfood));
+}
+
 #[cfg(windows)]
 #[test]
 fn shared_bundle_commit_keeps_components_consistent_when_old_image_is_running() {
@@ -254,6 +281,14 @@ fn composite_migration_preserves_project_content_and_latest_public_baseline() {
     let agents = fs::read_to_string(project.join("AGENTS.md")).unwrap();
     assert!(agents.contains("must preserve project rule"));
     assert!(!agents.contains("obsolete public rule"));
+    let public = agents
+        .split("<!-- BRIDGEFORGE:PUBLIC:END -->")
+        .next()
+        .unwrap();
+    assert!(
+        public
+            .contains("反哺上游必须先说明对其他项目与未来初始化的影响、收益和风险，并取得明确授权")
+    );
     assert!(
         fs::read_to_string(project.join("doc/README.md"))
             .unwrap()

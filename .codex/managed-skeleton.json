@@ -1,6 +1,6 @@
 {
   "schema_version": 4,
-  "release_version": "1.8.8",
+  "release_version": "1.8.10",
   "host": "codex",
   "stamp": ".codex/.bridgeforge_codex_version",
   "contract_target": ".codex/managed-skeleton.json",
@@ -31,7 +31,7 @@
         "public": {
           "begin": "<!-- BRIDGEFORGE:PUBLIC:BEGIN -->",
           "end": "<!-- BRIDGEFORGE:PUBLIC:END -->",
-          "current_sha256": "sha256:34608f96bfd999410ad2cacbea27dab49e7ad7a24e50a28d0fadadd934a4e33b"
+          "current_sha256": "sha256:4545b0ef591bb4f079773f8b723abfe6905e91b6745fd2863e94b2c1b13922d9"
         },
         "project": {
           "begin": "<!-- BRIDGEFORGE:PROJECT:BEGIN -->",
@@ -51,7 +51,7 @@
           ]
         }
       },
-      "current_sha256": "sha256:07ef7af3260fa7740365ba85ddbb1a22a184121ebb1978ac95a4958e0b134bd1",
+      "current_sha256": "sha256:8b3bc4ab8597ff17064665221a832a9e434c2e34041df3762c0910ff56fc5771",
       "render": "project-name"
     },
     {
@@ -419,14 +419,14 @@
       "source": "templates/hooks/Cargo.lock",
       "target": ".codex/hooks/Cargo.lock",
       "strategy": "whole",
-      "current_sha256": "sha256:9dda469650fc68b05fd6493b495bc1e3b8fb4a90ffca71c8c0caa6b32546cc82"
+      "current_sha256": "sha256:e599d4ab769c0fbd5ea9d67c874ff35b1455c0536b7721871105a4d39628d7d9"
     },
     {
       "id": "codex.hooks.cargo-toml",
       "source": "templates/hooks/Cargo.toml",
       "target": ".codex/hooks/Cargo.toml",
       "strategy": "whole",
-      "current_sha256": "sha256:eec49625b18528ee910369fd1e485e53d3bb94b4bc7d2e315ea37aab7f751a1e"
+      "current_sha256": "sha256:9df3e73d431795a54238e10a7e04ca73fb952772eb197b52f1eae59fdf50af28"
     },
     {
       "id": "codex.hooks.readme-md",
@@ -717,8 +717,8 @@
           "status": "ok"
         }
       },
-      "source_tree_sha256": "sha256:f6eee46486d262f2a470c63fdd24526a81b831b1236465d4fcd209e922993748",
-      "lockfile_sha256": "sha256:9dda469650fc68b05fd6493b495bc1e3b8fb4a90ffca71c8c0caa6b32546cc82",
+      "source_tree_sha256": "sha256:81f7f8b025d8c6f9702e3bd8b0a9453781d2323dcd51a060aafd4fb685003d28",
+      "lockfile_sha256": "sha256:e599d4ab769c0fbd5ea9d67c874ff35b1455c0536b7721871105a4d39628d7d9",
       "build_recipe_sha256": "sha256:d26d34aa838a1a1f5556ef92f492d2abc7b415c2163e2a4c9ea7e07121dad78a",
       "self_test_sha256": "sha256:74a8b4a4c20ff1f5cc6660697138c151d9ed2172e6d57e75cce671d773e98f5a"
     },
@@ -762,8 +762,8 @@
           "status": "ok"
         }
       },
-      "source_tree_sha256": "sha256:f6eee46486d262f2a470c63fdd24526a81b831b1236465d4fcd209e922993748",
-      "lockfile_sha256": "sha256:9dda469650fc68b05fd6493b495bc1e3b8fb4a90ffca71c8c0caa6b32546cc82",
+      "source_tree_sha256": "sha256:81f7f8b025d8c6f9702e3bd8b0a9453781d2323dcd51a060aafd4fb685003d28",
+      "lockfile_sha256": "sha256:e599d4ab769c0fbd5ea9d67c874ff35b1455c0536b7721871105a4d39628d7d9",
       "build_recipe_sha256": "sha256:079aefde96a8925913b7b6cd3ee9d8c7086014ad5e4b6e3f74a911b2ce49e537",
       "self_test_sha256": "sha256:6b0426352bb099a61fae52600d4f684c0e11bca644fa767a9b79d224e939b0e0"
     }
