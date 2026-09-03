@@ -9,6 +9,7 @@ pub mod git_sync;
 pub mod manifest;
 pub mod memory;
 mod process;
+mod project_hooks;
 pub mod project_structure;
 pub mod project_sync;
 pub mod proposal_contract;

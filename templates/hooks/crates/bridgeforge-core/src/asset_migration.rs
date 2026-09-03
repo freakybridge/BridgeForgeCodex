@@ -296,6 +296,9 @@ pub fn validate_manifest(
                 .ok_or("hook migration requires its hooks.json registration")?;
             let document: Value = serde_json::from_slice(&registration.payload)
                 .map_err(|_| "hook registration is not JSON")?;
+            let rust_registered = crate::project_hooks::hooks(&document)?
+                .iter()
+                .any(|hook| hook.source() == target.target);
             let registered = document["hooks"]
                 .as_object()
                 .into_iter()
@@ -318,7 +321,7 @@ pub fn validate_manifest(
                         })
                     })
                 });
-            if !registered {
+            if !registered && !rust_registered {
                 return Err(format!(
                     "hook migration is not registered: {}",
                     target.target

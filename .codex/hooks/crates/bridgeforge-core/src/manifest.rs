@@ -110,7 +110,11 @@ pub(crate) fn generated_sources(source_root: &Path) -> Result<Vec<String>, Strin
     for entry in WalkDir::new(source_root)
         .follow_links(false)
         .into_iter()
-        .filter_entry(|entry| entry.depth() != 1 || entry.file_name() != "target")
+        .filter_entry(|entry| {
+            entry.depth() != 1
+                || (entry.file_name() != "target"
+                    && !entry.file_name().to_string_lossy().starts_with("project_"))
+        })
     {
         let entry = entry.map_err(|error| error.to_string())?;
         if entry.file_type().is_symlink() {
@@ -254,7 +258,10 @@ pub fn render_managed_contract(root: &Path) -> Result<Vec<u8>, String> {
         let payload =
             fs::read(safe_join(root, source)?).map_err(|error| format!("{source}: {error}"))?;
         asset["current_sha256"] = Value::String(sha_git(&payload));
-        if let Some(blocks) = asset.get_mut("managed_blocks").filter(|value| value.is_object()) {
+        if let Some(blocks) = asset
+            .get_mut("managed_blocks")
+            .filter(|value| value.is_object())
+        {
             let projection = crate::baseline::markdown_projection(&payload, blocks)?;
             blocks["current_projection_sha256"] = Value::String(canonical_sha(&projection)?);
         }

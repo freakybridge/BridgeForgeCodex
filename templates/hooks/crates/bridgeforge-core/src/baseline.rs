@@ -929,6 +929,11 @@ fn verify_contract_assets(
         }
     }
     let contract_bytes = fs::read(&contract_path).map_err(|error| error.to_string())?;
+    checked.extend(crate::project_hooks::verify(
+        root,
+        contract,
+        verify_generated_runtime,
+    )?);
     let fingerprint = sha(format!(
         "{}\n{}\n{}",
         version,
@@ -1017,6 +1022,27 @@ pub fn verify_index(root: &Path, runner: &dyn ProcessRunner) -> Result<BaselineR
     if let Some(generated_assets) = contract["generated_assets"].as_array() {
         for generated in generated_assets {
             skipped.push(generated["id"].as_str().unwrap_or("").to_string());
+        }
+    }
+    if contract["assets"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .any(|asset| asset["target"] == ".codex/hooks.json")
+    {
+        let document = parse_unique_json(
+            &git_index_blob(root, ".codex/hooks.json", runner)?,
+            "staged hooks.json",
+        )?;
+        if crate::project_hooks::render(&document)? != document {
+            return Err("staged project Rust hook registrations drifted".into());
+        }
+        for hook in crate::project_hooks::hooks(&document)? {
+            let source = git_index_blob(root, &hook.source(), runner)?;
+            std::str::from_utf8(&source)
+                .map_err(|_| "staged project Rust hook source must be UTF-8")?;
+            let input = crate::project_hooks::identity(&hook, &source, &contract)?;
+            checked.push(format!("project-hook:{}:{input}", hook.id));
         }
     }
     Ok(BaselineReport {

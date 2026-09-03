@@ -98,6 +98,7 @@ delivery_layout: flat # flat | milestone；初始化时确认，已有项目不�
 | 文件 | 说明 |
 |---|---|
 | [`codex-hook-signals.md`](3_reference/codex-hook-signals.md) | Agent 原生主动澄清的响应边界、例外和调试方法；自动 Clarify / Focus Hook 已退役 |
+| [`project-rust-hooks.md`](3_reference/project-rust-hooks.md) | 项目自有 Rust Hook 的源码、注册、锁定构建和事务边界 |
 
 <!-- 外部资料必须记录来源、获取日期和适用范围。 -->
 

@@ -71,7 +71,7 @@ mod tests {
             let name = entry.file_name();
             if matches!(
                 name.to_str(),
-                Some("target" | ".git" | ".venv" | "__pycache__")
+                Some("target" | ".git" | ".venv" | "__pycache__" | ".runtime")
             ) {
                 continue;
             }
@@ -106,9 +106,16 @@ mod tests {
 
     #[test]
     fn rust_source_is_identical_in_template_and_dogfood() {
-        assert_eq!(
-            files(&root().join("templates/hooks")),
-            files(&root().join(".codex/hooks"))
+        let template = files(&root().join("templates/hooks"));
+        let dogfood = files(&root().join(".codex/hooks"));
+        let changed = template
+            .keys()
+            .chain(dogfood.keys())
+            .filter(|path| template.get(*path) != dogfood.get(*path))
+            .collect::<std::collections::BTreeSet<_>>();
+        assert!(
+            changed.is_empty(),
+            "template/dogfood drifted paths: {changed:?}"
         );
     }
 

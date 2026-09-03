@@ -567,7 +567,10 @@ fn real_template_upgrades_legacy_markdown_without_old_contract_or_losing_index()
     let merged =
         merge_managed_markdown(&source, old.as_bytes(), asset, Path::new("Example"), true).unwrap();
     assert!(String::from_utf8_lossy(&merged).contains("## 项目自有\n不得丢失\n"));
-    assert!(String::from_utf8_lossy(&merged).contains("## 项目知识库\n[my topic](5_project_knowledgebase/topic.md)\n"));
+    assert!(
+        String::from_utf8_lossy(&merged)
+            .contains("## 项目知识库\n[my topic](5_project_knowledgebase/topic.md)\n")
+    );
     assert!(String::from_utf8_lossy(&merged).contains("my existing knowledge navigation"));
     crate::baseline::verify_asset_payload(asset, &merged).unwrap();
     assert_eq!(
@@ -940,6 +943,8 @@ fn transaction_fixture(valid_asset_hash: bool) -> (PathBuf, SyncPlan) {
         ]),
         deletes: Vec::new(),
         generated_source_fingerprints,
+        project_hook_inputs: Vec::new(),
+        project_hook_reads: BTreeMap::new(),
     };
     (root, plan)
 }
@@ -952,6 +957,95 @@ fn json_merge_preserves_external_keys_and_adds_required_values() {
     assert_eq!(actual["permissions"]["extra"], true);
     assert_eq!(actual["permissions"]["mode"], "safe");
     assert_eq!(actual["permissions"]["allow"], json!(["Custom", "Read"]));
+}
+
+#[test]
+fn failed_prospective_check_restores_project_hook_payloads_and_retired_source() {
+    let (root, mut plan) = transaction_fixture(false);
+    let old = root.join(".codex/hooks/project_old/entrypoint.py");
+    fs::create_dir_all(old.parent().unwrap()).unwrap();
+    fs::write(&old, b"legacy source").unwrap();
+    let hooks = root.join(".codex/hooks.json");
+    fs::write(&hooks, b"{\"hooks\":{}}").unwrap();
+    let original_hooks = fs::read(&hooks).unwrap();
+    for (target, payload) in [
+        (
+            ".codex/hooks/project_demo/entrypoint.rs",
+            b"new rust".as_slice(),
+        ),
+        (
+            ".codex/hooks.json",
+            b"{\"hooks\":{},\"changed\":true}".as_slice(),
+        ),
+        (".codex/bin/project_demo.exe", b"binary".as_slice()),
+        (
+            ".codex/bin/build-receipt-project-demo.json",
+            b"receipt".as_slice(),
+        ),
+    ] {
+        let path = root.join(target);
+        plan.safe.push(SyncAction {
+            id: format!("project-hook:fixture:{target}"),
+            target: target.into(),
+            operation: "write".into(),
+            risk: false,
+            before_sha256: fs::read(&path).ok().as_deref().map(sha_git),
+            after_sha256: sha_git(payload),
+        });
+        plan.writes.insert(path, payload.to_vec());
+    }
+    plan.deletes.push(old.clone());
+    plan.safe.push(SyncAction {
+        id: "retired:fixture".into(),
+        target: ".codex/hooks/project_old/entrypoint.py".into(),
+        operation: "delete".into(),
+        risk: false,
+        before_sha256: Some(sha_git(b"legacy source")),
+        after_sha256: "sha256:deleted".into(),
+    });
+    plan.aggregate_fingerprint = plan_fingerprint(
+        &plan.mode,
+        &plan.current_version,
+        &plan.safe,
+        &plan.risk,
+        &plan.preservation_manifest,
+        &plan.generated_source_fingerprints,
+    )
+    .unwrap();
+    assert!(
+        apply_plan(plan.clone(), &plan.aggregate_fingerprint, true)
+            .unwrap_err()
+            .contains("rolled back")
+    );
+    assert_eq!(fs::read(old).unwrap(), b"legacy source");
+    assert_eq!(fs::read(hooks).unwrap(), original_hooks);
+    for target in [
+        ".codex/hooks/project_demo/entrypoint.rs",
+        ".codex/bin/project_demo.exe",
+        ".codex/bin/build-receipt-project-demo.json",
+    ] {
+        assert!(!root.join(target).exists());
+    }
+    assert_eq!(
+        fs::read(root.join(".codex/.bridgeforge_codex_version")).unwrap(),
+        b"1.0.0\n"
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn project_hook_registration_serialization_is_stable_on_next_merge() {
+    let (root,_) = transaction_fixture(true);
+    fs::create_dir_all(root.join(".codex/hooks/project_demo")).unwrap();
+    fs::write(root.join(".codex/hooks/project_demo/entrypoint.rs"),b"pub fn run(_:Vec<String>)->i32{0}").unwrap();
+    let config=json!({"hooks":{},"bridgeforgeProjectHooks":{"schema_version":1,"hooks":[{"id":"demo","events":[{"event":"Stop"}]}]}});
+    fs::write(root.join(".codex/hooks.json"),serde_json::to_vec(&config).unwrap()).unwrap();
+    let contract=json!({"generated_assets":[{"source_tree_sha256":"source","lockfile_sha256":"lock"}]});
+    let mut writes=BTreeMap::new();
+    plan_project_hooks(&root,&contract,&mut writes,&[],&mut Vec::new(),&mut Vec::new(),&mut BTreeMap::new()).unwrap();
+    let payload=writes.get(&root.join(".codex/hooks.json")).unwrap();
+    assert_eq!(merge_project_hooks(b"{\"hooks\":{}}",Some(payload)).unwrap(),*payload,"first install must already use the stable hook JSON encoding");
+    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]

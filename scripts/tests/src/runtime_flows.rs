@@ -236,7 +236,43 @@ fn project_sync_real_init_builds_and_applies_generated_assets() {
     let contract: serde_json::Value =
         serde_json::from_slice(&fs::read(factory.join("templates/managed-skeleton.json")).unwrap())
             .unwrap();
-    let mut plan = build_plan(&project, &factory, SyncMode::Init).unwrap();
+    // A registered project-owned Rust program shares the verified locked workspace,
+    let mut initial = build_plan(&project, &factory, SyncMode::Init).unwrap();
+    attach_generated_assets(
+        &mut initial,
+        &factory,
+        &project,
+        &contract,
+        &SystemProcessRunner,
+    )
+    .unwrap();
+    let initial_fingerprint = initial.aggregate_fingerprint.clone();
+    apply_plan(initial, &initial_fingerprint, false).unwrap();
+    bridgeforge_core::baseline::verify(&project, None, true).unwrap();
+    let initial_stamp = fs::read(project.join(".codex/.bridgeforge_codex_version")).unwrap();
+    // Project hook installation is a subsequent compatible update.
+    // but remains outside managed source ownership. Its regular branch reads stdin.
+    write(&project.join(".codex/hooks/project_demo/entrypoint.rs"),b"pub fn run(args:Vec<String>)->i32 { use std::io::Read; let mut input=String::new(); std::io::stdin().read_to_string(&mut input).unwrap(); println!(\"{}:{}\",args.join(\",\"),input); 0 }");
+    let hooks_path=project.join(".codex/hooks.json");
+    let mut hooks_config:serde_json::Value=serde_json::from_slice(&fs::read(&hooks_path).unwrap()).unwrap();
+    hooks_config["bridgeforgeProjectHooks"]=json!({"schema_version":1,"hooks":[{"id":"demo","events":[{"event":"SessionStart","args":["check"]}]}]});
+    write(&hooks_path,&serde_json::to_vec(&hooks_config).unwrap());
+    let project_binary = project.join(format!(
+        ".codex/bin/project_demo{}",
+        std::env::consts::EXE_SUFFIX
+    ));
+    write(&project_binary, b"existing project program");
+    let mut plan = build_plan(&project, &factory, SyncMode::Update).unwrap();
+    assert!(
+        plan.risk
+            .iter()
+            .any(|action| action.id.starts_with("project-hook:generated:"))
+    );
+    assert!(apply_plan(plan.clone(), &plan.aggregate_fingerprint, false).is_err());
+    assert_eq!(
+        fs::read(&project_binary).unwrap(),
+        b"existing project program"
+    );
     let confirmed_source_fingerprint = plan.aggregate_fingerprint.clone();
     let receipts = attach_generated_assets(
         &mut plan,
@@ -248,6 +284,23 @@ fn project_sync_real_init_builds_and_applies_generated_assets() {
     .unwrap();
     assert!(!receipts.is_empty());
     assert_eq!(plan.aggregate_fingerprint, confirmed_source_fingerprint);
+    let input_path = project.join(".codex/hooks/project_demo/entrypoint.rs");
+    let original_input = fs::read(&input_path).unwrap();
+    fs::write(&input_path, b"source drift after build").unwrap();
+    assert!(
+        apply_plan(plan.clone(), &plan.aggregate_fingerprint, true)
+            .unwrap_err()
+            .contains("input changed after plan")
+    );
+    assert_eq!(
+        fs::read(&project_binary).unwrap(),
+        b"existing project program"
+    );
+    assert_eq!(
+        fs::read(project.join(".codex/.bridgeforge_codex_version")).unwrap(),
+        initial_stamp
+    );
+    fs::write(input_path, original_input).unwrap();
     let expected = plan
         .safe
         .iter()
@@ -255,7 +308,7 @@ fn project_sync_real_init_builds_and_applies_generated_assets() {
         .map(|action| (action.target.clone(), action.after_sha256.clone()))
         .collect::<Vec<_>>();
     let fingerprint = plan.aggregate_fingerprint.clone();
-    apply_plan(plan, &fingerprint, false).unwrap();
+    apply_plan(plan, &fingerprint, true).unwrap();
     for (target, hash) in expected {
         assert_eq!(
             hash,
@@ -266,6 +319,31 @@ fn project_sync_real_init_builds_and_applies_generated_assets() {
         );
     }
     bridgeforge_core::baseline::verify(&project, None, true).unwrap();
+    let again = build_plan(&project, &factory, SyncMode::Update).unwrap();
+    assert_eq!(again.status, "current");
+    let mut project_hook = ProcessRequest::new(
+        project
+            .join(format!(
+                ".codex/bin/project_demo{}",
+                std::env::consts::EXE_SUFFIX
+            ))
+            .into_os_string(),
+        &project,
+    );
+    project_hook.args = vec!["check".into()];
+    project_hook.stdin = b"stdin-payload".to_vec();
+    let result = SystemProcessRunner.run(&project_hook).unwrap();
+    assert_eq!(result.code, 0);
+    assert!(String::from_utf8_lossy(&result.stdout).contains("check:stdin-payload"));
+    let source_path = project.join(".codex/hooks/project_demo/entrypoint.rs");
+    let source = fs::read(&source_path).unwrap();
+    fs::write(&source_path, b"changed").unwrap();
+    assert!(
+        bridgeforge_core::baseline::verify(&project, None, true)
+            .unwrap_err()
+            .contains("project Rust hook")
+    );
+    fs::write(source_path, source).unwrap();
     assert!(!project.join("scripts/tests").exists());
     let mut request = ProcessRequest::new("cargo", &project);
     request.args = [

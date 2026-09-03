@@ -10,7 +10,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use walkdir::WalkDir;
 
 #[path = "build_inputs.rs"]
-mod build_inputs;
+pub(crate) mod build_inputs;
 
 pub(crate) struct ProjectLock {
     _guard: crate::file_lock::FileLock,
@@ -73,6 +73,10 @@ pub struct SyncPlan {
     deletes: Vec<PathBuf>,
     #[serde(skip)]
     generated_source_fingerprints: BTreeMap<String, String>,
+    #[serde(skip)]
+    project_hook_inputs: Vec<(crate::project_hooks::Hook, Vec<u8>)>,
+    #[serde(skip)]
+    project_hook_reads: BTreeMap<String, Option<Vec<u8>>>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1668,6 +1672,15 @@ pub fn build_plan_with_inputs(
         })
     };
     plan_legacy_receipt_retirement(&project_root, &mut safe, &mut deletes)?;
+    let (project_hook_inputs, project_hook_reads) = plan_project_hooks(
+        &project_root,
+        &contract,
+        &mut writes,
+        &deletes,
+        &mut safe,
+        &mut risk,
+        &mut generated_source_fingerprints,
+    )?;
     safe.sort_by(|left, right| left.target.cmp(&right.target));
     risk.sort_by(|left, right| left.target.cmp(&right.target));
     let fingerprint = plan_fingerprint(
@@ -1708,7 +1721,114 @@ pub fn build_plan_with_inputs(
         writes,
         deletes,
         generated_source_fingerprints,
+        project_hook_inputs,
+        project_hook_reads,
     })
+}
+
+fn plan_project_hooks(
+    root: &Path,
+    contract: &Value,
+    writes: &mut BTreeMap<PathBuf, Vec<u8>>,
+    deletes: &[PathBuf],
+    safe: &mut Vec<SyncAction>,
+    risk: &mut Vec<SyncAction>,
+    fingerprints: &mut BTreeMap<String, String>,
+) -> Result<
+    (
+        Vec<(crate::project_hooks::Hook, Vec<u8>)>,
+        BTreeMap<String, Option<Vec<u8>>>,
+    ),
+    String,
+> {
+    let mut reads = BTreeMap::new();
+    let mut inputs = Vec::new();
+    let original = crate::project_hooks::read(root, ".codex/hooks.json")?;
+    let path = root.join(".codex/hooks.json");
+    let Some(payload) = writes.get(&path).cloned().or_else(|| original.clone()) else {
+        return Ok((inputs, reads));
+    };
+    let document = crate::baseline::parse_unique_json(&payload, "hooks.json")?;
+    let registered = crate::project_hooks::render(&document)?;
+    reads.insert(".codex/hooks.json".into(), original.clone());
+    if registered != document {
+        let mut payload = serde_json::to_vec_pretty(&registered).map_err(|e| e.to_string())?;
+        payload.push(b'\n');
+        if let Some(action) = safe
+            .iter_mut()
+            .chain(risk.iter_mut())
+            .find(|action| action.target == ".codex/hooks.json")
+        {
+            action.after_sha256 = if action.id.starts_with("migration.") {
+                sha_raw(&payload)
+            } else {
+                sha_git(&payload)
+            };
+        } else {
+            risk.push(SyncAction {
+                id: "project-hook:registration".into(),
+                target: ".codex/hooks.json".into(),
+                operation: "replace".into(),
+                risk: true,
+                before_sha256: original.as_deref().map(sha_git),
+                after_sha256: sha_git(&payload),
+            });
+        }
+        writes.insert(path, payload);
+    }
+    for hook in crate::project_hooks::hooks(&registered)? {
+        let source_path = root.join(hook.source());
+        if deletes.contains(&source_path) {
+            return Err("registered project Rust hook source is scheduled for deletion".into());
+        }
+        let original = crate::project_hooks::read(root, &hook.source())?;
+        let source = writes
+            .get(&source_path)
+            .cloned()
+            .or_else(|| original.clone())
+            .ok_or_else(|| format!("project Rust hook source is missing: {}", hook.source()))?;
+        reads.insert(hook.source(), original);
+        let fingerprint = crate::project_hooks::identity(&hook, &source, contract)?;
+        if crate::project_hooks::current(root, &hook, &fingerprint)? {
+            continue;
+        }
+        let owned = crate::project_hooks::owned(root, &hook)?;
+        for target in [hook.binary(), hook.receipt()] {
+            if deletes.contains(&root.join(&target)) {
+                return Err("project hook build target is scheduled for deletion".into());
+            }
+            let before = crate::project_hooks::read(root, &target)?;
+            let id = format!("project-hook:generated:{target}");
+            fingerprints.insert(id.clone(), fingerprint.clone());
+            let conflicting = before.is_some() && !owned;
+            let action = SyncAction {
+                id,
+                target,
+                operation: "build".into(),
+                risk: conflicting,
+                before_sha256: before.as_deref().map(sha_git),
+                after_sha256: fingerprint.clone(),
+            };
+            if conflicting {
+                risk.push(action);
+            } else {
+                safe.push(action);
+            }
+        }
+        inputs.push((hook, source));
+    }
+    Ok((inputs, reads))
+}
+
+fn verify_project_hook_reads(plan: &SyncPlan) -> Result<(), String> {
+    for (relative, expected) in &plan.project_hook_reads {
+        if crate::project_hooks::read(&plan.project_root, relative)? != *expected {
+            return Err(format!(
+                "project Rust hook input changed after plan: {relative}"
+            ));
+        }
+    }
+    Ok(())
 }
 
 pub fn apply_plan(
@@ -1783,6 +1903,7 @@ fn apply_plan_internal(
         }
     }
     let _lock = ProjectLock::acquire(&plan.project_root)?;
+    verify_project_hook_reads(&plan)?;
     let legacy = legacy_receipt(&plan.project_root)?;
     if legacy
         .as_ref()
@@ -2342,20 +2463,39 @@ pub fn attach_generated_assets(
     contract: &Value,
     runner: &dyn ProcessRunner,
 ) -> Result<Vec<Value>, String> {
-    if !plan
+    let mut receipts = Vec::new();
+    if plan
         .safe
         .iter()
         .any(|action| action.id.starts_with("generated:"))
     {
-        return Ok(Vec::new());
+        let (writes, generated_receipts) =
+            generated_writes(template_root, "source_root", project_root, contract, runner)?;
+        plan.writes.extend(writes);
+        receipts.extend(generated_receipts);
     }
-    let (writes, receipts) =
-        generated_writes(template_root, "source_root", project_root, contract, runner)?;
-    plan.writes.extend(writes);
+    verify_project_hook_reads(plan)?;
+    let project_writes = crate::project_hooks::build(
+        &template_root.join("templates/hooks"),
+        project_root,
+        contract,
+        &plan.project_hook_inputs,
+        runner,
+    )?;
+    verify_project_hook_reads(plan)?;
+    for (hook, _) in &plan.project_hook_inputs {
+        if let Some(payload) = project_writes.get(&project_root.join(hook.receipt())) {
+            receipts.push(serde_json::from_slice(payload).map_err(|e| e.to_string())?);
+        }
+    }
+    plan.writes.extend(project_writes);
     for action in plan
         .safe
         .iter_mut()
-        .filter(|action| action.id.starts_with("generated:"))
+        .chain(plan.risk.iter_mut())
+        .filter(|action| {
+            action.id.starts_with("generated:") || action.id.starts_with("project-hook:generated:")
+        })
     {
         let target = safe_join(project_root, &action.target, "generated action target")?;
         let payload = plan
@@ -2382,21 +2522,64 @@ pub fn build_generated_assets(
 ) -> Result<Vec<Value>, String> {
     let _lock = ProjectLock::acquire(project_root)?;
     let legacy = legacy_receipt(project_root)?;
-    let (writes, receipts) = generated_writes(
+    let (mut writes, mut receipts) = generated_writes(
         project_root,
         "target_source_root",
         project_root,
         contract,
         runner,
     )?;
+    let mut project_writes = BTreeMap::new();
+    let mut safe = Vec::new();
+    let mut risk = Vec::new();
+    let (inputs, reads) = plan_project_hooks(
+        project_root,
+        contract,
+        &mut project_writes,
+        &[],
+        &mut safe,
+        &mut risk,
+        &mut BTreeMap::new(),
+    )?;
+    if !risk.is_empty() || !project_writes.is_empty() {
+        return Err(
+            "project Rust hook registration changes require project-sync plan/apply".into(),
+        );
+    }
+    let outputs = crate::project_hooks::build(
+        &project_root.join(".codex/hooks"),
+        project_root,
+        contract,
+        &inputs,
+        runner,
+    )?;
+    for (relative, expected) in &reads {
+        if crate::project_hooks::read(project_root, relative)? != *expected {
+            return Err(format!(
+                "project Rust hook input changed during build: {relative}"
+            ));
+        }
+    }
+    for (hook, _) in &inputs {
+        receipts.push(
+            serde_json::from_slice(
+                outputs
+                    .get(&project_root.join(hook.receipt()))
+                    .ok_or("project receipt missing")?,
+            )
+            .map_err(|e| e.to_string())?,
+        );
+    }
+    writes.extend(outputs);
     let snapshots = writes
         .keys()
-        .map(|path| (path.clone(), fs::read(path).ok()))
-        .collect::<Vec<_>>();
+        .map(|path| transaction_file_state(path).map(|state| (path.clone(), state)))
+        .collect::<Result<Vec<_>, _>>()?;
     let result = (|| {
         for (path, payload) in &writes {
             atomic_write(path, payload)?;
         }
+        crate::project_hooks::verify(project_root, contract, true)?;
         if let Some((path, before)) = &legacy {
             if fs::read(path).map_err(|error| error.to_string())? != *before {
                 return Err("legacy build receipt changed during build".into());
@@ -2408,7 +2591,24 @@ pub fn build_generated_assets(
     if let Err(error) = result {
         let mut failures = Vec::new();
         for (target, before) in snapshots.into_iter().rev() {
-            if fs::read(&target).ok() == before {
+            let current = match transaction_file_state(&target) {
+                Ok(state) => state,
+                Err(error) => {
+                    failures.push(format!(
+                        "{}: {error}; external target preserved",
+                        target.display()
+                    ));
+                    continue;
+                }
+            };
+            if current == before {
+                continue;
+            }
+            if current.as_deref() != writes.get(&target).map(Vec::as_slice) {
+                failures.push(format!(
+                    "{}: external change preserved during rollback",
+                    target.display()
+                ));
                 continue;
             }
             let restored = match before {

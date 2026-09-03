@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-pub(super) struct BuildInputs {
+pub(crate) struct BuildInputs {
     original: PathBuf,
     pub snapshot: PathBuf,
     files: BTreeMap<String, Vec<u8>>,
@@ -85,11 +85,16 @@ impl BuildInputs {
     }
 
     pub fn verify_unchanged(&self) -> Result<(), String> {
-        if read_files(&self.original)? != self.files {
-            return Err("generated source inputs changed during build".into());
-        }
+        self.verify_original_unchanged()?;
         if read_files(&self.snapshot)? != self.files {
             return Err("generated isolated build inputs changed during build".into());
+        }
+        Ok(())
+    }
+
+    pub fn verify_original_unchanged(&self) -> Result<(), String> {
+        if read_files(&self.original)? != self.files {
+            return Err("generated source inputs changed during build".into());
         }
         Ok(())
     }

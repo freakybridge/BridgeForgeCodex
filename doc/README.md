@@ -58,13 +58,14 @@ delivery_layout: flat
 ## 架构
 
 - 设计资料：[`0_architecture/design/`](0_architecture/design/)，包括 [`codex-project-sync.md`](0_architecture/design/codex-project-sync.md)、[`codex-native-instruction-architecture.md`](0_architecture/design/codex-native-instruction-architecture.md)、[`codex-native-memory-sync.md`](0_architecture/design/codex-native-memory-sync.md)、[`user-facing-result-contract.md`](0_architecture/design/user-facing-result-contract.md)、`design-rationale.md` 与上游同步 playbook。
-- 操作参考：[`codex-project-operating-guide.md`](3_reference/codex-project-operating-guide.md) 与主动澄清参考 [`codex-hook-signals.md`](3_reference/codex-hook-signals.md)；自动 Clarify / Focus Hook 已退役。
+- 操作参考：[`codex-project-operating-guide.md`](3_reference/codex-project-operating-guide.md)、[项目自有 Rust Hook](3_reference/project-rust-hooks.md) 与主动澄清参考 [`codex-hook-signals.md`](3_reference/codex-hook-signals.md)；自动 Clarify / Focus Hook 已退役。
 - `$bridgeforge-codex` 的运行手册属于产品源码，位于 [`skills/bridgeforge-codex/references/`](../skills/bridgeforge-codex/references/)，不纳入 `doc/`。
 
 ## Delivery topic
 
 | Topic | 主要记录 |
 |---|---|
+| `project-rust-hooks` | [项目自有 Rust Hook 构建与 Assist 迁移](1_delivery/project-rust-hooks/requirements_2026-09-03_project-rust-hooks.md) |
 | `project-knowledgebase-layer` | 固定第六层项目知识库、项目内容保留与逐源迁移支持，见[确认卡](1_delivery/project-knowledgebase-layer/requirements_2026-09-03_project-knowledgebase-layer.md)（2026-09-03） |
 | `rust-only-bridgeforge` | BridgeForge 工厂与下发骨架整体退役 Python，以 Rust CLI 迁移检查、项目同步、Git、批处理、Native Memory 和测试，并最终删除全部 `.py` 与 `.venv` 依赖；含[确认卡](1_delivery/rust-only-bridgeforge/requirements_2026-09-01_rust-only-bridgeforge.md)与[协作记录](1_delivery/rust-only-bridgeforge/collabs_2026-09-01_rust-only-bridgeforge.md)（2026-09-01） |
 | `rust-hook-runtime` | 将项目骨架 6 个 Hook 的完整触发链迁移到 Rust，安装/升级时由 Cargo 构建，运行时零 Python，并保持跨平台、无窗口与失败语义等价；含[确认卡](1_delivery/rust-hook-runtime/requirements_2026-09-01_rust-hook-runtime.md)与[协作记录](1_delivery/rust-hook-runtime/collabs_2026-09-01_rust-hook-runtime.md)（2026-09-01） |
