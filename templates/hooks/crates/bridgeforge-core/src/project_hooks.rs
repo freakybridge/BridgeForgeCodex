@@ -10,7 +10,34 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const REGISTRY: &str = "bridgeforgeProjectHooks";
+pub(crate) const REGISTRY_PATH: &str = ".codex/project-hooks.json";
 const HANDLER_ID: &str = "bridgeforgeProjectHookId";
+
+/// Merge registry inputs in memory only. The legacy root key is never serialized
+/// back into Codex's native configuration.
+pub(crate) fn with_registry(document: &Value, sidecar: Option<&[u8]>) -> Result<Value, String> {
+    let mut combined = document.clone();
+    if let Some(payload) = sidecar {
+        let registry = crate::baseline::parse_unique_json(payload, REGISTRY_PATH)?;
+        if let Some(legacy) = document.get(REGISTRY) {
+            if legacy != &registry {
+                return Err(
+                    "conflicting legacy and standalone project Rust hook registries".into(),
+                );
+            }
+        }
+        combined
+            .as_object_mut()
+            .ok_or("hooks config must be an object")?
+            .insert(REGISTRY.into(), registry);
+    }
+    hooks(&combined)?;
+    Ok(combined)
+}
+
+pub(crate) fn registry(document: &Value) -> Option<&Value> {
+    document.get(REGISTRY)
+}
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -150,6 +177,10 @@ pub(crate) fn render(document: &Value) -> Result<Value, String> {
     }
     let entries = hooks(document)?;
     let mut result = document.clone();
+    result
+        .as_object_mut()
+        .ok_or("hooks config must be an object")?
+        .remove(REGISTRY);
     let Some(groups) = result.get_mut("hooks").and_then(Value::as_object_mut) else {
         if entries.is_empty() {
             return Ok(result);
@@ -241,15 +272,20 @@ pub(crate) fn owned(root: &Path, hook: &Hook) -> Result<bool, String> {
 }
 
 pub(crate) fn verify(root: &Path, contract: &Value, runtime: bool) -> Result<Vec<String>, String> {
+    let sidecar = read(root, REGISTRY_PATH)?;
     let Some(payload) = read(root, ".codex/hooks.json")? else {
+        if sidecar.is_some() {
+            return Err("project Rust hook registry requires hooks.json".into());
+        }
         return Ok(Vec::new());
     };
     let document = crate::baseline::parse_unique_json(&payload, "hooks.json")?;
-    if render(&document)? != document {
+    let combined = with_registry(&document, sidecar.as_deref())?;
+    if render(&combined)? != document {
         return Err("project Rust hook registrations drifted".into());
     }
     let mut checked = Vec::new();
-    for hook in hooks(&document)? {
+    for hook in hooks(&combined)? {
         let source = read(root, &hook.source())?.ok_or("project Rust hook source is missing")?;
         let input = identity(&hook, &source, contract)?;
         if runtime && !current(root, &hook, &input)? {

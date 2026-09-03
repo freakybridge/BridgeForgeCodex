@@ -533,6 +533,88 @@ fn composite_migration_failure_restores_every_source_before_stamping() {
 }
 
 #[test]
+fn project_hook_registry_migration_receipt_matches_final_native_payload() {
+    let f = Fixture::new();
+    let (factory, project, mut manifest) = composite_fixture(&f, false);
+    let decision = manifest["sources"][0]["decisions"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|d| d["target"] == ".codex/hooks.json")
+        .unwrap();
+    let mut document: Value =
+        serde_json::from_str(decision["content_utf8"].as_str().unwrap()).unwrap();
+    document["bridgeforgeProjectHooks"] = json!({"schema_version":1,"hooks":[]});
+    decision["content_utf8"] = json!(document.to_string());
+    let plan =
+        build_plan_with_inputs(&project, &factory, SyncMode::Adopt, Some(&manifest), None).unwrap();
+    let target = plan.asset_migration["targets"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["target"] == ".codex/hooks.json")
+        .unwrap();
+    let expected = target["after_sha256"].as_str().unwrap().to_string();
+    apply_plan(plan.clone(), &plan.aggregate_fingerprint, true).unwrap();
+    assert_eq!(
+        hash(fs::read(project.join(".codex/hooks.json")).unwrap()),
+        expected
+    );
+    assert!(project.join(".codex/project-hooks.json").is_file());
+}
+
+#[test]
+fn standalone_project_hook_registry_is_required_preserve_during_rebuild() {
+    let f = Fixture::new();
+    let (factory, project) = minimal(&f);
+    write(&project.join(".codex/hooks.json"), b"{\"hooks\":{}}");
+    write(
+        &project.join(".codex/project-hooks.json"),
+        b"{\"schema_version\":1,\"hooks\":[]}",
+    );
+    let plan = build_plan(&project, &factory, SyncMode::Adopt).unwrap();
+    assert!(
+        plan.preservation_manifest["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(
+                |e| e["id"] == "R:project-hook-registry" && e["disposition"] == "required-preserve"
+            )
+    );
+    assert!(
+        !plan
+            .gaps
+            .iter()
+            .any(|gap| gap.contains("project-hooks.json"))
+    );
+}
+
+#[test]
+fn legacy_hook_migration_accepts_explicit_standalone_registry() {
+    let f = Fixture::new();
+    let (_, project, mut manifest) = composite_fixture(&f, false);
+    let decisions = manifest["sources"][0]["decisions"].as_array_mut().unwrap();
+    let native = decisions
+        .iter_mut()
+        .find(|d| d["target"] == ".codex/hooks.json")
+        .unwrap();
+    let mut document: Value =
+        serde_json::from_str(native["content_utf8"].as_str().unwrap()).unwrap();
+    document["hooks"]["Stop"].as_array_mut().unwrap().pop();
+    native["content_utf8"] = json!(document.to_string());
+    decisions.push(json!({"target":".codex/project-hooks.json","asset_type":"hook-registration","target_before_sha256":null,"content_utf8":json!({"schema_version":1,"hooks":[{"id":"sample","events":[{"event":"Stop"}]}]}).to_string()}));
+    let validated =
+        bridgeforge_core::asset_migration::validate_manifest(&project, &manifest, &[]).unwrap();
+    assert!(
+        validated
+            .targets
+            .iter()
+            .any(|t| t.target == ".codex/project-hooks.json")
+    );
+}
+
+#[test]
 fn migration_cannot_register_a_hook_only_in_a_note() {
     let f = Fixture::new();
     let (factory, project, mut manifest) = composite_fixture(&f, false);

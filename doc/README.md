@@ -50,7 +50,7 @@ delivery_layout: flat
 |---|---|---|
 | `0_architecture/` | 架构与设计依据 | `design/` |
 | `1_delivery/` | 需求确认、计划、验收、协作与专题讨论 | 见下方 topic 索引 |
-| `2_bugs/` | 已知故障及其修复记录 | 27 条故障记录 |
+| `2_bugs/` | 已知故障及其修复记录 | 28 条故障记录 |
 | `3_reference/` | 外部资料与可复用参考实现 | `examples/antifab-deny-hook.rs` |
 | `4_archive/` | 已完成或已失效的历史材料 | 既有历史档案；后续按 `delivery/`、`bugs/` 分类归档 |
 | `5_project_knowledgebase/` | 项目自有知识话题与长期资料 | 当前为空 |
@@ -65,7 +65,7 @@ delivery_layout: flat
 
 | Topic | 主要记录 |
 |---|---|
-| `project-rust-hooks` | [项目自有 Rust Hook 构建与 Assist 迁移](1_delivery/project-rust-hooks/requirements_2026-09-03_project-rust-hooks.md) |
+| `project-rust-hooks` | [项目自有 Rust Hook 构建与 Assist 迁移](1_delivery/project-rust-hooks/requirements_2026-09-03_project-rust-hooks.md)；[Hook 登记兼容性修复](1_delivery/project-rust-hooks/requirements_2026-09-03_hook-registry-compatibility.md) |
 | `project-knowledgebase-layer` | 固定第六层项目知识库、项目内容保留与逐源迁移支持，见[确认卡](1_delivery/project-knowledgebase-layer/requirements_2026-09-03_project-knowledgebase-layer.md)（2026-09-03） |
 | `rust-only-bridgeforge` | BridgeForge 工厂与下发骨架整体退役 Python，以 Rust CLI 迁移检查、项目同步、Git、批处理、Native Memory 和测试，并最终删除全部 `.py` 与 `.venv` 依赖；含[确认卡](1_delivery/rust-only-bridgeforge/requirements_2026-09-01_rust-only-bridgeforge.md)与[协作记录](1_delivery/rust-only-bridgeforge/collabs_2026-09-01_rust-only-bridgeforge.md)（2026-09-01） |
 | `rust-hook-runtime` | 将项目骨架 6 个 Hook 的完整触发链迁移到 Rust，安装/升级时由 Cargo 构建，运行时零 Python，并保持跨平台、无窗口与失败语义等价；含[确认卡](1_delivery/rust-hook-runtime/requirements_2026-09-01_rust-hook-runtime.md)与[协作记录](1_delivery/rust-hook-runtime/collabs_2026-09-01_rust-hook-runtime.md)（2026-09-01） |
@@ -133,6 +133,7 @@ delivery_layout: flat
 - [`BUG-target-cleanup-core-skeleton-ownership.md`](2_bugs/BUG-target-cleanup-core-skeleton-ownership.md)
 - [`BUG-aggressive-absorption-drops-downstream-rule-semantics.md`](2_bugs/BUG-aggressive-absorption-drops-downstream-rule-semantics.md)
 - [`BUG-git-sync-sandbox-permission.md`](2_bugs/BUG-git-sync-sandbox-permission.md)
+- [`BUG-project-hook-registry-native-schema.md`](2_bugs/BUG-project-hook-registry-native-schema.md)（修复项目 Rust Hook 独立登记与原生配置兼容性，验收证据见关联确认卡）
 - [`BUG-git-sync-contract-transition-classification.md`](2_bugs/BUG-git-sync-contract-transition-classification.md)（1.5.5 修复已通过工厂验证与独立审计，等待 Batch restart 的真实下游复验）
 - [`BUG-current-baseline-gitattributes-hook-reinitializes-real-repository.md`](2_bugs/BUG-current-baseline-gitattributes-hook-reinitializes-real-repository.md)（源码与回归已修复，等待发布和 StratusAgent 真实恢复）
 - [`BUG-batch-pending-drift-deadlock.md`](2_bugs/BUG-batch-pending-drift-deadlock.md)（状态机与修复见证已修复，等待发布后重启原批次）

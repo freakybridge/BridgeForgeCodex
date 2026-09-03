@@ -37,7 +37,7 @@ dependencies = [
 
 [[package]]
 name = "bridgeforge-cli"
-version = "1.12.0"
+version = "1.12.2"
 dependencies = [
  "bridgeforge-core",
  "serde_json",
@@ -45,7 +45,7 @@ dependencies = [
 
 [[package]]
 name = "bridgeforge-core"
-version = "1.12.0"
+version = "1.12.2"
 dependencies = [
  "chrono",
  "libc",
@@ -60,7 +60,7 @@ dependencies = [
 
 [[package]]
 name = "bridgeforge-hook"
-version = "1.12.0"
+version = "1.12.2"
 dependencies = [
  "bridgeforge-core",
  "chrono",

@@ -211,6 +211,9 @@ fn plan_fingerprint(
     material.push_str(
         &serde_json::to_string(preservation_manifest).map_err(|error| error.to_string())?,
     );
+    if let Some(registry) = generated_source_fingerprints.get("project-hook:registry-input") {
+        material.push_str(&format!("\nproject-hook:registry-input={registry}\n"));
+    }
     Ok(sha_raw(material.as_bytes()))
 }
 
@@ -1045,6 +1048,17 @@ fn destructive_inventory(
     exact.extend(known_existing.iter().map(|target| target.to_lowercase()));
 
     let mut required_prefixes = Vec::<String>::new();
+    let registry_target = crate::project_hooks::REGISTRY_PATH;
+    if let Some(payload) = crate::project_hooks::read(project_root, registry_target)? {
+        if !exact.contains(&registry_target.to_lowercase()) {
+            entries.push(json!({
+                "id": "R:project-hook-registry", "kind": "project-hook-registry",
+                "target": registry_target, "before_sha256": sha_git(&payload),
+                "disposition": "required-preserve"
+            }));
+            exact.insert(registry_target.to_lowercase());
+        }
+    }
     for (id, target) in [
         ("R:project-map:find-doc", ".codex/find-doc.map.md"),
         ("R:project-map:sync-docs", ".codex/sync-docs.map.md"),
@@ -1606,7 +1620,7 @@ pub fn build_plan_with_inputs(
             after_sha256: "sha256:deleted".into(),
         });
     }
-    let asset_migration = if migration_sources.is_empty() {
+    let mut asset_migration = if migration_sources.is_empty() {
         json!({"status": "not-required", "source_count": 0, "target_count": 0})
     } else if let Some(validated) = migration.as_mut() {
         for target in &mut validated.targets {
@@ -1681,6 +1695,17 @@ pub fn build_plan_with_inputs(
         &mut risk,
         &mut generated_source_fingerprints,
     )?;
+    // Hook projection can rewrite a migration target. Receipts must describe the
+    // final transactional payload, not the pre-projection configuration.
+    if let Some(targets) = asset_migration["targets"].as_array_mut() {
+        for target in targets {
+            if let Some(path) = target["target"].as_str() {
+                if let Some(payload) = writes.get(&project_root.join(path)) {
+                    target["after_sha256"] = json!(sha_raw(payload));
+                }
+            }
+        }
+    }
     safe.sort_by(|left, right| left.target.cmp(&right.target));
     risk.sort_by(|left, right| left.target.cmp(&right.target));
     let fingerprint = plan_fingerprint(
@@ -1743,13 +1768,47 @@ fn plan_project_hooks(
 > {
     let mut reads = BTreeMap::new();
     let mut inputs = Vec::new();
+    let registry_target = crate::project_hooks::REGISTRY_PATH;
+    let registry_path = root.join(registry_target);
+    if deletes.contains(&registry_path) {
+        return Err("project Rust hook registry is scheduled for deletion".into());
+    }
+    let registry_original = crate::project_hooks::read(root, registry_target)?;
+    let registry_payload = writes
+        .get(&registry_path)
+        .cloned()
+        .or_else(|| registry_original.clone());
+    reads.insert(registry_target.into(), registry_original.clone());
     let original = crate::project_hooks::read(root, ".codex/hooks.json")?;
     let path = root.join(".codex/hooks.json");
     let Some(payload) = writes.get(&path).cloned().or_else(|| original.clone()) else {
+        if registry_payload.is_some() {
+            return Err("project Rust hook registry requires hooks.json".into());
+        }
         return Ok((inputs, reads));
     };
     let document = crate::baseline::parse_unique_json(&payload, "hooks.json")?;
-    let registered = crate::project_hooks::render(&document)?;
+    let combined = crate::project_hooks::with_registry(&document, registry_payload.as_deref())?;
+    let registered = crate::project_hooks::render(&combined)?;
+    if let Some(registry) = crate::project_hooks::registry(&combined) {
+        fingerprints.insert(
+            "project-hook:registry-input".into(),
+            crate::manifest::canonical_sha(registry)?,
+        );
+        if registry_payload.is_none() {
+            let mut payload = serde_json::to_vec_pretty(registry).map_err(|e| e.to_string())?;
+            payload.push(b'\n');
+            risk.push(SyncAction {
+                id: "project-hook:registry".into(),
+                target: registry_target.into(),
+                operation: "create".into(),
+                risk: true,
+                before_sha256: None,
+                after_sha256: sha_git(&payload),
+            });
+            writes.insert(registry_path, payload);
+        }
+    }
     reads.insert(".codex/hooks.json".into(), original.clone());
     if registered != document {
         let mut payload = serde_json::to_vec_pretty(&registered).map_err(|e| e.to_string())?;
@@ -1776,7 +1835,7 @@ fn plan_project_hooks(
         }
         writes.insert(path, payload);
     }
-    for hook in crate::project_hooks::hooks(&registered)? {
+    for hook in crate::project_hooks::hooks(&combined)? {
         let source_path = root.join(hook.source());
         if deletes.contains(&source_path) {
             return Err("registered project Rust hook source is scheduled for deletion".into());

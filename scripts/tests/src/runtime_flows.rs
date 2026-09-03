@@ -253,10 +253,11 @@ fn project_sync_real_init_builds_and_applies_generated_assets() {
     // Project hook installation is a subsequent compatible update.
     // but remains outside managed source ownership. Its regular branch reads stdin.
     write(&project.join(".codex/hooks/project_demo/entrypoint.rs"),b"pub fn run(args:Vec<String>)->i32 { use std::io::Read; let mut input=String::new(); std::io::stdin().read_to_string(&mut input).unwrap(); println!(\"{}:{}\",args.join(\",\"),input); 0 }");
-    let hooks_path=project.join(".codex/hooks.json");
-    let mut hooks_config:serde_json::Value=serde_json::from_slice(&fs::read(&hooks_path).unwrap()).unwrap();
-    hooks_config["bridgeforgeProjectHooks"]=json!({"schema_version":1,"hooks":[{"id":"demo","events":[{"event":"SessionStart","args":["check"]}]}]});
-    write(&hooks_path,&serde_json::to_vec(&hooks_config).unwrap());
+    let hooks_path = project.join(".codex/hooks.json");
+    let mut hooks_config: serde_json::Value =
+        serde_json::from_slice(&fs::read(&hooks_path).unwrap()).unwrap();
+    hooks_config["bridgeforgeProjectHooks"] = json!({"schema_version":1,"hooks":[{"id":"demo","events":[{"event":"SessionStart","args":["check"]}]}]});
+    write(&hooks_path, &serde_json::to_vec(&hooks_config).unwrap());
     let project_binary = project.join(format!(
         ".codex/bin/project_demo{}",
         std::env::consts::EXE_SUFFIX
@@ -301,6 +302,18 @@ fn project_sync_real_init_builds_and_applies_generated_assets() {
         initial_stamp
     );
     fs::write(input_path, original_input).unwrap();
+    let registry_path = project.join(".codex/project-hooks.json");
+    assert!(
+        !registry_path.exists(),
+        "plan/build must not migrate registration early"
+    );
+    fs::write(&registry_path, b"registry appeared after plan").unwrap();
+    assert!(
+        apply_plan(plan.clone(), &plan.aggregate_fingerprint, true)
+            .unwrap_err()
+            .contains("input changed after plan")
+    );
+    fs::remove_file(&registry_path).unwrap();
     let expected = plan
         .safe
         .iter()
@@ -309,6 +322,52 @@ fn project_sync_real_init_builds_and_applies_generated_assets() {
         .collect::<Vec<_>>();
     let fingerprint = plan.aggregate_fingerprint.clone();
     apply_plan(plan, &fingerprint, true).unwrap();
+    let native: serde_json::Value =
+        serde_json::from_slice(&fs::read(&hooks_path).unwrap()).unwrap();
+    assert!(
+        native
+            .as_object()
+            .unwrap()
+            .keys()
+            .all(|key| matches!(key.as_str(), "description" | "hooks"))
+    );
+    let registry = fs::read(&registry_path).unwrap();
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&registry).unwrap(),
+        hooks_config["bridgeforgeProjectHooks"]
+    );
+    // Index verification cannot silently use working-tree registry contents.
+    for args in [vec!["init"], vec!["add", "--force", "."]] {
+        let mut request = ProcessRequest::new("git", &project);
+        request.args = args.into_iter().map(Into::into).collect();
+        let output = SystemProcessRunner.run(&request).unwrap();
+        assert_eq!(
+            output.code,
+            0,
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    fs::write(&registry_path, b"invalid working-tree registry").unwrap();
+    bridgeforge_core::baseline::verify_index(&project, &SystemProcessRunner).unwrap();
+    fs::write(&registry_path, &registry).unwrap();
+    let mut unstage = ProcessRequest::new("git", &project);
+    unstage.args = [
+        "rm",
+        "--cached",
+        "--force",
+        "--",
+        ".codex/project-hooks.json",
+    ]
+    .into_iter()
+    .map(Into::into)
+    .collect();
+    assert_eq!(SystemProcessRunner.run(&unstage).unwrap().code, 0);
+    assert!(
+        bridgeforge_core::baseline::verify_index(&project, &SystemProcessRunner)
+            .unwrap_err()
+            .contains("no registry")
+    );
     for (target, hash) in expected {
         assert_eq!(
             hash,
@@ -366,6 +425,114 @@ fn project_sync_real_init_builds_and_applies_generated_assets() {
         0,
         "ordinary downstream Cargo test must not require factory tests: {}",
         String::from_utf8_lossy(&result.stderr)
+    );
+}
+
+/// Explicitly opt in to reading ONLY the two named files of a real downstream.
+/// No vault mappings/data are copied and no project business mode is executed.
+#[test]
+#[ignore = "requires an explicitly authorized BRIDGEFORGE_ASSIST_FIXTURE_SOURCE"]
+fn assist_registry_migration_in_isolated_fixture() {
+    let source = PathBuf::from(
+        std::env::var_os("BRIDGEFORGE_ASSIST_FIXTURE_SOURCE").expect("explicit source required"),
+    );
+    let native_path = source.join(".codex/hooks.json");
+    let entry_path = source.join(".codex/hooks/project_vault/entrypoint.rs");
+    let original_native = fs::read(&native_path).unwrap();
+    let original_entry = fs::read(&entry_path).unwrap();
+    let original: serde_json::Value = serde_json::from_slice(&original_native).unwrap();
+    assert_eq!(
+        original["bridgeforgeProjectHooks"]["hooks"][0]["id"],
+        "vault"
+    );
+    let temp = TestDirectory::new("assist-registry-compatibility");
+    let project = temp.0.join("project");
+    fs::create_dir_all(&project).unwrap();
+    let factory = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .ancestors()
+        .nth(2)
+        .unwrap();
+    let contract: serde_json::Value =
+        serde_json::from_slice(&fs::read(factory.join("templates/managed-skeleton.json")).unwrap())
+            .unwrap();
+    let mut initial = build_plan(&project, factory, SyncMode::Init).unwrap();
+    attach_generated_assets(
+        &mut initial,
+        factory,
+        &project,
+        &contract,
+        &SystemProcessRunner,
+    )
+    .unwrap();
+    let fingerprint = initial.aggregate_fingerprint.clone();
+    apply_plan(initial, &fingerprint, false).unwrap();
+    write(&project.join(".codex/hooks.json"), &original_native);
+    write(
+        &project.join(".codex/hooks/project_vault/entrypoint.rs"),
+        &original_entry,
+    );
+    let mut plan = build_plan(&project, factory, SyncMode::Update).unwrap();
+    assert!(plan.gaps.is_empty(), "{:?}", plan.gaps);
+    assert!(
+        plan.risk
+            .iter()
+            .any(|action| action.target == ".codex/project-hooks.json")
+    );
+    let fingerprint = plan.aggregate_fingerprint.clone();
+    attach_generated_assets(
+        &mut plan,
+        factory,
+        &project,
+        &contract,
+        &SystemProcessRunner,
+    )
+    .unwrap();
+    assert_eq!(plan.aggregate_fingerprint, fingerprint);
+    apply_plan(plan, &fingerprint, true).unwrap();
+    let migrated: serde_json::Value =
+        serde_json::from_slice(&fs::read(project.join(".codex/hooks.json")).unwrap()).unwrap();
+    assert!(
+        migrated
+            .as_object()
+            .unwrap()
+            .keys()
+            .all(|key| matches!(key.as_str(), "description" | "hooks"))
+    );
+    assert_eq!(
+        migrated["hooks"], original["hooks"],
+        "Assist commands/events must stay identical"
+    );
+    let registry: serde_json::Value =
+        serde_json::from_slice(&fs::read(project.join(".codex/project-hooks.json")).unwrap())
+            .unwrap();
+    assert_eq!(registry, original["bridgeforgeProjectHooks"]);
+    assert_eq!(
+        fs::read(project.join(".codex/hooks/project_vault/entrypoint.rs")).unwrap(),
+        original_entry
+    );
+    bridgeforge_core::baseline::verify(&project, None, true).unwrap();
+    assert_eq!(
+        build_plan(&project, factory, SyncMode::Update)
+            .unwrap()
+            .status,
+        "current"
+    );
+    assert!(!project.join("vault").exists());
+    assert!(!project.join("vault-mirror").exists());
+    assert!(!project.join("vault_node_map").exists());
+    assert_eq!(
+        fs::read(&native_path).unwrap(),
+        original_native,
+        "real downstream config is read-only"
+    );
+    assert_eq!(
+        fs::read(&entry_path).unwrap(),
+        original_entry,
+        "real business source is read-only"
+    );
+    println!(
+        "Assist fixture: native commands identical; registry moved; source sha256:{:x}; locked build/baseline passed; second plan current; no vault business execution",
+        Sha256::digest(&original_entry)
     );
 }
 

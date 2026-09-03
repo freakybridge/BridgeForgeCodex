@@ -1035,16 +1035,158 @@ fn failed_prospective_check_restores_project_hook_payloads_and_retired_source() 
 
 #[test]
 fn project_hook_registration_serialization_is_stable_on_next_merge() {
-    let (root,_) = transaction_fixture(true);
+    let (root, _) = transaction_fixture(true);
     fs::create_dir_all(root.join(".codex/hooks/project_demo")).unwrap();
-    fs::write(root.join(".codex/hooks/project_demo/entrypoint.rs"),b"pub fn run(_:Vec<String>)->i32{0}").unwrap();
-    let config=json!({"hooks":{},"bridgeforgeProjectHooks":{"schema_version":1,"hooks":[{"id":"demo","events":[{"event":"Stop"}]}]}});
-    fs::write(root.join(".codex/hooks.json"),serde_json::to_vec(&config).unwrap()).unwrap();
-    let contract=json!({"generated_assets":[{"source_tree_sha256":"source","lockfile_sha256":"lock"}]});
-    let mut writes=BTreeMap::new();
-    plan_project_hooks(&root,&contract,&mut writes,&[],&mut Vec::new(),&mut Vec::new(),&mut BTreeMap::new()).unwrap();
-    let payload=writes.get(&root.join(".codex/hooks.json")).unwrap();
-    assert_eq!(merge_project_hooks(b"{\"hooks\":{}}",Some(payload)).unwrap(),*payload,"first install must already use the stable hook JSON encoding");
+    fs::write(
+        root.join(".codex/hooks/project_demo/entrypoint.rs"),
+        b"pub fn run(_:Vec<String>)->i32{0}",
+    )
+    .unwrap();
+    let config = json!({"hooks":{},"bridgeforgeProjectHooks":{"schema_version":1,"hooks":[{"id":"demo","events":[{"event":"Stop"}]}]}});
+    fs::write(
+        root.join(".codex/hooks.json"),
+        serde_json::to_vec(&config).unwrap(),
+    )
+    .unwrap();
+    let contract =
+        json!({"generated_assets":[{"source_tree_sha256":"source","lockfile_sha256":"lock"}]});
+    let mut writes = BTreeMap::new();
+    plan_project_hooks(
+        &root,
+        &contract,
+        &mut writes,
+        &[],
+        &mut Vec::new(),
+        &mut Vec::new(),
+        &mut BTreeMap::new(),
+    )
+    .unwrap();
+    let payload = writes.get(&root.join(".codex/hooks.json")).unwrap();
+    assert_eq!(
+        merge_project_hooks(b"{\"hooks\":{}}", Some(payload)).unwrap(),
+        *payload,
+        "first install must already use the stable hook JSON encoding"
+    );
+    let native: Value = serde_json::from_slice(payload).unwrap();
+    assert!(
+        native
+            .as_object()
+            .unwrap()
+            .keys()
+            .all(|key| matches!(key.as_str(), "description" | "hooks"))
+    );
+    let registry = writes
+        .get(&root.join(crate::project_hooks::REGISTRY_PATH))
+        .unwrap();
+    assert_eq!(
+        serde_json::from_slice::<Value>(registry).unwrap(),
+        config["bridgeforgeProjectHooks"]
+    );
+    for (path, payload) in &writes {
+        fs::write(path, payload).unwrap();
+    }
+    let mut next_writes = BTreeMap::new();
+    let (_, reads) = plan_project_hooks(
+        &root,
+        &contract,
+        &mut next_writes,
+        &[],
+        &mut Vec::new(),
+        &mut Vec::new(),
+        &mut BTreeMap::new(),
+    )
+    .unwrap();
+    assert!(
+        next_writes.is_empty(),
+        "canonical registry must not be rewritten"
+    );
+    assert!(reads.contains_key(crate::project_hooks::REGISTRY_PATH));
+    fs::write(
+        root.join(".codex/hooks.json"),
+        serde_json::to_vec(&config).unwrap(),
+    )
+    .unwrap();
+    fs::write(
+        root.join(crate::project_hooks::REGISTRY_PATH),
+        br#"{"schema_version":1,"hooks":[]}"#,
+    )
+    .unwrap();
+    assert!(
+        plan_project_hooks(
+            &root,
+            &contract,
+            &mut BTreeMap::new(),
+            &[],
+            &mut Vec::new(),
+            &mut Vec::new(),
+            &mut BTreeMap::new()
+        )
+        .unwrap_err()
+        .contains("conflicting")
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn project_hook_registry_migration_is_atomic_and_rejects_input_drift() {
+    let (root, mut plan) = transaction_fixture(true);
+    let original=br#"{"description":"keep","hooks":{},"bridgeforgeProjectHooks":{"schema_version":1,"hooks":[]}}"#;
+    fs::write(root.join(".codex/hooks.json"), original).unwrap();
+    let (inputs, reads) = plan_project_hooks(
+        &root,
+        &json!({}),
+        &mut plan.writes,
+        &[],
+        &mut plan.safe,
+        &mut plan.risk,
+        &mut plan.generated_source_fingerprints,
+    )
+    .unwrap();
+    plan.project_hook_inputs = inputs;
+    plan.project_hook_reads = reads;
+    plan.confirmation_required = true;
+    plan.aggregate_fingerprint = plan_fingerprint(
+        &plan.mode,
+        &plan.current_version,
+        &plan.safe,
+        &plan.risk,
+        &plan.preservation_manifest,
+        &plan.generated_source_fingerprints,
+    )
+    .unwrap();
+    let fingerprint = plan.aggregate_fingerprint.clone();
+    assert!(apply_plan(plan.clone(), &fingerprint, false).is_err());
+    let registry_path = root.join(crate::project_hooks::REGISTRY_PATH);
+    assert!(!registry_path.exists());
+    fs::write(&registry_path, b"unexpected").unwrap();
+    assert!(
+        apply_plan(plan.clone(), &fingerprint, true)
+            .unwrap_err()
+            .contains("input changed after plan")
+    );
+    fs::remove_file(&registry_path).unwrap();
+    let observer = |_: &Path, _: &Path| {
+        assert!(registry_path.is_file());
+        assert!(
+            serde_json::from_slice::<Value>(&fs::read(root.join(".codex/hooks.json")).unwrap())
+                .unwrap()
+                .get("bridgeforgeProjectHooks")
+                .is_none()
+        );
+        Err("injected after registry migration".into())
+    };
+    assert!(
+        apply_plan_internal(plan.clone(), &fingerprint, true, Some(&observer))
+            .unwrap_err()
+            .contains("rolled back")
+    );
+    assert!(!registry_path.exists());
+    assert_eq!(fs::read(root.join(".codex/hooks.json")).unwrap(), original);
+    apply_plan(plan, &fingerprint, true).unwrap();
+    assert_eq!(
+        serde_json::from_slice::<Value>(&fs::read(registry_path).unwrap()).unwrap(),
+        json!({"schema_version":1,"hooks":[]})
+    );
     fs::remove_dir_all(root).unwrap();
 }
 

@@ -19,6 +19,15 @@ fn knowledge_documentation_has_a_fixed_directory_boundary() {
 
 #[test]
 fn rust_hook_and_test_targets_are_supported() {
+    assert!(valid_target_type("hook-registration", ".codex/hooks.json"));
+    assert!(valid_target_type(
+        "hook-registration",
+        ".codex/project-hooks.json"
+    ));
+    assert!(!valid_target_type(
+        "hook-registration",
+        ".codex/other-hooks.json"
+    ));
     assert!(valid_target_type(
         "hook",
         ".codex/hooks/project_x/entrypoint.rs"

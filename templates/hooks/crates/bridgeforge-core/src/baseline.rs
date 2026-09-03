@@ -1034,10 +1034,32 @@ pub fn verify_index(root: &Path, runner: &dyn ProcessRunner) -> Result<BaselineR
             &git_index_blob(root, ".codex/hooks.json", runner)?,
             "staged hooks.json",
         )?;
-        if crate::project_hooks::render(&document)? != document {
+        let registry_path = crate::project_hooks::REGISTRY_PATH;
+        let mut request = ProcessRequest::new("git", root);
+        request.args = vec![
+            "ls-files".into(),
+            "--stage".into(),
+            "-z".into(),
+            "--".into(),
+            registry_path.into(),
+        ];
+        request.timeout = std::time::Duration::from_secs(45);
+        let output = runner
+            .run(&request)
+            .map_err(|e| format!("cannot inspect staged project hook registry: {e}"))?;
+        if output.timed_out || output.code != 0 {
+            return Err("cannot inspect staged project hook registry".into());
+        }
+        let registry = if output.stdout.is_empty() {
+            None
+        } else {
+            Some(git_index_blob(root, registry_path, runner)?)
+        };
+        let combined = crate::project_hooks::with_registry(&document, registry.as_deref())?;
+        if crate::project_hooks::render(&combined)? != document {
             return Err("staged project Rust hook registrations drifted".into());
         }
-        for hook in crate::project_hooks::hooks(&document)? {
+        for hook in crate::project_hooks::hooks(&combined)? {
             let source = git_index_blob(root, &hook.source(), runner)?;
             std::str::from_utf8(&source)
                 .map_err(|_| "staged project Rust hook source must be UTF-8")?;

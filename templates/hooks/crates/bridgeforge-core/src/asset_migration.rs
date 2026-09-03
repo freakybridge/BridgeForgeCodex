@@ -142,7 +142,10 @@ fn valid_target_type(kind: &str, target: &str) -> bool {
             .is_some_and(|(bundle, entry)| {
                 bundle.starts_with("project_") && bundle.len() > 8 && entry == "entrypoint.rs"
             }),
-        "hook-registration" => target == ".codex/hooks.json",
+        "hook-registration" => matches!(
+            target,
+            ".codex/hooks.json" | crate::project_hooks::REGISTRY_PATH
+        ),
         "test" => target.starts_with("scripts/tests/") && target.ends_with(".rs"),
         "delivery" | "todo" => target.starts_with("doc/1_delivery/") && target.ends_with(".md"),
         "bug" => target.starts_with("doc/2_bugs/") && target.ends_with(".md"),
@@ -294,8 +297,13 @@ pub fn validate_manifest(
             let registration = targets
                 .get(".codex/hooks.json")
                 .ok_or("hook migration requires its hooks.json registration")?;
-            let document: Value = serde_json::from_slice(&registration.payload)
-                .map_err(|_| "hook registration is not JSON")?;
+            let document =
+                crate::baseline::parse_unique_json(&registration.payload, "hook registration")?;
+            let registry = targets.get(crate::project_hooks::REGISTRY_PATH);
+            let document = crate::project_hooks::with_registry(
+                &document,
+                registry.map(|target| target.payload.as_slice()),
+            )?;
             let rust_registered = crate::project_hooks::hooks(&document)?
                 .iter()
                 .any(|hook| hook.source() == target.target);

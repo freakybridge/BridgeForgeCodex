@@ -22,7 +22,12 @@ fn temporary() -> Temporary {
 fn registry_is_strict_and_render_is_idempotent_and_preserves_custom_handlers() {
     let original = config();
     let rendered = render(&original).unwrap();
-    assert_eq!(render(&rendered).unwrap(), rendered);
+    assert!(rendered.get(REGISTRY).is_none());
+    let sidecar = serde_json::to_vec(&original[REGISTRY]).unwrap();
+    assert_eq!(
+        render(&with_registry(&rendered, Some(&sidecar)).unwrap()).unwrap(),
+        rendered
+    );
     assert_eq!(
         rendered["hooks"]["SessionStart"][0],
         original["hooks"]["SessionStart"][0]
@@ -57,6 +62,50 @@ fn registry_is_strict_and_render_is_idempotent_and_preserves_custom_handlers() {
     assert_eq!(
         render(&json!({"hooks":{"Stop":[]}})).unwrap(),
         json!({"hooks":{"Stop":[]}})
+    );
+}
+
+#[test]
+fn standalone_registry_conflicts_and_missing_native_config_fail_closed() {
+    let original = config();
+    let registry = serde_json::to_vec(&original[REGISTRY]).unwrap();
+    assert_eq!(with_registry(&original, Some(&registry)).unwrap(), original);
+    assert!(
+        with_registry(&original, Some(br#"{"schema_version":1,"hooks":[]}"#))
+            .unwrap_err()
+            .contains("conflicting")
+    );
+    assert!(
+        with_registry(
+            &json!({"hooks":{}}),
+            Some(br#"{"schema_version":1,"schema_version":1,"hooks":[]}"#)
+        )
+        .is_err()
+    );
+    assert!(
+        with_registry(
+            &json!({"hooks":{}}),
+            Some(br#"{"schema_version":1,"hooks":[],"unknown":true}"#)
+        )
+        .is_err()
+    );
+    let temp = temporary();
+    fs::create_dir_all(temp.0.join(".codex")).unwrap();
+    fs::write(temp.0.join(REGISTRY_PATH), &registry).unwrap();
+    assert!(
+        verify(&temp.0, &json!({}), false)
+            .unwrap_err()
+            .contains("requires hooks.json")
+    );
+    fs::write(
+        temp.0.join(".codex/hooks.json"),
+        serde_json::to_vec(&original).unwrap(),
+    )
+    .unwrap();
+    assert!(
+        verify(&temp.0, &json!({}), false)
+            .unwrap_err()
+            .contains("registrations drifted")
     );
 }
 
