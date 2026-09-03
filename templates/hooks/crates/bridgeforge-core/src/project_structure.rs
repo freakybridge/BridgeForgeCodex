@@ -239,11 +239,13 @@ pub fn inspect(root: &Path) -> StructureReport {
         .filter_map(Result::ok)
     {
         let name = entry.file_name().to_string_lossy().to_string();
-        if name != "README.md" && !LAYERS.contains(&name.as_str()) {
+        let directory_instructions =
+            name == "AGENTS.md" && entry.file_type().is_ok_and(|file_type| file_type.is_file());
+        if name != "README.md" && !LAYERS.contains(&name.as_str()) && !directory_instructions {
             report.errors.push(Finding {
                 code: "unexpected-doc-entry".into(),
                 path: relative(root, &entry.path()),
-                message: "doc/ 顶层只允许六层目录和 README.md".into(),
+                message: "doc/ 顶层只允许六层目录、README.md 和普通文件 AGENTS.md".into(),
             });
         }
     }

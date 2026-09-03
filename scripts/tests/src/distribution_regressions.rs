@@ -145,6 +145,61 @@ fn current_version_repair_applies_and_receipt_proves_finalization() {
 }
 
 #[test]
+fn doc_structure_accepts_directory_instructions() {
+    for layout in ["flat", "milestone"] {
+        let f = Fixture::new();
+        write(
+            &f.0.join("doc/README.md"),
+            format!("---\ndelivery_layout: {layout}\n---\n"),
+        );
+        for layer in [
+            "0_architecture",
+            "1_delivery",
+            "2_bugs",
+            "3_reference",
+            "4_archive",
+            "5_project_knowledgebase",
+        ] {
+            fs::create_dir_all(f.0.join("doc").join(layer)).unwrap();
+        }
+        write(
+            &f.0.join("doc/AGENTS.md"),
+            "# Documentation rules\n\n- Preserve project instructions.\n",
+        );
+        let report = bridgeforge_core::project_structure::inspect(&f.0);
+        assert!(report.errors.is_empty(), "{layout}: {report:?}");
+    }
+}
+
+#[test]
+fn doc_structure_rejects_unexpected_entries() {
+    for (name, directory) in [
+        ("extra.md", false),
+        ("6_unknown", true),
+        ("AGENTS.md", true),
+    ] {
+        let f = Fixture::new();
+        write(
+            &f.0.join("doc/README.md"),
+            "---\ndelivery_layout: flat\n---\n",
+        );
+        let path = f.0.join("doc").join(name);
+        if directory {
+            fs::create_dir_all(path).unwrap();
+        } else {
+            write(&path, "# Unexpected document\n");
+        }
+        let report = bridgeforge_core::project_structure::inspect(&f.0);
+        assert!(
+            report.errors.iter().any(|finding| {
+                finding.code == "unexpected-doc-entry" && finding.path == format!("doc/{name}")
+            }),
+            "{name}: {report:?}"
+        );
+    }
+}
+
+#[test]
 fn knowledge_structure_accepts_old_and_new_layout_and_never_auto_archives_topics() {
     let f = Fixture::new();
     write(

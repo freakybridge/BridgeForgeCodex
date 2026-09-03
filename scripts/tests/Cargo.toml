@@ -1,6 +1,6 @@
 [package]
 name = "bridgeforge-factory-tests"
-version = "1.12.2"
+version = "1.12.4"
 edition = "2024"
 rust-version = "1.88"
 publish = false
