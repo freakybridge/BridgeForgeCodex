@@ -218,6 +218,42 @@ fn memory_status_reports_consent_runtime_remote_health_and_alert_fields() {
     fs::remove_dir_all(home).unwrap();
 }
 
+#[cfg(windows)]
+#[test]
+fn memory_status_agrees_for_windows_path_separator_aliases_without_writing() {
+    let token = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let home = std::env::temp_dir().join(format!("memory-cli-path-alias-{token}"));
+    fs::create_dir_all(&home).unwrap();
+    let binary = std::env::current_exe().unwrap();
+    let document = bridgeforge_core::memory::user_config::expected_document(&binary, &home);
+    let payload = serde_json::to_vec_pretty(&document).unwrap();
+    fs::write(home.join("hooks.json"), &payload).unwrap();
+    let mut receipts = Vec::new();
+    for spelling in [
+        home.to_string_lossy().replace('\\', "/"),
+        home.to_string_lossy().replace('/', "\\"),
+    ] {
+        let outcome = run(&[
+            "memory-sync".into(),
+            "status".into(),
+            "--codex-home".into(),
+            spelling,
+        ]);
+        assert_eq!(outcome.code, 0);
+        let receipt = outcome.receipt.unwrap();
+        assert_eq!(receipt["hookInstalled"], true);
+        assert_eq!(receipt["hookRuntimeVerified"], false);
+        receipts.push(receipt);
+        assert_eq!(fs::read(home.join("hooks.json")).unwrap(), payload);
+        assert!(!home.join(".bridgeforge-codex").exists());
+    }
+    assert_eq!(receipts[0], receipts[1]);
+    fs::remove_dir_all(home).unwrap();
+}
+
 #[test]
 fn memory_failed_health_is_persistent_and_alerts_once() {
     let token = SystemTime::now()

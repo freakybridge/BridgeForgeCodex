@@ -50,7 +50,7 @@ delivery_layout: flat
 |---|---|---|
 | `0_architecture/` | 架构与设计依据 | `design/` |
 | `1_delivery/` | 需求确认、计划、验收、协作与专题讨论 | 见下方 topic 索引 |
-| `2_bugs/` | 已知故障及其修复记录 | 29 条故障记录 |
+| `2_bugs/` | 已知故障及其修复记录 | 30 条故障记录 |
 | `3_reference/` | 外部资料与可复用参考实现 | `examples/antifab-deny-hook.rs` |
 | `4_archive/` | 已完成或已失效的历史材料 | 既有历史档案；后续按 `delivery/`、`bugs/` 分类归档 |
 | `5_project_knowledgebase/` | 项目自有知识话题与长期资料 | 当前为空 |
@@ -122,6 +122,7 @@ delivery_layout: flat
 
 ## 当前 Bug records
 
+- [`BUG-native-memory-hook-path-separator-drift.md`](2_bugs/BUG-native-memory-hook-path-separator-drift.md)（Windows 等价路径引起用户级 Memory Hook 漂移误报，修复与验证进行中）
 - [`BUG-agents-ia/`](2_bugs/BUG-agents-ia/README.md)（当前状态与验证收据见该总账；IA-14 用户与 runtime 验收见 [`IA-14-user-runtime-acceptance.md`](2_bugs/BUG-agents-ia/IA-14-user-runtime-acceptance.md)）
 - [`BUG-codex-backend-unexpected-control-exit.md`](2_bugs/BUG-codex-backend-unexpected-control-exit.md)
 - [`BUG-windows-codex-hooks-open-visible-terminal.md`](2_bugs/BUG-windows-codex-hooks-open-visible-terminal.md)

@@ -1,5 +1,6 @@
 use super::ownership::{
-    ExpectedHooksState, MANAGED_ID_KEY, expected_groups, hooks_file_healthy, merge_hooks_file,
+    ExpectedGroup, ExpectedHooksState, MANAGED_ID_KEY, canonical_json_sha256, expected_groups,
+    load_document, managed_document_healthy, merge_hooks_file,
 };
 use super::{
     Authorization, MemoryResult, MemorySyncError, atomic_write, record_native_memories_consent,
@@ -36,9 +37,67 @@ fn windows_quote(value: &str) -> String {
     format!("\"{}\"", value.replace('"', "\\\""))
 }
 
+fn ordinary_windows_absolute_path(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    cfg!(windows)
+        && bytes.len() >= 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && matches!(bytes[2], b'/' | b'\\')
+}
+
+fn command_path(path: &Path) -> String {
+    let text = path.to_string_lossy();
+    if ordinary_windows_absolute_path(&text) {
+        text.replace('\\', "/")
+    } else {
+        text.into_owned()
+    }
+}
+
+fn quoted_path_matches(actual: &str, path: &Path, quote: fn(&str) -> String) -> bool {
+    let canonical = command_path(path);
+    let expected = quote(&canonical);
+    actual == expected
+        || (ordinary_windows_absolute_path(&canonical)
+            // A trailing backslash escapes the closing Windows quote. Paths
+            // containing literal quotes also cannot use separator aliases.
+            && (!expected.starts_with('"')
+                || (!canonical.contains('"') && !actual.ends_with("\\\"")))
+            && actual.len() == expected.len()
+            && actual
+                .bytes()
+                .zip(expected.bytes())
+                .all(|(actual, expected)| {
+                    actual == expected || (expected == b'/' && actual == b'\\')
+                }))
+}
+
+fn hook_command_matches(
+    actual: &str,
+    binary: &Path,
+    codex_home: &Path,
+    event: &str,
+    quote: fn(&str) -> String,
+) -> bool {
+    let binary_len = quote(&command_path(binary)).len();
+    let Some(binary_part) = actual.get(..binary_len) else {
+        return false;
+    };
+    let Some(rest) = actual.get(binary_len..) else {
+        return false;
+    };
+    let middle = format!(" memory-sync hook-run --event {event} --codex-home ");
+    let Some(home_part) = rest.strip_prefix(&middle) else {
+        return false;
+    };
+    quoted_path_matches(binary_part, binary, quote)
+        && quoted_path_matches(home_part, codex_home, quote)
+}
+
 pub fn expected_document(binary: &Path, codex_home: &Path) -> Value {
-    let binary_text = binary.to_string_lossy();
-    let home_text = codex_home.to_string_lossy();
+    let binary_text = command_path(binary);
+    let home_text = command_path(codex_home);
     let mut hooks = Map::new();
     for event in HOOK_EVENTS {
         let mut handler = json!({
@@ -70,6 +129,48 @@ pub fn expected_document(binary: &Path, codex_home: &Path) -> Value {
     json!({"hooks": hooks})
 }
 
+fn expected_user_groups(
+    binary: &Path,
+    codex_home: &Path,
+    existing: Option<&[u8]>,
+) -> MemoryResult<Vec<ExpectedGroup>> {
+    let mut expected = expected_groups(
+        &expected_document(binary, codex_home),
+        &format!("{HOOK_ID}:"),
+    )?;
+    let Some(payload) = existing else {
+        return Ok(expected);
+    };
+    let document = load_document(payload, "native memory hooks")?;
+    for spec in &mut expected {
+        let handler = document["hooks"][&spec.event]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|group| group["hooks"].as_array())
+            .flatten()
+            .find(|handler| handler[MANAGED_ID_KEY].as_str() == Some(spec.id.as_str()));
+        let Some(handler) = handler else {
+            continue;
+        };
+        // Only the two quoted path slots may differ. The ownership checker still
+        // checks every other field, command token, group, and managed identity.
+        for (key, quote) in [
+            ("command", shell_quote as fn(&str) -> String),
+            ("commandWindows", windows_quote as fn(&str) -> String),
+        ] {
+            if let Some(command) = handler[key].as_str()
+                && hook_command_matches(command, binary, codex_home, &spec.event, quote)
+            {
+                spec.handler[key] = Value::String(command.into());
+            }
+        }
+        spec.handler_sha256 = canonical_json_sha256(&spec.handler)?;
+        spec.group["hooks"][0] = spec.handler.clone();
+    }
+    Ok(expected)
+}
+
 fn managed_looking(handler: &Map<String, Value>) -> bool {
     handler
         .get(MANAGED_ID_KEY)
@@ -82,10 +183,18 @@ pub fn merge_user_hooks(codex_home: &Path, binary: &Path) -> MemoryResult<bool> 
     let _lock = UserHooksLock::acquire(codex_home)?;
     let path = codex_home.join("hooks.json");
     let before = fs::read(&path).ok();
-    let expected = expected_groups(
-        &expected_document(binary, codex_home),
-        &format!("{HOOK_ID}:"),
-    )?;
+    let expected = expected_user_groups(binary, codex_home, before.as_deref())?;
+    if before.as_deref().is_some_and(|payload| {
+        managed_document_healthy(
+            payload,
+            &expected,
+            &[&format!("{HOOK_ID}:")],
+            "native memory hooks",
+            Some(&managed_looking),
+        )
+    }) {
+        return Ok(false);
+    }
     merge_hooks_file(
         &path,
         &expected,
@@ -100,11 +209,15 @@ pub fn merge_user_hooks(codex_home: &Path, binary: &Path) -> MemoryResult<bool> 
 
 pub fn user_hooks_healthy(codex_home: &Path, binary: &Path) -> bool {
     let prefix = format!("{HOOK_ID}:");
-    expected_groups(&expected_document(binary, codex_home), &prefix).is_ok_and(|expected| {
-        hooks_file_healthy(
-            &codex_home.join("hooks.json"),
+    let Ok(payload) = fs::read(codex_home.join("hooks.json")) else {
+        return false;
+    };
+    expected_user_groups(binary, codex_home, Some(&payload)).is_ok_and(|expected| {
+        managed_document_healthy(
+            &payload,
             &expected,
             &[&prefix],
+            "native memory hooks",
             Some(&managed_looking),
         )
     })
