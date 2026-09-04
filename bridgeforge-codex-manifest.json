@@ -57,7 +57,7 @@
             {
               "source": "skills/bridgeforge-codex/references/transaction.md",
               "target": "references/transaction.md",
-              "sha256": "sha256:060b97915a4f83b16123450dfc4ace956445ff47e81c2e8918e9169eb018d693"
+              "sha256": "sha256:e1edcb0802a32e7854f2bf1d59a6e85ed8f6dc1c2b744aa9dcb1fbbce72ae845"
             },
             {
               "source": "skills/bridgeforge-codex/references/update.md",
@@ -182,7 +182,7 @@
             {
               "source": "skills/find-doc/SKILL.md",
               "target": "SKILL.md",
-              "sha256": "sha256:6827907322c88f79289ca34488df927752cc9dbb0f1b77228512ac46c553b5d3"
+              "sha256": "sha256:efe2bd516e01ec9cd079df499e9da13bea5b4726a67ef32d37752dd9ffd6ed6a"
             }
           ]
         },
@@ -277,7 +277,7 @@
             {
               "source": "skills/sync-docs/SKILL.md",
               "target": "SKILL.md",
-              "sha256": "sha256:ceede779579c01603d443442de7f5cf81f5f049213ac7604b3a49b40df7d9f39"
+              "sha256": "sha256:92a127bf5b2c30bf037145e1157adf655ea42d4fd6bdfd6a2eded27a461adbc7"
             }
           ]
         },

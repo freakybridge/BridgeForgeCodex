@@ -9,12 +9,12 @@ argument: 可选的改动重点或额外上下文
 
 ## 定位与边界
 
-依据真实代码 diff 更新既有设计文档。源码到文档的可证明关系由 BridgeForge 自动生成到 `.codex/sync-docs.map.md`；skill 只定义通用同步流程与未命中 fallback。
+依据真实代码 diff 更新既有设计文档。源码到文档的可证明关系由 BridgeForge 自动生成到 `.runtime/bridgeforge-codex/sync-docs.map.md`；skill 只定义通用同步流程与未命中 fallback。
 
 ## 输入
 
 - `git diff --stat HEAD`、`git status` 与必要的具体 diff。
-- BridgeForge 自动生成的 `.codex/sync-docs.map.md`（可用时）。
+- BridgeForge 自动生成的 `.runtime/bridgeforge-codex/sync-docs.map.md`（可用时；禁止加入 Git）。
 - `$ARGUMENTS`：用户指定的重点。
 
 ## 核心流程

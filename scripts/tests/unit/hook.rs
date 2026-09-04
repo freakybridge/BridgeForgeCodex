@@ -116,8 +116,13 @@ fn seed_project_map_inputs(fixture: &Fixture) {
 fn project_maps_replace_legacy_content_use_only_proven_links_and_are_idempotent() {
     let fixture = Fixture::new();
     seed_project_map_inputs(&fixture);
-    let find_path = fixture.root.join(".codex/find-doc.map.md");
-    let sync_path = fixture.root.join(".codex/sync-docs.map.md");
+    let find_path = fixture
+        .root
+        .join(".runtime/bridgeforge-codex/find-doc.map.md");
+    let sync_path = fixture
+        .root
+        .join(".runtime/bridgeforge-codex/sync-docs.map.md");
+    fs::create_dir_all(find_path.parent().unwrap()).unwrap();
     fs::write(&find_path, "legacy topic_to_rules\n").unwrap();
     fs::write(&sync_path, "legacy guessed mapping\n").unwrap();
 
@@ -127,6 +132,8 @@ fn project_maps_replace_legacy_content_use_only_proven_links_and_are_idempotent(
     assert!(result.stderr.is_empty());
     let find = fs::read_to_string(&find_path).unwrap();
     let sync = fs::read_to_string(&sync_path).unwrap();
+    assert!(!fixture.root.join(".codex/find-doc.map.md").exists());
+    assert!(!fixture.root.join(".codex/sync-docs.map.md").exists());
     assert!(find.starts_with("<!-- bridgeforge-project-map schema=1 kind=find-doc input=sha256:"));
     assert!(find.contains("此文件由 BridgeForge 自动生成，禁止手工维护"));
     assert!(find.contains("`trading runtime`"));
@@ -176,7 +183,12 @@ fn project_map_dirty_tracking_is_scoped_and_strict_route_repairs_maps() {
     .unwrap();
     assert_eq!(project_map::ensure_if_dirty().code, 0);
     assert!(!marker.exists());
-    let find = fs::read_to_string(fixture.root.join(".codex/find-doc.map.md")).unwrap();
+    let find = fs::read_to_string(
+        fixture
+            .root
+            .join(".runtime/bridgeforge-codex/find-doc.map.md"),
+    )
+    .unwrap();
     assert!(find.contains("`updated runtime`"));
     assert!(!find.contains("`trading runtime`"));
 }
@@ -202,7 +214,12 @@ fn post_edit_and_stop_connect_dirty_tracking_to_silent_rebuild() {
     assert!(marker.is_file());
     assert_eq!(lifecycle("stop"), 0);
     assert!(!marker.exists());
-    let find = fs::read_to_string(fixture.root.join(".codex/find-doc.map.md")).unwrap();
+    let find = fs::read_to_string(
+        fixture
+            .root
+            .join(".runtime/bridgeforge-codex/find-doc.map.md"),
+    )
+    .unwrap();
     assert!(find.contains("`lifecycle updated`"));
 }
 
@@ -210,11 +227,18 @@ fn post_edit_and_stop_connect_dirty_tracking_to_silent_rebuild() {
 fn project_map_rejects_non_file_targets_before_writing_any_map() {
     let fixture = Fixture::new();
     seed_project_map_inputs(&fixture);
-    fs::create_dir(fixture.root.join(".codex/find-doc.map.md")).unwrap();
+    let map_root = fixture.root.join(".runtime/bridgeforge-codex");
+    fs::create_dir_all(&map_root).unwrap();
+    fs::create_dir(map_root.join("find-doc.map.md")).unwrap();
     let result = project_map::ensure_current();
     assert_eq!(result.code, 1);
     assert!(result.stderr.contains("is not a plain file"));
-    assert!(!fixture.root.join(".codex/sync-docs.map.md").exists());
+    assert!(
+        !fixture
+            .root
+            .join(".runtime/bridgeforge-codex/sync-docs.map.md")
+            .exists()
+    );
 }
 
 #[test]

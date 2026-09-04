@@ -12,8 +12,8 @@ use crate::util::{
 };
 
 const SCHEMA: u8 = 1;
-const FIND_MAP: &str = ".codex/find-doc.map.md";
-const SYNC_MAP: &str = ".codex/sync-docs.map.md";
+const FIND_MAP: &str = ".runtime/bridgeforge-codex/find-doc.map.md";
+const SYNC_MAP: &str = ".runtime/bridgeforge-codex/sync-docs.map.md";
 const DIRTY_MARKER: &str = ".runtime/bridgeforge-codex/project-map-dirty";
 const GENERATED_MARKER: &str = "<!-- bridgeforge-project-map schema=1";
 const EXCLUDED_DIRECTORIES: &[&str] = &[
@@ -372,12 +372,7 @@ fn sync_docs_map(root: &Path, files: &[PathBuf]) -> Result<String, String> {
 }
 
 fn validate_target(root: &Path, relative: &str) -> Result<PathBuf, String> {
-    let codex = root.join(".codex");
-    let metadata =
-        fs::symlink_metadata(&codex).map_err(|error| format!("cannot inspect .codex: {error}"))?;
-    if !metadata.file_type().is_dir() || metadata.file_type().is_symlink() {
-        return Err(".codex is not a plain directory".into());
-    }
+    ensure_plain_runtime_directory(root)?;
     let path = root.join(relative);
     if path.exists() {
         let metadata = fs::symlink_metadata(&path)

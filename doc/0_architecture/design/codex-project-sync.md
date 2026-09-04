@@ -37,15 +37,13 @@ Rule / Memory 源存在
 按照新模板顺序补齐受管 Markdown 章节、更新同列数表头；同版本缺失/漂移、无戳接入、
 重复标题/歧义表格和列数变化仍阻断。
 
-latest rebuild 不读取旧 `.codex/managed-skeleton.json` 的语义，也不按版本选择历史 adapter。它先盘点项目资产，再只放回确认的 AGENTS 项目区、pre-commit 项目扩展、项目 Hook 与自动保留的 `.codex/skills/**`、
-`.codex/find-doc.map.md` 和 `.codex/sync-docs.map.md`。两个项目映射只按精确路径识别并作为
-required-preserve 原样保留到同步事务结束；新 Hook 随后的 `Stop` / `SessionStart` 会按当前项目事实把旧手写格式完整重建为自动索引。未被当前合同覆盖的普通文件以 `P:project-file:<path>` 列为决策项；链接和危险 Hook 结构仍阻断。每个可选资产必须显式选择
+latest rebuild 不读取旧 `.codex/managed-skeleton.json` 的语义，也不按版本选择历史 adapter。它先盘点项目资产，再只放回确认的 AGENTS 项目区、pre-commit 项目扩展、项目 Hook 与自动保留的 `.codex/skills/**`。旧 `.codex/find-doc.map.md` 和 `.codex/sync-docs.map.md` 是已退役的骨架生成物，两条升级路径都在事务内按精确路径删除；新 Hook 随后的 `Stop` / `SessionStart` 会在 `.runtime/bridgeforge-codex/` 按当前项目事实重建自动索引。未被当前合同覆盖的普通文件以 `P:project-file:<path>` 列为决策项；链接和危险 Hook 结构仍阻断。每个可选资产必须显式选择
 保留或删除；临时 `PreservationManifest` 只存在于本次事务内，在写最终戳前清空，不生成持久
 before 包或迁移账本。
 
 ## 项目 Map 自动索引
 
-`.codex/find-doc.map.md` 与 `.codex/sync-docs.map.md` 是项目 Git 数据，但内容由受管 Rust Hook 生成，禁止手工维护。`find-doc` 索引只从实际生效的根/嵌套 `AGENTS.md` 标题、作用目录和明确代码词建立主题到指令源的关系；`sync-docs` 索引只接受设计文档中明确引用且磁盘真实存在的源码路径。目录同名不是语义证据，无法证明的关系不进入 Map，由 Skill 继续搜索 fallback。
+`.runtime/bridgeforge-codex/find-doc.map.md` 与 `.runtime/bridgeforge-codex/sync-docs.map.md` 是骨架内生的本地运行时索引，禁止手工维护或加入 Git。`find-doc` 索引只从实际生效的根/嵌套 `AGENTS.md` 标题、作用目录和明确代码词建立主题到指令源的关系；`sync-docs` 索引只接受设计文档中明确引用且磁盘真实存在的源码路径。目录同名不是语义证据，无法证明的关系不进入 Map，由 Skill 继续搜索 fallback。
 
 `PostToolUse` 对相关输入只在 `.runtime/bridgeforge-codex/` 写脏标记；`Stop` 合并重建，`SessionStart` 兜底校验，两个 Skill 在读取前调用 `bridgeforge-hook project-map ensure-current`。生成文件携带 schema 与输入 SHA-256；相同输入逐字生成相同内容，目标字节未变化时不得重写。生命周期 Hook 的维护成功与 no-op 都不输出；严格 Skill 入口失败且 fallback 也不能完成任务时才向用户报告真正阻断。
 

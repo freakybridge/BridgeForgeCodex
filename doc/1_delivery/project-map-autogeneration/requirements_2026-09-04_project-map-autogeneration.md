@@ -10,7 +10,7 @@ source: $confirm
 
 ## 原始需求摘要
 
-用户要求把 `.codex/find-doc.map.md` 与 `.codex/sync-docs.map.md` 从用户手工维护的数据表升级为骨架自动维护的机器索引。正常运行必须对用户无感；文件缺失、输入变化或内容漂移时由程序创建或重建。用户明确选择：已有手写 Map 首次进入新机制时完全重建，不继承旧内容。
+用户最初要求把 `.codex/find-doc.map.md` 与 `.codex/sync-docs.map.md` 从用户手工维护的数据表升级为骨架自动维护的机器索引。2026-09-04 用户进一步确认：两份 Map 是会实时变化的骨架内生数据，不应进入 Git，正式位置改为 `.runtime/bridgeforge-codex/`；旧 `.codex` 路径在升级事务中精确退役。正常运行必须对用户无感；文件缺失、输入变化或内容漂移时由程序创建或重建。
 
 调用来源：用户给出 StratusAgent 对话 `codex://threads/01a069fb-59db-7b12-b8fc-3f9255f28987`，由 `$bridgeforge-codex` 与 `$develop` 路由进入 `$confirm`。
 
@@ -22,7 +22,7 @@ source: $confirm
 - 在 `SessionStart`、相关编辑后的 `Stop` 以及 Skill 使用前保证索引为当前状态。
 - 输入指纹未变化时不重写文件，避免无意义 Git diff。
 - 无法从当前项目事实确定的映射不得编造，Skill 继续使用现有搜索 fallback。
-- 生成结果作为项目 Git 工作树中的伴随生成物，由项目后续正常保存流程处理。
+- 生成结果只存在于项目 `.runtime/bridgeforge-codex/`，不进入 Git；旧 `.codex` Map 由项目同步事务精确删除。
 
 ## 不做
 
@@ -30,7 +30,7 @@ source: $confirm
 - 不在本工厂自动执行 `git add`、commit 或 push。
 - 不保留或迁移旧手写 Map 的任何条目；首次运行按当前事实完全重建。
 - 不把业务语义写入公共 Template，也不因缺少确定映射而新建业务文档。
-- 不把两个 Map 加入 Template 的固定内容覆盖面；它们仍是项目数据，只是改由程序生成。
+- 不把两个 Map 加入 Template 的固定内容覆盖面、Git 跟踪或 project-owned 保留清单；它们是可随时重建的本地运行时数据。
 
 ## 规模与预算
 
@@ -67,7 +67,7 @@ source: $confirm
 6. 已有手写 Map 首次进入新机制时完全重建；旧内容不作为证据或输入。
 7. 生成器只输出能由当前文件、目录或明确引用证明的关系；不确定项省略，由 Skill fallback 搜索。
 8. 正常创建、no-op、判脏和重建均不显示给用户；只有生成失败并影响当前任务时才报告真正阻断。
-9. 两份 Map 继续作为项目 Git 数据被同步器精确保护，不扩展为 `.codex/*.map.md` glob ownership。
+9. 两份 Map 固定写入 `.runtime/bridgeforge-codex/` 且禁止进入 Git；同步器仅精确退役旧 `.codex/find-doc.map.md` 与 `.codex/sync-docs.map.md`，禁止用 glob 扩大删除边界。
 
 ## 拟修改组件
 
@@ -77,7 +77,7 @@ source: $confirm
 | `.codex/hooks/src/` | 同步工厂 dogfood 镜像 |
 | `skills/find-doc/` | 使用前确保索引当前，删除用户维护提醒 |
 | `skills/sync-docs/` | 使用前确保索引当前，删除用户维护提醒 |
-| 项目同步与架构文档 | 将 Map 从“手写项目数据”更新为“项目所有、骨架生成”的精确资产合同 |
+| 项目同步与架构文档 | 将 Map 定义为 `.runtime` 中的骨架内生数据，并在两条升级路径中精确退役旧 `.codex` 路径 |
 | `scripts/tests/**` | 覆盖生成、触发、幂等、完全重建、fallback、镜像和分发行为 |
 | `VERSION`、`CHANGELOG.md`、manifest 与生成资产 | 第一轮完整测试通过后升级产品版本、记录 `[product]`，按官方流程刷新并终验 |
 
@@ -87,7 +87,8 @@ source: $confirm
 
 | 验收面 | 通过标准 |
 |---|---|
-| 缺失文件 | `ensure-current` 或生命周期事件能创建两份合法 Map |
+| 缺失文件 | `ensure-current` 或生命周期事件能在 `.runtime/bridgeforge-codex/` 创建两份合法 Map |
+| Git 边界 | 新 Map 位于既有 Git 忽略区；旧 `.codex` Map 在兼容更新与重建中均由事务删除 |
 | 输入变化 | 相关事实变化后 Map 确定性重建 |
 | 无关编辑 | 不判脏、不改写 Map |
 | 幂等 | 相同输入连续执行时文件字节和修改时间保持不变 |
@@ -102,7 +103,7 @@ source: $confirm
 
 - 完全重建会有意丢弃旧手写关系；这是用户明确选择，不属于回归。
 - 只凭目录名不能证明业务文档关系；生成结果允许比旧手写表更稀疏，fallback 是正常路径。
-- Hook 写入会形成工作树 diff，但不主动暂存、提交或推送。
+- Hook 写入只发生在项目既有 Git 忽略区，不形成工作树 diff，也不主动暂存、提交或推送。
 - 本轮不做真实下游升级或 runtime smoke；相关证据必须在用户另一个对话完成前标为未验证。
 
 ## 自动化边界
@@ -115,6 +116,7 @@ source: $confirm
 
 - 2026-09-04：用户确认范围仅限工厂，选择旧 Map 完全重建，并确认本需求卡。
 - 2026-09-04：用户授权 `$develop` 开工；锁定 M 级精简路径，由主对话实施，不使用子 agent。
+- 2026-09-04：用户修订存储边界；两份 Map 改入 `.runtime/bridgeforge-codex/`，旧 `.codex` 路径不再跟踪并由升级事务精确退役。
 
 ### 实施计划
 

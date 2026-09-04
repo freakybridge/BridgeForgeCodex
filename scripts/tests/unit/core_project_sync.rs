@@ -74,6 +74,28 @@ fn fixed_baseline_does_not_move_with_the_release() {
 }
 
 #[test]
+fn compatible_update_retires_old_project_map_paths() {
+    let (root, project, factory) = upgrade_fixture("1.8.6", "1.8.7");
+    for target in [".codex/find-doc.map.md", ".codex/sync-docs.map.md"] {
+        fs::write(project.join(target), b"old project map\n").unwrap();
+    }
+
+    let plan = build_plan(&project, &factory, SyncMode::Update).unwrap();
+    for target in [".codex/find-doc.map.md", ".codex/sync-docs.map.md"] {
+        assert!(plan.safe.iter().any(|action| {
+            action.target == target
+                && action.operation == "delete"
+                && action.id.starts_with("retired:project-map:")
+        }));
+    }
+    let fingerprint = plan.aggregate_fingerprint.clone();
+    apply_plan(plan, &fingerprint, false).unwrap();
+    assert!(!project.join(".codex/find-doc.map.md").exists());
+    assert!(!project.join(".codex/sync-docs.map.md").exists());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn fixed_baseline_rejects_missing_invalid_future_floor_and_downgrade() {
     let (root, project, factory) = upgrade_fixture("1.8.8", "1.8.7");
     assert!(

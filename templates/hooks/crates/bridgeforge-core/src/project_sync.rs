@@ -101,6 +101,10 @@ fn sha_raw(payload: &[u8]) -> String {
 }
 
 const LEGACY_RECEIPT: &str = ".codex/bin/build-receipt.json";
+const RETIRED_PROJECT_MAPS: &[(&str, &str)] = &[
+    ("retired:project-map:find-doc", ".codex/find-doc.map.md"),
+    ("retired:project-map:sync-docs", ".codex/sync-docs.map.md"),
+];
 
 fn legacy_receipt(root: &Path) -> Result<Option<(PathBuf, Vec<u8>)>, String> {
     let path = safe_join(root, LEGACY_RECEIPT, "legacy build receipt")?;
@@ -165,6 +169,29 @@ fn plan_legacy_receipt_retirement(
         safe.push(SyncAction {
             id: "retired:codex.hooks.build-receipt.v1".into(),
             target: LEGACY_RECEIPT.into(),
+            operation: "delete".into(),
+            risk: false,
+            before_sha256: Some(sha_git(&bytes)),
+            after_sha256: "sha256:deleted".into(),
+        });
+        deletes.push(path);
+    }
+    Ok(())
+}
+
+fn plan_project_map_retirement(
+    root: &Path,
+    safe: &mut Vec<SyncAction>,
+    deletes: &mut Vec<PathBuf>,
+) -> Result<(), String> {
+    for (id, target) in RETIRED_PROJECT_MAPS {
+        let path = safe_join(root, target, "retired project map")?;
+        let Some(bytes) = transaction_file_state(&path)? else {
+            continue;
+        };
+        safe.push(SyncAction {
+            id: (*id).into(),
+            target: (*target).into(),
             operation: "delete".into(),
             risk: false,
             before_sha256: Some(sha_git(&bytes)),
@@ -1025,6 +1052,11 @@ fn destructive_inventory(
             .unwrap_or_default()
             .to_lowercase(),
     ]);
+    exact.extend(
+        RETIRED_PROJECT_MAPS
+            .iter()
+            .map(|(_, target)| target.to_lowercase()),
+    );
     for asset in contract["assets"].as_array().into_iter().flatten() {
         if let Some(target) = asset["target"].as_str() {
             exact.insert(target.to_lowercase());
@@ -1057,22 +1089,6 @@ fn destructive_inventory(
                 "disposition": "required-preserve"
             }));
             exact.insert(registry_target.to_lowercase());
-        }
-    }
-    for (id, target) in [
-        ("R:project-map:find-doc", ".codex/find-doc.map.md"),
-        ("R:project-map:sync-docs", ".codex/sync-docs.map.md"),
-    ] {
-        let path = project_root.join(target);
-        if path.is_file() && !exact.contains(&target.to_lowercase()) {
-            entries.push(json!({
-                "id": id,
-                "kind": "project-map",
-                "target": target,
-                "before_sha256": sha_git(&fs::read(&path).map_err(|error| error.to_string())?),
-                "disposition": "required-preserve"
-            }));
-            exact.insert(target.to_lowercase());
         }
     }
     let skills = project_root.join(".codex/skills");
@@ -1686,6 +1702,7 @@ pub fn build_plan_with_inputs(
         })
     };
     plan_legacy_receipt_retirement(&project_root, &mut safe, &mut deletes)?;
+    plan_project_map_retirement(&project_root, &mut safe, &mut deletes)?;
     let (project_hook_inputs, project_hook_reads) = plan_project_hooks(
         &project_root,
         &contract,
@@ -1969,6 +1986,14 @@ fn apply_plan_internal(
         .is_some_and(|(path, _)| !plan.deletes.contains(path))
     {
         return Err("legacy build receipt appeared after plan; regenerate the plan".into());
+    }
+    for (_, target) in RETIRED_PROJECT_MAPS {
+        let path = safe_join(&plan.project_root, target, "retired project map")?;
+        if transaction_file_state(&path)?.is_some() && !plan.deletes.contains(&path) {
+            return Err(format!(
+                "retired project map appeared after plan; regenerate the plan: {target}"
+            ));
+        }
     }
     let current_fingerprint = plan_fingerprint(
         &plan.mode,

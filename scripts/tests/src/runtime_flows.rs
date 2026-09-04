@@ -660,7 +660,7 @@ fn project_sync_retired_assets_require_exact_preservation_decisions() {
 }
 
 #[test]
-fn destructive_rebuild_requires_unknown_file_decisions_and_preserves_required_project_assets() {
+fn destructive_rebuild_requires_unknown_file_decisions_and_retires_old_project_maps() {
     let temp = TestDirectory::new("project-sync-destructive");
     let factory = temp.0.join("factory");
     let project = temp.0.join("project");
@@ -689,6 +689,7 @@ fn destructive_rebuild_requires_unknown_file_decisions_and_preserves_required_pr
         format!("{}\n", serde_json::to_string_pretty(&contract).unwrap()).as_bytes(),
     );
     write(&project.join(".codex/find-doc.map.md"), b"project map\n");
+    write(&project.join(".codex/sync-docs.map.md"), b"project map\n");
     write(
         &project.join(".codex/skills/custom/SKILL.md"),
         b"---\nname: custom\ndescription: project skill\n---\n",
@@ -701,14 +702,13 @@ fn destructive_rebuild_requires_unknown_file_decisions_and_preserves_required_pr
 
     let blocked = build_plan(&project, &factory, SyncMode::Adopt).unwrap();
     assert!(blocked.gaps.iter().any(|item| item.contains("unknown.bin")));
-    assert!(
-        blocked.preservation_manifest["entries"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|item| item["id"] == "R:project-map:find-doc"
-                && item["disposition"] == "required-preserve")
-    );
+    for target in [".codex/find-doc.map.md", ".codex/sync-docs.map.md"] {
+        assert!(blocked.safe.iter().any(|action| {
+            action.target == target
+                && action.operation == "delete"
+                && action.id.starts_with("retired:project-map:")
+        }));
+    }
     assert!(
         blocked.preservation_manifest["entries"]
             .as_array()
@@ -742,10 +742,8 @@ fn destructive_rebuild_requires_unknown_file_decisions_and_preserves_required_pr
     );
     let fingerprint = plan.aggregate_fingerprint.clone();
     apply_plan(plan, &fingerprint, false).unwrap();
-    assert_eq!(
-        fs::read(project.join(".codex/find-doc.map.md")).unwrap(),
-        b"project map\n"
-    );
+    assert!(!project.join(".codex/find-doc.map.md").exists());
+    assert!(!project.join(".codex/sync-docs.map.md").exists());
     assert!(project.join(".codex/skills/custom/SKILL.md").is_file());
     assert!(project.join(".codex/rules/custom.rules").is_file());
 }

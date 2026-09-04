@@ -50,7 +50,7 @@ argument: 主题关键词（中英混合，例 "auth oauth" / "数据库 schema"
 
 ### 3. 查项目指令索引
 
-读取 `.codex/find-doc.map.md` 的 `topic_to_sources` 表：命中主题或代码词时读取对应根/嵌套 `AGENTS.md` 位置；未命中时跳过，不全量扫描指令源。该文件由 BridgeForge 生成，禁止手工编辑。
+读取 `.runtime/bridgeforge-codex/find-doc.map.md` 的 `topic_to_sources` 表：命中主题或代码词时读取对应根/嵌套 `AGENTS.md` 位置；未命中时跳过，不全量扫描指令源。该文件由 BridgeForge 生成，禁止手工编辑或加入 Git。
 
 ### 4. 聚合与收尾
 
