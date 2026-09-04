@@ -489,7 +489,16 @@ pub fn sync(
             Err(error) => return blocked(error),
         };
     }
-    if dirty {
+    let factory = root.join("templates/managed-skeleton.json").is_file();
+    let factory_runtime_repair = if factory && !dirty {
+        if let Err(error) = crate::baseline::verify(root, None, false) {
+            return blocked(format!("current baseline blocked git-sync: {error}"));
+        }
+        crate::baseline::verify(root, None, true).is_err()
+    } else {
+        false
+    };
+    if dirty || factory_runtime_repair {
         let identity = match RepositoryIdentity::capture(&git) {
             Ok(value) => value,
             Err(error) => return blocked(error),
@@ -501,27 +510,37 @@ pub fn sync(
         let adaptation_path = root.join(".runtime/bridgeforge-codex/explicit-adaptation.json");
         let adaptation_before = fs::read(&adaptation_path).ok();
         transaction_identity = Some(identity.clone());
-        let message = match (&options.message_file, &options.message) {
-            (Some(path), _) => match fs::read_to_string(path) {
-                Ok(value) if !value.trim().is_empty() => value.trim().to_string(),
-                Ok(_) => return blocked("commit message is empty".into()),
-                Err(error) => return blocked(format!("cannot read commit message: {error}")),
-            },
-            (None, Some(value)) if !value.trim().is_empty() => value.trim().to_string(),
-            _ => return blocked("commit message is required when real changes exist".into()),
-        };
-        let changed_paths = match git.changed_paths() {
-            Ok(value) => value,
-            Err(error) => return blocked(error),
-        };
-        let release =
-            match crate::release::build_file_release_plan(root, &message, changed_paths, runner) {
+        let (message, release) = if dirty {
+            let message = match (&options.message_file, &options.message) {
+                (Some(path), _) => match fs::read_to_string(path) {
+                    Ok(value) if !value.trim().is_empty() => value.trim().to_string(),
+                    Ok(_) => return blocked("commit message is empty".into()),
+                    Err(error) => {
+                        return blocked(format!("cannot read commit message: {error}"));
+                    }
+                },
+                (None, Some(value)) if !value.trim().is_empty() => value.trim().to_string(),
+                _ => return blocked("commit message is required when real changes exist".into()),
+            };
+            let changed_paths = match git.changed_paths() {
+                Ok(value) => value,
+                Err(error) => return blocked(error),
+            };
+            let release = match crate::release::build_file_release_plan(
+                root,
+                &message,
+                changed_paths,
+                runner,
+            ) {
                 Ok(value) => value,
                 Err(error) => {
                     return blocked(format!("automatic release planning failed: {error}"));
                 }
             };
-        let factory = root.join("templates/managed-skeleton.json").is_file();
+            (message, release)
+        } else {
+            (String::new(), None)
+        };
         let _project_lock = if factory {
             match crate::project_sync::ProjectLock::acquire(root) {
                 Ok(lock) => Some(lock),
@@ -717,6 +736,9 @@ pub fn sync(
                 snapshots,
             );
         }
+    }
+    if factory && let Err(error) = crate::baseline::verify(root, None, true) {
+        return blocked(format!("current baseline blocked git-sync: {error}"));
     }
     (ahead, behind) = match git.ahead_behind_target(push_comparison) {
         Ok(value) => value,

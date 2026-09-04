@@ -129,7 +129,61 @@ fn real_factory_cli_sync_builds_new_runtime_and_commits_through_precommit() {
     let receipt: serde_json::Value = serde_json::from_slice(&tested.stdout).unwrap();
     assert_eq!(tested.code, 0);
     assert_eq!(receipt["version"], next.to_string());
+
+    let released_head = git(&root, &["rev-parse", "HEAD"]);
+    let hook_receipt = root.join(".codex/bin/build-receipt-hook.json");
+    fs::write(&hook_receipt, b"{}\n").unwrap();
+    request.args = ["git-sync"].iter().map(Into::into).collect();
+    request.timeout = Duration::from_secs(2400);
+    let repaired = SystemProcessRunner.run(&request).unwrap();
+    assert!(
+        !repaired.timed_out && repaired.code == 0,
+        "clean factory runtime repair failed: {} {}",
+        String::from_utf8_lossy(&repaired.stdout),
+        String::from_utf8_lossy(&repaired.stderr)
+    );
+    assert_eq!(git(&root, &["rev-parse", "HEAD"]), released_head);
+    assert_eq!(
+        fs::read_to_string(root.join("VERSION")).unwrap().trim(),
+        next
+    );
+    assert!(git(&root, &["status", "--porcelain=v1"]).is_empty());
+    assert_eq!(
+        git(
+            &root,
+            &["rev-list", "--left-right", "--count", "HEAD...@{u}"]
+        ),
+        "0\t0"
+    );
+    bridgeforge_core::baseline::verify(&root, None, true).unwrap();
+    assert_ne!(fs::read(&hook_receipt).unwrap(), b"{}\n");
+
+    let cli_modified = fs::metadata(&cli).unwrap().modified().unwrap();
+    let receipt_modified = fs::metadata(&hook_receipt).unwrap().modified().unwrap();
+    let fast_path = SystemProcessRunner.run(&request).unwrap();
+    assert!(
+        !fast_path.timed_out && fast_path.code == 0,
+        "healthy clean factory fast path failed: {} {}",
+        String::from_utf8_lossy(&fast_path.stdout),
+        String::from_utf8_lossy(&fast_path.stderr)
+    );
+    assert_eq!(
+        fs::metadata(&cli).unwrap().modified().unwrap(),
+        cli_modified
+    );
+    assert_eq!(
+        fs::metadata(&hook_receipt).unwrap().modified().unwrap(),
+        receipt_modified
+    );
+    assert!(git(&root, &["status", "--porcelain=v1"]).is_empty());
+    assert_eq!(
+        git(
+            &root,
+            &["rev-list", "--left-right", "--count", "HEAD...@{u}"]
+        ),
+        "0\t0"
+    );
     println!(
-        "real factory CLI: version {old} -> {next}; real pre-commit accepted; runtime and index verified; local remote parity 0/0"
+        "real factory CLI: version {old} -> {next}; clean runtime self-healed without a release; healthy fast path did not rewrite runtime; real pre-commit accepted; runtime and index verified; local remote parity 0/0"
     );
 }
