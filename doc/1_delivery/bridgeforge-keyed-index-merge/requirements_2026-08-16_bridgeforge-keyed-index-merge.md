@@ -58,7 +58,8 @@ handoff: develop
 - 上游键缺失于下游时作为 safe insert；下游非 managed key 永远保留。
 - managed key 同值为 no-op；同键异值生成一个 U。A 吸收上游行，B 逐 U 选择，C 保留本地行。
 - 输出顺序为上游 managed keys 的模板顺序，随后是下游独有键的原相对顺序。
-- 重复键、多个候选表格、损坏表头、列数不一致或解析歧义必须零写入并进入 gap/blocker。
+- 重复键、无法由 managed key 唯一定位的多个候选表格、损坏表头、列数不一致或解析歧义
+  必须零写入并进入 gap/blocker。
 - 上游当前未列出的旧键保守视为项目内容；没有显式退役证据时禁止删除。
 
 ## 拟修改
@@ -108,3 +109,6 @@ handoff: develop
 - 静态硬闸：manifest `--check`、harness parity、mirror drift、skill metadata、`git diff --check` 全部 exit 0；四份 `version_release.py` SHA-256 一致。
 - 独立发布审计通过：核心 project-sync/version-release 39/39、root skill/actionable 13/13、完整下游 fixture 39/39，未发现剩余发布阻断。
 - 本轮未修改真实下游 `ClaudeBridgeAssist`，未执行 VERSION/CHANGELOG 发布、commit 或 push。
+- 2026-09-05 补充多表唯一定位：同一标题内项目实表与注释示例表共存时，只有一张表包含
+  managed key 才允许选择；零张或多张命中继续 fail-closed。工厂完整测试与真实
+  HoldemTrainer 只读规划已通过，未执行下游写入。

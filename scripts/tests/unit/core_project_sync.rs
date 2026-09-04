@@ -282,6 +282,37 @@ fn markdown_upgrade_inserts_sections_and_preserves_project_content() {
 }
 
 #[test]
+fn markdown_upgrade_selects_the_only_table_with_managed_keys() {
+    let source = b"# Docs\n\n## Index\n<!-- example\n| File | Purpose |\n|------|---------|\n| managed | new |\n-->\n";
+    let current = b"# Docs\r\n\r\n## Index\r\n| File | Purpose |\r\n|---|---|\r\n| project | keep |\r\n\r\n<!-- example\r\n| Old | Header |\r\n|------|---------|\r\n| managed | old |\r\n-->\r\n";
+    let asset = json!({"managed_blocks":{"headings":[],"keyed_tables":[
+        {"heading":"## Index","managed_keys":["managed"]}]}});
+    let merged =
+        merge_managed_markdown(source, current, &asset, Path::new("Example"), true).unwrap();
+    let text = String::from_utf8(merged.clone()).unwrap();
+    assert!(text.contains("| File | Purpose |\r\n|---|---|\r\n| project | keep |\r\n"));
+    assert!(text.contains(
+        "<!-- example\r\n| File | Purpose |\n|------|---------|\n| managed | new |\n-->"
+    ));
+    assert_eq!(
+        merge_managed_markdown(source, &merged, &asset, Path::new("Example"), false).unwrap(),
+        merged
+    );
+
+    let ambiguous = text.replace("| project | keep |", "| managed | project copy |");
+    assert!(
+        merge_managed_markdown(
+            source,
+            ambiguous.as_bytes(),
+            &asset,
+            Path::new("Example"),
+            true
+        )
+        .is_err()
+    );
+}
+
+#[test]
 fn hook_removal_matches_path_boundaries_and_platform_commands() {
     let payload = json!({"hooks":{"Stop":[{"hooks":[
         {"command":"run .codex/hooks/project_a/entrypoint.rs"},

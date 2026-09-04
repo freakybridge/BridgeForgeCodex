@@ -485,6 +485,36 @@ fn table_header(section: &str) -> Result<(&str, &str, usize), String> {
     Ok((header, separator, columns))
 }
 
+fn table_ranges(section: &str) -> Result<Vec<(usize, usize)>, String> {
+    let lines = section.split_inclusive('\n').collect::<Vec<_>>();
+    let mut offsets = Vec::with_capacity(lines.len() + 1);
+    offsets.push(0);
+    for line in &lines {
+        offsets.push(offsets.last().unwrap() + line.len());
+    }
+    let mut ranges = Vec::new();
+    for (index, line) in lines.iter().enumerate() {
+        let cells = line.trim().trim_matches('|').split('|').collect::<Vec<_>>();
+        let separator = line.trim_start().starts_with('|')
+            && cells.iter().all(|cell| {
+                let cell = cell.trim().trim_matches(':');
+                cell.len() >= 3 && cell.bytes().all(|byte| byte == b'-')
+            });
+        if !separator {
+            continue;
+        }
+        if index == 0 {
+            return Err("managed Markdown table is missing or ambiguous".into());
+        }
+        let mut end = index + 1;
+        while end < lines.len() && lines[end].trim_start().starts_with('|') {
+            end += 1;
+        }
+        ranges.push((offsets[index - 1], offsets[end]));
+    }
+    Ok(ranges)
+}
+
 fn table_key(line: &str) -> Option<String> {
     if !line.trim_start().starts_with('|') {
         return None;
@@ -506,6 +536,35 @@ fn merge_keyed_table(
     keys: &BTreeSet<String>,
     allow_upgrade: bool,
 ) -> Result<String, String> {
+    let target_ranges = table_ranges(current_section)?;
+    if target_ranges.len() > 1 {
+        let candidates = target_ranges
+            .iter()
+            .filter(|(start, end)| {
+                current_section[*start..*end]
+                    .split_inclusive('\n')
+                    .filter_map(table_key)
+                    .any(|key| keys.contains(&key))
+            })
+            .copied()
+            .collect::<Vec<_>>();
+        if candidates.len() != 1 {
+            return Err("managed Markdown table is missing or ambiguous".into());
+        }
+        let (start, end) = candidates[0];
+        let table = merge_keyed_table(
+            source_section,
+            &current_section[start..end],
+            keys,
+            allow_upgrade,
+        )?;
+        return Ok(format!(
+            "{}{}{}",
+            &current_section[..start],
+            table,
+            &current_section[end..]
+        ));
+    }
     let (source_header, source_separator, columns) = table_header(source_section)?;
     let (current_header, current_separator, current_columns) = table_header(current_section)?;
     if columns != current_columns {
