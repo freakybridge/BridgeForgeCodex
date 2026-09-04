@@ -1,3 +1,4 @@
+pub mod migration;
 pub mod ownership;
 pub mod remote;
 pub mod user_config;

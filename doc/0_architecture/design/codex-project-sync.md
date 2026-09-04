@@ -39,9 +39,15 @@ Rule / Memory 源存在
 
 latest rebuild 不读取旧 `.codex/managed-skeleton.json` 的语义，也不按版本选择历史 adapter。它先盘点项目资产，再只放回确认的 AGENTS 项目区、pre-commit 项目扩展、项目 Hook 与自动保留的 `.codex/skills/**`、
 `.codex/find-doc.map.md` 和 `.codex/sync-docs.map.md`。两个项目映射只按精确路径识别并作为
-required-preserve 原样保留；未被当前合同覆盖的普通文件以 `P:project-file:<path>` 列为决策项；链接和危险 Hook 结构仍阻断。每个可选资产必须显式选择
+required-preserve 原样保留到同步事务结束；新 Hook 随后的 `Stop` / `SessionStart` 会按当前项目事实把旧手写格式完整重建为自动索引。未被当前合同覆盖的普通文件以 `P:project-file:<path>` 列为决策项；链接和危险 Hook 结构仍阻断。每个可选资产必须显式选择
 保留或删除；临时 `PreservationManifest` 只存在于本次事务内，在写最终戳前清空，不生成持久
 before 包或迁移账本。
+
+## 项目 Map 自动索引
+
+`.codex/find-doc.map.md` 与 `.codex/sync-docs.map.md` 是项目 Git 数据，但内容由受管 Rust Hook 生成，禁止手工维护。`find-doc` 索引只从实际生效的根/嵌套 `AGENTS.md` 标题、作用目录和明确代码词建立主题到指令源的关系；`sync-docs` 索引只接受设计文档中明确引用且磁盘真实存在的源码路径。目录同名不是语义证据，无法证明的关系不进入 Map，由 Skill 继续搜索 fallback。
+
+`PostToolUse` 对相关输入只在 `.runtime/bridgeforge-codex/` 写脏标记；`Stop` 合并重建，`SessionStart` 兜底校验，两个 Skill 在读取前调用 `bridgeforge-hook project-map ensure-current`。生成文件携带 schema 与输入 SHA-256；相同输入逐字生成相同内容，目标字节未变化时不得重写。生命周期 Hook 的维护成功与 no-op 都不输出；严格 Skill 入口失败且 fallback 也不能完成任务时才向用户报告真正阻断。
 
 `.codex/rules/*.md` 与 `.codex/memory/**` 在两条升级路径中都由 Rust `project-sync` 盘点和验证。Agent 逐源文件提出语义迁移包；机器验证完整覆盖、source/target hash、目标职责、公共受管区、Hook 注册、文档索引和事务。`MEMORY.md`、`MEMORY_COLD.md`、`_stats.json` 逐个确认固定退役。全部确认前零写入，禁止落盘 manifest 或创建项目锁；中断后从第一个源重来。Apply 前重新盘点，新增、消失或改动的源均使旧计划失效。
 
@@ -110,5 +116,5 @@ Python 或 PowerShell 包装器。
 - schema 4 merge/Markdown/region/AGENTS 都携带当前可验证 projection；真实下游不存在
   `templates/**` 时也不得跳过。
 - 项目 Skills 正文只有在对应源迁移包中逐项确认后才允许语义改写；legacy Rule / Memory 禁止派生索引、自动分类或未确认保留。
-- 项目 `find-doc` / `sync-docs` 映射是精确登记的 required-preserve 数据，重建前后必须字节不变。
+- 项目 `find-doc` / `sync-docs` 映射在 project-sync 事务内按精确路径登记为 required-preserve；事务完成后的受管 Hook 可按自动索引合同重建，禁止扩大为 glob ownership。
 - Claude、switch、project finalizer 与 harness parity 不属于当前产品面，也不保留识别谱系。

@@ -57,7 +57,7 @@
             {
               "source": "skills/bridgeforge-codex/references/transaction.md",
               "target": "references/transaction.md",
-              "sha256": "sha256:d942f6b0e9a728f50034e9df28edde0c2f90c2a9040598c0d94c95544e0792a6"
+              "sha256": "sha256:060b97915a4f83b16123450dfc4ace956445ff47e81c2e8918e9169eb018d693"
             },
             {
               "source": "skills/bridgeforge-codex/references/update.md",
@@ -175,11 +175,6 @@
           "name": "find-doc",
           "files": [
             {
-              "source": "skills/find-doc/references/map-reminder-sop.md",
-              "target": "references/map-reminder-sop.md",
-              "sha256": "sha256:bac0d54c14ab9f27a3456ef1eb2bd2e9e6b1ca146173509029b2459c5103e7c6"
-            },
-            {
               "source": "skills/find-doc/references/output-format.md",
               "target": "references/output-format.md",
               "sha256": "sha256:904b8f1529a5d72a956687c55d2aca5b505784199eee680c301b47abbf9fa7cc"
@@ -187,7 +182,7 @@
             {
               "source": "skills/find-doc/SKILL.md",
               "target": "SKILL.md",
-              "sha256": "sha256:4fdf78047ff2167b88705de424a9099ae1c08056406ff90f87537f90ac6c06a0"
+              "sha256": "sha256:6827907322c88f79289ca34488df927752cc9dbb0f1b77228512ac46c553b5d3"
             }
           ]
         },
@@ -282,7 +277,7 @@
             {
               "source": "skills/sync-docs/SKILL.md",
               "target": "SKILL.md",
-              "sha256": "sha256:7db9eb76a7ba0149ac16c842d5f2d67d135ae6a6ca8bfd49ac731eee1eb9396e"
+              "sha256": "sha256:ceede779579c01603d443442de7f5cf81f5f049213ac7604b3a49b40df7d9f39"
             }
           ]
         },

@@ -13,6 +13,34 @@ fn expected_handlers_use_rust_binary_only() {
     assert!(text.contains("bridgeforge"));
     assert!(!text.contains("python"));
     assert!(!text.contains(".venv"));
+    let hooks = value["hooks"].as_object().unwrap();
+    assert_eq!(hooks.len(), 3);
+    for (event, timeout, asynchronous) in [
+        ("SessionStart", 120, None),
+        ("Stop", 120, Some(true)),
+        ("SessionEnd", 3, None),
+    ] {
+        let groups = hooks[event].as_array().unwrap();
+        assert_eq!(groups.len(), 1);
+        let handlers = groups[0]["hooks"].as_array().unwrap();
+        assert_eq!(handlers.len(), 1);
+        let handler = &handlers[0];
+        assert_eq!(handler["type"], "command");
+        assert_eq!(handler["timeout"], timeout);
+        assert_eq!(handler.get("async").and_then(Value::as_bool), asynchronous);
+        assert!(
+            handler["command"]
+                .as_str()
+                .unwrap()
+                .contains(&format!("memory-sync hook-run --event {event}"))
+        );
+        assert!(
+            handler["commandWindows"]
+                .as_str()
+                .unwrap()
+                .contains(&format!("memory-sync hook-run --event {event}"))
+        );
+    }
 }
 
 #[cfg(windows)]

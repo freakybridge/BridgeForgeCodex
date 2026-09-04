@@ -9,13 +9,19 @@ argument: 主题关键词（中英混合，例 "auth oauth" / "数据库 schema"
 
 ## 定位与边界
 
-只检索 `doc/` 和项目专属 rule 映射，不扫描源代码、项目 Memory 或原生 Memory，也不先读取完整文档。目标是用少量高信号命中回答“在哪、现状、TODO、设计和计划”。
+只检索 `doc/` 和 BridgeForge 自动生成的项目指令索引，不扫描源代码、项目 Memory 或原生 Memory，也不先读取完整文档。目标是用少量高信号命中回答“在哪、现状、TODO、设计和计划”。
 
 ## 输入
 
 从 `$ARGUMENTS` 或用户问题提取主题：中文按 `/` 和空格分词；英文 `_` 不拆。多关键词用 OR 检索，并增加一路共现交集。
 
 ## 核心流程
+
+### 0. 确保项目索引为最新
+
+先运行当前平台的受管入口：Windows 使用 `.codex\bin\bridgeforge-hook.exe project-map ensure-current`，其他平台使用 `.codex/bin/bridgeforge-hook project-map ensure-current`。成功路径无输出。
+
+入口缺失或失败时，不要求用户创建或修复 Map；跳过索引并继续下面的文档搜索 fallback。只有 fallback 也无法完成当前检索时，才报告真正的任务阻断。
 
 ### 1. 分流意图
 
@@ -42,19 +48,18 @@ argument: 主题关键词（中英混合，例 "auth oauth" / "数据库 schema"
   - Grep `doc/2_bugs/**/<topic>*.md`，只返回命中文件，最多 20 个。
 - **Path D—多词共现**：仅多 token 时，在 `doc/**/*.md` 中按正反顺序做 multiline 共现 Grep，只返回文件，最多 15 个。
 
-### 3. 查项目 rule 映射
+### 3. 查项目指令索引
 
-读取 `.codex/find-doc.map.md`，按 `topic_to_rules` 查表：命中主题取对应 rules，未命中取 `default`。映射不存在时跳过，不全量 grep rules。
+读取 `.codex/find-doc.map.md` 的 `topic_to_sources` 表：命中主题或代码词时读取对应根/嵌套 `AGENTS.md` 位置；未命中时跳过，不全量扫描指令源。该文件由 BridgeForge 生成，禁止手工编辑。
 
 ### 4. 聚合与收尾
 
 1. 聚合去重：A 作基线，D 作高优先级，B/C 调整次序，空段不显示。
 2. 命中后读取 [references/output-format.md](references/output-format.md)，按其格式输出。
-3. 收尾读取 [references/map-reminder-sop.md](references/map-reminder-sop.md)，只在满足条件时提醒维护映射。
 
 ## 输出与验证
 
-标明每项命中来自文件名、README、TODO 还是规则映射；区分进行中、待解决与已归档文档。需要正文结论时，只读用户选定或最高信号的目标文件。
+标明每项命中来自文件名、README、TODO 还是自动指令索引；区分进行中、待解决与已归档文档。需要正文结论时，只读用户选定或最高信号的目标文件。
 
 ## 停止条件
 
@@ -68,7 +73,7 @@ argument: 主题关键词（中英混合，例 "auth oauth" / "数据库 schema"
 
 - 禁止先读完整文件理解上下文；先检索，再按需读。
 - 禁止扫描源代码、项目 `.codex/memory/`、原生 `~/.codex/memories/` 或全量 rules。
-- 禁止在无明确 topic 时提醒创建映射，或在同一会话重复提醒同一 topic。
+- 禁止要求用户创建、补充或修复自动生成的 Map。
 - 禁止用 `todo`、`resume`、`summary` 的能力替代本 skill；新建文档、跨会话接续和对话总结应转交对应 skill。
 
 输入：`$ARGUMENTS`

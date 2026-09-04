@@ -35,6 +35,36 @@ fn upstream_write_authorization_is_a_shared_public_rule() {
     assert_eq!(shared, public(&dogfood));
 }
 
+#[test]
+fn project_map_skills_refresh_generated_indexes_without_user_maintenance_prompts() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .ancestors()
+        .nth(2)
+        .unwrap();
+    let find_doc = fs::read_to_string(root.join("skills/find-doc/SKILL.md")).unwrap();
+    let sync_docs = fs::read_to_string(root.join("skills/sync-docs/SKILL.md")).unwrap();
+    for (name, text) in [("find-doc", find_doc), ("sync-docs", sync_docs)] {
+        assert!(
+            text.contains("project-map ensure-current"),
+            "{name} must refresh the generated map before reading it"
+        );
+        assert!(
+            text.contains("禁止要求用户") && text.contains("自动生成的 Map"),
+            "{name} must keep generated map maintenance away from the user"
+        );
+        assert!(
+            !text.contains("候选映射并询问") && !text.contains("要不要顺手"),
+            "{name} still contains the retired manual-maintenance prompt"
+        );
+    }
+    assert!(
+        !root
+            .join("skills/find-doc/references/map-reminder-sop.md")
+            .exists(),
+        "manual map reminder SOP must be retired"
+    );
+}
+
 #[cfg(windows)]
 #[test]
 fn shared_bundle_commit_keeps_components_consistent_when_old_image_is_running() {

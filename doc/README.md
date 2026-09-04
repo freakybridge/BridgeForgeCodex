@@ -65,6 +65,7 @@ delivery_layout: flat
 
 | Topic | 主要记录 |
 |---|---|
+| `project-map-autogeneration` | 两份项目 Map 的确定性生成、静默生命周期维护、旧手写内容完全重建与 Skill fallback；见[确认卡](1_delivery/project-map-autogeneration/requirements_2026-09-04_project-map-autogeneration.md)（2026-09-04） |
 | `project-rust-hooks` | [项目自有 Rust Hook 构建与 Assist 迁移](1_delivery/project-rust-hooks/requirements_2026-09-03_project-rust-hooks.md)；[Hook 登记兼容性修复](1_delivery/project-rust-hooks/requirements_2026-09-03_hook-registry-compatibility.md)；[临时构建路径失效](1_delivery/project-rust-hooks/requirements_2026-09-03_build-directory-failure.md) |
 | `project-knowledgebase-layer` | 固定第六层项目知识库、项目内容保留与逐源迁移支持，见[确认卡](1_delivery/project-knowledgebase-layer/requirements_2026-09-03_project-knowledgebase-layer.md)（2026-09-03） |
 | `rust-only-bridgeforge` | BridgeForge 工厂与下发骨架整体退役 Python，以 Rust CLI 迁移检查、项目同步、Git、批处理、Native Memory 和测试，并最终删除全部 `.py` 与 `.venv` 依赖；含[确认卡](1_delivery/rust-only-bridgeforge/requirements_2026-09-01_rust-only-bridgeforge.md)与[协作记录](1_delivery/rust-only-bridgeforge/collabs_2026-09-01_rust-only-bridgeforge.md)（2026-09-01） |
@@ -102,7 +103,7 @@ delivery_layout: flat
 | `template-root-flattening` | Codex-only 模板从 `templates/codex/**` 提升为 `templates/**`，保留 `0.86.0+` 历史 lineage 并同步同步器、schema、dogfood 与测试（2026-08-16） |
 | `factory-template-dogfood-contract` | Template 公共 AGENTS/Rules 单一事实源、bridgeforge-codex 项目定制区与工厂 Overlay，以及编辑/提交/发布防漂移硬闸（2026-08-16） |
 | `codex-rule-runtime-simplification` | 退役未实际加载的 Markdown path rule，将有效红线无损迁入原生 AGENTS、hook、skill 与文档，并安全保留下游定制（2026-08-16） |
-| `current-baseline-project-asset-migration-and-native-memory-sync` | 下游旧 Rule/项目 Memory 逐文件确认迁移、动态最新 current-only 基线，以及原生 Memory 无感双机同步、自愈和可验证 Git 历史；含[确认卡](1_delivery/current-baseline-project-asset-migration-and-native-memory-sync/requirements_2026-08-31_asset-migration-sync.md)与[协作记录](1_delivery/current-baseline-project-asset-migration-and-native-memory-sync/collabs_2026-08-31_asset-migration-sync.md)（2026-08-31） |
+| `current-baseline-project-asset-migration-and-native-memory-sync` | 下游旧 Rule/项目 Memory 逐文件确认迁移、动态最新 current-only 基线，以及原生 Memory 无感双机同步、自愈和可验证 Git 历史；含[确认卡](1_delivery/current-baseline-project-asset-migration-and-native-memory-sync/requirements_2026-08-31_asset-migration-sync.md)、[协作记录](1_delivery/current-baseline-project-asset-migration-and-native-memory-sync/collabs_2026-08-31_asset-migration-sync.md)与[Hook 自动触发辩论](1_delivery/current-baseline-project-asset-migration-and-native-memory-sync/debates/2026-09-04_native-memory-hook-dispatch.md)（2026-09-04） |
 | `header-upgrade` | 旧版 current-only rebuild 安全升级 Markdown 受管表头、补齐缺失受管标题并保留项目自有内容；含[确认卡](1_delivery/header-upgrade/requirements_2026-09-01_header-upgrade.md)、[计划](1_delivery/header-upgrade/plan.md)与[验收](1_delivery/header-upgrade/acceptance.md)（2026-09-01） |
 | `fixed-upgrade-baseline` | 固定 1.8.6 升级基线、低版本重建与基线内兼容更新；两条路径保留旧 Rule/Memory 逐文件确认，见[确认卡](1_delivery/fixed-upgrade-baseline/requirements_2026-09-02_fixed-baseline.md)（2026-09-02） |
 | `codex-agents-structure-reorganization` | Codex AGENTS 信息架构重组、历史标题安全迁移、项目必填区双状态硬闸与 `ctx-budget` 完整退役（2026-08-16） |

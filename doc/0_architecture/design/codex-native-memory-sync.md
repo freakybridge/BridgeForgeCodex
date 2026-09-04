@@ -58,10 +58,11 @@ Codex 官方生成/读取 ~/.codex/memories/
 
 - 未获用户明确同意时，禁止启用开关、创建仓库、安装同步 Hook 或写入拒绝之外的配置。配置编辑使用 TOML 结构解析，保留注释并在写入前验证，禁止重复创建带注释或引号的已有表。
 - `gh` 登录失效或查询失败时，以非交互 `git credential fill` 读取现有 Git 凭证，仅通过校验子进程的 `GH_TOKEN` 环境变量重试固定 github.com 仓库的 private 查询。禁止写入凭证、修改登录配置或回显凭证/原始诊断；没有可用凭证、`gh` 缺失、重试失败或结果非 private 时停止。
-- `hookInstalled=true` 只证明配置存在；只有当前 handler revision 真实登记 pending / worker 收据和同步健康共同成立，才能报告 runtime 健康；`busy` 不等于成功。
+- `hookInstalled=true` 只作为历史兼容字段并等同 `hookConfigured`；`hookDispatchObserved` 证明 Codex 至少进入过当前 handler，只有迁移、授权、pending 登记和 worker 启动完成后才写 `hookRuntimeVerified` 所需收据；`busy` 不等于同步成功。
 - SessionStart、Stop 与 SessionEnd 只登记需求并启动或复用隐藏 worker；单 worker 消费同步期间到达的后续需求，退出释放后再次检查 pending，避免遗漏尾部事件。死亡 PID 与受管临时目录可自动验证并自愈；五分钟未完成必须进入 `degraded` / `failed`。
 - 同步、pending 队列和用户 Hook 配置使用操作系统持有的排他文件句柄；锁文件保留，进程退出即释放所有权。禁止按文件年龄删除锁，避免并发回收删除新持有者的锁。运行授权必须同时验证 ledger 与状态目录下的 `remote.txt`。显式 `--remote` 也必须与授权一致；`--memories` 和 `--state-dir` 必须解析到所选 Codex home 下的固定目录。
-- 同一失败或冲突只在下一次 SessionStart 或 `$bridgeforge-codex` 告警一次；状态未变化时禁止重复输出。同步失败
+- 从历史 `.bridgeforge-codex/memory-sync` 升级时，只允许一次性迁移与 ledger 相符的 remote、通过 manifest/digest 验证的完整基线包、合法 pending 和其引用的当前冲突包；禁止覆盖有效新状态、复制 worker/锁/临时目录/健康状态或整段冲突历史。完成标记必须保留源指纹，避免旧冲突在新目录解决后被再次导入。
+- `memory-sync status` 必须纯只读，不得因查询创建目录、更新健康状态或消费告警；活动告警持续报告，直到显式确认。同一失败或冲突的主动通知由显式运行路径负责。同步失败
   不得阻止 Codex 官方 Memory 的生成、注入或正常会话。
 - 合法空快照、非空快照、损坏远端、换行保持、并发 lease、wrapper 入口和第三方 Hook 保留
   都必须由隔离测试覆盖；真实安装或 GitHub 状态只能由真实 runtime 收据证明。

@@ -1,5 +1,6 @@
 mod guards;
 mod post;
+mod project_map;
 mod session;
 mod util;
 
@@ -236,6 +237,7 @@ fn post_edit(payload: &Value) -> i32 {
             eprintln!("[hook-dispatch] encoding_check failed; dependent edit checks skipped.");
             return output.finish("PostToolUse", step.code);
         }
+        let _ = project_map::mark_dirty(edit);
     }
     for edit in &virtuals {
         let handlers: [fn(&Value) -> StepResult; 4] = [
@@ -269,6 +271,9 @@ fn self_test() -> i32 {
 
 fn lifecycle(event: &str) -> i32 {
     if matches!(event, "post-compact" | "stop") {
+        if event == "stop" {
+            let _ = project_map::ensure_if_dirty();
+        }
         let step = session::snapshot(event);
         let mut output = HookOutput::default();
         output.absorb(&step);
@@ -281,6 +286,7 @@ fn lifecycle(event: &str) -> i32 {
             step.code,
         );
     }
+    let _ = project_map::ensure_current();
     let mut output = HookOutput::default();
     let mut first = 0;
     let steps = [
@@ -322,8 +328,14 @@ pub fn run(args: Vec<String>) -> i32 {
         eprint!("{}", step.stderr);
         return step.code;
     }
+    if args.as_slice() == ["project-map", "ensure-current"] {
+        let step = project_map::ensure_current();
+        print!("{}", step.stdout);
+        eprint!("{}", step.stderr);
+        return step.code;
+    }
     if args.len() != 1 {
-        eprintln!("usage: bridgeforge-hook EVENT | snapshot manual");
+        eprintln!("usage: bridgeforge-hook EVENT | snapshot manual | project-map ensure-current");
         return 2;
     }
     let event = &args[0];

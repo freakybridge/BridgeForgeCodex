@@ -136,6 +136,13 @@ fn every_lifecycle_event_queues_and_reuses_worker_without_network() {
                 .triggers
                 .contains(&event.to_lowercase())
         );
+        let attempt: Value =
+            serde_json::from_slice(&fs::read(state.join("hook-attempt.json")).unwrap()).unwrap();
+        assert_eq!(attempt["status"], "completed");
+        assert_eq!(attempt["event"], *event);
+        let runtime: Value =
+            serde_json::from_slice(&fs::read(state.join("hook-runtime.json")).unwrap()).unwrap();
+        assert_eq!(runtime["lastEvent"], *event);
         assert!(!state.join("last-synced.json").exists());
     }
     worker::release_worker(&state, &lease.token).unwrap();
@@ -205,14 +212,20 @@ fn memory_status_reports_consent_runtime_remote_health_and_alert_fields() {
         "consent",
         "enabled",
         "hookInstalled",
+        "hookConfigured",
+        "hookDispatchObserved",
         "hookRuntimeVerified",
         "remoteConfigured",
+        "stateMigrationNeeded",
+        "stateMigrationCompleted",
         "syncHealth",
         "alertId",
     ] {
         assert!(receipt.get(field).is_some(), "missing status field {field}");
     }
     assert_eq!(receipt["syncHealth"], "gap");
+    assert_eq!(receipt["hookConfigured"], false);
+    assert_eq!(receipt["hookDispatchObserved"], false);
     assert_eq!(receipt["hookRuntimeVerified"], false);
     assert_eq!(receipt["remoteConfigured"], false);
     fs::remove_dir_all(home).unwrap();
@@ -255,7 +268,7 @@ fn memory_status_agrees_for_windows_path_separator_aliases_without_writing() {
 }
 
 #[test]
-fn memory_failed_health_is_persistent_and_alerts_once() {
+fn memory_status_is_read_only_and_alert_remains_until_acknowledged() {
     let token = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
@@ -271,13 +284,36 @@ fn memory_failed_health_is_persistent_and_alerts_once() {
         "--codex-home".into(),
         home.display().to_string(),
     ];
+    let health_before = fs::read(state.join("health.json")).unwrap();
     let first = run(&args);
     assert_eq!(first.code, EXIT_BLOCKED);
     assert!(first.receipt.as_ref().unwrap()["alertId"].is_string());
     assert_eq!(first.receipt.as_ref().unwrap()["syncHealth"], "failed");
     let second = run(&args);
-    assert_eq!(second.receipt.as_ref().unwrap()["alertId"], Value::Null);
+    assert_eq!(
+        second.receipt.as_ref().unwrap()["alertId"],
+        first.receipt.as_ref().unwrap()["alertId"]
+    );
     assert!(second.receipt.as_ref().unwrap()["activeAlertId"].is_string());
+    assert_eq!(fs::read(state.join("health.json")).unwrap(), health_before);
+    assert!(!state.join("alert-state.json").exists());
+    let alert_id = second.receipt.as_ref().unwrap()["alertId"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert_eq!(
+        run(&[
+            "memory-sync".into(),
+            "ack-alert".into(),
+            "--alert-id".into(),
+            alert_id,
+            "--codex-home".into(),
+            home.display().to_string(),
+        ])
+        .code,
+        0
+    );
+    assert_eq!(run(&args).receipt.as_ref().unwrap()["alertId"], Value::Null);
     bridgeforge_core::memory::record_health(&state, "healthy", None, Some("recovered")).unwrap();
     bridgeforge_core::memory::record_health(&state, "failed", Some("simulated failure"), None)
         .unwrap();

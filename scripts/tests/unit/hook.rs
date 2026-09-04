@@ -79,6 +79,144 @@ impl Drop for Fixture {
     }
 }
 
+fn seed_project_map_inputs(fixture: &Fixture) {
+    fs::create_dir_all(fixture.root.join("src/domain")).unwrap();
+    fs::create_dir_all(fixture.root.join("doc/0_architecture/design")).unwrap();
+    fs::create_dir_all(fixture.root.join("doc/2_bugs/proposal")).unwrap();
+    fs::write(
+        fixture.root.join("AGENTS.md"),
+        "# Trading Runtime\n\n- `OrderBook` changes require review.\n",
+    )
+    .unwrap();
+    fs::write(
+        fixture.root.join("Cargo.toml"),
+        "[package]\nname = \"fixture\"\nversion = \"0.1.0\"\n",
+    )
+    .unwrap();
+    fs::write(fixture.root.join("src/domain/mod.rs"), "pub fn run() {}\n").unwrap();
+    fs::write(fixture.root.join("src/unmapped.rs"), "pub fn idle() {}\n").unwrap();
+    fs::write(
+        fixture.root.join("doc/0_architecture/design/runtime.md"),
+        "# Runtime\n\nImplemented by `src/domain/mod.rs`. The similar domain name alone is not evidence. `src/missing.rs` does not exist.\n",
+    )
+    .unwrap();
+    fs::write(
+        fixture.root.join("doc/2_bugs/proposal/AGENTS.md"),
+        "# Retired Draft Instruction\n\n- `DoNotIndexThis` is proposal text.\n",
+    )
+    .unwrap();
+    fs::write(
+        fixture.root.join("doc/2_bugs/proposal/README.md"),
+        "# Bug proposal\n\nDraft reference: `src/unmapped.rs`.\n",
+    )
+    .unwrap();
+}
+
+#[test]
+fn project_maps_replace_legacy_content_use_only_proven_links_and_are_idempotent() {
+    let fixture = Fixture::new();
+    seed_project_map_inputs(&fixture);
+    let find_path = fixture.root.join(".codex/find-doc.map.md");
+    let sync_path = fixture.root.join(".codex/sync-docs.map.md");
+    fs::write(&find_path, "legacy topic_to_rules\n").unwrap();
+    fs::write(&sync_path, "legacy guessed mapping\n").unwrap();
+
+    let result = project_map::ensure_current();
+    assert_eq!(result.code, 0, "{}", result.stderr);
+    assert!(result.stdout.is_empty());
+    assert!(result.stderr.is_empty());
+    let find = fs::read_to_string(&find_path).unwrap();
+    let sync = fs::read_to_string(&sync_path).unwrap();
+    assert!(find.starts_with("<!-- bridgeforge-project-map schema=1 kind=find-doc input=sha256:"));
+    assert!(find.contains("此文件由 BridgeForge 自动生成，禁止手工维护"));
+    assert!(find.contains("`trading runtime`"));
+    assert!(find.contains("`orderbook`"));
+    assert!(!find.contains("retired draft instruction"));
+    assert!(!find.contains("donotindexthis"));
+    assert!(!find.contains("legacy topic_to_rules"));
+    assert!(sync.starts_with("<!-- bridgeforge-project-map schema=1 kind=sync-docs input=sha256:"));
+    assert!(sync.contains("`src/domain/mod.rs`"));
+    assert!(sync.contains("`doc/0_architecture/design/runtime.md`"));
+    assert!(!sync.contains("src/missing.rs"));
+    assert!(!sync.contains("doc/2_bugs/proposal/README.md"));
+    assert!(!sync.contains("legacy guessed mapping"));
+
+    let before_modified = fs::metadata(&find_path).unwrap().modified().unwrap();
+    std::thread::sleep(Duration::from_millis(25));
+    assert_eq!(project_map::ensure_current().code, 0);
+    assert_eq!(fs::read_to_string(&find_path).unwrap(), find);
+    assert_eq!(fs::read_to_string(&sync_path).unwrap(), sync);
+    assert_eq!(
+        fs::metadata(&find_path).unwrap().modified().unwrap(),
+        before_modified,
+        "unchanged inputs must not rewrite the map"
+    );
+}
+
+#[test]
+fn project_map_dirty_tracking_is_scoped_and_strict_route_repairs_maps() {
+    let fixture = Fixture::new();
+    seed_project_map_inputs(&fixture);
+    assert_eq!(run(vec!["project-map".into(), "ensure-current".into()]), 0);
+    let marker = fixture
+        .root
+        .join(".runtime/bridgeforge-codex/project-map-dirty");
+
+    let unrelated = json!({"tool_input":{"file_path":"README.md"}});
+    assert_eq!(project_map::mark_dirty(&unrelated).code, 0);
+    assert!(!marker.exists());
+
+    let source = json!({"tool_input":{"file_path":"src/domain/mod.rs"}});
+    assert_eq!(project_map::mark_dirty(&source).code, 0);
+    assert!(marker.is_file());
+    fs::write(
+        fixture.root.join("AGENTS.md"),
+        "# Updated Runtime\n\n- `OrderBook` changes require review.\n",
+    )
+    .unwrap();
+    assert_eq!(project_map::ensure_if_dirty().code, 0);
+    assert!(!marker.exists());
+    let find = fs::read_to_string(fixture.root.join(".codex/find-doc.map.md")).unwrap();
+    assert!(find.contains("`updated runtime`"));
+    assert!(!find.contains("`trading runtime`"));
+}
+
+#[test]
+fn post_edit_and_stop_connect_dirty_tracking_to_silent_rebuild() {
+    let fixture = Fixture::new();
+    seed_project_map_inputs(&fixture);
+    assert_eq!(project_map::ensure_current().code, 0);
+    fs::write(
+        fixture.root.join("AGENTS.md"),
+        "# Lifecycle Updated\n\n- `OrderBook` changes require review.\n",
+    )
+    .unwrap();
+    let payload = json!({
+        "tool_name": "Edit",
+        "tool_input": {"file_path": "AGENTS.md"}
+    });
+    assert_eq!(post_edit(&payload), 0);
+    let marker = fixture
+        .root
+        .join(".runtime/bridgeforge-codex/project-map-dirty");
+    assert!(marker.is_file());
+    assert_eq!(lifecycle("stop"), 0);
+    assert!(!marker.exists());
+    let find = fs::read_to_string(fixture.root.join(".codex/find-doc.map.md")).unwrap();
+    assert!(find.contains("`lifecycle updated`"));
+}
+
+#[test]
+fn project_map_rejects_non_file_targets_before_writing_any_map() {
+    let fixture = Fixture::new();
+    seed_project_map_inputs(&fixture);
+    fs::create_dir(fixture.root.join(".codex/find-doc.map.md")).unwrap();
+    let result = project_map::ensure_current();
+    assert_eq!(result.code, 1);
+    assert!(result.stderr.contains("is not a plain file"));
+    assert!(!fixture.root.join(".codex/sync-docs.map.md").exists());
+}
+
 #[test]
 fn lifecycle_snapshots_stop_dedup_and_manual_route_succeed() {
     let fixture = Fixture::new();

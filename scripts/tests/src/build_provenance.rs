@@ -5,7 +5,10 @@ use sha2::{Digest, Sha256};
 use std::cell::Cell;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
+
+static FIXTURE_ID: AtomicU64 = AtomicU64::new(0);
 
 struct Fixture {
     root: PathBuf,
@@ -179,8 +182,9 @@ fn legacy_receipt_delete_failure_rolls_back_installed_assets() {
 impl Fixture {
     fn new() -> Self {
         let root = std::env::temp_dir().join(format!(
-            "bf-provenance-{}-{}",
+            "bf-provenance-{}-{}-{}",
             std::process::id(),
+            FIXTURE_ID.fetch_add(1, Ordering::Relaxed),
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap()

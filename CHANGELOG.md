@@ -15,6 +15,28 @@
 
 > **追溯说明**：v0.1.0 - v0.7.0 基于 git log 历史回溯标记，**git tag 仅从 v0.8.0 开始打**。早期未启用版本号管理是 setup_agent 自打脸问题（要求下游用但自己没用），v0.8.0 修补。
 
+## [1.14.0] - 2026-09-04
+
+### Added
+
+- [product][repo][meta] 自动维护项目地图并迁移原生 Memory 状态
+
+## [1.13.0] - 2026-09-04
+
+### Added
+
+- [product] 新增由 Rust Hook 自动维护的项目地图：根据当前项目事实生成 `.codex/find-doc.map.md` 与 `.codex/sync-docs.map.md`，使用输入指纹、原子写入和字节级幂等避免无意义改写。
+- [product] PostEdit 仅登记相关输入变脏，Stop 与 SessionStart 静默补齐地图；同时提供严格的 `project-map ensure-current` 路由供 Skill 即时修复，失败只在严格调用时返回错误。
+- [product][repo][meta] `$find-doc` 与 `$sync-docs` 改为消费自动索引并保留无索引降级路径；旧手写地图按已确认迁移策略整体重建，不再要求用户维护映射，同时补齐 Template/dogfood、架构说明与回归测试。
+
+## [1.12.6] - 2026-09-04
+
+### Fixed
+
+- [product] 修复原生 Memory 同步升级后遗失旧状态的问题：首次受权运行会从历史 `memory-sync` 目录安全迁移远端授权、合法基线、pending 与当前活动冲突，并以完成收据保证幂等，禁止复活已解决的旧冲突或复制 worker、锁、健康状态及冲突历史。
+- [product] Hook runtime 收据改为在迁移、授权、pending 登记和隐藏 worker 启动全部成功后才完成；新增 dispatch attempt、配置/触发/运行三层状态，`memory-sync status` 改为纯只读。
+- [repo][meta] 同步 Template/dogfood、版本、架构说明及无网络回归，锁定 SessionStart、Stop、SessionEnd 的既有命令、超时与异步合同。
+
 ## [1.12.5] - 2026-09-04
 
 ### Fixed

@@ -478,6 +478,48 @@ fn memory_failure_outcome(state_dir: &Path, detail: impl ToString) -> CommandOut
     blocked("memory-sync", detail)
 }
 
+fn migrate_memory_state(codex: &Path, state: &Path, ledger: &Path) -> Result<(), String> {
+    bridgeforge_core::memory::migration::migrate_legacy_state(codex, state, ledger)
+        .map(|_| ())
+        .map_err(|error| error.to_string())
+}
+
+fn record_hook_attempt(
+    state: &Path,
+    event: &str,
+    status: &str,
+    started_utc: &str,
+    detail: Option<&str>,
+) -> Result<(), String> {
+    let executable = std::env::current_exe().map_err(|error| error.to_string())?;
+    bridgeforge_core::memory::atomic_write_json(
+        &state.join("hook-attempt.json"),
+        &json!({
+            "schema": 1,
+            "hookId": bridgeforge_core::memory::user_config::HOOK_ID,
+            "event": event,
+            "status": status,
+            "executablePath": executable,
+            "binaryVersion": env!("CARGO_PKG_VERSION"),
+            "startedUtc": started_utc,
+            "completedUtc": (status != "started").then(bridgeforge_core::memory::utc_now),
+            "detail": detail,
+        }),
+    )
+    .map_err(|error| error.to_string())
+}
+
+fn hook_failure_outcome(
+    state: &Path,
+    event: &str,
+    started_utc: &str,
+    detail: impl ToString,
+) -> CommandOutcome {
+    let detail = detail.to_string();
+    let _ = record_hook_attempt(state, event, "failed", started_utc, Some(&detail));
+    memory_failure_outcome(state, detail)
+}
+
 fn launch_memory_worker(args: &[String], state: &Path) -> Result<String, String> {
     use bridgeforge_core::memory::worker::{WorkerReservation, reserve_worker};
     let reservation = reserve_worker(state).map_err(|error| error.to_string())?;
@@ -542,13 +584,17 @@ fn memory_sync(args: &[String]) -> CommandOutcome {
                 &remote,
                 has(args, "--confirmed-enable"),
             ) {
-                Ok(authorization) => CommandOutcome::with_receipt(json!({
-                    "schema": 1,
-                    "status": "configured",
-                    "hookInstalled": true,
-                    "runtime": binary,
-                    "authorization": authorization,
-                })),
+                Ok(authorization) => match migrate_memory_state(&codex, &state_dir, &ledger) {
+                    Ok(()) => CommandOutcome::with_receipt(json!({
+                        "schema": 1,
+                        "status": "configured",
+                        "hookInstalled": true,
+                        "hookConfigured": true,
+                        "runtime": binary,
+                        "authorization": authorization,
+                    })),
+                    Err(error) => memory_failure_outcome(&state_dir, error),
+                },
                 Err(error) => blocked("memory-sync", error),
             }
         }
@@ -566,6 +612,9 @@ fn memory_sync(args: &[String]) -> CommandOutcome {
             }
         }
         "maintain" | "repair-hook" => {
+            if let Err(error) = migrate_memory_state(&codex, &state_dir, &ledger) {
+                return memory_failure_outcome(&state_dir, error);
+            }
             if let Err(error) = authorized_remote(&ledger, &state_dir) {
                 return blocked("memory-sync", error);
             }
@@ -613,6 +662,17 @@ fn memory_sync(args: &[String]) -> CommandOutcome {
             let hook_runtime_verified = hook_runtime
                 .as_ref()
                 .is_some_and(bridgeforge_core::memory::runtime_receipt_healthy);
+            let hook_attempt: Option<Value> = fs::read(state_dir.join("hook-attempt.json"))
+                .ok()
+                .and_then(|payload| serde_json::from_slice(&payload).ok());
+            let hook_dispatch_observed = hook_attempt.as_ref().is_some_and(|receipt| {
+                receipt["schema"].as_u64() == Some(1)
+                    && receipt["hookId"].as_str()
+                        == Some(bridgeforge_core::memory::user_config::HOOK_ID)
+                    && receipt["event"].as_str().is_some_and(|event| {
+                        bridgeforge_core::memory::user_config::HOOK_EVENTS.contains(&event)
+                    })
+            });
             let configured_remote = fs::read_to_string(state_dir.join("remote.txt"))
                 .ok()
                 .map(|value| bridgeforge_core::memory::normalize_remote(&value));
@@ -644,7 +704,15 @@ fn memory_sync(args: &[String]) -> CommandOutcome {
             let health_receipt = bridgeforge_core::memory::read_health(&state_dir)
                 .ok()
                 .flatten();
-            let (sync_health, active_alert_id) = if authorization_error.is_some() {
+            let migration = bridgeforge_core::memory::migration::status(&codex, &state_dir);
+            let migration_error = migration.as_ref().err().map(ToString::to_string);
+            let migration = migration.ok();
+            let (sync_health, active_alert_id) = if migration_error.is_some() {
+                (
+                    "failed",
+                    Some("native-memory:state-migration-invalid".to_string()),
+                )
+            } else if authorization_error.is_some() {
                 (
                     "failed",
                     Some("native-memory:authorization-invalid".to_string()),
@@ -691,10 +759,15 @@ fn memory_sync(args: &[String]) -> CommandOutcome {
             } else {
                 ("gap", None)
             };
-            let alert_id =
-                bridgeforge_core::memory::emit_alert_once(&state_dir, active_alert_id.as_deref())
-                    .ok()
-                    .flatten();
+            let alert_state: Option<Value> = fs::read(state_dir.join("alert-state.json"))
+                .ok()
+                .and_then(|payload| serde_json::from_slice(&payload).ok());
+            let alert_id = active_alert_id.clone().filter(|active| {
+                alert_state
+                    .as_ref()
+                    .and_then(|value| value["lastAcknowledged"].as_str())
+                    != Some(active.as_str())
+            });
             let code = if sync_health == "failed" {
                 EXIT_BLOCKED
             } else {
@@ -708,7 +781,10 @@ fn memory_sync(args: &[String]) -> CommandOutcome {
                 "enabled": enabled,
                 "disabledByUser": consent.as_deref() == Some("approved") && !enabled,
                 "hookInstalled": hook_installed,
+                "hookConfigured": hook_installed,
+                "hookDispatchObserved": hook_dispatch_observed,
                 "hookRuntimeVerified": hook_runtime_verified,
+                "hookAttempt": hook_attempt,
                 "hookRuntime": hook_runtime,
                 "remoteConfigured": remote_configured,
                 "pending": pending,
@@ -718,6 +794,10 @@ fn memory_sync(args: &[String]) -> CommandOutcome {
                 "activeConflict": conflict,
                 "lastReceipt": last_receipt,
                 "healthReceipt": health_receipt,
+                "stateMigration": migration,
+                "stateMigrationNeeded": migration.as_ref().and_then(|value| value["needed"].as_bool()).unwrap_or(false),
+                "stateMigrationCompleted": migration.as_ref().and_then(|value| value["completed"].as_bool()).unwrap_or(false),
+                "stateMigrationError": migration_error,
                 "syncHealth": sync_health,
                 "alertId": alert_id,
                 "activeAlertId": active_alert_id,
@@ -738,6 +818,9 @@ fn memory_sync(args: &[String]) -> CommandOutcome {
             }
         }
         "reconcile" => {
+            if let Err(error) = migrate_memory_state(&codex, &state_dir, &ledger) {
+                return memory_failure_outcome(&state_dir, error);
+            }
             let remote = match authorized_memory_remote(args, &ledger, &state_dir) {
                 Ok(value) => value,
                 Err(error) => return blocked("memory-sync", error),
@@ -756,6 +839,9 @@ fn memory_sync(args: &[String]) -> CommandOutcome {
             let Some(conflict_id) = value(args, "--conflict-id") else {
                 return blocked("memory-sync", "resolve requires --conflict-id");
             };
+            if let Err(error) = migrate_memory_state(&codex, &state_dir, &ledger) {
+                return memory_failure_outcome(&state_dir, error);
+            }
             let remote = match authorized_memory_remote(args, &ledger, &state_dir) {
                 Ok(value) => value,
                 Err(error) => return memory_failure_outcome(&state_dir, error),
@@ -793,6 +879,9 @@ fn memory_sync(args: &[String]) -> CommandOutcome {
         }
         "kick" => {
             let trigger = value(args, "--trigger").unwrap_or_else(|| "bridgeforge".into());
+            if let Err(error) = migrate_memory_state(&codex, &state_dir, &ledger) {
+                return memory_failure_outcome(&state_dir, error);
+            }
             if let Err(error) = authorized_remote(&ledger, &state_dir) {
                 return memory_failure_outcome(&state_dir, error);
             }
@@ -857,28 +946,54 @@ fn memory_sync(args: &[String]) -> CommandOutcome {
             if !bridgeforge_core::memory::user_config::memories_enabled(&codex) {
                 return CommandOutcome::ok();
             }
-            if let Err(error) = authorized_remote(&ledger, &state_dir) {
-                return memory_failure_outcome(&state_dir, error);
-            }
-            if let Err(error) = bridgeforge_core::memory::atomic_write_json(
-                &state_dir.join("hook-runtime.json"),
-                &json!({
-                    "schema": 1,
-                    "lastEvent": event,
-                    "handlerRevision": bridgeforge_core::memory::user_config::HOOK_ID,
-                    "verifiedUtc": bridgeforge_core::memory::utc_now(),
-                }),
-            ) {
+            let started_utc = bridgeforge_core::memory::utc_now();
+            if let Err(error) =
+                record_hook_attempt(&state_dir, &event, "started", &started_utc, None)
+            {
                 return blocked("memory-sync", error);
+            }
+            if let Err(error) = migrate_memory_state(&codex, &state_dir, &ledger) {
+                return hook_failure_outcome(&state_dir, &event, &started_utc, error);
+            }
+            if let Err(error) = authorized_remote(&ledger, &state_dir) {
+                return hook_failure_outcome(&state_dir, &event, &started_utc, error);
             }
             let trigger = event.to_lowercase();
             if let Err(error) = bridgeforge_core::memory::worker::mark_pending(&state_dir, &trigger)
             {
-                return memory_failure_outcome(&state_dir, error);
+                return hook_failure_outcome(&state_dir, &event, &started_utc, error);
             }
             match launch_memory_worker(args, &state_dir) {
-                Ok(_) => CommandOutcome::ok(),
-                Err(error) => memory_failure_outcome(&state_dir, error),
+                Ok(worker) => {
+                    let completed_utc = bridgeforge_core::memory::utc_now();
+                    if let Err(error) = record_hook_attempt(
+                        &state_dir,
+                        &event,
+                        "completed",
+                        &started_utc,
+                        Some(&format!("worker-{worker}")),
+                    ) {
+                        return hook_failure_outcome(&state_dir, &event, &started_utc, error);
+                    }
+                    let executable = std::env::current_exe().ok();
+                    if let Err(error) = bridgeforge_core::memory::atomic_write_json(
+                        &state_dir.join("hook-runtime.json"),
+                        &json!({
+                            "schema": 1,
+                            "hookId": bridgeforge_core::memory::user_config::HOOK_ID,
+                            "lastEvent": event,
+                            "handlerRevision": bridgeforge_core::memory::user_config::HOOK_ID,
+                            "executablePath": executable,
+                            "binaryVersion": env!("CARGO_PKG_VERSION"),
+                            "startedUtc": started_utc,
+                            "verifiedUtc": completed_utc,
+                        }),
+                    ) {
+                        return hook_failure_outcome(&state_dir, &event, &started_utc, error);
+                    }
+                    CommandOutcome::ok()
+                }
+                Err(error) => hook_failure_outcome(&state_dir, &event, &started_utc, error),
             }
         }
         _ => blocked("memory-sync", format!("unknown subcommand: {command}")),

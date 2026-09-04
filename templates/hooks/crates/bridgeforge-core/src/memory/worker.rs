@@ -103,6 +103,68 @@ pub fn read_pending(state_dir: &Path) -> MemoryResult<Option<PendingState>> {
     }
 }
 
+pub fn merge_migrated_pending(
+    state_dir: &Path,
+    legacy: &PendingState,
+) -> MemoryResult<PendingState> {
+    if legacy.schema_version != 2
+        || DateTime::parse_from_rfc3339(&legacy.first_pending_utc).is_err()
+        || DateTime::parse_from_rfc3339(&legacy.updated_utc).is_err()
+    {
+        return Err(MemorySyncError::new(
+            "legacy native memory pending state is invalid",
+        ));
+    }
+    fs::create_dir_all(state_dir)?;
+    if is_link_or_reparse(state_dir)? {
+        return Err(MemorySyncError::new(format!(
+            "state directory is unsafe: {}",
+            state_dir.display()
+        )));
+    }
+    let _queue = queue_lock(state_dir)?;
+    let path = state_dir.join("pending.json");
+    let current = if path.exists() {
+        read_pending(state_dir)?
+            .ok_or_else(|| MemorySyncError::new("current native memory pending state is invalid"))?
+            .into()
+    } else {
+        None
+    };
+    let mut triggers = current
+        .as_ref()
+        .map(|value: &PendingState| value.triggers.clone())
+        .unwrap_or_default();
+    for trigger in &legacy.triggers {
+        if !triggers.contains(trigger) {
+            triggers.push(trigger.clone());
+        }
+    }
+    if !triggers.iter().any(|value| value == "state-migration") {
+        triggers.push("state-migration".into());
+    }
+    if triggers.len() > 16 {
+        triggers.drain(0..triggers.len() - 16);
+    }
+    let first_pending_utc = current
+        .as_ref()
+        .map(|value| value.first_pending_utc.as_str())
+        .into_iter()
+        .chain(std::iter::once(legacy.first_pending_utc.as_str()))
+        .min_by_key(|value| DateTime::parse_from_rfc3339(value).ok())
+        .unwrap_or(&legacy.first_pending_utc)
+        .to_string();
+    let pending = PendingState {
+        schema_version: 2,
+        first_pending_utc,
+        updated_utc: utc_now(),
+        trigger: "state-migration".into(),
+        triggers,
+    };
+    atomic_write_json(&path, &pending)?;
+    Ok(pending)
+}
+
 pub fn pending_age(state_dir: &Path) -> MemoryResult<Duration> {
     let Some(pending) = read_pending(state_dir)? else {
         return Ok(Duration::ZERO);

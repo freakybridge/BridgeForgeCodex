@@ -9,34 +9,29 @@ argument: 可选的改动重点或额外上下文
 
 ## 定位与边界
 
-依据真实代码 diff 更新既有设计文档。项目专属路径映射放在 `.codex/sync-docs.map.md`，skill 只定义通用同步流程。
+依据真实代码 diff 更新既有设计文档。源码到文档的可证明关系由 BridgeForge 自动生成到 `.codex/sync-docs.map.md`；skill 只定义通用同步流程与未命中 fallback。
 
 ## 输入
 
 - `git diff --stat HEAD`、`git status` 与必要的具体 diff。
-- 当前 agent 的 `sync-docs.map.md`（存在时）。
+- BridgeForge 自动生成的 `.codex/sync-docs.map.md`（可用时）。
 - `$ARGUMENTS`：用户指定的重点。
 
 ## 核心流程
 
-1. 读取 Git 状态与 diff，确定本轮实际修改文件和行为变化。
-2. 把 diff-to-document location 显式分派给 `light-explorer`，由它只读映射文件和候选文档：
+1. 先运行当前平台的受管入口：Windows 使用 `.codex\bin\bridgeforge-hook.exe project-map ensure-current`，其他平台使用 `.codex/bin/bridgeforge-hook project-map ensure-current`。成功路径无输出；入口缺失或失败时跳过 Map，继续文档搜索 fallback，禁止要求用户维护 Map。
+2. 读取 Git 状态与 diff，确定本轮实际修改文件和行为变化。
+3. 把 diff-to-document location 显式分派给 `light-explorer`，由它只读映射文件和候选文档：
    - 命中映射时，按表定位设计文档。
    - 文件不存在或路径未命中时，依据路径和变更内容寻找最相关的既有文档。
-3. 主 agent 读取候选收据和目标文档原文，只更新与代码实质变化对应的部分：新增或删除的对象、字段、接口、行为和可由代码证实的设计决策。
-4. 再核对一次文档陈述与实际 diff，保留无关内容不动。
-5. 检查映射覆盖：若本轮出现稳定的源码路径规律但映射缺失，在同步摘要末尾给出候选映射并询问是否补充；同一会话对同一路径只提醒一次。
+4. 主 agent 读取候选收据和目标文档原文，只更新与代码实质变化对应的部分：新增或删除的对象、字段、接口、行为和可由代码证实的设计决策。
+5. 再核对一次文档陈述与实际 diff，保留无关内容不动。
 
 ## 输出与收据
 
 - 列出每个已更新文档及对应代码变化。
 - 列出未找到目标文档的源码路径。
-- 映射缺失且路径规律明确时，给出如下候选，不自动写入：
-
-```text
-映射提醒：本次 <path_pattern> 走了 catchall。
-候选：<src_pattern> → <guessed_doc_path>
-```
+- Map 未命中时说明本次使用了文档搜索 fallback，不向用户提出 Map 维护动作。
 
 ## 停止条件
 
@@ -48,6 +43,6 @@ argument: 可选的改动重点或额外上下文
 - 禁止添加代码中不存在的行为、接口或结论。
 - 禁止改动与本轮 diff 无关的文档内容。
 - 禁止因零散、无规律的变更提醒建立映射。
-- 禁止强制用户填写映射文件或重复提醒同一路径。
+- 禁止要求用户创建、填写或修复自动生成的 Map。
 
 $ARGUMENTS

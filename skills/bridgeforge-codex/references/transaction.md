@@ -8,7 +8,7 @@ Apply 必须传 `--apply --plan-fingerprint <fingerprint>` 和已取得的用户
 
 - 只以刷新后产品 home 的 latest current-only 合同生成目标；禁止解释旧 schema 或逐版本执行历史迁移。
 - 按当前合同固定 `compatibility_baseline` 分流：基线及以上常规兼容更新保留 project-owned、未知文件和人工定制；低基线 latest rebuild 将未被当前合同覆盖的普通文件列为精确路径的保留/删除决定；链接、危险 Hook 结构和未确认项阻断，并严格执行 `PreservationManifest` 与资产迁移 manifest。
-- 破坏性重建把精确路径 `.codex/find-doc.map.md` 与 `.codex/sync-docs.map.md` 作为 required-preserve 项目映射原样保留，禁止用 glob 扩大所有权边界。
+- 破坏性重建在事务内把精确路径 `.codex/find-doc.map.md` 与 `.codex/sync-docs.map.md` 作为 required-preserve 项目数据原样保留，禁止用 glob 扩大所有权边界；新 Hook 在事务完成后的 `Stop` / `SessionStart` 按当前项目事实把旧手写格式完整重建为自动索引。
 - Planner、Apply、`$git-sync` 与 pre-commit 调用同一 `bridgeforge check baseline` 检查器。
 - legacy Rule / Memory 只能按逐文件确认的 manifest 迁移；`MEMORY.md`、`MEMORY_COLD.md`、`_stats.json` 只做固定退役。确认期间禁止落盘 manifest、写目标或删除源文件。
 - Skill 只允许确定性修复 frontmatter；缺少 description 或 routing 语义时必须阻断。
