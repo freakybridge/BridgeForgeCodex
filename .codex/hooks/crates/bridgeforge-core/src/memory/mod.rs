@@ -552,13 +552,28 @@ pub fn build_snapshot(
 }
 
 pub fn verify_snapshot(snapshot: &Path, manifest: &SnapshotManifest) -> MemoryResult<()> {
+    verify_manifest_directory(&snapshot.join("memories"), manifest)
+}
+
+fn same_manifest_files(left: &SnapshotManifest, right: &SnapshotManifest) -> bool {
+    let mut left_files: Vec<_> = left.files.iter().collect();
+    let mut right_files: Vec<_> = right.files.iter().collect();
+    left_files.sort_by(|a, b| a.path.cmp(&b.path));
+    right_files.sort_by(|a, b| a.path.cmp(&b.path));
+    left_files == right_files
+}
+
+fn verify_manifest_directory(source: &Path, manifest: &SnapshotManifest) -> MemoryResult<()> {
     if manifest.schema_version != SNAPSHOT_SCHEMA_VERSION {
         return Err(MemorySyncError::new(
             "remote snapshot manifest schema is invalid",
         ));
     }
-    let actual = capture_manifest(&snapshot.join("memories"), manifest.revision, None)?;
-    if actual.files != manifest.files || actual.content_sha256 != manifest.content_sha256 {
+    let actual = capture_manifest(source, manifest.revision, None)?;
+    // The digest authenticates the stored ordering; filesystem ordering is not
+    // part of file identity and can differ across snapshot producers/platforms.
+    let declared_digest = sha256_hex(&serde_json::to_vec(&manifest.files)?);
+    if !same_manifest_files(&actual, manifest) || declared_digest != manifest.content_sha256 {
         return Err(MemorySyncError::new(
             "remote snapshot content does not match its SHA-256 manifest",
         ));
@@ -1211,7 +1226,7 @@ fn verify_local_unchanged(
     let unchanged = match expected {
         Some(expected) if destination.exists() => {
             let actual = capture_manifest(destination, expected.revision, None)?;
-            actual.files == expected.files && actual.content_sha256 == expected.content_sha256
+            same_manifest_files(&actual, expected)
         }
         None => !destination.exists(),
         _ => false,

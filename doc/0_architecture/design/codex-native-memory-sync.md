@@ -36,6 +36,7 @@ Codex 官方生成/读取 ~/.codex/memories/
 ## Git 与合并合同
 
 - Memory 文件按 opaque bytes 计算逐文件 hash 和整树 digest；禁止依赖内部 schema。
+- 校验已有快照时，整树 digest 按 manifest 声明的原始文件顺序计算；文件集合按路径与逐文件 hash 比较，不能把不同生产者或平台的排序差异当作内容损坏。重复路径、缺失、多余、篡改文件及错误 digest 仍须阻断。
 - 恢复只使用已核验 manifest 声明的文件字节，暂存后再次核验再替换原目录；未声明的缓存、锁和临时文件不进入恢复目录。声明文件损坏时保留原目录并停止。
 - 冲突决议先核对 captured local；自动合并和恢复在发布前、替换前及移走原目录后复核本地指纹。期间新增或变化的本地内容导致阻断，必须重新取证。被移走的原目录保留为 memories 同级 `.memories.before-sync.<pid>.<counter>.<timestamp>.tmp`，不自动删除，供恢复或排查晚到写入使用；这不属于新的 Memory 内容源。
 - 临时读取仓库和发布仓库都必须关闭 `core.autocrlf`，并禁止 attributes、clean/smudge 或

@@ -74,6 +74,34 @@ fn corrupted_declared_file_blocks_restore_and_preserves_destination() {
 
 const TEST_REMOTE: &str = "https://github.com/owner/bridgeforge-codex-memories.git";
 
+#[test]
+fn restore_accepts_verified_legacy_manifest_order() {
+    let temp = RestoreFixture::new();
+    let snapshot = temp.0.join("snapshot");
+    let files = BTreeMap::from([
+        ("MEMORY.md".into(), b"baseline".to_vec()),
+        ("extensions/note.md".into(), b"note".to_vec()),
+    ]);
+    let mut manifest = snapshot_from_files(&snapshot, &files, 22).unwrap();
+    manifest.files.reverse();
+    manifest.content_sha256 =
+        super::super::sha256_hex(&serde_json::to_vec(&manifest.files).unwrap());
+    atomic_write_json(&snapshot.join("snapshot-manifest.json"), &manifest).unwrap();
+    for exists in [false, true] {
+        let destination = temp.0.join(format!("restored-{exists}"));
+        let expected = if exists {
+            fs::create_dir(&destination).unwrap();
+            Some(super::super::capture_manifest(&destination, 0, None).unwrap())
+        } else {
+            None
+        };
+        restore_snapshot(&snapshot, &destination, expected.as_ref()).unwrap();
+        for (path, bytes) in &files {
+            assert_eq!(fs::read(destination.join(path)).unwrap(), *bytes);
+        }
+    }
+}
+
 struct LocalGit {
     root: PathBuf,
     bare: PathBuf,
@@ -166,6 +194,77 @@ fn write_memory(root: &Path, name: &str, bytes: &[u8]) {
     let target = root.join(name);
     fs::create_dir_all(target.parent().unwrap()).unwrap();
     fs::write(target, bytes).unwrap();
+}
+
+fn reverse_manifest_order(snapshot: &Path) -> SnapshotManifest {
+    let mut manifest = super::super::read_manifest(snapshot).unwrap();
+    manifest.files.reverse();
+    manifest.content_sha256 =
+        super::super::sha256_hex(&serde_json::to_vec(&manifest.files).unwrap());
+    atomic_write_json(&snapshot.join("snapshot-manifest.json"), &manifest).unwrap();
+    manifest
+}
+
+#[test]
+fn identical_legacy_remote_is_noop_with_or_without_baseline() {
+    let fixture = RestoreFixture::new();
+    let runner = LocalGit::new(&fixture.0);
+    let memories = fixture.0.join("memories");
+    write_memory(&memories, "MEMORY.md", b"baseline");
+    write_memory(&memories, "extensions/note.md", b"note");
+    let snapshot = fixture.0.join("legacy-snapshot");
+    let local = build_snapshot(&memories, &snapshot, 22).unwrap();
+    let legacy = reverse_manifest_order(&snapshot);
+    let work = fixture.0.join("publish-work");
+    fs::create_dir(&work).unwrap();
+    let commit = push_snapshot(
+        &Git { runner: &runner },
+        &snapshot,
+        &work,
+        TEST_REMOTE,
+        None,
+        (&memories, &local),
+    )
+    .unwrap();
+    for has_baseline in [false, true] {
+        let state = fixture.0.join(format!("state-{has_baseline}"));
+        fs::create_dir(&state).unwrap();
+        if has_baseline {
+            record_synced(&state, &snapshot, &legacy, Some(commit.clone())).unwrap();
+        }
+        assert_eq!(
+            reconcile(&memories, &state, TEST_REMOTE, &runner).unwrap(),
+            "noop"
+        );
+        assert_eq!(runner.head(), commit);
+        assert!(!state.join("active-conflict.json").exists());
+    }
+}
+
+#[test]
+fn legacy_captured_local_order_allows_resolution_but_blocks_real_changes() {
+    let fixture = RestoreFixture::new();
+    write_memory(&fixture.0.join("a/memories"), "extra.md", b"stable");
+    let (runner, _, _, b, sb, id) = conflicting_pair(&fixture.0);
+    let captured = sb.join("conflicts").join(&id).join("local");
+    let legacy = reverse_manifest_order(&captured);
+    super::super::verify_local_unchanged(&b, Some(&legacy)).unwrap();
+    write_memory(&b, "extra.md", b"concurrent change");
+    assert!(super::super::verify_local_unchanged(&b, Some(&legacy)).is_err());
+    write_memory(&b, "extra.md", b"stable");
+    assert_eq!(
+        resolve_conflict_with_choices(
+            &b,
+            &sb,
+            TEST_REMOTE,
+            &id,
+            &[("note.md".into(), "local".into())],
+            &runner,
+        )
+        .unwrap(),
+        "resolved"
+    );
+    assert_eq!(fs::read(b.join("note.md")).unwrap(), b"local edit");
 }
 
 fn synchronized_pair(root: &Path) -> (LocalGit, PathBuf, PathBuf, PathBuf, PathBuf) {

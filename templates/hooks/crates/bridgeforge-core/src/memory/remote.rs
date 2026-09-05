@@ -380,12 +380,7 @@ fn restore_snapshot(
             fs::create_dir_all(target.parent().unwrap())?;
             fs::write(target, payload)?;
         }
-        let actual = super::capture_manifest(&stage, manifest.revision, None)?;
-        if actual.files != manifest.files || actual.content_sha256 != manifest.content_sha256 {
-            return Err(MemorySyncError::new(
-                "restore staging content does not match snapshot manifest",
-            ));
-        }
+        super::verify_manifest_directory(&stage, &manifest)?;
         super::replace_memories_if_unchanged(&stage, memories, expected)
     })();
     if result.is_err() {
@@ -522,7 +517,7 @@ fn reconcile_locked(
             return Ok("push".into());
         };
         let remote_path = remote_snapshot.path.as_ref().unwrap();
-        if local.content_sha256 == remote_manifest.content_sha256 {
+        if super::same_manifest_files(&local, remote_manifest) {
             record_synced(
                 state_dir,
                 remote_path,
@@ -615,7 +610,7 @@ fn reconcile_locked(
         }
         let merged_path = work.join("merged-snapshot");
         let merged_manifest = snapshot_from_files(&merged_path, &merged.files, revision)?;
-        let (action, commit) = if merged_manifest.content_sha256 == remote_manifest.content_sha256 {
+        let (action, commit) = if super::same_manifest_files(&merged_manifest, remote_manifest) {
             ("restore", remote_snapshot.commit.clone())
         } else {
             let commit = push_snapshot(
@@ -628,7 +623,7 @@ fn reconcile_locked(
             )?;
             ("merge", Some(commit))
         };
-        if merged_manifest.content_sha256 != local.content_sha256 {
+        if !super::same_manifest_files(&merged_manifest, &local) {
             restore_snapshot(&merged_path, memories, Some(&local))?;
         }
         record_synced(state_dir, &merged_path, &merged_manifest, commit)?;
@@ -831,7 +826,7 @@ pub fn resolve_conflict_with_choices(
             let remote_matches_captured_local = remote_snapshot
                 .manifest
                 .as_ref()
-                .is_some_and(|manifest| manifest.content_sha256 == captured_local.content_sha256);
+                .is_some_and(|manifest| super::same_manifest_files(manifest, &captured_local));
             if !remote_matches_captured_local {
                 return Err(MemorySyncError::new(
                     "remote HEAD changed after conflict capture; reconcile again before resolving",

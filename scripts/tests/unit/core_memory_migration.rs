@@ -167,3 +167,56 @@ fn legacy_remote_mismatch_fails_without_publishing_a_completion_marker() {
     assert!(!state.join(MARKER_NAME).exists());
     fs::remove_dir_all(home).unwrap();
 }
+
+#[test]
+fn legacy_snapshot_order_does_not_invalidate_verified_bytes() {
+    let home = fixture("memory-legacy-order");
+    let legacy = legacy_state_dir(&home);
+    let state = home.join(".bridgeforge-codex/native-memory-sync");
+    let remote = "https://github.com/offline-fixture/bridgeforge-codex-memories";
+    authorize(&home, remote);
+    fs::create_dir_all(&legacy).unwrap();
+    fs::write(legacy.join("remote.txt"), remote).unwrap();
+    let source = home.join("source");
+    fs::create_dir_all(source.join("extensions")).unwrap();
+    fs::write(source.join("MEMORY.md"), b"baseline").unwrap();
+    fs::write(source.join("extensions/note.md"), b"note").unwrap();
+    let snapshot = legacy.join("last-synced-snapshot");
+    let mut manifest = build_snapshot(&source, &snapshot, 22).unwrap();
+    manifest.files.reverse();
+    manifest.content_sha256 = sha256_hex(&serde_json::to_vec(&manifest.files).unwrap());
+    atomic_write_json(&snapshot.join("snapshot-manifest.json"), &manifest).unwrap();
+    atomic_write_json(
+        &legacy.join("last-synced.json"),
+        &json!({"schemaVersion": 2, "revision": 22,
+            "content_sha256": manifest.content_sha256, "commit": "fixture"}),
+    )
+    .unwrap();
+
+    let receipt = migrate_legacy_state(&home, &state, &home.join("bridgeforge-codex-managed.json"))
+        .unwrap()
+        .unwrap();
+    assert!(receipt.migrated.contains(&"baseline".into()));
+    let migrated = state.join("last-synced-snapshot");
+    assert_eq!(snapshot_files(&migrated).unwrap().len(), 2);
+    assert_eq!(
+        fs::read(migrated.join("snapshot-manifest.json")).unwrap(),
+        fs::read(snapshot.join("snapshot-manifest.json")).unwrap()
+    );
+
+    let mut invalid = manifest.clone();
+    invalid.content_sha256 = "0".repeat(64);
+    assert!(super::super::verify_snapshot(&migrated, &invalid).is_err());
+    invalid = manifest.clone();
+    invalid.files.push(invalid.files[0].clone());
+    invalid.content_sha256 = sha256_hex(&serde_json::to_vec(&invalid.files).unwrap());
+    assert!(super::super::verify_snapshot(&migrated, &invalid).is_err());
+    fs::write(migrated.join("memories/extra.md"), b"extra").unwrap();
+    assert!(snapshot_files(&migrated).is_err());
+    fs::remove_file(migrated.join("memories/extra.md")).unwrap();
+    fs::write(migrated.join("memories/MEMORY.md"), b"tampered").unwrap();
+    assert!(snapshot_files(&migrated).is_err());
+    fs::remove_file(migrated.join("memories/MEMORY.md")).unwrap();
+    assert!(snapshot_files(&migrated).is_err());
+    fs::remove_dir_all(home).unwrap();
+}
