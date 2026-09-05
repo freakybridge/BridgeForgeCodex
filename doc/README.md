@@ -123,7 +123,7 @@ delivery_layout: flat
 
 ## 当前 Bug records
 
-- [`BUG-native-memory-snapshot-order-compatibility.md`](2_bugs/BUG-native-memory-snapshot-order-compatibility.md)（有效旧快照因文件顺序不同被误报损坏，阻断状态迁移与自动同步；修复与真实验收进行中）
+- [`BUG-native-memory-snapshot-order-compatibility.md`](2_bugs/BUG-native-memory-snapshot-order-compatibility.md)（旧快照兼容与后台句柄继承已修复；1.14.7 真实启动、回复结束及关闭后同步验证通过，等待用户验收）
 - [`BUG-managed-markdown-commented-table-ambiguity.md`](2_bugs/BUG-managed-markdown-commented-table-ambiguity.md)（项目实表与注释示例表共存时被误判为歧义，六类验证与独立审计已通过，等待发布与下游 Apply 验收）
 - [`BUG-clean-factory-git-sync-skips-runtime-repair.md`](2_bugs/BUG-clean-factory-git-sync-skips-runtime-repair.md)（干净工厂同步跳过生成资产修复，源码与真实 fixture 已修复，等待发布、四项目 batch 与 runtime 验收）
 - [`BUG-native-memory-hook-path-separator-drift.md`](2_bugs/BUG-native-memory-hook-path-separator-drift.md)（Windows 等价路径引起用户级 Memory Hook 漂移误报，修复与验证进行中）

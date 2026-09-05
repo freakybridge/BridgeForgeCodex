@@ -1,6 +1,6 @@
 ---
 lifecycle: active
-validation_status: in_progress
+validation_status: awaiting_user_acceptance
 ---
 
 # Native Memory 有效旧快照被排序差异误判损坏
@@ -66,3 +66,24 @@ Codex 官方 hooks/list 证明旧三个 Hook 已 trusted；转换后必须重新
 离线回归证明旧 `Command::spawn` 即使三个 stdio 为 null，仍泄漏额外可继承句柄：父进程关闭独占测试文件后，子进程仍持有该句柄，重新打开返回 WinError 32。修复仅替换 Memory worker 的 Windows 创建入口：固定 native exe、UTF-16 参数、`bInheritHandles=FALSE`、单独 `DETACHED_PROCESS`，不更改父 Job 策略。`CREATE_NO_WINDOW` 单独使用的试验在 stdin 读取处阻塞，故不采用。最终回归同时断言三个标准句柄为 NULL、无 console、stdin EOF、Rust stdout/stderr/println 成功、参数逐字保留及子进程存活时额外句柄已经释放。
 
 此阶段 `cargo test --locked --config scripts/tests/factory-cargo.toml --manifest-path .codex/hooks/Cargo.toml --workspace` 完成 Core 113、CLI 9、Hook 15 项通过，4 项子进程入口按设计忽略；`cargo test --locked --manifest-path scripts/tests/Cargo.toml -- --test-threads=1` 完成 81 passed、0 failed、2 ignored（354.24 秒）。受管 build-assets、manifest --check、factory-version、baseline、project-structure、skill-metadata 与镜像检查通过。独立审计未发现源码阻断；MSRV 1.88 未单独实编。仍需正式安装与关闭后真实同步收据，不能以启动收据代替完成收据。
+
+## 1.14.7 正式安装后的真实验收
+
+2026-09-05 用户再次明确同意完整 Memory 目录与既定私有仓库的双向同步验证，冲突停止并保留两份。正式 updater 安装修复提交 `b010071fd0a1d8a8c88822417aedd0e5ee23c680`，用户级 CLI self-test 版本为 1.14.7。
+
+使用 PowerShell 7 执行 `scripts/tests/fixtures/native_memory_lifecycle_observer.ps1 -ConfirmAuthorizedMemorySync`，由临时、不持久化的真实 Codex 会话触发事件；没有手工 reconcile、修改 Memory 正文或强杀 app-server。命令退出 0：
+
+- 04:52:58 UTC 的 SessionStart 在 602ms 内正常返回，后台 worker 继续运行；04:53:01 的 Stop 复用 worker，04:53:32 队列清空。
+- 04:54:07.112 关闭 app-server stdin；04:54:07.760 服务已退出，但 SessionEnd worker 25276 仍存活。04:54:23.946 pending 消失，04:54:24.053 worker 正常退出并释放登记。关闭后的约 16 秒同步不再被三秒 Hook 窗口终止。
+- 最终 `memory-sync status` 为 healthy，当前 SessionEnd 收据版本 1.14.7，pending、worker、activeConflict、alertId 均为空。lastReceipt 为 revision 23、`44a630aebd3eb1290e476b30b3e27a84c0ecb017`，时间 04:54:23.921 UTC；实际 `git ls-remote` 的 HEAD 与 main 均等于该提交。内容未变化时正常 noop，不制造新提交。
+
+| 证据层 | 最终状态 |
+|---|---|
+| 源码 | 句柄泄漏先红后绿，完整 Rust 回归通过；关闭缺陷修复在 1.14.7 |
+| 产品传播 | Template 已发布，正式用户级产品与 CLI 已安装修复提交 |
+| dogfood | 镜像、manifest、受管构建及 baseline 检查通过 |
+| fixture | 工厂 81 项通过，包含真实隔离初始化、发布与 Memory 冲突保护 |
+| 真实下游 | 本次未改写四个下游工作区，未宣称下游项目升级通过；同步入口为用户级 |
+| runtime | SessionStart、Stop、SessionEnd 自动链路及关闭后队列收尾通过，远端与本地收据一致 |
+
+独立审计于 04:55:21 UTC 只读复核正式程序版本、SessionEnd 运行收据、同步完成时间与空队列，确认该关闭缺陷可以技术收口。技术验证完成，等待用户验收，不自动归档。测试中第三方 UserPromptSubmit Hook 仍返回 1，属于既有非 Memory 问题，不在本 Bug 修复声明内。未验证第二台真实电脑的恢复路径；该路径只有隔离 fixture 证据。
