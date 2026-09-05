@@ -44,3 +44,15 @@ validation_status: in_progress
 Codex 官方 hooks/list 证明旧三个 Hook 已 trusted；转换后必须重新核验新定义的信任与实际触发。
 
 第二层修复发布前执行 `cargo test --locked --manifest-path scripts/tests/Cargo.toml -- --test-threads=1`：81 passed、0 failed、2 ignored（332.46 秒），包含真实 init、工厂受管 commit/push、Memory push/restore 与冲突保护。manifest --check、factory-version、project-structure、skill-metadata、baseline、mirror diff 与 diff --check 均通过。
+
+## 真实 Codex 生命周期发现的启动语法遗漏
+
+1.14.5 / `5d3463e` 已推送并正式安装；repair-hook 返回 applied，三个 Rust user Hook 经 Codex 官方 API 核验 enabled/trusted。2026-09-05 01:52 UTC 临时、不持久化的 Codex 0.153.3 会话首轮实际发出 SessionStart，Hook 在 653ms 内退出 1，未产生 hookAttempt，证明尚未进入 CLI。仅启动 thread 而未发送首轮不会执行 SessionStart；子 agent 续接也未提供该事件。
+
+旧 commandWindows 以引号路径开头，没有 PowerShell 调用符。真实 PowerShell self-test 复现 ParserError，独立源码复核确认 Codex Hook 继承会话 shell，并非固定 cmd。修复针对本机 PowerShell 5/7 宿主：单引号字面量参数、调用符、显式原样传递 native exit code，不添加脚本包装资产。cmd 宿主不在本轮验证与支持声明内。
+
+新增真实 Rust native probe，覆盖路径空格/单引号/美元符/反引号，中文 JSON stdin、stdout/stderr 逐字节和 0/1/2 退出码；PowerShell 5/7 六个组合均通过。旧无调用符 Rust handler 必须精确迁移，不能继续当健康别名，附加命令仍零写阻断。迁移完成后从新 payload 重算 ownership，覆盖两字段四种独立路径分隔符组合。
+
+最终 workspace 验证 Core 111/111、CLI 9/9、Hook 15/15 通过。独立审计发现的启动失败误报成功已通过 ErrorActionPreference Stop 修复，PS5/7 缺失程序均实测退出 1；最终审计无剩余源码阻断。最终受管 build-assets、manifest --check、factory-version、baseline、project-structure、skill-metadata 通过；真实安装后仍需新的生命周期和同步收据。
+
+最终完整工厂 fixture 以同一串行命令完成：81 passed、0 failed、2 ignored（375.14 秒），真实新项目安装与工厂发布均通过。

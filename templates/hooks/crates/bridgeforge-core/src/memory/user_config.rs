@@ -37,6 +37,16 @@ fn windows_quote(value: &str) -> String {
     format!("\"{}\"", value.replace('"', "\\\""))
 }
 
+fn powershell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "''"))
+}
+
+fn windows_hook_matches(actual: &str, binary: &Path, home: &Path, event: &str) -> bool {
+    actual.strip_prefix("$ErrorActionPreference = 'Stop'; & ")
+        .and_then(|value| value.strip_suffix("; exit $LASTEXITCODE"))
+        .is_some_and(|value| hook_command_matches(value, binary, home, event, powershell_quote))
+}
+
 fn ordinary_windows_absolute_path(value: &str) -> bool {
     let bytes = value.as_bytes();
     cfg!(windows)
@@ -109,10 +119,10 @@ pub fn expected_document(binary: &Path, codex_home: &Path) -> Value {
                 shell_quote(&home_text),
             ),
             "commandWindows": format!(
-                "{} memory-sync hook-run --event {} --codex-home {}",
-                windows_quote(&binary_text),
+                "$ErrorActionPreference = 'Stop'; & {} memory-sync hook-run --event {} --codex-home {}; exit $LASTEXITCODE",
+                powershell_quote(&binary_text),
                 event,
-                windows_quote(&home_text),
+                powershell_quote(&home_text),
             ),
             MANAGED_ID_KEY: format!("{HOOK_ID}:{event}"),
         });
@@ -160,7 +170,11 @@ fn expected_user_groups(
             ("commandWindows", windows_quote as fn(&str) -> String),
         ] {
             if let Some(command) = handler[key].as_str()
-                && hook_command_matches(command, binary, codex_home, &spec.event, quote)
+                && if key == "commandWindows" {
+                    windows_hook_matches(command, binary, codex_home, &spec.event)
+                } else {
+                    hook_command_matches(command, binary, codex_home, &spec.event, quote)
+                }
             {
                 spec.handler[key] = Value::String(command.into());
             }
@@ -209,6 +223,12 @@ fn migrate_python_handlers(
             "powershell.exe -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File {} {event}",
             windows_quote(&wrapper),
         ));
+        let mut rust_legacy = desired.clone();
+        rust_legacy["commandWindows"] = Value::String(format!(
+            "{} memory-sync hook-run --event {event} --codex-home {}",
+            windows_quote(&command_path(binary)),
+            windows_quote(&command_path(codex_home)),
+        ));
         if let Some(groups) = document
             .get_mut("hooks")
             .and_then(|hooks| hooks.get_mut(event))
@@ -217,7 +237,16 @@ fn migrate_python_handlers(
             for group in groups {
                 if let Some(handlers) = group["hooks"].as_array_mut() {
                     for handler in handlers {
-                        if *handler == legacy {
+                        let mut rust_alias = rust_legacy.clone();
+                        for key in ["command", "commandWindows"] {
+                            let quote = if key == "command" { shell_quote } else { windows_quote };
+                            if let Some(command) = handler[key].as_str()
+                                && hook_command_matches(command, binary, codex_home, event, quote)
+                            {
+                                rust_alias[key] = command.into();
+                            }
+                        }
+                        if *handler == legacy || *handler == rust_alias {
                             *handler = desired.clone();
                             changed = true;
                         }
@@ -242,6 +271,7 @@ pub fn merge_user_hooks(codex_home: &Path, binary: &Path) -> MemoryResult<bool> 
     if let Some(payload) = before.as_deref()
         && let Some(migrated) = migrate_python_handlers(payload, codex_home, binary)?
     {
+        let expected = expected_user_groups(binary, codex_home, Some(&migrated))?;
         let desired = merge_managed_document(
             Some(&migrated),
             &expected,

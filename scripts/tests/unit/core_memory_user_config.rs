@@ -72,19 +72,31 @@ fn exact_official_python_handlers_migrate_to_rust_and_preserve_external_hooks() 
 #[test]
 fn partial_official_python_hooks_migrate_and_fill_missing_events() {
     let home = std::env::temp_dir()
-        .join(format!("bf-python-partial-{}", SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()))
+        .join(format!(
+            "bf-python-partial-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ))
         .join(".codex");
     fs::create_dir_all(&home).unwrap();
     let mut before = python_hook_fixture(&home);
     before["hooks"].as_object_mut().unwrap().remove("Stop");
-    before["hooks"].as_object_mut().unwrap().remove("SessionEnd");
+    before["hooks"]
+        .as_object_mut()
+        .unwrap()
+        .remove("SessionEnd");
     let binary = home.join("bin/bridgeforge.exe");
     fs::write(home.join("hooks.json"), before.to_string()).unwrap();
     assert!(merge_user_hooks(&home, &binary).unwrap());
     assert!(user_hooks_healthy(&home, &binary));
     let after = load_document(&fs::read(home.join("hooks.json")).unwrap(), "test").unwrap();
     assert_eq!(after["description"], before["description"]);
-    assert_eq!(after["hooks"]["UserPromptSubmit"], before["hooks"]["UserPromptSubmit"]);
+    assert_eq!(
+        after["hooks"]["UserPromptSubmit"],
+        before["hooks"]["UserPromptSubmit"]
+    );
     for event in HOOK_EVENTS {
         assert_eq!(after["hooks"][event].as_array().unwrap().len(), 1);
     }
@@ -175,6 +187,141 @@ fn expected_handlers_use_rust_binary_only() {
                 .contains(&format!("memory-sync hook-run --event {event}"))
         );
     }
+}
+
+#[cfg(windows)]
+#[test]
+fn powershell_host_preserves_native_arguments_stdin_streams_and_exit_code() {
+    use std::io::Write;
+    use std::os::windows::process::CommandExt;
+    use std::process::{Command, Stdio};
+    let folder = std::env::temp_dir().join(format!(
+        "bf shell ' dollar$ tick` {}",
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    fs::create_dir_all(&folder).unwrap();
+    let binary = folder.join("probe.exe");
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .ancestors()
+        .nth(4)
+        .unwrap();
+    let built = Command::new("rustc")
+        .arg(root.join("scripts/tests/fixtures/native_memory_shell_probe.rs"))
+        .arg("-o")
+        .arg(&binary)
+        .creation_flags(0x08000000)
+        .output()
+        .unwrap();
+    assert!(
+        built.status.success(),
+        "{}",
+        String::from_utf8_lossy(&built.stderr)
+    );
+    let home = folder.join(".codex");
+    let command =
+        expected_document(&binary, &home)["hooks"]["SessionStart"][0]["hooks"][0]["commandWindows"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+    let input = "{\"text\":\"中文\\nline \\\"quoted\\\"\"}\n".as_bytes();
+    for shell in ["powershell.exe", "pwsh.exe"] {
+        for code in [0, 1, 2] {
+            let mut child = Command::new(shell)
+                .args(["-NoProfile", "-NonInteractive", "-Command", &command])
+                .env("BF_PROBE_HOME", command_path(&home))
+                .env("BF_PROBE_EXIT", code.to_string())
+                .creation_flags(0x08000000)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .unwrap();
+            child.stdin.take().unwrap().write_all(input).unwrap();
+            let output = child.wait_with_output().unwrap();
+            assert_eq!(
+                output.status.code(),
+                Some(code),
+                "{shell}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert_eq!(output.stdout, input, "{shell}");
+            assert_eq!(output.stderr, b"probe-stderr\n", "{shell}");
+        }
+        let missing = expected_document(&folder.join("missing.exe"), &home)["hooks"]["SessionStart"][0]["hooks"][0]["commandWindows"].as_str().unwrap().to_owned();
+        let output = Command::new(shell)
+            .args(["-NoProfile", "-NonInteractive", "-Command", &missing])
+            .creation_flags(0x08000000)
+            .output()
+            .unwrap();
+        assert!(
+            !output.status.success(),
+            "{shell}: missing executable must fail"
+        );
+        assert!(!output.stderr.is_empty());
+    }
+    fs::remove_dir_all(folder).unwrap();
+}
+
+#[cfg(windows)]
+#[test]
+fn exact_legacy_rust_hooks_migrate_but_command_suffixes_block() {
+    let home = std::env::temp_dir().join(format!(
+        "bf-rust-legacy-{}",
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    fs::create_dir_all(&home).unwrap();
+    let binary = home.join("bin/bridgeforge.exe");
+    let mut legacy = expected_document(&binary, &home);
+    for event in HOOK_EVENTS {
+        legacy["hooks"][event][0]["hooks"][0]["commandWindows"] = format!(
+            "{} memory-sync hook-run --event {event} --codex-home {}",
+            windows_quote(&command_path(&binary)),
+            windows_quote(&command_path(&home))
+        )
+        .into();
+    }
+    let mut drift = legacy.clone();
+    let handler = &mut drift["hooks"]["Stop"][0]["hooks"][0];
+    handler["commandWindows"] =
+        format!("{}; other.exe", handler["commandWindows"].as_str().unwrap()).into();
+    fs::write(home.join("hooks.json"), drift.to_string()).unwrap();
+    assert!(merge_user_hooks(&home, &binary).is_err());
+    assert_eq!(
+        fs::read_to_string(home.join("hooks.json")).unwrap(),
+        drift.to_string()
+    );
+    for command_backslash in [false, true] {
+        for windows_backslash in [false, true] {
+            let mut candidate = legacy.clone();
+            for event in HOOK_EVENTS {
+                for (key, backslash) in [
+                    ("command", command_backslash),
+                    ("commandWindows", windows_backslash),
+                ] {
+                    if backslash {
+                        candidate["hooks"][event][0]["hooks"][0][key] = candidate["hooks"][event]
+                            [0]["hooks"][0][key]
+                            .as_str()
+                            .unwrap()
+                            .replace('/', "\\")
+                            .into();
+                    }
+                }
+            }
+            fs::write(home.join("hooks.json"), candidate.to_string()).unwrap();
+            assert!(!user_hooks_healthy(&home, &binary));
+            assert!(merge_user_hooks(&home, &binary).unwrap());
+            assert!(user_hooks_healthy(&home, &binary));
+            assert!(!merge_user_hooks(&home, &binary).unwrap());
+        }
+    }
+    fs::remove_dir_all(home).unwrap();
 }
 
 #[cfg(windows)]
@@ -326,7 +473,7 @@ fn native_memory_path_comparison_preserves_quoting_and_non_drive_paths() {
 
 #[cfg(windows)]
 #[test]
-fn native_memory_windows_trailing_backslash_is_not_a_path_alias() {
+fn native_memory_powershell_single_quotes_allow_trailing_path_separator() {
     for path in ["C:/Users/test/.codex/", "C:/Users/test/.codex//", "C:/"] {
         let quoted = windows_quote(path);
         assert!(quoted_path_matches(&quoted, Path::new(path), windows_quote));
@@ -353,8 +500,8 @@ fn native_memory_windows_trailing_backslash_is_not_a_path_alias() {
         .into();
     let before = super::super::ownership::render_document(&document).unwrap();
     fs::write(home.join("hooks.json"), &before).unwrap();
-    assert!(!user_hooks_healthy(&spelling, binary));
-    assert!(merge_user_hooks(&spelling, binary).is_err());
+    assert!(user_hooks_healthy(&spelling, binary));
+    assert!(!merge_user_hooks(&spelling, binary).unwrap());
     assert_eq!(fs::read(home.join("hooks.json")).unwrap(), before);
     fs::remove_dir_all(home).unwrap();
 }
