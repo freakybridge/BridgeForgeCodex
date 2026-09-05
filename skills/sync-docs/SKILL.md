@@ -21,7 +21,7 @@ argument: 可选的改动重点或额外上下文
 
 1. 只读、审计或预览时跳过 Map 刷新，禁止写盘或清除脏标记；已授权同步使用 `.codex/bin/bridgeforge-hook.exe project-map ensure-current`（非 Windows 去掉 `.exe`），成功无输出；入口不可用则直接搜索文档。
 2. 读取 Git 状态与 diff，确定本轮实际修改文件和行为变化。
-3. 把 diff-to-document location 显式分派给 `light-explorer`，由它只读映射文件和候选文档：
+3. 默认由主对话定位变更对应的既有文档，复用已核实的定位结果；确有可独立处理的定位任务且授权、预算允许时，再分派给 `light-explorer`：
    - 命中映射时，按表定位设计文档。
    - Map 缺失、过时或未命中时，按路径和变更查找既有文档。
 4. 主 agent 核对原文与 diff；预览交付拟修改位置和原因即止。已授权同步只修改实质变化对应的对象、字段、接口、行为和设计决策。

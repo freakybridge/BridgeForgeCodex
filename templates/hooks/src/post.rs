@@ -18,6 +18,14 @@ use crate::util::{
 const TEXT_SUFFIXES: &[&str] = &[
     "md", "json", "py", "rs", "toml", "sh", "ps1", "yml", "yaml", "txt",
 ];
+
+// Factory-test counters only; no production telemetry or persisted state.
+#[cfg(all(test, bridgeforge_factory_tests))]
+pub(crate) static ENCODING_SCANS: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+#[cfg(all(test, bridgeforge_factory_tests))]
+pub(crate) static INSTRUCTION_SCANS: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
 const TEXT_NAMES: &[&str] = &[
     "AGENTS.md",
     "CHANGELOG.md",
@@ -54,6 +62,8 @@ fn is_text(path: &Path) -> bool {
 }
 
 fn all_text_paths(root: &Path) -> Vec<PathBuf> {
+    #[cfg(all(test, bridgeforge_factory_tests))]
+    ENCODING_SCANS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let mut result = BTreeSet::new();
     for selected in TEXT_ROOTS {
         let path = root.join(selected);
@@ -104,7 +114,7 @@ fn garble_hits(root: &Path, paths: &[PathBuf]) -> Vec<String> {
     hits
 }
 
-pub fn encoding(payload: &Value) -> StepResult {
+pub fn encoding(payloads: &[Value]) -> StepResult {
     let root = repo_root();
     let all = all_text_paths(&root);
     let bom: Vec<String> = all
@@ -125,20 +135,22 @@ pub fn encoding(payload: &Value) -> StepResult {
                 .join("\n")
         ));
     }
-    let mut edited = Vec::new();
-    if let Some(input) = tool_input(payload) {
-        for key in ["file_path", "path"] {
-            let raw = json_string(input, key);
-            if raw.is_empty() {
-                continue;
-            }
-            let path = normalize_path(&root, &raw);
-            if path_is_inside(&root, &path) && path.is_file() && is_text(&path) {
-                edited.push(path);
+    let mut edited = BTreeSet::new();
+    for payload in payloads {
+        if let Some(input) = tool_input(payload) {
+            for key in ["file_path", "path"] {
+                let raw = json_string(input, key);
+                if raw.is_empty() {
+                    continue;
+                }
+                let path = normalize_path(&root, &raw);
+                if path_is_inside(&root, &path) && path.is_file() && is_text(&path) {
+                    edited.insert(path);
+                }
             }
         }
     }
-    let hits = garble_hits(&root, &edited);
+    let hits = garble_hits(&root, &edited.into_iter().collect::<Vec<_>>());
     if hits.is_empty() {
         StepResult::ok()
     } else {
@@ -257,46 +269,72 @@ pub fn fallback_smell(payload: &Value) -> StepResult {
     let mut parts = Vec::new();
     for key in ["new_string", "content"] {
         if let Some(value) = input.get(key).and_then(Value::as_str) {
-            parts.push(value);
+            parts.push((value, None));
         }
     }
     if let Some(edits) = input.get("edits").and_then(Value::as_array) {
         for edit in edits {
             if let Some(value) = edit.get("new_string").and_then(Value::as_str) {
-                parts.push(value);
+                parts.push((value, None));
             }
         }
     }
-    let text = parts.join("\n");
-    if text.is_empty() {
+    if let Some(hunks) = input.get("patch_hunks").and_then(Value::as_array) {
+        for hunk in hunks {
+            if let (Some(text), Some(added)) = (
+                hunk.get("new_string").and_then(Value::as_str),
+                hunk.get("added_lines").and_then(Value::as_array),
+            ) {
+                parts.push((text, Some(added)));
+            }
+        }
+    }
+    if parts.is_empty() {
         return StepResult::ok();
     }
     let py = Regex::new(r"except\s*(?:\(?\s*(?:Exception|BaseException)\s*\)?(?:\s+as\s+\w+)?)?\s*:\s*(?:\n[ \t]*)?pass\b").unwrap();
     let js = Regex::new(r"catch\s*(?:\([^)]*\))?\s*\{\s*\}").unwrap();
     let mut hits = Vec::new();
-    for item in py.find_iter(&text) {
-        hits.push(format!(
-            "裸/宽 except 后直接 pass（静默吞异常）: {}",
-            item.as_str()
-                .split_whitespace()
-                .collect::<Vec<_>>()
-                .join(" ")
-        ));
-    }
-    for item in js.find_iter(&text) {
-        hits.push(format!(
-            "空 catch 块（静默吞异常）: {}",
-            item.as_str()
-                .split_whitespace()
-                .collect::<Vec<_>>()
-                .join(" ")
-        ));
+    for (text, added_lines) in parts {
+        for (pattern, label) in [
+            (&py, "裸/宽 except 后直接 pass（静默吞异常）"),
+            (&js, "空 catch 块（静默吞异常）"),
+        ] {
+            for item in pattern.find_iter(text) {
+                // Context completes split constructs; only changed matches should warn.
+                if let Some(added) = added_lines {
+                    let first = text[..item.start()]
+                        .bytes()
+                        .filter(|byte| *byte == b'\n')
+                        .count();
+                    let last = text[..item.end()]
+                        .trim_end_matches('\n')
+                        .bytes()
+                        .filter(|byte| *byte == b'\n')
+                        .count();
+                    if !added
+                        .iter()
+                        .filter_map(Value::as_u64)
+                        .any(|line| (first..=last).contains(&(line as usize)))
+                    {
+                        continue;
+                    }
+                }
+                hits.push(format!(
+                    "{label}: {}",
+                    item.as_str()
+                        .split_whitespace()
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                ));
+            }
+        }
     }
     if hits.is_empty() {
         return StepResult::ok();
     }
     StepResult::output(format!(
-        "[fallback-smell] {} 疑似兜底坏味道（仅裸吞异常，软提醒不阻塞）:\n{}\n[fallback-smell] 静默吞异常会把真报错藏成假成功 → 先确认根因，别用 pass 掩盖（AGENTS.md §5.2）",
+        "[fallback-smell] {} 疑似兜底坏味道（仅裸吞异常，软提醒不阻塞）:\n{}\n[fallback-smell] 静默吞异常会把真报错藏成假成功 → 先确认根因，别用 pass 掩盖",
         Path::new(&raw)
             .file_name()
             .and_then(|value| value.to_str())
@@ -488,6 +526,8 @@ fn instruction_text_issues(path: &Path, root: &Path, nested: bool) -> Vec<String
 }
 
 pub fn instruction_source(_payload: &Value) -> StepResult {
+    #[cfg(all(test, bridgeforge_factory_tests))]
+    INSTRUCTION_SCANS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let root = repo_root();
     let path = root.join("AGENTS.md");
     let Ok(bytes) = fs::read(&path) else {
@@ -516,15 +556,11 @@ pub fn instruction_source(_payload: &Value) -> StepResult {
     let parts = zone_parts(&text);
     match &parts {
         Ok((public, project)) => {
-            let public_headings = [
-                "## BridgeForge 公共区",
-                "### 1.1 公共架构红线",
-                "### 1.3 工具与证据红线",
-                "### 2.1 信息放置与指令承载",
-                "### 2.3 文档管理",
-                "### 4.2 鬼打墙觉察与渐进升级",
-            ];
-            let public_heads = visible_heading_positions(public, &public_headings);
+            // The managed public hash below validates the complete public block.
+            // Do not duplicate its editorial headings in the runtime contract.
+            if let Err(error) = visible_heading_positions(public, &[]) {
+                issues.push(format!("AGENTS.md: {error}"));
+            }
             let project_headings = [
                 "## 项目级专区",
                 "### 项目架构红线",
@@ -534,23 +570,8 @@ pub fn instruction_source(_payload: &Value) -> StepResult {
                 "### 目录级 AGENTS 索引",
             ];
             let project_heads = visible_heading_positions(project, &project_headings);
-            if let Err(error) = &public_heads {
-                issues.push(format!("AGENTS.md: {error}"));
-            }
             if let Err(error) = &project_heads {
                 issues.push(format!("AGENTS.md: {error}"));
-            }
-            for heading in public_headings {
-                if public_heads
-                    .as_ref()
-                    .ok()
-                    .and_then(|items| items.get(heading))
-                    .is_none_or(|positions| positions.len() != 1)
-                {
-                    issues.push(format!(
-                        "AGENTS.md public zone must contain exactly one {heading}"
-                    ));
-                }
             }
             let mut ordered = Vec::new();
             for heading in project_headings {

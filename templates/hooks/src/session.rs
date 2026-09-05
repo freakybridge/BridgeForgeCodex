@@ -3,6 +3,7 @@ use regex::Regex;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 use walkdir::WalkDir;
@@ -14,6 +15,7 @@ use crate::util::{atomic_write, codex_root, read_utf8, repo_root, run_command};
 fn git(args: &[String], timeout: Duration) -> Option<std::process::Output> {
     let root = repo_root();
     let mut safe_args = vec![
+        "--no-optional-locks".to_string(),
         "-c".to_string(),
         format!(
             "safe.directory={}",
@@ -64,16 +66,134 @@ fn snapshot_paths(directory: &Path) -> Vec<PathBuf> {
         .into_iter()
         .flatten()
         .flatten()
+        .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_file()))
         .map(|entry| entry.path())
         .filter(|path| path.extension().and_then(|value| value.to_str()) == Some("md"))
         .collect();
     items.sort_by_key(|path| {
-        fs::metadata(path)
-            .and_then(|value| value.modified())
-            .unwrap_or(SystemTime::UNIX_EPOCH)
+        (
+            fs::metadata(path)
+                .and_then(|value| value.modified())
+                .unwrap_or(SystemTime::UNIX_EPOCH),
+            path.clone(),
+        )
     });
     items.reverse();
     items
+}
+
+fn complete_handoff(text: &str) -> bool {
+    let Some((_, summary)) = text.split_once("## 交接摘要（agent 填）") else {
+        return false;
+    };
+    ["已完成", "关键决定 / 当前假设", "改动文件", "下一步"]
+        .iter()
+        .all(|heading| {
+            summary
+                .split_once(&format!("### {heading}\n"))
+                .is_some_and(|(_, body)| {
+                    !body.split("\n### ").next().unwrap_or("").trim().is_empty()
+                })
+        })
+}
+
+fn automatic_snapshot(text: &str) -> bool {
+    !text.contains("## 交接摘要")
+        && text
+            .lines()
+            .any(|line| matches!(line, "**Event**: stop" | "**Event**: post-compact"))
+}
+
+// One selection policy for startup hints and the read-only Skill entrypoint.
+pub(crate) fn snapshot_candidates(directory: &Path) -> Vec<(PathBuf, bool)> {
+    let entries: Vec<_> = snapshot_paths(directory)
+        .into_iter()
+        .filter_map(|path| {
+            read_utf8(&path)
+                .ok()
+                .map(|text| (path, complete_handoff(&text)))
+        })
+        .collect();
+    if entries.iter().any(|(_, complete)| *complete) {
+        entries
+            .into_iter()
+            .filter(|(_, complete)| *complete)
+            .collect()
+    } else {
+        entries
+    }
+}
+
+pub fn select_snapshot(list: bool) -> StepResult {
+    let entries = snapshot_candidates(&repo_root().join(".runtime/session_state"));
+    if entries.is_empty() {
+        return StepResult::failed("snapshot selection", "no readable snapshots");
+    }
+    StepResult::output(
+        entries
+            .iter()
+            .take(if list { 10 } else { 1 })
+            .map(|(path, complete)| {
+                format!(
+                    "{}\t{}",
+                    if *complete {
+                        "handoff"
+                    } else {
+                        "state-only / incomplete"
+                    },
+                    path.display()
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n"),
+    )
+}
+
+pub(crate) fn write_new_snapshot(
+    directory: &Path,
+    timestamp: &str,
+    content: &[u8],
+) -> std::io::Result<PathBuf> {
+    for sequence in 0..1000 {
+        let name = if sequence == 0 {
+            format!("{timestamp}.md")
+        } else {
+            format!("{timestamp}-{sequence:03}.md")
+        };
+        let path = directory.join(name);
+        let mut file = match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+        {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error),
+        };
+        let result = file.write_all(content).and_then(|_| file.sync_all());
+        drop(file);
+        if let Err(error) = result {
+            let _ = fs::remove_file(&path);
+            return Err(error);
+        }
+        return Ok(path);
+    }
+    Err(std::io::Error::new(
+        std::io::ErrorKind::AlreadyExists,
+        "snapshot filename attempts exhausted",
+    ))
+}
+
+pub(crate) fn retain_automatic_snapshots(directory: &Path) -> std::io::Result<usize> {
+    let automatic: Vec<_> = snapshot_paths(directory)
+        .into_iter()
+        .filter(|path| read_utf8(path).is_ok_and(|text| automatic_snapshot(&text)))
+        .collect();
+    let trimmed = automatic.len().saturating_sub(20);
+    for old in automatic.into_iter().skip(20) {
+        fs::remove_file(old)?;
+    }
+    Ok(trimmed)
 }
 
 pub fn snapshot(event: &str) -> StepResult {
@@ -93,53 +213,40 @@ pub fn snapshot(event: &str) -> StepResult {
         }
     }
     let timestamp = Local::now().format("%Y-%m-%d_%H%M%S").to_string();
-    let branch = git(
-        &["branch".into(), "--show-current".into()],
-        Duration::from_secs(10),
-    )
-    .filter(|value| value.status.success())
-    .map(|value| String::from_utf8_lossy(&value.stdout).trim().to_string())
-    .unwrap_or_else(|| "?".into());
-    let ahead = git(
-        &[
-            "rev-list".into(),
-            "--left-right".into(),
-            "--count".into(),
-            "HEAD...@{u}".into(),
-        ],
-        Duration::from_secs(10),
-    )
-    .filter(|value| value.status.success())
-    .map(|value| String::from_utf8_lossy(&value.stdout).trim().to_string())
-    .unwrap_or_else(|| "no-upstream".into());
-    let status = git(
-        &["status".into(), "--short".into()],
-        Duration::from_secs(10),
-    )
-    .filter(|value| value.status.success())
-    .map(|value| String::from_utf8_lossy(&value.stdout).trim().to_string())
-    .unwrap_or_default();
+    let state = git_state();
     let content = format!(
-        "# Session State Snapshot\n\n**Timestamp**: {timestamp}\n**Event**: {event}\n**Branch**: {branch}\n**Ahead/Behind**: {ahead}\n**bridgeforge-codex Skeleton**: v{}\n\n## Uncommitted changes\n\n```\n{}\n```\n\n## 活跃交付与 Bug（唤起记忆）\n\n```\n{}\n```\n\n---\n\n由 `{event}` hook 自动生成。\n下次 session 接续可用 `$resume` 读最新一份。\n",
+        "# Session State Snapshot\n\n**Timestamp**: {timestamp}\n**Event**: {event}\n**Branch**: {}\n**HEAD**: {}\n**Ahead/Behind**: {}\n**Git observation**: {}\n**bridgeforge-codex Skeleton**: v{}\n\n## Uncommitted changes (porcelain v2)\n\n```\n{}\n```\n\n## 文档数量（不代表当前任务）\n\n```\n{}\n```\n\n---\n\n由 `{event}` hook 生成客观状态；只有完整交接摘要才能承接任务决定。\n下次 session 可用 `$resume latest` 查找完整交接。\n",
+        state.branch,
+        state.head,
+        state.ahead,
+        if state.known {
+            "known"
+        } else {
+            "unknown: Git query failed or incomplete"
+        },
         skeleton_version(),
-        if status.is_empty() {
+        if !state.known {
+            "(unknown)"
+        } else if state.changes.is_empty() {
             "(clean)"
         } else {
-            &status
+            &state.changes
         },
         active_work(&root)
     );
-    let path = directory.join(format!("{timestamp}.md"));
-    if let Err(error) = atomic_write(&path, content.as_bytes()) {
-        return StepResult::failed("session snapshot", error);
-    }
-    let paths = snapshot_paths(&directory);
-    let trimmed = paths.len().saturating_sub(20);
-    for old in paths.into_iter().skip(20) {
-        if let Err(error) = fs::remove_file(old) {
-            return StepResult::failed("session snapshot retention", error);
+    let path = match write_new_snapshot(&directory, &timestamp, content.as_bytes()) {
+        Ok(path) => path,
+        Err(error) => return StepResult::failed("session snapshot", error),
+    };
+    let trimmed = match retain_automatic_snapshots(&directory) {
+        Ok(trimmed) => trimmed,
+        Err(error) => {
+            return StepResult::failed(
+                "session snapshot retention",
+                format!("saved {}; {error}", path.display()),
+            );
         }
-    }
+    };
     if event == "stop" {
         StepResult::ok()
     } else {
@@ -149,7 +256,8 @@ pub fn snapshot(event: &str) -> StepResult {
             String::new()
         };
         StepResult::output(format!(
-            "[session snapshot {event}] -> .runtime/session_state/{timestamp}.md{suffix}"
+            "[session snapshot {event}] -> {}{suffix}",
+            path.display()
         ))
     }
 }
@@ -337,32 +445,58 @@ pub fn githooks_path() -> StepResult {
     }
 }
 
-fn git_state() -> (String, usize, String) {
+pub(crate) struct GitState {
+    pub branch: String,
+    pub head: String,
+    pub ahead: String,
+    pub changes: String,
+    pub known: bool,
+}
+
+pub(crate) fn parse_git_state(text: Option<&str>) -> GitState {
+    let mut state = GitState {
+        branch: "unknown".into(),
+        head: "unknown".into(),
+        ahead: "unknown".into(),
+        changes: String::new(),
+        known: false,
+    };
+    let Some(text) = text else {
+        return state;
+    };
+    let mut changes = Vec::new();
+    let mut upstream = false;
+    for line in text.lines() {
+        if let Some(value) = line.strip_prefix("# branch.head ") {
+            state.branch = value.into();
+        } else if let Some(value) = line.strip_prefix("# branch.oid ") {
+            state.head = value.into();
+        } else if line.starts_with("# branch.upstream ") {
+            upstream = true;
+        } else if let Some(value) = line.strip_prefix("# branch.ab ") {
+            state.ahead = value.into();
+        } else if !line.starts_with("# ") && !line.is_empty() {
+            changes.push(line);
+        }
+    }
+    state.known = !matches!(state.branch.as_str(), "" | "unknown")
+        && !matches!(state.head.as_str(), "" | "unknown");
+    if state.known && !upstream {
+        state.ahead = "no-upstream".into();
+    }
+    state.changes = changes.join("\n");
+    state
+}
+
+fn git_state() -> GitState {
     let output = git(
         &["status".into(), "--porcelain=v2".into(), "--branch".into()],
         Duration::from_secs(5),
     );
     let text = output
         .filter(|value| value.status.success())
-        .map(|value| String::from_utf8_lossy(&value.stdout).to_string())
-        .unwrap_or_default();
-    let mut branch = "?".to_string();
-    let mut dirty = 0usize;
-    let mut ahead = "no-upstream".to_string();
-    for line in text.lines() {
-        if let Some(value) = line.strip_prefix("# branch.head ") {
-            if value != "(detached)" && !value.is_empty() {
-                branch = value.into();
-            }
-        } else if let Some(value) = line.strip_prefix("# branch.ab ") {
-            if let Some(caps) = Regex::new(r"^\+(\d+) -(\d+)$").unwrap().captures(value) {
-                ahead = format!("{}/{}", &caps[1], &caps[2]);
-            }
-        } else if !line.starts_with("# ") && !line.is_empty() {
-            dirty += 1;
-        }
-    }
-    (branch, dirty, ahead)
+        .map(|value| String::from_utf8_lossy(&value.stdout).to_string());
+    parse_git_state(text.as_deref())
 }
 
 fn archive_count(root: &Path) -> usize {
@@ -468,19 +602,28 @@ fn archive_count(root: &Path) -> usize {
 
 pub fn show_state() -> StepResult {
     let root = repo_root();
-    let (branch, dirty, ahead) = git_state();
+    let state = git_state();
+    let dirty = if state.known {
+        state.changes.lines().count().to_string()
+    } else {
+        "unknown".into()
+    };
     let mut lines = vec![format!(
-        "[session-start] branch={branch} | dirty={dirty} | ahead/behind={ahead} | skeleton=v{}",
+        "[session-start] branch={} | dirty={dirty} | ahead/behind={} | skeleton=v{}",
+        state.branch,
+        state.ahead,
         skeleton_version()
     )];
-    let snapshots = snapshot_paths(&root.join(".runtime/session_state"));
-    if let Some(latest) = snapshots
-        .first()
-        .and_then(|path| path.file_name())
-        .and_then(|value| value.to_str())
-    {
+    let snapshots = snapshot_candidates(&root.join(".runtime/session_state"));
+    if let Some((latest, complete)) = snapshots.first() {
         lines.push(format!(
-            "[snapshot] 最新存档: {latest} — 输入 $resume 可接续上下文"
+            "[snapshot] {}: {} — 输入 $resume latest 核对后接续",
+            if *complete {
+                "最新完整交接"
+            } else {
+                "只有状态记录或不完整交接"
+            },
+            latest.display()
         ));
     }
     let count = archive_count(&root);

@@ -277,7 +277,7 @@ pub fn cross_project_write(payload: &Value) -> StepResult {
         return StepResult::ok();
     };
     StepResult::blocked(format!(
-        "[cross-project-write-guard] BLOCKED 未完成：拒绝跨项目写入。\n[cross-project-write-guard]   当前项目：{}\n[cross-project-write-guard]   目标路径：{}\n[cross-project-write-guard]   操作：{}\n[cross-project-write-guard]   下一步：让用户明确确认目标项目，再在保留该确认的上下文中重试。\n",
+        "[cross-project-write-guard] BLOCKED 未完成：拒绝跨项目写入。\n[cross-project-write-guard]   当前项目：{}\n[cross-project-write-guard]   目标路径：{}\n[cross-project-write-guard]   操作：{}\n[cross-project-write-guard]   下一步：已有授权只继承一次；请在目标项目的受管任务中执行该项目内操作。当前入口按路径边界判定，用户确认不会改变结果，禁止原样重复重试。目标或范围未获授权时先澄清，禁止修改 Hook 根路径来绕过检查。\n",
         root.display(),
         target.display(),
         reason

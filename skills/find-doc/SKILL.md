@@ -1,6 +1,6 @@
 ---
 name: find-doc
-description: 定位主题相关文档、TODO、当前进展、设计计划、验收方案及关联 rules；用户询问“相关文档在哪、还有什么未解决、现状如何、查一下某主题”时主动使用。精确路径、纯代码搜索或本轮已查过同一主题时跳过。
+description: 定位主题相关文档、TODO、进展、计划和验收资料；需要时核对索引指向的项目约束。用户询问“文档在哪、还有什么未解决、现状如何”时使用；精确路径、纯代码搜索或本轮已查过同一主题时跳过。
 user_invocable: true
 argument: 主题关键词（中英混合，例 "auth oauth" / "数据库 schema"）
 ---
@@ -9,7 +9,7 @@ argument: 主题关键词（中英混合，例 "auth oauth" / "数据库 schema"
 
 ## 定位与边界
 
-只检索 `doc/` 和 BridgeForge 自动生成的项目指令索引，不扫描源代码、项目 Memory 或原生 Memory，也不先读取完整文档。目标是用少量高信号命中回答“在哪、现状、TODO、设计和计划”。
+检索范围为 `doc/` 和 BridgeForge 自动生成的项目指令索引；可只读核对索引明确指向的指令文件，不扩成源码或 Memory 调查。先定位，再读取高信号正文，回答“在哪、现状、TODO、设计和计划”。
 
 ## 输入
 
@@ -40,13 +40,15 @@ argument: 主题关键词（中英混合，例 "auth oauth" / "数据库 schema"
 子 agent。其他情况才把下面的多路径搜索与候选摘要显式分派给 `light-explorer`，并在同一批
 工具调用中运行所需路径：
 
-- **Path A—文件名**：每个 token 执行 Glob `doc/**/*<token>*.md`。
-- **Path B—README 入口**：在 `doc/**/README.md` 中大小写不敏感 Grep topic regex，返回内容，最多 30 条；命中后再判断是否读取目标文件。
+使用当前可用的只读工具完成以下检索，不依赖固定工具名：
+
+- **Path A—文件名**：每个 token 匹配 `doc/**/*<token>*.md`。
+- **Path B—README 入口**：在 `doc/**/README.md` 中按 topic regex 做大小写不敏感的文本检索，最多返回 30 条；命中后再判断是否读取目标文件。
 - **Path C—Delivery + Bugs**：
   - 读取 `doc/README.md` 的 `delivery_layout`；
-  - Glob `doc/1_delivery/**/<topic>*/**/*.md`，并匹配 `requirements_*.md`、`plan.md`、`acceptance.md`、`debates/*.md`；
-  - Grep `doc/2_bugs/**/<topic>*.md`，只返回命中文件，最多 20 个。
-- **Path D—多词共现**：仅多 token 时，在 `doc/**/*.md` 中按正反顺序做 multiline 共现 Grep，只返回文件，最多 15 个。
+  - 按布局在 `doc/1_delivery/` 定位 topic，匹配 `requirements_*.md`、`plan.md`、`acceptance.md`、`debates/*.md`；
+  - 在 `doc/2_bugs/` 按主题检索，最多返回 20 个命中文件。
+- **Path D—多词共现**：仅多 token 时，在 `doc/**/*.md` 中按正反顺序检索跨行共现，最多返回 15 个命中文件。
 
 ### 3. 查项目指令索引
 
@@ -55,11 +57,14 @@ argument: 主题关键词（中英混合，例 "auth oauth" / "数据库 schema"
 ### 4. 聚合与收尾
 
 1. 聚合去重：A 作基线，D 作高优先级，B/C 调整次序，空段不显示。
-2. 命中后读取 [references/output-format.md](references/output-format.md)，按其格式输出。
+2. 按下面的输出规则直接返回，不另读格式手册。
 
 ## 输出与验证
 
-标明每项命中来自文件名、README、TODO 还是自动指令索引；区分进行中、待解决与已归档文档。需要正文结论时，只读用户选定或最高信号的目标文件。
+- 先给最相关文件的可点击位置和用途，标明来自文件名、README、TODO 还是自动指令索引；不展示空分组或重复路径。
+- 用户问进展、TODO 或验收时，读取相关文档的 `lifecycle`、`validation_status` 和必要正文，区分当前状态、未解决事项及历史记录。字段缺失或与正文矛盾时如实说明，不能仅凭目录或文件名认定活跃、完成或已验收。
+- 关联项目约束只列已从索引定位并核实的指令文件及适用范围；没有命中就省略。
+- 仅根据已读证据给出下一阅读位置或待办，不从检索结果自动开始开发。
 
 ## 停止条件
 

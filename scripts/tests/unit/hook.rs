@@ -79,6 +79,84 @@ impl Drop for Fixture {
     }
 }
 
+#[test]
+fn instruction_source_uses_trusted_public_hash_without_fixed_editorial_headings() {
+    use sha2::{Digest, Sha256};
+
+    let fixture = Fixture::new();
+    let public = "<!-- BRIDGEFORGE:PUBLIC:BEGIN -->\n## Reorganized guidance\n\nKeep user scope.\n<!-- BRIDGEFORGE:PUBLIC:END -->\n";
+    let project = "<!-- BRIDGEFORGE:PROJECT:BEGIN -->\n## 项目级专区\n### 项目架构红线\n### 项目业务与安全红线\n### 项目目录地图\n### 项目快速命令\n### 目录级 AGENTS 索引\n<!-- BRIDGEFORGE:PROJECT:END -->\n";
+    let contract_path = fixture.root.join(".codex/managed-skeleton.json");
+    let write_contract = |block: &str| {
+        let hash = format!("sha256:{:x}", Sha256::digest(block.as_bytes()));
+        fs::write(
+            &contract_path,
+            serde_json::to_vec(&serde_json::json!({"assets":[{
+                "id":"root.agents", "agents_zones":{"public":{"current_sha256":hash}}
+            }]}))
+            .unwrap(),
+        )
+        .unwrap();
+    };
+    let agents_path = fixture.root.join("AGENTS.md");
+    write_contract(public);
+    fs::write(&agents_path, format!("{public}\n{project}")).unwrap();
+    assert!(post::instruction_source(&Value::Null).stderr.is_empty());
+
+    fs::write(
+        &agents_path,
+        format!(
+            "{}\n{project}",
+            public.replace("Keep user scope.", "Unexpected policy.")
+        ),
+    )
+    .unwrap();
+    assert!(
+        post::instruction_source(&Value::Null)
+            .stderr
+            .contains("public zone was modified")
+    );
+
+    fs::write(
+        &agents_path,
+        format!("{public}\n{}", project.replace("### 项目快速命令\n", "")),
+    )
+    .unwrap();
+    assert!(
+        post::instruction_source(&Value::Null)
+            .stderr
+            .contains("project zone must contain exactly one")
+    );
+
+    fs::write(
+        &agents_path,
+        format!("{public}\n{project}<!-- BRIDGEFORGE:PUBLIC:END -->\n"),
+    )
+    .unwrap();
+    assert!(
+        post::instruction_source(&Value::Null)
+            .stderr
+            .contains("markers must each appear exactly once")
+    );
+
+    let unclosed = public.replace("Keep user scope.", "```text\nKeep user scope.");
+    write_contract(&unclosed);
+    fs::write(&agents_path, format!("{unclosed}\n{project}")).unwrap();
+    assert!(
+        post::instruction_source(&Value::Null)
+            .stderr
+            .contains("unclosed fenced code block")
+    );
+
+    fs::write(&agents_path, format!("{public}\n{project}")).unwrap();
+    fs::remove_file(&contract_path).unwrap();
+    assert!(
+        post::instruction_source(&Value::Null)
+            .stderr
+            .contains("cannot be verified")
+    );
+}
+
 fn seed_project_map_inputs(fixture: &Fixture) {
     fs::create_dir_all(fixture.root.join("src/domain")).unwrap();
     fs::create_dir_all(fixture.root.join("doc/0_architecture/design")).unwrap();
@@ -257,6 +335,275 @@ fn lifecycle_snapshots_stop_dedup_and_manual_route_succeed() {
     assert_eq!(lifecycle("stop"), 0);
     assert_eq!(fs::read(&paths[0]).unwrap(), before);
     assert_eq!(run(vec!["snapshot".into(), "manual".into()]), 0);
+    assert_eq!(fs::read_dir(&directory).unwrap().count(), 2);
+    assert_eq!(fs::read(&paths[0]).unwrap(), before);
+}
+
+#[test]
+fn hook_topic4_batch_scans_once_and_checks_later_files() {
+    use std::sync::atomic::Ordering::Relaxed;
+    let fixture = Fixture::new();
+    let mut command = String::from("*** Begin Patch\n");
+    fs::create_dir_all(fixture.root.join("doc")).unwrap();
+    for i in 0..10 {
+        let path = format!("doc/note-{i}.md");
+        fs::write(
+            fixture.root.join(&path),
+            if i == 9 {
+                "bad \x3f\x3f\x3f marker"
+            } else {
+                "valid"
+            },
+        )
+        .unwrap();
+        command.push_str(&format!("*** Update File: {path}\n@@\n-old\n+new\n"));
+    }
+    command.push_str("*** End Patch");
+    let payload = json!({"tool_name":"apply_patch", "tool_input":{"command":command}});
+    let virtuals = edits(&payload);
+    let diagnostic = post::encoding(&virtuals);
+    assert_eq!(diagnostic.code, 0);
+    assert!(diagnostic.stderr.contains("note-9.md"));
+    for count in [1, 10] {
+        let input = if count == 1 {
+            json!({"tool_name":"Edit","tool_input":{"file_path":"doc/note-0.md"}})
+        } else {
+            payload.clone()
+        };
+        post::ENCODING_SCANS.store(0, Relaxed);
+        post::INSTRUCTION_SCANS.store(0, Relaxed);
+        assert_eq!(post_edit(&input), 0);
+        assert_eq!(post::ENCODING_SCANS.load(Relaxed), 1);
+        assert_eq!(post::INSTRUCTION_SCANS.load(Relaxed), 1);
+    }
+    fs::write(fixture.root.join("doc/note-9.md"), b"\xef\xbb\xbfblocked").unwrap();
+    post::INSTRUCTION_SCANS.store(0, Relaxed);
+    assert_eq!(post_edit(&payload), 2);
+    assert_eq!(post::INSTRUCTION_SCANS.load(Relaxed), 0);
+}
+
+#[test]
+fn hook_topic4_map_failures_propagate_without_skipping_other_work() {
+    let fixture = Fixture::new();
+    seed_project_map_inputs(&fixture);
+    let map_root = fixture.root.join(".runtime/bridgeforge-codex");
+    fs::create_dir_all(&map_root).unwrap();
+    fs::create_dir(map_root.join("project-map-dirty")).unwrap();
+    let payload = json!({"tool_name":"Edit","tool_input":{"file_path":"src/domain/mod.rs"}});
+    post::INSTRUCTION_SCANS.store(0, std::sync::atomic::Ordering::Relaxed);
+    assert_eq!(post_edit(&payload), 1);
+    assert_eq!(
+        post::INSTRUCTION_SCANS.load(std::sync::atomic::Ordering::Relaxed),
+        1
+    );
+    assert_eq!(
+        fs::read_to_string(fixture.root.join("src/domain/mod.rs")).unwrap(),
+        "pub fn run() {}\n"
+    );
+    fs::create_dir(map_root.join("find-doc.map.md")).unwrap();
+    assert_eq!(lifecycle("session-start"), 1);
+    assert_eq!(lifecycle("stop"), 1);
+    assert!(fixture.root.join(".runtime/session_state").is_dir());
+    let failed = project_map::ensure_current();
+    let mut output = HookOutput::default();
+    output.absorb_map(&failed);
+    assert_eq!(output.contexts.len(), 1);
+    assert!(output.contexts[0].contains("直接检索原文件"));
+    assert!(failed.stderr.contains("is not a plain file"));
+}
+
+#[test]
+fn hook_topic4_patch_smell_matches_edit_and_ignores_unchanged_removed_or_split_code() {
+    for (path, text) in [
+        ("x.py", "except Exception:\n    pass"),
+        ("x.ts", "catch (e) {}"),
+    ] {
+        let edit = json!({"tool_input":{"file_path":path,"new_string":text}});
+        let patch = format!(
+            "*** Begin Patch\n*** Add File: {path}\n{}\n*** End Patch",
+            text.lines()
+                .map(|line| format!("+{line}"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        );
+        let virtuals = virtual_edits(&Value::Null, &patch);
+        assert_eq!(
+            post::fallback_smell(&edit).stdout,
+            post::fallback_smell(&virtuals[0]).stdout
+        );
+        assert!(!post::fallback_smell(&virtuals[0]).stdout.is_empty());
+    }
+    let cases = [
+        ("@@\n except Exception:\n-    raise\n+    pass", true),
+        ("@@\n-except Exception:\n-    pass\n+raise", false),
+        (
+            "@@\n except Exception:\n     pass\n-old = 1\n+new = 2",
+            false,
+        ),
+        ("@@\n+except Exception:\n@@\n+    pass", false),
+        ("@@\n+except Exception:\n+    raise", false),
+    ];
+    for (hunks, expected) in cases {
+        let patch = format!("*** Begin Patch\n*** Update File: x.py\n{hunks}\n*** End Patch");
+        let virtuals = virtual_edits(&Value::Null, &patch);
+        assert_eq!(
+            !post::fallback_smell(&virtuals[0]).stdout.is_empty(),
+            expected,
+            "{patch}"
+        );
+    }
+    let moved = virtual_edits(
+        &Value::Null,
+        "*** Begin Patch\n*** Update File: old.py\n*** Move to: new.py\n@@\n+except Exception:\n+    pass\n*** Delete File: deleted.py\n*** End Patch",
+    );
+    assert_eq!(moved.len(), 3);
+    assert!(post::fallback_smell(&moved[0]).stdout.is_empty());
+    assert!(post::fallback_smell(&moved[1]).stdout.contains("new.py"));
+    assert!(post::fallback_smell(&moved[2]).stdout.is_empty());
+}
+
+fn handoff_text(event: &str) -> String {
+    format!(
+        "**Event**: {event}\n## 交接摘要（agent 填）\n### 已完成\n- checked\n### 关键决定 / 当前假设\n- read only\n### 改动文件\n- none\n### 下一步\n- inspect\n"
+    )
+}
+
+#[test]
+fn snapshot_git_observation_distinguishes_failure_clean_unborn_and_detached() {
+    for text in [None, Some(""), Some("# branch.head main\n")] {
+        let state = session::parse_git_state(text);
+        assert!(!state.known);
+        assert_eq!(state.ahead, "unknown");
+    }
+    let clean = session::parse_git_state(Some("# branch.oid aaaa\n# branch.head main\n"));
+    assert!(clean.known);
+    assert_eq!(clean.head, "aaaa");
+    assert!(clean.changes.is_empty());
+    assert_eq!(clean.ahead, "no-upstream");
+    let changed = session::parse_git_state(Some(
+        "# branch.oid bbbb\n# branch.head main\n# branch.upstream origin/main\n# branch.ab +1 -2\n? new file.txt\n",
+    ));
+    assert!(changed.known);
+    assert_ne!(clean.head, changed.head);
+    assert_eq!(changed.changes, "? new file.txt");
+    assert_eq!(changed.ahead, "+1 -2");
+    let unborn = session::parse_git_state(Some("# branch.oid (initial)\n# branch.head main\n"));
+    assert!(unborn.known);
+    assert_eq!(unborn.head, "(initial)");
+    let detached = session::parse_git_state(Some("# branch.oid cccc\n# branch.head (detached)\n"));
+    assert!(detached.known);
+    assert_eq!(detached.branch, "(detached)");
+}
+
+#[test]
+fn snapshot_failed_git_query_is_saved_as_unknown_not_clean() {
+    let fixture = Fixture::new(); // Not a Git repository: the real command exits nonzero.
+    let result = session::snapshot("manual");
+    assert_eq!(result.code, 0); // File saved, even though Git observation is unknown.
+    let candidates = session::snapshot_candidates(&fixture.root.join(".runtime/session_state"));
+    assert_eq!(candidates.len(), 1);
+    assert!(!candidates[0].1);
+    let content = fs::read_to_string(&candidates[0].0).unwrap();
+    assert!(
+        result
+            .stdout
+            .contains(&candidates[0].0.display().to_string())
+    );
+    assert!(content.contains("**Git observation**: unknown"));
+    assert!(content.contains("**HEAD**: unknown"));
+    assert!(!content.contains("(clean)"));
+    assert!(!content.contains("no-upstream"));
+    assert!(session::show_state().stdout.contains("dirty=unknown"));
+}
+
+#[test]
+fn snapshot_same_timestamp_concurrent_creation_preserves_both_files() {
+    let fixture = Fixture::new();
+    let directory = fixture.root.join("snapshots");
+    fs::create_dir(&directory).unwrap();
+    let barrier = std::sync::Barrier::new(2);
+    let paths = std::thread::scope(|scope| {
+        let first = scope.spawn(|| {
+            barrier.wait();
+            session::write_new_snapshot(&directory, "2026-09-06_120000", b"first").unwrap()
+        });
+        let second = scope.spawn(|| {
+            barrier.wait();
+            session::write_new_snapshot(&directory, "2026-09-06_120000", b"second").unwrap()
+        });
+        (first.join().unwrap(), second.join().unwrap())
+    });
+    assert_ne!(paths.0, paths.1);
+    assert_eq!(fs::read(paths.0).unwrap(), b"first");
+    assert_eq!(fs::read(paths.1).unwrap(), b"second");
+    assert_eq!(fs::read_dir(directory).unwrap().count(), 2);
+}
+
+#[test]
+fn snapshot_selection_and_retention_preserve_handoffs_and_unknown_files() {
+    let fixture = Fixture::new();
+    let directory = fixture.root.join(".runtime/session_state");
+    fs::create_dir_all(&directory).unwrap();
+    let handoff = directory.join("old-manual.md");
+    let complete = handoff_text("manual").replace('\n', "\r\n");
+    fs::write(&handoff, &complete).unwrap();
+    let incomplete = directory.join("incomplete-manual.md");
+    fs::write(&incomplete, "**Event**: manual\n").unwrap();
+    let unknown = directory.join("legacy.md");
+    fs::write(&unknown, "unrecognized legacy content").unwrap();
+    let appended = directory.join("annotated-stop.md");
+    fs::write(&appended, "**Event**: stop\n## 交接摘要\npartial").unwrap();
+    for index in 0..25 {
+        let path = directory.join(format!("auto-{index:02}.md"));
+        fs::write(&path, "**Event**: stop\n").unwrap();
+        fs::File::options()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_times(
+                fs::FileTimes::new()
+                    .set_modified(SystemTime::now() + Duration::from_secs(index + 1)),
+            )
+            .unwrap();
+    }
+    assert_eq!(
+        session::snapshot_candidates(&directory),
+        vec![(handoff.clone(), true)]
+    );
+    let before_count = fs::read_dir(&directory).unwrap().count();
+    let selected = session::select_snapshot(false);
+    assert!(selected.stdout.contains(&handoff.display().to_string()));
+    assert!(!selected.stdout.contains("state-only"));
+    assert!(
+        session::show_state()
+            .stdout
+            .contains(&handoff.display().to_string())
+    );
+    assert_eq!(fs::read_dir(&directory).unwrap().count(), before_count);
+    assert_eq!(session::retain_automatic_snapshots(&directory).unwrap(), 5);
+    assert_eq!(fs::read_to_string(&handoff).unwrap(), complete);
+    assert!(incomplete.exists() && unknown.exists() && appended.exists());
+    assert!(!directory.join("auto-00.md").exists());
+    assert!(directory.join("auto-24.md").exists());
+    assert_eq!(fs::read_dir(&directory).unwrap().count(), 24);
+}
+
+#[test]
+fn snapshot_selector_is_read_only_and_labels_missing_handoff() {
+    let fixture = Fixture::new();
+    let directory = fixture.root.join(".runtime/session_state");
+    assert_eq!(run(vec!["snapshot".into(), "latest".into()]), 1);
+    assert!(!directory.exists());
+    fs::create_dir_all(&directory).unwrap();
+    let path = directory.join("auto.md");
+    let body = "**Event**: post-compact\n";
+    fs::write(&path, body).unwrap();
+    let result = session::select_snapshot(false);
+    assert_eq!(result.code, 0);
+    assert!(result.stdout.contains("state-only / incomplete"));
+    assert_eq!(run(vec!["snapshot".into(), "list".into()]), 0);
+    assert_eq!(fs::read_to_string(path).unwrap(), body);
+    assert_eq!(fs::read_dir(directory).unwrap().count(), 1);
 }
 
 #[test]

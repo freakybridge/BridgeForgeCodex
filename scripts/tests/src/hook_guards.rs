@@ -332,3 +332,77 @@ fn apply_patch_checks_add_update_delete_and_both_move_endpoints() {
         "[hook-dispatch]",
     );
 }
+
+#[test]
+fn hook_topic4_cross_project_denial_explains_real_recovery_without_confirmation_loop() {
+    let fixture = Fixture::new();
+    let target = fixture.directory.join("outside.txt");
+    let input = json!({"file_path":target});
+    let first = fixture.run("pre-tool", "Edit", input.clone());
+    let second = fixture.run("pre-tool", "Edit", input);
+    assert_eq!(first.code, 2);
+    assert_eq!(second.code, 2);
+    assert_eq!(first.stderr, second.stderr);
+    let message = String::from_utf8_lossy(&first.stderr);
+    assert!(message.contains("用户确认不会改变结果"));
+    assert!(message.contains("目标项目的受管任务"));
+    assert!(!message.contains("再在保留该确认的上下文中重试"));
+    assert!(!target.exists());
+}
+
+#[test]
+fn hook_topic4_batch_probe() {
+    let fixture = Fixture::new();
+    fs::create_dir_all(fixture.root.join("doc")).unwrap();
+    for count in [1, 10] {
+        let mut patch = String::from("*** Begin Patch\n");
+        for index in 0..count {
+            let path = format!("doc/file-{index}.md");
+            fs::write(fixture.root.join(&path), "valid\n").unwrap();
+            patch.push_str(&format!("*** Update File: {path}\n@@\n-old\n+valid\n"));
+        }
+        patch.push_str("*** End Patch");
+        let mut elapsed = Vec::new();
+        let mut diagnostics = 0;
+        for _ in 0..3 {
+            let started = std::time::Instant::now();
+            let result = fixture.run("post-edit", "apply_patch", json!({"command":patch}));
+            elapsed.push(started.elapsed().as_micros());
+            assert_eq!(result.code, 0);
+            diagnostics = String::from_utf8_lossy(&result.stderr)
+                .matches("cannot read AGENTS.md")
+                .count();
+            assert!(diagnostics > 0);
+        }
+        elapsed.sort();
+        println!(
+            "hook-batch files={count} instruction_diagnostics={diagnostics} median_us={} samples=3",
+            elapsed[1]
+        );
+    }
+}
+
+#[test]
+fn hook_topic4_native_patch_reports_smell_once_and_map_failure_without_rollback() {
+    let fixture = Fixture::new();
+    let source = fixture.root.join("x.py");
+    fs::write(&source, "except Exception:\n    pass\n").unwrap();
+    let map_root = fixture.root.join(".runtime/bridgeforge-codex");
+    fs::create_dir_all(map_root.join("project-map-dirty")).unwrap();
+    let result = fixture.run("post-edit", "apply_patch", json!({"command":"*** Begin Patch\n*** Add File: x.py\n+except Exception:\n+    pass\n*** Add File: y.py\n+print('ok')\n*** End Patch"}));
+    assert_eq!(result.code, 1);
+    let err = String::from_utf8_lossy(&result.stderr);
+    assert!(err.contains("project-map dirty marker"));
+    assert_eq!(err.matches("cannot read AGENTS.md").count(), 1);
+    let out: Value = serde_json::from_slice(&result.stdout).unwrap();
+    let context = out["hookSpecificOutput"]["additionalContext"]
+        .as_str()
+        .unwrap();
+    assert!(context.contains("直接检索原文件"));
+    assert!(context.contains("[fallback-smell] x.py"));
+    assert!(!context.contains("[fallback-smell] y.py"));
+    assert_eq!(
+        fs::read_to_string(&source).unwrap(),
+        "except Exception:\n    pass\n"
+    );
+}

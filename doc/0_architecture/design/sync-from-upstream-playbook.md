@@ -16,7 +16,7 @@ Claude 骨架已经退役。遗留 `.claude/` 只报告存在，不读取正文�
 1. 在目标项目运行 `$bridgeforge-codex`。
 2. 入口先识别项目版本戳；双戳、非法戳停止，无戳空项目 init，无戳已有资产 adopt。运行 `doctor --product-root <产品目录> --json` 检查产品 runtime，不要求目标项目已经安装 Rust 骨架。
 3. 任意合法旧版本直接进入 latest current-only rebuild；版本只证明身份，禁止运行旧 schema、旧 manifest 或逐版本兼容链。
-4. `.codex/rules/*.md` 与 `.codex/memory/**` 逐源文件确认完整迁移包；中断不保存决定，全部确认前零写入。确认同时授权在同一事务删除对应源，不再追加清理确认。
+4. `.codex/rules/*.md` 与 `.codex/memory/**` 按 [迁移手册](../../../skills/bridgeforge-codex/references/project-asset-migration.md)逐源确认；全部确认前零写入、不新增持久恢复状态。中断恢复时按手册核验决定与现场，仅重核失效部分；确认同时授权在同一事务删除对应源，不再追加清理确认。
 5. apply 先取得项目级事务锁，再重算聚合 fingerprint。锁覆盖验证、写入、版本戳与回滚；独立 build-assets 使用同一把锁。任何漂移、验证失败或运行错误都必须零写入或事务回滚。
 6. validators 与真实磁盘 current baseline 全部通过后，最后写新版本戳；旧项目成功时同事务删除旧戳。
 

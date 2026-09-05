@@ -56,6 +56,13 @@ struct HookOutput {
 }
 
 impl HookOutput {
+    fn absorb_map(&mut self, result: &StepResult) {
+        self.absorb(result);
+        if result.code != 0 {
+            self.contexts.push("[project-map] Map 未更新，不能将其视为最新证据；请直接检索原文件。已完成的编辑不回滚，无需重复确认既有授权。".into());
+        }
+    }
+
     fn absorb(&mut self, result: &StepResult) {
         if !result.stderr.is_empty() {
             let _ = std::io::stderr().write_all(result.stderr.as_bytes());
@@ -160,24 +167,46 @@ fn validate_tool_payload(event: &str, payload: &Value) -> Result<Value, String> 
 }
 
 fn virtual_edits(payload: &Value, command: &str) -> Vec<Value> {
-    let mut items: Vec<(String, String)> = Vec::new();
+    let mut items: Vec<(String, String, Vec<Value>)> = Vec::new();
+    let mut hunk = Vec::new();
+    let mut added_lines = Vec::new();
+    let flush = |items: &mut Vec<(String, String, Vec<Value>)>,
+                 hunk: &mut Vec<String>,
+                 added: &mut Vec<usize>| {
+        if let Some((_, _, hunks)) = items.last_mut() {
+            if !added.is_empty() {
+                hunks.push(json!({"new_string": hunk.join("\n"), "added_lines": added}));
+            }
+        }
+        hunk.clear();
+        added.clear();
+    };
     for line in command.lines() {
+        if line.starts_with("*** ") || line.starts_with("@@") {
+            flush(&mut items, &mut hunk, &mut added_lines);
+        }
         if let Some(rest) = line.strip_prefix("*** Add File: ") {
-            items.push(("Write".into(), rest.trim().into()));
+            items.push(("Write".into(), rest.trim().into(), Vec::new()));
         } else if let Some(rest) = line.strip_prefix("*** Update File: ") {
-            items.push(("Edit".into(), rest.trim().into()));
+            items.push(("Edit".into(), rest.trim().into(), Vec::new()));
         } else if let Some(rest) = line.strip_prefix("*** Delete File: ") {
-            items.push(("Edit".into(), rest.trim().into()));
+            items.push(("Edit".into(), rest.trim().into(), Vec::new()));
         } else if let Some(rest) = line.strip_prefix("*** Move to: ") {
-            items.push(("Write".into(), rest.trim().into()));
+            items.push(("Write".into(), rest.trim().into(), Vec::new()));
+        } else if let Some(text) = line.strip_prefix('+') {
+            added_lines.push(hunk.len());
+            hunk.push(text.into());
+        } else if let Some(text) = line.strip_prefix(' ') {
+            hunk.push(text.into());
         }
     }
+    flush(&mut items, &mut hunk, &mut added_lines);
     items
         .into_iter()
-        .map(|(name, file)| {
+        .map(|(name, file, hunks)| {
             let mut value = payload.clone();
             value["tool_name"] = Value::String(name);
-            value["tool_input"] = json!({"file_path": file});
+            value["tool_input"] = json!({"file_path": file, "patch_hunks": hunks});
             value
         })
         .collect()
@@ -230,18 +259,27 @@ fn pre_tool(payload: &Value) -> i32 {
 fn post_edit(payload: &Value) -> i32 {
     let mut output = HookOutput::default();
     let virtuals = edits(payload);
+    let step = post::encoding(&virtuals);
+    output.absorb(&step);
+    if step.code != 0 {
+        eprintln!("[hook-dispatch] encoding_check failed; dependent edit checks skipped.");
+        return output.finish("PostToolUse", step.code);
+    }
+    let mut first = 0;
     for edit in &virtuals {
-        let step = post::encoding(edit);
-        output.absorb(&step);
-        if step.code != 0 {
-            eprintln!("[hook-dispatch] encoding_check failed; dependent edit checks skipped.");
-            return output.finish("PostToolUse", step.code);
+        if first == 0 {
+            let step = project_map::mark_dirty(edit);
+            output.absorb_map(&step);
+            first = step.code;
         }
-        let _ = project_map::mark_dirty(edit);
+    }
+    let step = post::instruction_source(payload);
+    output.absorb(&step);
+    if step.code != 0 {
+        return output.finish("PostToolUse", step.code);
     }
     for edit in &virtuals {
-        let handlers: [fn(&Value) -> StepResult; 4] = [
-            post::instruction_source,
+        let handlers: [fn(&Value) -> StepResult; 3] = [
             post::requirements,
             post::cargo_default_run,
             post::fallback_smell,
@@ -254,7 +292,7 @@ fn post_edit(payload: &Value) -> i32 {
             }
         }
     }
-    output.finish("PostToolUse", 0)
+    output.finish("PostToolUse", first)
 }
 
 fn post_shell(payload: &Value) -> i32 {
@@ -270,12 +308,15 @@ fn self_test() -> i32 {
 }
 
 fn lifecycle(event: &str) -> i32 {
+    let mut output = HookOutput::default();
+    let mut first = 0;
     if matches!(event, "post-compact" | "stop") {
         if event == "stop" {
-            let _ = project_map::ensure_if_dirty();
+            let step = project_map::ensure_if_dirty();
+            output.absorb_map(&step);
+            first = step.code;
         }
         let step = session::snapshot(event);
-        let mut output = HookOutput::default();
         output.absorb(&step);
         return output.finish(
             if event == "post-compact" {
@@ -283,12 +324,12 @@ fn lifecycle(event: &str) -> i32 {
             } else {
                 "Stop"
             },
-            step.code,
+            if first != 0 { first } else { step.code },
         );
     }
-    let _ = project_map::ensure_current();
-    let mut output = HookOutput::default();
-    let mut first = 0;
+    let step = project_map::ensure_current();
+    output.absorb_map(&step);
+    first = step.code;
     let steps = [
         || session::config_health(false),
         session::enforce_no_effort,
@@ -328,6 +369,12 @@ pub fn run(args: Vec<String>) -> i32 {
         eprint!("{}", step.stderr);
         return step.code;
     }
+    if args.as_slice() == ["snapshot", "latest"] || args.as_slice() == ["snapshot", "list"] {
+        let step = session::select_snapshot(args[1] == "list");
+        print!("{}", step.stdout);
+        eprint!("{}", step.stderr);
+        return step.code;
+    }
     if args.as_slice() == ["project-map", "ensure-current"] {
         let step = project_map::ensure_current();
         print!("{}", step.stdout);
@@ -335,7 +382,9 @@ pub fn run(args: Vec<String>) -> i32 {
         return step.code;
     }
     if args.len() != 1 {
-        eprintln!("usage: bridgeforge-hook EVENT | snapshot manual | project-map ensure-current");
+        eprintln!(
+            "usage: bridgeforge-hook EVENT | snapshot manual|latest|list | project-map ensure-current"
+        );
         return 2;
     }
     let event = &args[0];

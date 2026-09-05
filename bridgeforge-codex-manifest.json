@@ -42,7 +42,7 @@
             {
               "source": "skills/bridgeforge-codex/references/project-asset-migration.md",
               "target": "references/project-asset-migration.md",
-              "sha256": "sha256:8af2acfd42c7849e0944fe452f066522f890dfd9fe4cbfbe6de1c6f9bc7af0a6"
+              "sha256": "sha256:23c5f67011e74663d2327f43e7e0ed841195e1ac66d7598aeeb1246dc5732ccd"
             },
             {
               "source": "skills/bridgeforge-codex/references/runtime-preflight.md",
@@ -137,7 +137,7 @@
             {
               "source": "skills/develop/references/agent-execution.md",
               "target": "references/agent-execution.md",
-              "sha256": "sha256:9beb1a14ea888e836ab86852b91d770c1755f94635484ca84f10c06710e6ea0f"
+              "sha256": "sha256:4260a3b9bb05d8ef42a2384c127db1a5afb374698988cf1b3ff225d0d4bf787f"
             },
             {
               "source": "skills/develop/references/ml-delivery.md",
@@ -147,7 +147,7 @@
             {
               "source": "skills/develop/SKILL.md",
               "target": "SKILL.md",
-              "sha256": "sha256:ad6f162067450550f28ba0c25de3fefb2b69857bd98f8ce8dad87fc01dca0246"
+              "sha256": "sha256:4d374d7cc362ca812377842d305c14a93a24a3685e7ec8ff23b91e8426308ec6"
             }
           ]
         },
@@ -175,14 +175,9 @@
           "name": "find-doc",
           "files": [
             {
-              "source": "skills/find-doc/references/output-format.md",
-              "target": "references/output-format.md",
-              "sha256": "sha256:904b8f1529a5d72a956687c55d2aca5b505784199eee680c301b47abbf9fa7cc"
-            },
-            {
               "source": "skills/find-doc/SKILL.md",
               "target": "SKILL.md",
-              "sha256": "sha256:98f07bbc259f626ad14e58cac48ef63ddbbbe9be4877ecf66e5a8f6bf50edcfc"
+              "sha256": "sha256:a254ef3d0f995e040002f2233bb5fd3320a61bd076d212a42fa005c4a2cbe6be"
             }
           ]
         },
@@ -222,7 +217,7 @@
             {
               "source": "skills/resume/SKILL.md",
               "target": "SKILL.md",
-              "sha256": "sha256:b6de076212ab7167e7d172439409614cb0fb6ff8a6eea93725d32e1c6998ab8a"
+              "sha256": "sha256:7d0361a2dcbb9b9f4e3739c10b427abf3fe333913cb70d6f773d68063f4e00f7"
             }
           ]
         },
@@ -232,7 +227,7 @@
             {
               "source": "skills/snapshot/SKILL.md",
               "target": "SKILL.md",
-              "sha256": "sha256:7b3605da6e4d620ed551b28b5a07ee338376224231b95cfb1d16e5999ee57ba2"
+              "sha256": "sha256:b03b015fc30e2e1c5d6a6238e4104c995cd7af3968a71c937b55a90588630660"
             }
           ]
         },
@@ -277,7 +272,7 @@
             {
               "source": "skills/sync-docs/SKILL.md",
               "target": "SKILL.md",
-              "sha256": "sha256:09c2672f495a3e8b111b343b67c690680db2c36f7670b3f95479da2cf00b9aca"
+              "sha256": "sha256:66d606ff881f926237c66d9bd100ba3338e6a51421f86e67ee8f96293dd16027"
             }
           ]
         },

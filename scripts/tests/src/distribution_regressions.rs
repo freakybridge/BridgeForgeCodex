@@ -47,18 +47,19 @@ fn gpt6_behavior_cases_have_unique_ids_and_resolvable_inputs() {
             }
         }
     }
-    assert_eq!(
-        ids,
-        [
-            "diagnose_only",
-            "ambiguous_scope",
-            "authorized_continue",
-            "discussion_only",
-            "scope_boundary",
-            "readonly_review"
-        ]
-        .into_iter()
-        .collect()
+    let required = [
+        "diagnose_only",
+        "ambiguous_scope",
+        "authorized_continue",
+        "discussion_only",
+        "scope_boundary",
+        "readonly_review",
+    ]
+    .into_iter()
+    .collect();
+    assert!(
+        ids.is_superset(&required),
+        "original behavior cases must remain"
     );
 }
 
@@ -172,7 +173,7 @@ fn distributed_roles_match_skill_references_and_dogfood() {
 }
 
 #[test]
-fn upstream_write_authorization_is_a_shared_public_rule() {
+fn public_instruction_region_matches_template_and_dogfood() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"))
         .ancestors()
         .nth(2)
@@ -189,12 +190,19 @@ fn upstream_write_authorization_is_a_shared_public_rule() {
     let template = fs::read_to_string(root.join("templates/AGENTS.md")).unwrap();
     let dogfood = fs::read_to_string(root.join("AGENTS.md")).unwrap();
     let shared = public(&template);
-    assert!(shared.contains("用户仅授权当前项目改动时，禁止修改 BridgeForge 上游模板或其他项目"));
-    assert!(
-        shared
-            .contains("反哺上游必须先说明对其他项目与未来初始化的影响、收益和风险，并取得明确授权")
-    );
-    assert!(shared.contains("未获授权时必须仅作为后续候选记录，禁止执行上游写入"));
+    // Text matching cannot prove authorization behavior; exercise that in the
+    // isolated scope_boundary scenario. This check owns region integrity only.
+    assert!(!shared.trim().is_empty());
+    for text in [&template, &dogfood] {
+        for marker in [
+            "<!-- BRIDGEFORGE:PUBLIC:BEGIN -->",
+            "<!-- BRIDGEFORGE:PUBLIC:END -->",
+            "<!-- BRIDGEFORGE:PROJECT:BEGIN -->",
+            "<!-- BRIDGEFORGE:PROJECT:END -->",
+        ] {
+            assert_eq!(text.matches(marker).count(), 1, "invalid marker: {marker}");
+        }
+    }
     assert_eq!(shared, public(&dogfood));
 }
 
@@ -688,7 +696,7 @@ fn composite_fixture(f: &Fixture, invalid: bool) -> (PathBuf, PathBuf, Value) {
                     "<!-- BRIDGEFORGE:PROJECT:END -->",
                     "must preserve project rule\n<!-- BRIDGEFORGE:PROJECT:END -->",
                 )
-                .replace("公共架构红线", "obsolete public rule"),
+                .replace("## BridgeForge 公共区", "## obsolete public rule"),
             ),
             "doc/README.md" => (
                 "documentation",
@@ -733,9 +741,14 @@ fn composite_migration_preserves_project_content_and_latest_public_baseline() {
         .split("<!-- BRIDGEFORGE:PUBLIC:END -->")
         .next()
         .unwrap();
-    assert!(
-        public
-            .contains("反哺上游必须先说明对其他项目与未来初始化的影响、收益和风险，并取得明确授权")
+    let template = fs::read_to_string(factory.join("templates/AGENTS.md")).unwrap();
+    let expected_public = template
+        .split("<!-- BRIDGEFORGE:PUBLIC:END -->")
+        .next()
+        .unwrap();
+    assert_eq!(
+        public.replace("\r\n", "\n"),
+        expected_public.replace("\r\n", "\n")
     );
     assert!(
         fs::read_to_string(project.join("doc/README.md"))
