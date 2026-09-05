@@ -56,3 +56,13 @@ Codex 官方 hooks/list 证明旧三个 Hook 已 trusted；转换后必须重新
 最终 workspace 验证 Core 111/111、CLI 9/9、Hook 15/15 通过。独立审计发现的启动失败误报成功已通过 ErrorActionPreference Stop 修复，PS5/7 缺失程序均实测退出 1；最终审计无剩余源码阻断。最终受管 build-assets、manifest --check、factory-version、baseline、project-structure、skill-metadata 通过；真实安装后仍需新的生命周期和同步收据。
 
 最终完整工厂 fixture 以同一串行命令完成：81 passed、0 failed、2 ignored（375.14 秒），真实新项目安装与工厂发布均通过。
+
+## SessionEnd 关闭阶段的句柄继承缺陷
+
+1.14.6 正式安装后，真实 SessionStart 已自动推送 revision 23，远端 HEAD 与本地收据均为 `44a630aebd3eb1290e476b30b3e27a84c0ecb017`。但 SessionEnd 后存在死亡 worker 与未完成 pending，不能因此宣称整条自动同步链已验收。
+
+2026-09-05 02:45–02:47 UTC 用不调用 Kill 的临时 Codex 会话观察：SessionStart 与 Stop 分别正常同步并清队列；02:47:00.650 只关闭 app-server stdin，SessionEnd worker 于 02:47:01.182 启动，02:47:04.042 随服务自然退出消失，遗留 pending。排除旧测试程序五秒强杀的干扰。
+
+离线回归证明旧 `Command::spawn` 即使三个 stdio 为 null，仍泄漏额外可继承句柄：父进程关闭独占测试文件后，子进程仍持有该句柄，重新打开返回 WinError 32。修复仅替换 Memory worker 的 Windows 创建入口：固定 native exe、UTF-16 参数、`bInheritHandles=FALSE`、单独 `DETACHED_PROCESS`，不更改父 Job 策略。`CREATE_NO_WINDOW` 单独使用的试验在 stdin 读取处阻塞，故不采用。最终回归同时断言三个标准句柄为 NULL、无 console、stdin EOF、Rust stdout/stderr/println 成功、参数逐字保留及子进程存活时额外句柄已经释放。
+
+此阶段 `cargo test --locked --config scripts/tests/factory-cargo.toml --manifest-path .codex/hooks/Cargo.toml --workspace` 完成 Core 113、CLI 9、Hook 15 项通过，4 项子进程入口按设计忽略；`cargo test --locked --manifest-path scripts/tests/Cargo.toml -- --test-threads=1` 完成 81 passed、0 failed、2 ignored（354.24 秒）。受管 build-assets、manifest --check、factory-version、baseline、project-structure、skill-metadata 与镜像检查通过。独立审计未发现源码阻断；MSRV 1.88 未单独实编。仍需正式安装与关闭后真实同步收据，不能以启动收据代替完成收据。

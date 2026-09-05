@@ -3,10 +3,7 @@ use serde_json::{Value, json};
 use std::ffi::OsString;
 use std::fs;
 use std::io::{Read, Write};
-#[cfg(windows)]
-use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 use std::time::Duration;
 
 fn emit(outcome: CommandOutcome) -> i32 {
@@ -528,27 +525,20 @@ fn launch_memory_worker(args: &[String], state: &Path) -> Result<String, String>
     };
     let executable = std::env::current_exe().map_err(|error| error.to_string())?;
     let codex = path_value(args, "--codex-home")?;
-    let mut command = Command::new(executable);
-    command
-        .args([
-            "memory-sync",
-            "worker",
-            "--codex-home",
-            codex.to_string_lossy().as_ref(),
-            "--token",
-            &worker.token,
-        ])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
+    let mut worker_args: Vec<OsString> = vec![
+        "memory-sync".into(),
+        "worker".into(),
+        "--codex-home".into(),
+        codex.into_os_string(),
+        "--token".into(),
+        worker.token.clone().into(),
+    ];
     for flag in ["--state-dir", "--memories"] {
         if let Some(path) = value(args, flag) {
-            command.args([flag, &path]);
+            worker_args.extend([flag.into(), path.into()]);
         }
     }
-    #[cfg(windows)]
-    command.creation_flags(0x0800_0000 | 0x0000_0008);
-    command.spawn().map_err(|error| {
+    bridgeforge_core::memory::background::spawn(&executable, &worker_args).map_err(|error| {
         let _ = bridgeforge_core::memory::worker::release_worker(state, &worker.token);
         format!("cannot launch hidden memory worker: {error}")
     })?;
