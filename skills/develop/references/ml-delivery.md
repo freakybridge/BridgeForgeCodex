@@ -1,11 +1,11 @@
 # develop M/L 交付流程
 
-> 仅在 M/L 已取得有效确认卡且用户授权开工后读取。Agent 选择和独立 review 规则见
+> 仅在 M/L 需求已记录且实施已授权后读取。Agent 选择和独立 review 规则见
 > `agent-execution.md`；S 级禁止读取本文件。
 
 ## 1. 完善唯一需求包
 
-1. 在现有确认卡中补充实施计划、实施记录和验证记录，禁止重建第二份需求。
+1. 在同一需求卡记录实施、验证及授权依据，禁止重建需求或重复确认开工。
 2. 项目级长期约束更新 `doc/0_architecture/`；单 feature 保持在确认卡所属的
    `doc/1_delivery/` topic；新 Bug 写入 `doc/2_bugs/`。禁止创建全局 plan 或 pending 文档。
 3. 需求包保留背景与目标、非目标、用户可见行为、约束与风险、验收、暂缓项和实施假设。
@@ -15,7 +15,7 @@
 
 - 已确认范围内的实现细节、事实补全和验证状态直接更新需求包或设计文档；开始实施时把 `validation_status` 从 `not_started` 改为 `in_progress`。
 - 完成实现后按证据更新 `validation_status` 为 `awaiting_validation` 或 `awaiting_user_acceptance`，并更新变更记录、每项验收状态及相关设计或 rules；`lifecycle` 保持 `active`，只有 `$summary 同意验收` 可以结算为 `completed`。
-- 发现用户行为、业务规则、接口、范围或验收变化时返回主入口的单题确认闸，禁止继续写入。
+- 实质变化按主入口重核受影响授权；用户新指令已明确决定则更新记录，否则暂停相关动作。
 
 ## 3. 验证与试用
 
@@ -25,4 +25,4 @@
 3. 交付改动、需求卡、验证收据、用户试用主路径和剩余风险。
 4. 当前需求内的小 Bug 直接修复并更新同一需求包；独立 Bug 建立
    `doc/2_bugs/BUG-<id>-<topic>.md`；新范围进入新的 `confirm` / `develop`。
-5. 同一症状修复失败两次，停止并按项目鬼打墙规则升级。
+5. 修复失败与恢复按公共 AGENTS 执行，禁止切换阶段清零计数。

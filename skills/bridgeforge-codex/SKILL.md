@@ -1,17 +1,23 @@
 ---
 name: bridgeforge-codex
-description: 在 Windows Codex 项目中初始化或事务更新 bridgeforge-codex 协作骨架，并维护受管用户级 skills。用户提到 bridgeforge-codex、Codex 骨架初始化或同步上游模板时使用。
+description: 初始化、升级或诊断 Windows Codex 骨架及受管 Skills；咨询和只读诊断不触发维护，仅提及产品名不触发本流程。
 user_invocable: true
 argument: 仅支持无参数
 ---
 
 # bridgeforge-codex
 
-bridgeforge-codex 是 Codex-only 骨架维护入口，只接受无参数 `$bridgeforge-codex`，并且必须由主对话编排。旧 `$bridgeforge`、`switch`、Claude 项目维护和内部参数不属于公开命令面。
+仅由主对话编排无参数 `$bridgeforge-codex`；不支持旧 `$bridgeforge`、`switch`、Claude 维护或内部参数。
+
+## 0. 先分流意图
+
+咨询直接回答；诊断、审计或只读预览仅检查已有相关文件，涉及运行时先读 [runtime preflight](references/runtime-preflight.md)，不进入下文维护流程，不刷新、安装或修复。未查上游时禁止称本机版本为最新。
+
+明确安装、升级或无附加限制的显式调用才进入 §1；附带的只读要求优先。意图不明且会写入时，只补问该决定，禁止从产品名称推断维护授权。
 
 ## 1. 刷新产品入口
 
-仅支持 Windows；其他平台必须在下载或写入前停止。每轮先从 Codex 薄入口运行一次 updater：
+维护仅支持 Windows；其他平台在下载或写入前停止。获准维护后从薄入口运行一次 updater：
 
 ```powershell
 $BRIDGEFORGE_CODEX_ENTRY = Join-Path $env:USERPROFILE ".codex\skills\bridgeforge-codex"
@@ -26,7 +32,7 @@ $BRIDGEFORGE_CODEX_HOME = Join-Path $env:USERPROFILE ".bridgeforge-codex"
 
 ## 2. 判断模式并锁定 Rust 工具
 
-在运行任何写操作前，只读检查版本戳并锁定唯一 `$MODE`：
+项目写入前，只读检查版本戳并锁定唯一 `$MODE`：
 
 1. `.codex/.bridgeforge_codex_version` 与 `.codex/.bridgeforge_version` 双戳或非法戳：零写阻断。
 2. 恰好一个合法戳：`update`；由当前合同的固定 `compatibility_baseline` 判定低基线重建或基线内兼容更新。
@@ -81,7 +87,7 @@ plan 必须零写入。同步器 `machine` 区负责 fingerprint、safe、risk�
 
 准备 Apply 时必须用同一份内存中的迁移 manifest 重新生成 plan；fingerprint 漂移则零写停止并重新展示。只有 fingerprint 与用户选择仍有效时，才读取 [事务与回滚](references/transaction.md) 并按其唯一顺序执行；Apply 必须传入刚生成的 `--plan-fingerprint`，禁止人工 copy、merge、删除或写版本戳。
 
-默认结果必须逐项展示同步器 `human` 区的“结论、待处理事项、下一步”；结论只能使用“已完成、无需处理、可直接执行、等待确认、未完成、已完成但仍有待处理项”六类固定中文状态。safe-only 计划必须显示“可直接执行”，禁止把零确认更新说成“等待确认”。禁止自行改写结论或直接倾倒 `machine` 区的 safe/risk/gap、fingerprint、asset ID、内部枚举与验证流水。只有同步器未覆盖用户追问的背景时，主对话才补充说明；补充说明不得改变同步器结论。
+维护结果逐项原样展示同步器 `human` 区的“结论、待处理事项、下一步”，只使用“已完成、无需处理、可直接执行、等待确认、未完成、已完成但仍有待处理项”六类状态。safe-only 必须为“可直接执行”，禁止改成“等待确认”、改写结论或倾倒 `machine` 内部字段。用户追问未覆盖的背景时可补充，但不得改变同步器结论。
 
 - 成功：说明当前骨架版本；只把本轮真实收据证明产生的未提交骨架文件计入数量，并把 `$git-sync` 作为需要保存到 GitHub 时的唯一下一步。
 - no-op：说明当前版本和“本次操作已结束，无需继续处理”，不展示 planner、validator 或健康 Native Memory 明细。
@@ -89,4 +95,4 @@ plan 必须零写入。同步器 `machine` 区负责 fingerprint、safe、risk�
 - blocker/失败：直接展示同步器 `human` 区确定的中文停止原因、写入/回滚状态与安全动作；未分类错误只能显示通用中文停止说明，原始异常只保留在 `machine` 技术收据中。禁止把状态码、blocker 列表、原始异常或 traceback 当结论。
 - gap/advisory：只有影响当前结果、需要用户操作或会改变后续行为时才展示；等待真实生命周期事件验证时，只说明仍在等待正常使用完成验证。
 
-工作区中无法证明由本轮产生的既有改动，禁止归为“本次升级产生”。需要核对字段级成功条件、Native Memory readiness、回滚或向用户解释技术证据时，读取 [内部技术收据](references/technical-receipts.md)；用户未追问时不得补发整份技术清单。
+既有改动禁止归为本轮成果。核对成功条件、Native Memory readiness、回滚或解释技术证据时，读取 [内部技术收据](references/technical-receipts.md)；未追问不补发技术清单。

@@ -5,6 +5,7 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
 use std::fs;
+use std::io::Read;
 use std::path::{Component, Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use walkdir::WalkDir;
@@ -101,6 +102,15 @@ fn sha_raw(payload: &[u8]) -> String {
 }
 
 const LEGACY_RECEIPT: &str = ".codex/bin/build-receipt.json";
+const RETIRED_SYNC_ROLE: &str = "mechanical-sync-worker";
+const RETIRED_SYNC_TARGET: &str = ".codex/agents/mechanical-sync-worker.toml";
+const RETIRED_SYNC_INPUT: &str = "retired:mechanical-sync-worker:inputs";
+// Published payloads from 3645472, d3af932, and 0dea502; never trust a downstream manifest.
+const RETIRED_SYNC_HASHES: &[&str] = &[
+    "sha256:57315c89fc965f1fb13dfa611242658a17391a7ee379f7aee753a22deb989cc0",
+    "sha256:3561c215ce3610421734e5173f911e38dc43657eee93272ec28ab520e6f8b871",
+    "sha256:4c553960c7733ad76bed8bdb078709836df6a75560390e99f348d19918e80ecf",
+];
 const RETIRED_PROJECT_MAPS: &[(&str, &str)] = &[
     ("retired:project-map:find-doc", ".codex/find-doc.map.md"),
     ("retired:project-map:sync-docs", ".codex/sync-docs.map.md"),
@@ -215,6 +225,122 @@ fn sha_git(payload: &[u8]) -> String {
     }
 }
 
+fn sync_role_input(path: &Path) -> Result<Option<(String, bool)>, String> {
+    validate_transaction_path(path)?;
+    let mut file = match fs::File::open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.to_string()),
+    };
+    if !file.metadata().map_err(|e| e.to_string())?.is_file() {
+        return Err(format!("role input is not a plain file: {}", path.display()));
+    }
+    let mut digest = Sha256::new();
+    let mut buffer = [0u8; 65536];
+    let mut tail = Vec::new();
+    let mut referenced = false;
+    loop {
+        let count = file.read(&mut buffer).map_err(|e| e.to_string())?;
+        if count == 0 { break; }
+        digest.update(&buffer[..count]);
+        tail.extend_from_slice(&buffer[..count]);
+        referenced |= tail.windows(RETIRED_SYNC_ROLE.len())
+            .any(|window| window == RETIRED_SYNC_ROLE.as_bytes());
+        let keep = tail.len().saturating_sub(RETIRED_SYNC_ROLE.len() - 1);
+        tail.drain(..keep);
+    }
+    Ok(Some((format!("sha256:{:x}", digest.finalize()), referenced)))
+}
+
+fn sync_role_inputs(root: &Path) -> Result<BTreeMap<String, (String, bool)>, String> {
+    let mut inputs = BTreeMap::new();
+    for target in ["AGENTS.md", ".codex/config.toml", RETIRED_SYNC_TARGET] {
+        if let Some(input) = sync_role_input(&safe_join(root, target, "role input")?)? {
+            inputs.insert(target.into(), input);
+        }
+    }
+    for directory in [".codex/skills", ".codex/agents"] {
+        let path = safe_join(root, directory, "role references")?;
+        match fs::symlink_metadata(&path) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(error.to_string()),
+            Ok(metadata) if !metadata.is_dir() => {
+                return Err(format!("role reference directory is not a plain directory: {directory}"));
+            }
+            Ok(_) => {}
+        }
+        for entry in WalkDir::new(&path).sort_by_file_name() {
+            let entry = entry.map_err(|error| error.to_string())?;
+            if crate::memory::is_link_or_reparse(entry.path()).map_err(|e| e.to_string())? {
+                return Err(format!("linked role input is unsafe: {}", entry.path().display()));
+            }
+            if entry.file_type().is_file() {
+                let extension = entry.path().extension().and_then(|s| s.to_str()).unwrap_or("").to_ascii_lowercase();
+                if !matches!(extension.as_str(), "md" | "toml" | "json" | "yaml" | "yml" | "txt" | "rs" | "py" | "ps1" | "sh" | "cmd" | "bat" | "js" | "ts") {
+                    continue;
+                }
+                let target = relative_posix(root, entry.path())?;
+                let input = sync_role_input(entry.path())?
+                    .ok_or_else(|| format!("role input disappeared: {target}"))?;
+                inputs.insert(target, input);
+            }
+        }
+    }
+    Ok(inputs)
+}
+
+fn sync_role_references(inputs: &BTreeMap<String, (String, bool)>) -> Vec<String> {
+    inputs.iter().filter_map(|(path, (_, referenced))| {
+        (path != RETIRED_SYNC_TARGET && *referenced)
+            .then(|| path.clone())
+    }).collect()
+}
+
+fn sync_role_fingerprint(inputs: &BTreeMap<String, (String, bool)>) -> Result<String, String> {
+    Ok(sha_raw(&serde_json::to_vec(inputs).map_err(|e| e.to_string())?))
+}
+
+fn plan_sync_role_retirement(
+    root: &Path,
+    safe: &mut Vec<SyncAction>,
+    deletes: &mut Vec<PathBuf>,
+    gaps: &mut Vec<String>,
+    fingerprints: &mut BTreeMap<String, String>,
+) -> Result<(), String> {
+    let inputs = sync_role_inputs(root)?;
+    fingerprints.insert(RETIRED_SYNC_INPUT.into(), sync_role_fingerprint(&inputs)?);
+    let references = sync_role_references(&inputs);
+    for path in &references {
+        gaps.push(format!("retired role {RETIRED_SYNC_ROLE} is referenced by {path}; preserve and resolve before update"));
+    }
+    if !inputs.contains_key(RETIRED_SYNC_TARGET) { return Ok(()); }
+    let path = safe_join(root, RETIRED_SYNC_TARGET, "retired role")?;
+    // Known templates are below 4 KiB. Larger custom files need no in-memory payload.
+    let hash = if fs::metadata(&path).map_err(|e| e.to_string())?.len() <= 4096 {
+        let bytes = transaction_file_state(&path)?.ok_or("retired role disappeared")?;
+        if sha_raw(&bytes) != inputs[RETIRED_SYNC_TARGET].0 {
+            return Err("retired role changed while planning".into());
+        }
+        sha_git(&bytes)
+    } else {
+        String::new()
+    };
+    if !RETIRED_SYNC_HASHES.contains(&hash.as_str()) {
+        gaps.push(format!("retired role has custom or unknown content: {RETIRED_SYNC_TARGET}; preserve for review"));
+    } else if references.is_empty() {
+        safe.push(SyncAction {
+            id: "retired:codex.agent.mechanical-sync-worker".into(),
+            target: RETIRED_SYNC_TARGET.into(),
+            operation: "delete".into(),
+            risk: false,
+            before_sha256: Some(hash),
+            after_sha256: "sha256:deleted".into(),
+        });
+        deletes.push(safe_join(root, RETIRED_SYNC_TARGET, "retired role")?);
+    }
+    Ok(())
+}
+
 fn plan_fingerprint(
     mode: &SyncMode,
     version: &str,
@@ -240,6 +366,9 @@ fn plan_fingerprint(
     );
     if let Some(registry) = generated_source_fingerprints.get("project-hook:registry-input") {
         material.push_str(&format!("\nproject-hook:registry-input={registry}\n"));
+    }
+    if let Some(inputs) = generated_source_fingerprints.get(RETIRED_SYNC_INPUT) {
+        material.push_str(&format!("\n{RETIRED_SYNC_INPUT}={inputs}\n"));
     }
     Ok(sha_raw(material.as_bytes()))
 }
@@ -1101,6 +1230,7 @@ fn destructive_inventory(
     let mut candidate_ids = BTreeSet::new();
     let mut deleted_hook_prefixes = Vec::new();
     let mut exact = BTreeSet::from([
+        RETIRED_SYNC_TARGET.to_string(),
         ".codex/.bridgeforge_version".to_string(),
         contract["stamp"]
             .as_str()
@@ -1762,6 +1892,9 @@ pub fn build_plan_with_inputs(
     };
     plan_legacy_receipt_retirement(&project_root, &mut safe, &mut deletes)?;
     plan_project_map_retirement(&project_root, &mut safe, &mut deletes)?;
+    plan_sync_role_retirement(
+        &project_root, &mut safe, &mut deletes, &mut gaps, &mut generated_source_fingerprints,
+    )?;
     let (project_hook_inputs, project_hook_reads) = plan_project_hooks(
         &project_root,
         &contract,
@@ -1974,7 +2107,7 @@ pub fn apply_plan(
     apply_plan_internal(plan, confirmed_plan_fingerprint, confirmed_risk, None)
 }
 
-fn transaction_file_state(path: &Path) -> Result<Option<Vec<u8>>, String> {
+fn validate_transaction_path(path: &Path) -> Result<(), String> {
     for ancestor in path.ancestors() {
         match fs::symlink_metadata(ancestor) {
             Ok(_) => {
@@ -1989,6 +2122,11 @@ fn transaction_file_state(path: &Path) -> Result<Option<Vec<u8>>, String> {
             Err(error) => return Err(error.to_string()),
         }
     }
+    Ok(())
+}
+
+fn transaction_file_state(path: &Path) -> Result<Option<Vec<u8>>, String> {
+    validate_transaction_path(path)?;
     match fs::read(path) {
         Ok(payload) => Ok(Some(payload)),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
@@ -2038,6 +2176,11 @@ fn apply_plan_internal(
         }
     }
     let _lock = ProjectLock::acquire(&plan.project_root)?;
+    if let Some(expected) = plan.generated_source_fingerprints.get(RETIRED_SYNC_INPUT)
+        && sync_role_fingerprint(&sync_role_inputs(&plan.project_root)?)? != *expected
+    {
+        return Err("retired role or reference inputs drifted; regenerate the plan".into());
+    }
     verify_project_hook_reads(&plan)?;
     let legacy = legacy_receipt(&plan.project_root)?;
     if legacy
@@ -2228,6 +2371,12 @@ fn apply_plan_internal(
         )?;
         if let Some(observer) = before_stamp {
             observer(&plan.project_root, &stamp_path)?;
+        }
+        if plan.generated_source_fingerprints.contains_key(RETIRED_SYNC_INPUT) {
+            let inputs = sync_role_inputs(&plan.project_root)?;
+            if inputs.contains_key(RETIRED_SYNC_TARGET) || !sync_role_references(&inputs).is_empty() {
+                return Err("retired role or reference appeared during apply; regenerate the plan".into());
+            }
         }
         atomic_write(&stamp_path, &stamp_payload)?;
         expected_after.insert(stamp_path.clone(), Some(stamp_payload.clone()));

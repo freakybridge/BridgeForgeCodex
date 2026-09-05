@@ -1,18 +1,19 @@
 # Rust runtime preflight
 
-仅当根入口已经判定 `$MODE`，但受管 CLI 或产品 workspace 验证失败时读取。
+仅在诊断涉及运行时，或维护时 CLI / workspace 验证失败时读取。
 
-- 双戳、非法戳必须阻断；无戳空项目允许 init，无戳已有资产允许 adopt，不要求下游已经安装 Rust 骨架。
-- 只检查刷新后的产品 home：`templates/hooks/Cargo.toml`、`Cargo.lock` 和 updater 安装的用户级二进制。
-- Cargo 与 rustc 必须满足 workspace 声明的最低版本；产品版本与 CLI 必须相同。缺失、版本不足、锁文件校验失败或 self-test 失败都必须停止。
+- 诊断检查已有产品 home，维护检查本轮 updater 刷新后的 home；禁止先更新再诊断。
+- 先核对下述固定路径及 home 内 `templates/hooks/Cargo.toml`、`Cargo.lock`；缺失只报告，不调用缺失入口或补文件。
+- Cargo / rustc 必须满足 workspace 下限，产品与 CLI 版本一致；锁或自检失败阻断维护，不阻断只读说明。
 - 禁止使用 Python、旧脚本、其他 clone 或 PATH 中同名非受管二进制兜底。
 
 只读验证命令：
 
 ```powershell
-& $BRIDGEFORGE doctor --product-root $BRIDGEFORGE_CODEX_HOME --json
+& (Join-Path $env:USERPROFILE ".codex/bin/bridgeforge.exe") doctor `
+  --product-root (Join-Path $env:USERPROFILE ".bridgeforge-codex") --json
 ```
 
 doctor 检查工具链版本、`cargo metadata --locked --offline --no-deps` 和实际受管 CLI 的自检。收据须为 `schema=1`、`status=ok`，且 manifest/lockfile 位于当前产品 home。
 
-需要恢复时，先修复已报告的 Cargo/rustc 或文件问题，本轮停止；下一轮重新运行根入口。构建和替换只由官方 updater 完成：仓库外临时 target 构建 → 对新产物执行 `self-test --json` → 核对 `schema=1/name=bridgeforge/status=ok` → 事务替换用户级二进制，失败恢复原文件。禁止手工覆盖二进制，禁止用旧已安装产物的自检代替新构建产物自检，也禁止在同一轮再次刷新。
+诊断只交付证据、缺口和修复建议，不安装工具链、构建或替换。修复另需授权；官方 updater 在仓库外构建、自检新产物并事务替换，失败回滚。禁止手工覆盖、用旧产物自检代替新产物自检或同轮再次刷新。

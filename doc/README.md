@@ -65,6 +65,7 @@ delivery_layout: flat
 
 | Topic | 主要记录 |
 |---|---|
+| `gpt6-skeleton-upgrade` | [初审](1_delivery/gpt6-skeleton-upgrade/audit-01_2026-09-05.md)；[一](1_delivery/gpt6-skeleton-upgrade/requirements_2026-09-05_block1.md)、[二](1_delivery/gpt6-skeleton-upgrade/requirements_2026-09-05_block2.md)、[三](1_delivery/gpt6-skeleton-upgrade/requirements_2026-09-05_block3.md)已交付；[四](1_delivery/gpt6-skeleton-upgrade/requirements_2026-09-05_block4.md)测试补充完成、模型对照待运行（2026-09-05） |
 | `project-map-autogeneration` | 两份项目 Map 的确定性生成、静默生命周期维护、旧手写内容完全重建与 Skill fallback；见[确认卡](1_delivery/project-map-autogeneration/requirements_2026-09-04_project-map-autogeneration.md)（2026-09-04） |
 | `project-rust-hooks` | [项目自有 Rust Hook 构建与 Assist 迁移](1_delivery/project-rust-hooks/requirements_2026-09-03_project-rust-hooks.md)；[Hook 登记兼容性修复](1_delivery/project-rust-hooks/requirements_2026-09-03_hook-registry-compatibility.md)；[临时构建路径失效](1_delivery/project-rust-hooks/requirements_2026-09-03_build-directory-failure.md) |
 | `project-knowledgebase-layer` | 固定第六层项目知识库、项目内容保留与逐源迁移支持，见[确认卡](1_delivery/project-knowledgebase-layer/requirements_2026-09-03_project-knowledgebase-layer.md)（2026-09-03） |

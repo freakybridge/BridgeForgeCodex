@@ -17,11 +17,11 @@ argument: 主题关键词（中英混合，例 "auth oauth" / "数据库 schema"
 
 ## 核心流程
 
-### 0. 确保项目索引为最新
+### 0. 选择索引路径
 
-先运行当前平台的受管入口：Windows 使用 `.codex\bin\bridgeforge-hook.exe project-map ensure-current`，其他平台使用 `.codex/bin/bridgeforge-hook project-map ensure-current`。成功路径无输出。
+明确只读、审计或预览时，跳过刷新，禁止写入 Map 或清除脏标记。其他场景使用 `.codex/bin/bridgeforge-hook.exe project-map ensure-current`（非 Windows 去掉 `.exe`），成功无输出。
 
-入口缺失或失败时，不要求用户创建或修复 Map；跳过索引并继续下面的文档搜索 fallback。只有 fallback 也无法完成当前检索时，才报告真正的任务阻断。
+入口缺失或失败时直接搜索文档，不要求用户维护 Map；只有搜索也受阻才报告卡点。
 
 ### 1. 分流意图
 
@@ -50,7 +50,7 @@ argument: 主题关键词（中英混合，例 "auth oauth" / "数据库 schema"
 
 ### 3. 查项目指令索引
 
-读取 `.runtime/bridgeforge-codex/find-doc.map.md` 的 `topic_to_sources` 表：命中主题或代码词时读取对应根/嵌套 `AGENTS.md` 位置；未命中时跳过，不全量扫描指令源。该文件由 BridgeForge 生成，禁止手工编辑或加入 Git。
+可用时读取 `.runtime/bridgeforge-codex/find-doc.map.md` 的 `topic_to_sources`，仅作线索并核对命中的原文件。缺失、过时或未命中时直接搜索文档，不全量扫描指令源；禁止手改或提交 Map。
 
 ### 4. 聚合与收尾
 

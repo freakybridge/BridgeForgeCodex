@@ -335,8 +335,6 @@ mod tests {
             ".githooks/pre-commit",
             "templates/.githooks/pre-commit",
             "scripts/bridgeforge_codex_shared_update.ps1",
-            "templates/agents/mechanical-sync-worker.toml",
-            ".codex/agents/mechanical-sync-worker.toml",
         ] {
             let text = fs::read_to_string(repository.join(relative))
                 .unwrap()

@@ -51,12 +51,12 @@ bridgeforge-codex 只支持 Windows、Rust/Cargo 1.88+ 和 Codex。Cargo 在安�
 
 ## 项目升级与异常诊断
 
-项目骨架版本记录在 `.codex/.bridgeforge_codex_version`。每次 `$bridgeforge-codex` 先刷新官方产品 home，再按身份和固定升级基线分流：
+项目骨架版本记录在 `.codex/.bridgeforge_codex_version`。咨询、诊断或只读预览不更新安装；明确维护（含无附加限制的 `$bridgeforge-codex`）才刷新官方产品 home，随后分流：
 
 - 没有骨架身份和骨架资产的空白项目：直接初始化，不要求预先存在版本戳。
 - 低于修复首版 `1.8.6`：盘点并确认项目资产后重建最新骨架，不读取旧 schema、旧 manifest 或逐版本兼容链。
 - 等于或高于 `1.8.6`：兼容更新并保留项目定制；升级分界线固定，不随最新发布版本自动上移。比产品 home 更新的版本拒绝降级。
-- 已存在骨架资产但没有版本戳：进入受控接入；双戳或非法戳在写入前停止。
+- 已有骨架资产但无戳：受控接入；双戳或非法戳在项目写入前停止。
 
 两条升级路径都会逐文件整理 `.codex/rules/*.md` 和 `.codex/memory/**`。每个源文件展示完整迁移包并由用户确认：红线进 `AGENTS.md`，命令策略进 `.rules`，流程进 Skill，机械约束进 Hook / test，工作与设计资料进 `doc/`。`MEMORY.md`、`MEMORY_COLD.md`、`_stats.json` 逐个确认固定退役，不做语义转换。
 
@@ -66,8 +66,7 @@ bridgeforge-codex 只支持 Windows、Rust/Cargo 1.88+ 和 Codex。Cargo 在安�
 
 ## 维护者协议
 
-本页只说明用户可观察到的安装、迁移和阻断行为，不重复维护同步器内部合同。维护者按以下
-单一事实源继续阅读：
+本页说明安装、迁移与阻断行为；内部合同见：
 
 - [Codex 项目同步设计](doc/0_architecture/design/codex-project-sync.md)：版本路由、规划、确认、事务和回滚合同。
 - [设计依据](doc/0_architecture/design/design-rationale.md)：资产归属与安全取舍。

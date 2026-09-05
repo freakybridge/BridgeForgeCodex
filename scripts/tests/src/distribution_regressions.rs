@@ -9,6 +9,169 @@ use std::sync::atomic::{AtomicU64, Ordering};
 static ID: AtomicU64 = AtomicU64::new(0);
 
 #[test]
+fn gpt6_behavior_cases_have_unique_ids_and_resolvable_inputs() {
+    // Validates test inputs only, not model behavior or an A/B result.
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .ancestors()
+        .nth(2)
+        .unwrap();
+    let suite: Value =
+        serde_json::from_str(include_str!("../fixtures/gpt6-behavior-cases.json")).unwrap();
+    assert_eq!(suite["schema"], 1);
+    let baseline = suite["baseline_ref"].as_str().unwrap();
+    assert!(baseline.len() == 40 && baseline.bytes().all(|b| b.is_ascii_hexdigit()));
+    let mut ids = std::collections::BTreeSet::new();
+    for case in suite["cases"].as_array().unwrap() {
+        let id = case["id"].as_str().unwrap();
+        assert!(!id.is_empty() && ids.insert(id));
+        for field in ["context", "user"] {
+            assert!(
+                !case[field].as_str().unwrap().trim().is_empty(),
+                "{id}: {field}"
+            );
+        }
+        for field in ["instructions", "expect", "forbid"] {
+            let entries = case[field].as_array().unwrap();
+            assert!(!entries.is_empty(), "{id}: {field}");
+            for value in entries {
+                let text = value.as_str().unwrap();
+                assert!(!text.trim().is_empty());
+                if field == "instructions" {
+                    let path = Path::new(text);
+                    assert!(
+                        path.components()
+                            .all(|part| matches!(part, std::path::Component::Normal(_)))
+                    );
+                    assert!(root.join(path).is_file(), "{id}: {text}");
+                }
+            }
+        }
+    }
+    assert_eq!(
+        ids,
+        [
+            "diagnose_only",
+            "ambiguous_scope",
+            "authorized_continue",
+            "discussion_only",
+            "scope_boundary",
+            "readonly_review"
+        ]
+        .into_iter()
+        .collect()
+    );
+}
+
+#[test]
+fn distributed_roles_match_skill_references_and_dogfood() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .ancestors()
+        .nth(2)
+        .unwrap();
+    let contract: Value =
+        serde_json::from_slice(&fs::read(root.join("templates/managed-skeleton.json")).unwrap())
+            .unwrap();
+    let roles = contract["assets"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|asset| {
+            asset["id"]
+                .as_str()
+                .unwrap_or("")
+                .starts_with("codex.agent.")
+        })
+        .map(|asset| {
+            let name = asset["id"]
+                .as_str()
+                .unwrap()
+                .strip_prefix("codex.agent.")
+                .unwrap();
+            let source = fs::read_to_string(root.join(asset["source"].as_str().unwrap()))
+                .unwrap()
+                .replace("\r\n", "\n");
+            let mirror = fs::read_to_string(root.join(asset["target"].as_str().unwrap()))
+                .unwrap()
+                .replace("\r\n", "\n");
+            assert_eq!(source, mirror);
+            assert!(
+                source
+                    .lines()
+                    .any(|line| line == format!("name = \"{name}\""))
+            );
+            assert!(
+                !source
+                    .lines()
+                    .filter_map(|line| line.split_once('='))
+                    .any(|(key, _)| {
+                        matches!(key.trim(), "model" | "effort" | "model_reasoning_effort")
+                    }),
+                "role must not select session settings: {name}"
+            );
+            name.to_string()
+        })
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(
+        roles,
+        [
+            "implementation-worker",
+            "light-explorer",
+            "review-auditor",
+            "xhigh-auditor"
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect()
+    );
+    for directory in ["templates/agents", ".codex/agents"] {
+        let actual = fs::read_dir(root.join(directory))
+            .unwrap()
+            .map(|entry| {
+                entry
+                    .unwrap()
+                    .path()
+                    .file_stem()
+                    .unwrap()
+                    .to_str()
+                    .unwrap()
+                    .to_string()
+            })
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(actual, roles);
+    }
+    let mut pending = vec![root.join("skills"), root.join(".codex/skills")];
+    let mut referenced = std::collections::BTreeSet::new();
+    while let Some(directory) = pending.pop() {
+        for entry in fs::read_dir(directory).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                pending.push(path);
+                continue;
+            }
+            if path.extension().and_then(|s| s.to_str()) != Some("md") {
+                continue;
+            }
+            let text = fs::read_to_string(&path).unwrap();
+            for (index, token) in text.split('`').enumerate() {
+                if index % 2 == 1
+                    && ["-worker", "-explorer", "-auditor"]
+                        .iter()
+                        .any(|suffix| token.ends_with(suffix))
+                {
+                    assert!(
+                        roles.contains(token),
+                        "unresolved role {token} in {}",
+                        path.display()
+                    );
+                    referenced.insert(token.to_string());
+                }
+            }
+        }
+    }
+    assert!(referenced.contains("implementation-worker") && referenced.contains("review-auditor"));
+}
+
+#[test]
 fn upstream_write_authorization_is_a_shared_public_rule() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"))
         .ancestors()
@@ -36,25 +199,20 @@ fn upstream_write_authorization_is_a_shared_public_rule() {
 }
 
 #[test]
-fn project_map_skills_refresh_generated_indexes_without_user_maintenance_prompts() {
+fn project_maps_are_not_fixed_managed_payloads() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"))
         .ancestors()
         .nth(2)
         .unwrap();
-    let find_doc = fs::read_to_string(root.join("skills/find-doc/SKILL.md")).unwrap();
-    let sync_docs = fs::read_to_string(root.join("skills/sync-docs/SKILL.md")).unwrap();
-    for (name, text) in [("find-doc", find_doc), ("sync-docs", sync_docs)] {
+    let contract: Value =
+        serde_json::from_slice(&fs::read(root.join("templates/managed-skeleton.json")).unwrap())
+            .unwrap();
+    for asset in contract["assets"].as_array().unwrap() {
+        let target = asset["target"].as_str().unwrap();
         assert!(
-            text.contains("project-map ensure-current"),
-            "{name} must refresh the generated map before reading it"
-        );
-        assert!(
-            text.contains("禁止要求用户") && text.contains("自动生成的 Map"),
-            "{name} must keep generated map maintenance away from the user"
-        );
-        assert!(
-            !text.contains("候选映射并询问") && !text.contains("要不要顺手"),
-            "{name} still contains the retired manual-maintenance prompt"
+            !target.starts_with(".runtime/")
+                && !matches!(target, ".codex/find-doc.map.md" | ".codex/sync-docs.map.md"),
+            "generated maps must not become distributed fixed payloads: {target}"
         );
     }
     assert!(

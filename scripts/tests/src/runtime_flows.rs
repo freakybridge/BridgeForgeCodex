@@ -904,7 +904,7 @@ fn batch_restart_requires_committed_bug_and_changed_controller_witness() {
 }
 
 #[test]
-fn project_sync_real_contract_preserves_project_owned_zones_rows_and_hooks() {
+fn project_sync_combined_upgrade_preserves_project_assets_and_is_idempotent() {
     let temp = TestDirectory::new("project-sync-real-contract");
     let project = temp.0.join("ExampleProject");
     fs::create_dir_all(project.join("doc")).unwrap();
@@ -927,7 +927,41 @@ fn project_sync_real_contract_preserves_project_owned_zones_rows_and_hooks() {
         custom_project_zone,
         &canonical_agents[stop..]
     );
+    // Synthetic old state, not a complete historical installation or a model run.
+    let public_begin = "<!-- BRIDGEFORGE:PUBLIC:BEGIN -->";
+    let public_end = "<!-- BRIDGEFORGE:PUBLIC:END -->";
+    let public = |text: &str| {
+        text.split_once(public_begin)
+            .unwrap()
+            .1
+            .split_once(public_end)
+            .unwrap()
+            .0
+            .to_string()
+    };
+    let agents = agents.replacen(&public(&agents), "\nPrevious public rules\n", 1);
     write(&project.join("AGENTS.md"), agents.as_bytes());
+    let retired = ".codex/agents/mechanical-sync-worker.toml";
+    write(
+        &project.join(retired),
+        include_bytes!("../fixtures/retired-mechanical-sync-worker.txt"),
+    );
+    let roles = [
+        "implementation-worker",
+        "light-explorer",
+        "review-auditor",
+        "xhigh-auditor",
+    ];
+    for role in roles {
+        write(
+            &project.join(format!(".codex/agents/{role}.toml")),
+            b"previous role\n",
+        );
+    }
+    let local_skill = ".codex/skills/local/SKILL.md";
+    let local_content =
+        b"---\nname: local\ndescription: Project-owned notes\n---\nKeep local workflow.\n";
+    write(&project.join(local_skill), local_content);
 
     let canonical_doc = fs::read_to_string(factory.join("templates/doc/README.md"))
         .unwrap()
@@ -967,23 +1001,66 @@ fn project_sync_real_contract_preserves_project_owned_zones_rows_and_hooks() {
 
     write(
         &project.join(".codex/.bridgeforge_codex_version"),
-        &fs::read(factory.join("VERSION")).unwrap(),
+        b"1.14.8\n",
     );
+    let protected = [
+        "AGENTS.md",
+        "doc/README.md",
+        ".codex/hooks.json",
+        local_skill,
+        retired,
+        ".codex/.bridgeforge_codex_version",
+    ];
+    let before = protected.map(|path| fs::read(project.join(path)).unwrap());
     let plan = build_plan(&project, &factory, SyncMode::Update).unwrap();
     assert!(plan.gaps.is_empty(), "{:?}", plan.gaps);
     assert!(plan.blockers.is_empty(), "{:?}", plan.blockers);
+    assert_eq!(
+        protected.map(|path| fs::read(project.join(path)).unwrap()),
+        before
+    );
+    for id in ["root.agents", "retired:codex.agent.mechanical-sync-worker"] {
+        assert!(
+            plan.safe
+                .iter()
+                .chain(&plan.risk)
+                .any(|action| action.id == id)
+        );
+    }
     let fingerprint = plan.aggregate_fingerprint.clone();
-    apply_plan(plan, &fingerprint, true).unwrap();
+    let receipt = apply_plan(plan, &fingerprint, true).unwrap();
+    assert_eq!(receipt.project_readiness, "ready");
+    assert!(receipt.stamp_written_last);
 
     let agents = fs::read_to_string(project.join("AGENTS.md")).unwrap();
-    assert!(agents.contains("CUSTOM-PROJECT-RULE"));
+    assert_eq!(public(&agents), public(&canonical_agents));
+    let start = agents.find(project_begin).unwrap();
+    let stop = agents.find(project_end).unwrap() + project_end.len();
+    assert_eq!(&agents[start..stop], custom_project_zone);
     assert!(!agents.contains("{{PROJECT_NAME}}"));
+    assert!(!project.join(retired).exists());
+    assert_eq!(fs::read(project.join(local_skill)).unwrap(), local_content);
+    for role in roles {
+        assert_eq!(
+            fs::read(project.join(format!(".codex/agents/{role}.toml"))).unwrap(),
+            fs::read(factory.join(format!("templates/agents/{role}.toml"))).unwrap()
+        );
+    }
     let doc = fs::read_to_string(project.join("doc/README.md")).unwrap();
     assert!(doc.contains("| project-only/ | 用户项目内容 |"));
     let hooks = fs::read_to_string(project.join(".codex/hooks.json")).unwrap();
     assert!(hooks.contains("custom-tool --check"));
     assert!(!hooks.contains("hook_dispatcher.py"));
     assert!(hooks.contains("bridgeforge-codex.project-hook.v1:session-start"));
+    bridgeforge_core::baseline::verify(&project, None, true).unwrap();
+    assert_eq!(
+        fs::read(project.join(".codex/.bridgeforge_codex_version")).unwrap(),
+        fs::read(factory.join("VERSION")).unwrap()
+    );
+    let again = build_plan(&project, &factory, SyncMode::Update).unwrap();
+    assert_eq!(again.status, "current");
+    assert!(again.safe.is_empty() && again.risk.is_empty() && again.gaps.is_empty());
+    assert_eq!(fs::read(project.join(local_skill)).unwrap(), local_content);
 }
 
 #[test]

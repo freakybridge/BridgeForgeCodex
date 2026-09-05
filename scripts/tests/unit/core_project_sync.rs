@@ -115,6 +115,255 @@ fn fixed_baseline_rejects_missing_invalid_future_floor_and_downgrade() {
     fs::remove_dir_all(root).unwrap();
 }
 
+fn retired_role_payloads() -> Vec<String> {
+    let rust = include_str!("../fixtures/retired-mechanical-sync-worker.txt").replace("\r\n", "\n");
+    vec![
+        rust.clone(),
+        rust.replace(
+            ".codex/bin/bridgeforge.exe git-sync",
+            ".venv/Scripts/python.exe .codex/scripts/codex_git_sync.py",
+        ),
+        rust.replace(
+            ".codex/bin/bridgeforge.exe git-sync",
+            "python .codex/scripts/codex_git_sync.py",
+        ),
+    ]
+}
+
+fn write_role_input(project: &Path, target: &str, bytes: &[u8]) {
+    let path = project.join(target);
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(path, bytes).unwrap();
+}
+
+#[test]
+fn retired_role_scan_streams_text_and_ignores_binary_assets() {
+    let (root, project, factory) = upgrade_fixture("1.14.10", "1.14.11");
+    let mut text = vec![b'x'; 2 * 1024 * 1024];
+    // Place the role name across a 64 KiB read boundary.
+    text.splice(65530..65530, RETIRED_SYNC_ROLE.bytes());
+    write_role_input(&project, ".codex/skills/local/references/large.md", &text);
+    write_role_input(&project, ".codex/skills/local/assets/image.bin", &text);
+    let inputs = sync_role_inputs(&project).unwrap();
+    assert_eq!(
+        inputs[".codex/skills/local/references/large.md"],
+        (sha_raw(&text), true)
+    );
+    assert!(!inputs.contains_key(".codex/skills/local/assets/image.bin"));
+    assert!(serde_json::to_vec(&inputs).unwrap().len() < 1024);
+    write_role_input(
+        &project,
+        ".codex/skills/local/references/large.md",
+        b"no role dependency",
+    );
+    let plan = build_plan(&project, &factory, SyncMode::Update).unwrap();
+    assert!(plan.gaps.is_empty());
+    apply_plan(plan.clone(), &plan.aggregate_fingerprint, true).unwrap();
+    assert_eq!(
+        fs::read(project.join(".codex/skills/local/assets/image.bin")).unwrap(),
+        text
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn retired_role_is_absent_on_init_and_removed_on_adopt() {
+    let (root, project, factory) = upgrade_fixture("1.14.10", "1.14.11");
+    let fresh = root.join("fresh");
+    fs::create_dir_all(&fresh).unwrap();
+    let init = build_plan(&fresh, &factory, SyncMode::Init).unwrap();
+    apply_plan(init.clone(), &init.aggregate_fingerprint, false).unwrap();
+    assert!(!fresh.join(RETIRED_SYNC_TARGET).exists());
+    fs::remove_file(project.join(".codex/.bridgeforge_codex_version")).unwrap();
+    write_role_input(
+        &project,
+        RETIRED_SYNC_TARGET,
+        retired_role_payloads()[0].as_bytes(),
+    );
+    let adopt = build_plan(&project, &factory, SyncMode::Adopt).unwrap();
+    assert!(adopt.gaps.is_empty(), "{:?}", adopt.gaps);
+    apply_plan(adopt.clone(), &adopt.aggregate_fingerprint, true).unwrap();
+    assert!(!project.join(RETIRED_SYNC_TARGET).exists());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn retired_role_known_releases_are_transactional_and_idempotent() {
+    for previous in ["1.5.8", "1.14.10"] {
+        for (index, payload) in retired_role_payloads().iter().enumerate() {
+            assert_eq!(sha_git(payload.as_bytes()), RETIRED_SYNC_HASHES[index]);
+            for content in [payload.clone(), payload.replace('\n', "\r\n")] {
+                let (root, project, factory) = upgrade_fixture(previous, "1.14.11");
+                write_role_input(&project, RETIRED_SYNC_TARGET, content.as_bytes());
+                let before = tree_sha(&project).unwrap();
+                let plan = build_plan(&project, &factory, SyncMode::Update).unwrap();
+                assert_eq!(
+                    tree_sha(&project).unwrap(),
+                    before,
+                    "planning must be read-only"
+                );
+                assert!(plan.gaps.is_empty(), "{:?}", plan.gaps);
+                assert!(
+                    plan.safe
+                        .iter()
+                        .any(|a| a.target == RETIRED_SYNC_TARGET && a.operation == "delete")
+                );
+                let receipt = apply_plan(plan.clone(), &plan.aggregate_fingerprint, true).unwrap();
+                assert!(receipt.stamp_written_last);
+                assert!(!project.join(RETIRED_SYNC_TARGET).exists());
+                let next = build_plan(&project, &factory, SyncMode::Update).unwrap();
+                assert_eq!(next.status, "current");
+                assert!(next.gaps.is_empty());
+                fs::remove_dir_all(root).unwrap();
+            }
+        }
+    }
+}
+
+#[test]
+fn retired_role_custom_or_unknown_content_is_preserved_without_any_apply() {
+    for previous in ["1.5.8", "1.14.10"] {
+        for content in [b"custom role\n".as_slice(), b"", b"\xff\x00"] {
+            let (root, project, factory) = upgrade_fixture(previous, "1.14.11");
+            write_role_input(&project, RETIRED_SYNC_TARGET, content);
+            // Even an old manifest claiming ownership is not retirement evidence.
+            fs::write(
+                project.join(".codex/managed-skeleton.json"),
+                serde_json::to_vec(&json!({
+                    "assets":[{"target":RETIRED_SYNC_TARGET,"current_sha256":sha_git(content)}]
+                }))
+                .unwrap(),
+            )
+            .unwrap();
+            let before = tree_sha(&project).unwrap();
+            let plan = build_plan(&project, &factory, SyncMode::Update).unwrap();
+            assert!(plan.gaps.iter().any(|g| g.contains("custom or unknown")));
+            assert!(!plan.deletes.contains(&project.join(RETIRED_SYNC_TARGET)));
+            assert!(apply_plan(plan.clone(), &plan.aggregate_fingerprint, true).is_err());
+            assert_eq!(tree_sha(&project).unwrap(), before);
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+}
+
+#[test]
+fn retired_role_references_block_update_even_when_role_is_already_missing() {
+    for target in [
+        ".codex/skills/local/SKILL.md",
+        ".codex/skills/local/references/routing.md",
+        "AGENTS.md",
+        ".codex/config.toml",
+        ".codex/agents/local.toml",
+    ] {
+        for role_exists in [false, true] {
+            let (root, project, factory) = upgrade_fixture("1.14.10", "1.14.11");
+            if role_exists {
+                write_role_input(
+                    &project,
+                    RETIRED_SYNC_TARGET,
+                    retired_role_payloads()[0].as_bytes(),
+                );
+            }
+            write_role_input(&project, target, b"delegate to mechanical-sync-worker\n");
+            let before = tree_sha(&project).unwrap();
+            let plan = build_plan(&project, &factory, SyncMode::Update).unwrap();
+            assert!(plan.gaps.iter().any(|g| g.contains(target)));
+            assert!(!plan.deletes.contains(&project.join(RETIRED_SYNC_TARGET)));
+            assert!(apply_plan(plan.clone(), &plan.aggregate_fingerprint, true).is_err());
+            assert_eq!(tree_sha(&project).unwrap(), before);
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+}
+
+#[test]
+fn retired_role_and_reference_changes_invalidate_the_approved_plan() {
+    for target in [
+        RETIRED_SYNC_TARGET,
+        ".codex/skills/new/SKILL.md",
+        ".codex/config.toml",
+    ] {
+        for role_exists in [false, true] {
+            let (root, project, factory) = upgrade_fixture("1.14.10", "1.14.11");
+            if role_exists {
+                write_role_input(
+                    &project,
+                    RETIRED_SYNC_TARGET,
+                    retired_role_payloads()[0].as_bytes(),
+                );
+            }
+            let plan = build_plan(&project, &factory, SyncMode::Update).unwrap();
+            write_role_input(
+                &project,
+                target,
+                b"mechanical-sync-worker changed after planning\n",
+            );
+            let error = apply_plan(plan.clone(), &plan.aggregate_fingerprint, true).unwrap_err();
+            assert!(error.contains("inputs drifted"), "{error}");
+            assert!(!project.join("managed.txt").exists());
+            assert_eq!(
+                fs::read_to_string(project.join(".codex/.bridgeforge_codex_version")).unwrap(),
+                "1.14.10\n"
+            );
+            let replanned = build_plan(&project, &factory, SyncMode::Update).unwrap();
+            assert_ne!(plan.aggregate_fingerprint, replanned.aggregate_fingerprint);
+            assert!(!replanned.gaps.is_empty());
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+}
+
+#[test]
+fn retired_role_is_restored_on_failure_and_late_references_are_preserved() {
+    for late_reference in [false, true] {
+        let (root, project, factory) = upgrade_fixture("1.14.10", "1.14.11");
+        let payload = retired_role_payloads()[0].replace('\n', "\r\n");
+        write_role_input(&project, RETIRED_SYNC_TARGET, payload.as_bytes());
+        let plan = build_plan(&project, &factory, SyncMode::Update).unwrap();
+        let observer = |root: &Path, _: &Path| {
+            assert!(!root.join(RETIRED_SYNC_TARGET).exists());
+            if late_reference {
+                write_role_input(
+                    root,
+                    ".codex/skills/late/SKILL.md",
+                    b"mechanical-sync-worker",
+                );
+                Ok(())
+            } else {
+                Err("injected after role retirement".into())
+            }
+        };
+        let error = apply_plan_internal(
+            plan.clone(),
+            &plan.aggregate_fingerprint,
+            true,
+            Some(&observer),
+        )
+        .unwrap_err();
+        assert!(error.contains("rolled back"), "{error}");
+        assert_eq!(
+            fs::read(project.join(RETIRED_SYNC_TARGET)).unwrap(),
+            payload.as_bytes()
+        );
+        assert_eq!(
+            fs::read(project.join(".codex/managed-skeleton.json")).unwrap(),
+            b"invalid legacy contract"
+        );
+        assert_eq!(
+            fs::read(project.join(".codex/.bridgeforge_codex_version")).unwrap(),
+            b"1.14.10\n"
+        );
+        assert!(!project.join("managed.txt").exists());
+        if late_reference {
+            assert_eq!(
+                fs::read(project.join(".codex/skills/late/SKILL.md")).unwrap(),
+                b"mechanical-sync-worker"
+            );
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+}
+
 fn confirmed_sources(project: &Path) -> Value {
     let sources = crate::asset_migration::scan_sources(project).unwrap();
     json!({"schema_version":1,"sources":sources.iter().enumerate().map(|(index, source)| {

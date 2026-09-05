@@ -1,6 +1,6 @@
 ---
 name: sync-docs
-description: 根据当前 Git 代码变更同步对应设计文档，并核对项目源码到文档的映射；用户调用 /sync-docs、$sync-docs，或要求让设计文档与本轮实现保持一致时使用。
+description: 根据 Git 变更同步既有设计文档，或只读预览受影响文档；用户调用 /sync-docs、$sync-docs 或要求文档与实现一致时使用。
 user_invocable: true
 argument: 可选的改动重点或额外上下文
 ---
@@ -9,7 +9,7 @@ argument: 可选的改动重点或额外上下文
 
 ## 定位与边界
 
-依据真实代码 diff 更新既有设计文档。源码到文档的可证明关系由 BridgeForge 自动生成到 `.runtime/bridgeforge-codex/sync-docs.map.md`；skill 只定义通用同步流程与未命中 fallback。
+依据真实 diff 定位或更新既有设计文档。Map 只作线索，必须核对原文件；预览不授权写入，已授权同步才更新。
 
 ## 输入
 
@@ -19,17 +19,17 @@ argument: 可选的改动重点或额外上下文
 
 ## 核心流程
 
-1. 先运行当前平台的受管入口：Windows 使用 `.codex\bin\bridgeforge-hook.exe project-map ensure-current`，其他平台使用 `.codex/bin/bridgeforge-hook project-map ensure-current`。成功路径无输出；入口缺失或失败时跳过 Map，继续文档搜索 fallback，禁止要求用户维护 Map。
+1. 只读、审计或预览时跳过 Map 刷新，禁止写盘或清除脏标记；已授权同步使用 `.codex/bin/bridgeforge-hook.exe project-map ensure-current`（非 Windows 去掉 `.exe`），成功无输出；入口不可用则直接搜索文档。
 2. 读取 Git 状态与 diff，确定本轮实际修改文件和行为变化。
 3. 把 diff-to-document location 显式分派给 `light-explorer`，由它只读映射文件和候选文档：
    - 命中映射时，按表定位设计文档。
-   - 文件不存在或路径未命中时，依据路径和变更内容寻找最相关的既有文档。
-4. 主 agent 读取候选收据和目标文档原文，只更新与代码实质变化对应的部分：新增或删除的对象、字段、接口、行为和可由代码证实的设计决策。
-5. 再核对一次文档陈述与实际 diff，保留无关内容不动。
+   - Map 缺失、过时或未命中时，按路径和变更查找既有文档。
+4. 主 agent 核对原文与 diff；预览交付拟修改位置和原因即止。已授权同步只修改实质变化对应的对象、字段、接口、行为和设计决策。
+5. 执行后复核文档与 diff 一致，保留无关内容。
 
 ## 输出与收据
 
-- 列出每个已更新文档及对应代码变化。
+- 区分拟修改与已更新文档，列出对应代码变化；禁止把预览说成已同步。
 - 列出未找到目标文档的源码路径。
 - Map 未命中时说明本次使用了文档搜索 fallback，不向用户提出 Map 维护动作。
 

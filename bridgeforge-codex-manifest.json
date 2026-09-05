@@ -17,7 +17,7 @@
             {
               "source": "skills/bridgeforge-codex/SKILL.md",
               "target": "SKILL.md",
-              "sha256": "sha256:031758e98021551746022fa1211a46e99b3b308784470c8cd389c057680ed4ed"
+              "sha256": "sha256:a08e895d1761400eea056b0f01d5bc443f65c07861d191d2eebd9bbd41ab9981"
             },
             {
               "source": "skills/bridgeforge-codex/agents/openai.yaml",
@@ -47,7 +47,7 @@
             {
               "source": "skills/bridgeforge-codex/references/runtime-preflight.md",
               "target": "references/runtime-preflight.md",
-              "sha256": "sha256:a1e896c192cebec132166241f577ca3aac0c5317f36cab958281675acc1ecd57"
+              "sha256": "sha256:886304b417d7297a9191644c34efbf1e8ec82c73c5bb548c457246c36e8d662c"
             },
             {
               "source": "skills/bridgeforge-codex/references/technical-receipts.md",
@@ -67,7 +67,7 @@
             {
               "source": "skills/bridgeforge-codex/references/user-skill-maintenance.md",
               "target": "references/user-skill-maintenance.md",
-              "sha256": "sha256:e9a0798fe53a9ee5af8c1be6b150296710bbeaa34eaf4d16685f874ec1806693"
+              "sha256": "sha256:df1042699cd71d93920c68d915db18bf90dbf5e793aa83c4c5ab4c0ce61d265e"
             }
           ]
         },
@@ -87,7 +87,7 @@
             {
               "source": "skills/collab/SKILL.md",
               "target": "SKILL.md",
-              "sha256": "sha256:fc10f982617700eb72f0119207686c361288c582f0e02621661f8ae9c50b4642"
+              "sha256": "sha256:c0bc316c55ced36df3e37da79ff98966a815e081c9d87f1f92f89f2ca648932c"
             }
           ]
         },
@@ -97,7 +97,7 @@
             {
               "source": "skills/confirm/SKILL.md",
               "target": "SKILL.md",
-              "sha256": "sha256:4549069f34c379bb8b429b9b0edb72824d456e7f7036f4f76d0fcb797256ec8c"
+              "sha256": "sha256:0f11a72279c6b4e2ca3db42d3f3de106dbc1dd74f1ae175ac5ac9d94550a126d"
             }
           ]
         },
@@ -127,7 +127,7 @@
             {
               "source": "skills/debate/SKILL.md",
               "target": "SKILL.md",
-              "sha256": "sha256:7a4e158fd685b5803e30eb9751d7fbfd12c3f1958cef2f48c4b0ac3df9b9602b"
+              "sha256": "sha256:7873d0a0006dfd0257462d76226461734af2aa3d42b0fe2271c4b3191bb6c131"
             }
           ]
         },
@@ -137,17 +137,17 @@
             {
               "source": "skills/develop/references/agent-execution.md",
               "target": "references/agent-execution.md",
-              "sha256": "sha256:de2446b8f6d4b5e75d46e665bb85aa7ce46e233d07995415a9d92926c58a0cbc"
+              "sha256": "sha256:9beb1a14ea888e836ab86852b91d770c1755f94635484ca84f10c06710e6ea0f"
             },
             {
               "source": "skills/develop/references/ml-delivery.md",
               "target": "references/ml-delivery.md",
-              "sha256": "sha256:ae5e6df8d48e2dfd8989bbf9653f780d53828b559e736d7ecf5db83a1f697cee"
+              "sha256": "sha256:1d8844f0021fbdbd0e5da8253dab41ab178bffc24bf23e8171fdce2b9801095a"
             },
             {
               "source": "skills/develop/SKILL.md",
               "target": "SKILL.md",
-              "sha256": "sha256:cfd485cbcb49bfa2c955773e700583e713299e5eeb2808ef8d54b511eb714392"
+              "sha256": "sha256:ad6f162067450550f28ba0c25de3fefb2b69857bd98f8ce8dad87fc01dca0246"
             }
           ]
         },
@@ -157,7 +157,7 @@
             {
               "source": "skills/escalate/SKILL.md",
               "target": "SKILL.md",
-              "sha256": "sha256:8653702bf1aa78651bccbe50251573c93ab412000f82b4f6cddadb3233d6ec73"
+              "sha256": "sha256:fcfd227eed9cd8e32068bdcd5df281b89dbd0298e92ad4800bd301d8beb19a84"
             }
           ]
         },
@@ -182,7 +182,7 @@
             {
               "source": "skills/find-doc/SKILL.md",
               "target": "SKILL.md",
-              "sha256": "sha256:efe2bd516e01ec9cd079df499e9da13bea5b4726a67ef32d37752dd9ffd6ed6a"
+              "sha256": "sha256:98f07bbc259f626ad14e58cac48ef63ddbbbe9be4877ecf66e5a8f6bf50edcfc"
             }
           ]
         },
@@ -212,7 +212,7 @@
             {
               "source": "skills/plan/SKILL.md",
               "target": "SKILL.md",
-              "sha256": "sha256:9702da0a7bac3d53d8d54d39ef842524c265b20a4eb504a2aaf40481e8fcaebe"
+              "sha256": "sha256:65d595a899749b588a03cbdf49e625839a741d803b030679c94b5b6eb9e7bb95"
             }
           ]
         },
@@ -277,7 +277,7 @@
             {
               "source": "skills/sync-docs/SKILL.md",
               "target": "SKILL.md",
-              "sha256": "sha256:92a127bf5b2c30bf037145e1157adf655ea42d4fd6bdfd6a2eded27a461adbc7"
+              "sha256": "sha256:09c2672f495a3e8b111b343b67c690680db2c36f7670b3f95479da2cf00b9aca"
             }
           ]
         },
