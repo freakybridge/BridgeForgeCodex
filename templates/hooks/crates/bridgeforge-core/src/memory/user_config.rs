@@ -1,6 +1,6 @@
 use super::ownership::{
     ExpectedGroup, ExpectedHooksState, MANAGED_ID_KEY, canonical_json_sha256, expected_groups,
-    load_document, managed_document_healthy, merge_hooks_file,
+    load_document, managed_document_healthy, merge_hooks_file, merge_managed_document,
 };
 use super::{
     Authorization, MemoryResult, MemorySyncError, atomic_write, record_native_memories_consent,
@@ -178,12 +178,85 @@ fn managed_looking(handler: &Map<String, Value>) -> bool {
         .is_some_and(|value| value.starts_with(&format!("{HOOK_ID}:")))
 }
 
+fn migrate_python_handlers(
+    payload: &[u8],
+    codex_home: &Path,
+    binary: &Path,
+) -> MemoryResult<Option<Vec<u8>>> {
+    let Some(parent) = codex_home.parent() else {
+        return Ok(None);
+    };
+    let scripts = parent.join(".bridgeforge-codex/scripts");
+    let mut script = command_path(&scripts.join("codex_memory_sync.py"));
+    let mut wrapper = command_path(&scripts.join("codex_memory_sync_hook.ps1"));
+    if cfg!(windows) {
+        script = script.replace('/', "\\");
+        wrapper = wrapper.replace('/', "\\");
+    }
+    let current = expected_document(binary, codex_home);
+    let mut document = load_document(payload, "native memory hooks")?;
+    let mut changed = false;
+    // Exact official Python handler from fc94635; never infer ownership from a
+    // command substring or accept altered flags, timeout, matcher, or identity.
+    for event in HOOK_EVENTS {
+        let desired = &current["hooks"][event][0]["hooks"][0];
+        let mut legacy = desired.clone();
+        legacy["command"] = Value::String(format!(
+            "root=\"$(git rev-parse --show-toplevel)\" && \"$root/.venv/Scripts/python.exe\" {} hook-run --event {event} --project-root \"$root\"",
+            shell_quote(&script),
+        ));
+        legacy["commandWindows"] = Value::String(format!(
+            "powershell.exe -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File {} {event}",
+            windows_quote(&wrapper),
+        ));
+        if let Some(groups) = document
+            .get_mut("hooks")
+            .and_then(|hooks| hooks.get_mut(event))
+            .and_then(Value::as_array_mut)
+        {
+            for group in groups {
+                if let Some(handlers) = group["hooks"].as_array_mut() {
+                    for handler in handlers {
+                        if *handler == legacy {
+                            *handler = desired.clone();
+                            changed = true;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if changed {
+        Ok(Some(super::ownership::render_document(&document)?))
+    } else {
+        Ok(None)
+    }
+}
+
 pub fn merge_user_hooks(codex_home: &Path, binary: &Path) -> MemoryResult<bool> {
     fs::create_dir_all(codex_home)?;
     let _lock = UserHooksLock::acquire(codex_home)?;
     let path = codex_home.join("hooks.json");
     let before = fs::read(&path).ok();
     let expected = expected_user_groups(binary, codex_home, before.as_deref())?;
+    if let Some(payload) = before.as_deref()
+        && let Some(migrated) = migrate_python_handlers(payload, codex_home, binary)?
+    {
+        let desired = merge_managed_document(
+            Some(&migrated),
+            &expected,
+            &[&format!("{HOOK_ID}:")],
+            "native memory hooks",
+            Some(&managed_looking),
+        )?;
+        if fs::read(&path)? != payload {
+            return Err(MemorySyncError::new(
+                "user hooks changed during the locked CAS",
+            ));
+        }
+        atomic_write(&path, &desired)?;
+        return Ok(true);
+    }
     if before.as_deref().is_some_and(|payload| {
         managed_document_healthy(
             payload,

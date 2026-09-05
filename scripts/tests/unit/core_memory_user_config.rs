@@ -3,6 +3,140 @@ use super::*;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+#[cfg(windows)]
+fn python_hook_fixture(home: &Path) -> Value {
+    let parent = home.parent().unwrap().to_string_lossy();
+    let mut document = json!({"description":"retained", "hooks":{}});
+    for event in ["SessionStart", "Stop", "SessionEnd"] {
+        let mut handler: Value = serde_json::from_str(r#"{
+          "type":"command",
+          "command":"root=\"$(git rev-parse --show-toplevel)\" && \"$root/.venv/Scripts/python.exe\" 'C:\\Users\\test\\.bridgeforge-codex\\scripts\\codex_memory_sync.py' hook-run --event SessionStart --project-root \"$root\"",
+          "commandWindows":"powershell.exe -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File \"C:\\Users\\test\\.bridgeforge-codex\\scripts\\codex_memory_sync_hook.ps1\" SessionStart",
+          "bridgeforgeCodexId":"bridgeforge-codex.native-memory-sync.v1:SessionStart",
+          "timeout":120
+        }"#).unwrap();
+        for key in ["command", "commandWindows", "bridgeforgeCodexId"] {
+            handler[key] = Value::String(
+                handler[key]
+                    .as_str()
+                    .unwrap()
+                    .replace(r"C:\Users\test", &parent)
+                    .replace("SessionStart", event),
+            );
+        }
+        if event == "Stop" {
+            handler["async"] = json!(true);
+        }
+        if event == "SessionEnd" {
+            handler["timeout"] = json!(3);
+        }
+        document["hooks"][event] = json!([{"hooks":[handler]}]);
+    }
+    document["hooks"]["UserPromptSubmit"] = json!([{"hooks":[{
+        "type":"command", "command":"external-keep", "timeout":7
+    }]}]);
+    document
+}
+
+#[cfg(windows)]
+#[test]
+fn exact_official_python_handlers_migrate_to_rust_and_preserve_external_hooks() {
+    let home = std::env::temp_dir()
+        .join(format!(
+            "bf-python-hook-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ))
+        .join(".codex");
+    fs::create_dir_all(&home).unwrap();
+    let before = python_hook_fixture(&home);
+    let binary = home.join("bin/bridgeforge.exe");
+    fs::write(home.join("hooks.json"), before.to_string()).unwrap();
+    assert!(!user_hooks_healthy(&home, &binary));
+    assert!(merge_user_hooks(&home, &binary).unwrap());
+    assert!(user_hooks_healthy(&home, &binary));
+    let after = load_document(&fs::read(home.join("hooks.json")).unwrap(), "test").unwrap();
+    assert_eq!(after["description"], before["description"]);
+    assert_eq!(
+        after["hooks"]["UserPromptSubmit"],
+        before["hooks"]["UserPromptSubmit"]
+    );
+    assert!(!after.to_string().contains("python.exe"));
+    assert!(!merge_user_hooks(&home, &binary).unwrap());
+    fs::remove_dir_all(home.parent().unwrap()).unwrap();
+}
+
+#[cfg(windows)]
+#[test]
+fn partial_official_python_hooks_migrate_and_fill_missing_events() {
+    let home = std::env::temp_dir()
+        .join(format!("bf-python-partial-{}", SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()))
+        .join(".codex");
+    fs::create_dir_all(&home).unwrap();
+    let mut before = python_hook_fixture(&home);
+    before["hooks"].as_object_mut().unwrap().remove("Stop");
+    before["hooks"].as_object_mut().unwrap().remove("SessionEnd");
+    let binary = home.join("bin/bridgeforge.exe");
+    fs::write(home.join("hooks.json"), before.to_string()).unwrap();
+    assert!(merge_user_hooks(&home, &binary).unwrap());
+    assert!(user_hooks_healthy(&home, &binary));
+    let after = load_document(&fs::read(home.join("hooks.json")).unwrap(), "test").unwrap();
+    assert_eq!(after["description"], before["description"]);
+    assert_eq!(after["hooks"]["UserPromptSubmit"], before["hooks"]["UserPromptSubmit"]);
+    for event in HOOK_EVENTS {
+        assert_eq!(after["hooks"][event].as_array().unwrap().len(), 1);
+    }
+    assert!(!merge_user_hooks(&home, &binary).unwrap());
+    fs::remove_dir_all(home.parent().unwrap()).unwrap();
+}
+
+#[cfg(windows)]
+#[test]
+fn modified_python_handler_blocks_entire_migration_without_writes() {
+    let home = std::env::temp_dir()
+        .join(format!(
+            "bf-python-drift-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ))
+        .join(".codex");
+    fs::create_dir_all(&home).unwrap();
+    for change in [
+        "command",
+        "commandWindows",
+        "timeout",
+        "matcher",
+        "identity",
+    ] {
+        let mut document = python_hook_fixture(&home);
+        let group = &mut document["hooks"]["Stop"][0];
+        match change {
+            "matcher" => group["matcher"] = json!("custom"),
+            "timeout" => group["hooks"][0]["timeout"] = json!(121),
+            "identity" => {
+                group["hooks"][0]["bridgeforgeCodexId"] =
+                    json!("bridgeforge-codex.native-memory-sync.v1:Other")
+            }
+            key => group["hooks"][0][key] = json!("custom command"),
+        }
+        let payload = document.to_string();
+        fs::write(home.join("hooks.json"), &payload).unwrap();
+        assert!(
+            merge_user_hooks(&home, &home.join("bin/bridgeforge.exe")).is_err(),
+            "{change}"
+        );
+        assert_eq!(
+            fs::read_to_string(home.join("hooks.json")).unwrap(),
+            payload
+        );
+    }
+    fs::remove_dir_all(home.parent().unwrap()).unwrap();
+}
+
 #[test]
 fn expected_handlers_use_rust_binary_only() {
     let value = expected_document(

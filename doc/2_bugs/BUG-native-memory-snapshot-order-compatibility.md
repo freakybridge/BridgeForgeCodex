@@ -32,3 +32,15 @@ validation_status: in_progress
 | runtime | 安装、实际生命周期触发及远端同步待验证 |
 
 独立审计 `audit_memory_snapshot_order` 指出的恢复暂存、no-op 和旧冲突包等价判断遗漏均已修复；最终复核无剩余发布阻断。新增回归证明无/有基线时相同旧序远端均 no-op 且远端 HEAD 不变；旧 captured-local 可决议，真实本地变化仍阻断。原摘要只验证 manifest 完整性，已验证文件集合的等价判断共用同一函数。
+
+## 真实安装发现的第二层迁移遗漏
+
+1.14.4 / `9e5ab28` 已正式推送并通过 updater 安装；真实旧基线迁移完成，证明排序兼容修复有效。随后 Hook 安装返回 `managed hook content drifted`：现场三个旧 Python/PowerShell handler 与历史官方 `fc94635:scripts/codex_memory_sync.py` 的 `_hook_handler` / `_windows_hook_command` 完全一致，但 Rust 未迁移这套历史 handler。
+
+补充修复只在内存中精确识别完整旧 handler，转换后仍通过 ownership 校验，并在原用户 Hook 锁内以 CAS 核对原文件后原子写入。修改命令、Windows 命令、timeout、matcher 或 identity 的情况均零写阻断；第三方 handler 与顶层 metadata 保留。专项 user_config 12/12 通过，完整 workspace Core 109/109、CLI 9/9、Hook 15/15 通过；命令为 `cargo test --locked --config scripts/tests/factory-cargo.toml --manifest-path .codex/hooks/Cargo.toml --workspace`。
+
+独立审计指出的缺失事件可变索引问题已改为不插入键的 get_mut，回归覆盖仅 SessionStart 存在时补齐 Stop/SessionEnd、保留第三方与 metadata、重复 repair 幂等。最终复核无剩余发布阻断。自动兼容限历史默认产品安装位置，自定义旧产品路径保持 fail-closed。
+
+Codex 官方 hooks/list 证明旧三个 Hook 已 trusted；转换后必须重新核验新定义的信任与实际触发。
+
+第二层修复发布前执行 `cargo test --locked --manifest-path scripts/tests/Cargo.toml -- --test-threads=1`：81 passed、0 failed、2 ignored（332.46 秒），包含真实 init、工厂受管 commit/push、Memory push/restore 与冲突保护。manifest --check、factory-version、project-structure、skill-metadata、baseline、mirror diff 与 diff --check 均通过。
