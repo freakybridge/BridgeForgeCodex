@@ -6,6 +6,7 @@ pub mod batch;
 pub mod factory_version;
 mod file_lock;
 pub mod git_sync;
+pub mod high_cost;
 pub mod manifest;
 pub mod memory;
 mod process;

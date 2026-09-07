@@ -290,7 +290,7 @@ fn post_edit_and_stop_connect_dirty_tracking_to_silent_rebuild() {
         .root
         .join(".runtime/bridgeforge-codex/project-map-dirty");
     assert!(marker.is_file());
-    assert_eq!(lifecycle("stop"), 0);
+    assert_eq!(lifecycle("stop", None), 0);
     assert!(!marker.exists());
     let find = fs::read_to_string(
         fixture
@@ -322,8 +322,8 @@ fn project_map_rejects_non_file_targets_before_writing_any_map() {
 #[test]
 fn lifecycle_snapshots_stop_dedup_and_manual_route_succeed() {
     let fixture = Fixture::new();
-    assert_eq!(lifecycle("session-start"), 0);
-    assert_eq!(lifecycle("post-compact"), 0);
+    assert_eq!(lifecycle("session-start", None), 0);
+    assert_eq!(lifecycle("post-compact", None), 0);
     let directory = fixture.root.join(".runtime/session_state");
     let paths = fs::read_dir(&directory)
         .unwrap()
@@ -332,7 +332,7 @@ fn lifecycle_snapshots_stop_dedup_and_manual_route_succeed() {
     assert_eq!(paths.len(), 1);
     let before = fs::read(&paths[0]).unwrap();
     assert!(String::from_utf8_lossy(&before).contains("post-compact"));
-    assert_eq!(lifecycle("stop"), 0);
+    assert_eq!(lifecycle("stop", None), 0);
     assert_eq!(fs::read(&paths[0]).unwrap(), before);
     assert_eq!(run(vec!["snapshot".into(), "manual".into()]), 0);
     assert_eq!(fs::read_dir(&directory).unwrap().count(), 2);
@@ -401,8 +401,8 @@ fn hook_topic4_map_failures_propagate_without_skipping_other_work() {
         "pub fn run() {}\n"
     );
     fs::create_dir(map_root.join("find-doc.map.md")).unwrap();
-    assert_eq!(lifecycle("session-start"), 1);
-    assert_eq!(lifecycle("stop"), 1);
+    assert_eq!(lifecycle("session-start", None), 1);
+    assert_eq!(lifecycle("stop", None), 1);
     assert!(fixture.root.join(".runtime/session_state").is_dir());
     let failed = project_map::ensure_current();
     let mut output = HookOutput::default();
@@ -616,15 +616,15 @@ fn lifecycle_write_failures_are_observable_without_success_output() {
         assert!(result.stdout.is_empty());
         assert!(result.stderr.contains("state operation failed"));
     }
-    assert_eq!(lifecycle("post-compact"), 1);
-    assert_eq!(lifecycle("stop"), 1);
+    assert_eq!(lifecycle("post-compact", None), 1);
+    assert_eq!(lifecycle("stop", None), 1);
     fs::write(
         fixture.root.join(".codex/settings.json"),
         b"{\"effortLevel\":\"high\"}",
     )
     .unwrap();
     fs::create_dir(fixture.root.join(".codex/settings.json.bak")).unwrap();
-    assert_eq!(lifecycle("session-start"), 1);
+    assert_eq!(lifecycle("session-start", None), 1);
     assert_eq!(
         fs::read(fixture.root.join(".codex/settings.json")).unwrap(),
         b"{\"effortLevel\":\"high\"}"

@@ -8,6 +8,77 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 const SHELLS: &[&str] = &["Bash", "PowerShell", "shell_command"];
 const EDITS: &[&str] = &["Edit", "Write", "MultiEdit", "NotebookEdit"];
 
+#[test]
+fn high_cost_stop_emits_ui_warning_without_continuation() {
+    use std::io::Write;
+    let fixture = Fixture::new();
+    let home = fixture.home.join(".codex");
+    let transcript = home.join("sessions/main.jsonl");
+    fs::create_dir_all(transcript.parent().unwrap()).unwrap();
+    fs::write(
+        &transcript,
+        format!(
+            "{}\n",
+            json!({"type":"session_meta","payload":{"id":"cost-fixture","source":"cli"}})
+        ),
+    )
+    .unwrap();
+    let binary = std::env::var_os("BRIDGEFORGE_TEST_HOOK")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            repository().join(if cfg!(windows) {
+                ".codex/bin/bridgeforge-hook.exe"
+            } else {
+                ".codex/bin/bridgeforge-hook"
+            })
+        });
+    for round in 1..=31 {
+        let turn = format!("turn-{round}");
+        let timestamp = format!("2026-09-07T12:00:{round:02}Z");
+        writeln!(fs::OpenOptions::new().append(true).open(&transcript).unwrap(),"{}",json!({"timestamp":timestamp,"type":"turn_context","payload":{"turn_id":turn,"model":"gpt-6-astra","effort":"high"}})).unwrap();
+        let mut request = ProcessRequest::new(&binary, &fixture.root);
+        request.args = vec!["stop".into()];
+        request.timeout = Duration::from_secs(10);
+        request.env.insert(
+            "BRIDGEFORGE_HOOK_ROOT".into(),
+            fixture.root.clone().into_os_string(),
+        );
+        request
+            .env
+            .insert("CODEX_HOME".into(), home.clone().into_os_string());
+        request.stdin=serde_json::to_vec(&json!({"hook_event_name":"Stop","session_id":"cost-fixture","turn_id":turn,"model":"gpt-6-astra","transcript_path":transcript,"stop_hook_active":false,"last_assistant_message":"完成"})).unwrap();
+        for duplicate in [false, true] {
+            let output = SystemProcessRunner.run(&request).unwrap();
+            assert_eq!(
+                output.code,
+                0,
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert!(!output.timed_out);
+            let value: Value = if output.stdout.is_empty() {
+                json!({})
+            } else {
+                serde_json::from_slice(&output.stdout).unwrap()
+            };
+            assert_eq!(
+                value.get("systemMessage").is_some(),
+                round % 10 == 0 && !duplicate,
+                "round={round}, duplicate={duplicate}: {value}"
+            );
+            assert!(value.get("decision").is_none());
+            assert!(value.get("continue").is_none());
+            if let Some(text) = value["systemMessage"].as_str() {
+                assert!(text.contains(&format!(" {round} 轮")));
+            }
+        }
+    }
+    assert_eq!(
+        fs::read(home.join("config.toml")).unwrap(),
+        b"protected = true\n"
+    );
+}
+
 fn repository() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()

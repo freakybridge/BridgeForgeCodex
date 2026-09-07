@@ -1,6 +1,6 @@
 {
   "schema_version": 4,
-  "release_version": "1.14.21",
+  "release_version": "1.16.0",
   "host": "codex",
   "stamp": ".codex/.bridgeforge_codex_version",
   "contract_target": ".codex/managed-skeleton.json",
@@ -427,14 +427,14 @@
       "source": "templates/hooks/Cargo.lock",
       "target": ".codex/hooks/Cargo.lock",
       "strategy": "whole",
-      "current_sha256": "sha256:8bfcbfacd211bd75f85880e231b414ea1edbba745ab5cb3366e3602190ece6f4"
+      "current_sha256": "sha256:0d5bc2fd29df391643772df76e9b91884ddef2c61410f750583da4cbe9f94747"
     },
     {
       "id": "codex.hooks.cargo-toml",
       "source": "templates/hooks/Cargo.toml",
       "target": ".codex/hooks/Cargo.toml",
       "strategy": "whole",
-      "current_sha256": "sha256:32bbb2cbbac675ba3377be7fa6adf7b083ff2c0f233b5dfdb02d67b65857c981"
+      "current_sha256": "sha256:a97fcf8c20367ea8bb0cd36b82b4a43597b2a41920cd6990de2595e7ffcde53d"
     },
     {
       "id": "codex.hooks.readme-md",
@@ -535,11 +535,25 @@
       "current_sha256": "sha256:d48984814b9b848b8ff8797c0822daa1c69bd68d304deb40947ed8fd3525e9a3"
     },
     {
+      "id": "codex.hooks.crates-bridgeforge-core-src-high-cost-rs",
+      "source": "templates/hooks/crates/bridgeforge-core/src/high_cost.rs",
+      "target": ".codex/hooks/crates/bridgeforge-core/src/high_cost.rs",
+      "strategy": "whole",
+      "current_sha256": "sha256:6db863eb26162013240e783948d56acbb4377951e869db0403c1f9fdbc3bc852"
+    },
+    {
+      "id": "codex.hooks.crates-bridgeforge-core-src-high-cost-windows-rs",
+      "source": "templates/hooks/crates/bridgeforge-core/src/high_cost_windows.rs",
+      "target": ".codex/hooks/crates/bridgeforge-core/src/high_cost_windows.rs",
+      "strategy": "whole",
+      "current_sha256": "sha256:bb3566239108e98837ce23921f0e11414b3d41243df484c583d08ee03a11c6a8"
+    },
+    {
       "id": "codex.hooks.crates-bridgeforge-core-src-lib-rs",
       "source": "templates/hooks/crates/bridgeforge-core/src/lib.rs",
       "target": ".codex/hooks/crates/bridgeforge-core/src/lib.rs",
       "strategy": "whole",
-      "current_sha256": "sha256:680be3f9cb981f4c23faff14bc6e22bf50bb8b629219fcad810c4d985aa89251"
+      "current_sha256": "sha256:c20f5290cb6098668fbd8ae6411235c4cca6902d40ee174460f351d223279bc4"
     },
     {
       "id": "codex.hooks.crates-bridgeforge-core-src-manifest-rs",
@@ -672,7 +686,7 @@
       "source": "templates/hooks/src/lib.rs",
       "target": ".codex/hooks/src/lib.rs",
       "strategy": "whole",
-      "current_sha256": "sha256:22219c89a08964b2d8fe4054280545cbdccb1d4c00b334758aa98cd79c4c906f"
+      "current_sha256": "sha256:c20a6689b1cc201754ed422793a81e2d6d820ba664f1fba1eeacacb0bf2373c8"
     },
     {
       "id": "codex.hooks.src-main-rs",
@@ -753,8 +767,8 @@
           "status": "ok"
         }
       },
-      "source_tree_sha256": "sha256:d11719a3328ac2d90f3b1128f451cd542fa6042e00b298b17900d3296c90600c",
-      "lockfile_sha256": "sha256:8bfcbfacd211bd75f85880e231b414ea1edbba745ab5cb3366e3602190ece6f4",
+      "source_tree_sha256": "sha256:b6d264ff8bc28ed9c27293efbcfbd9d4c892213e00408180bbd89ccadade1804",
+      "lockfile_sha256": "sha256:0d5bc2fd29df391643772df76e9b91884ddef2c61410f750583da4cbe9f94747",
       "build_recipe_sha256": "sha256:d26d34aa838a1a1f5556ef92f492d2abc7b415c2163e2a4c9ea7e07121dad78a",
       "self_test_sha256": "sha256:74a8b4a4c20ff1f5cc6660697138c151d9ed2172e6d57e75cce671d773e98f5a"
     },
@@ -798,8 +812,8 @@
           "status": "ok"
         }
       },
-      "source_tree_sha256": "sha256:d11719a3328ac2d90f3b1128f451cd542fa6042e00b298b17900d3296c90600c",
-      "lockfile_sha256": "sha256:8bfcbfacd211bd75f85880e231b414ea1edbba745ab5cb3366e3602190ece6f4",
+      "source_tree_sha256": "sha256:b6d264ff8bc28ed9c27293efbcfbd9d4c892213e00408180bbd89ccadade1804",
+      "lockfile_sha256": "sha256:0d5bc2fd29df391643772df76e9b91884ddef2c61410f750583da4cbe9f94747",
       "build_recipe_sha256": "sha256:079aefde96a8925913b7b6cd3ee9d8c7086014ad5e4b6e3f74a911b2ce49e537",
       "self_test_sha256": "sha256:6b0426352bb099a61fae52600d4f684c0e11bca644fa767a9b79d224e939b0e0"
     }

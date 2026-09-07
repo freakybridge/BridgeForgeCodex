@@ -296,7 +296,7 @@ Hook 二进制 hash 为 `ab8320147785d82fef7f50e88cabca1a786c0afeb2a66522157b2e3
 
 ## 待办：持续高耗能设置提醒 Hook（2026-09-07）
 
-- [ ] `TODO-HIGH-COST-REMINDER`：用户明确要求“hook记入代办。我们回到confirm”。本条仅记录已确认需求与调查结果，暂不实施；不阻塞模型分配与节省消耗方案的需求确认。
+- [x] `TODO-HIGH-COST-REMINDER`：2026-09-07 已实现并安装本仓库，用户明确同意验收；范围、收据与未验证边界统一见[高耗能提醒需求卡](requirements_2026-09-07_high-cost-reminder.md)。下方保留实施前调查证据，不代表当前交付状态。
 
 ### 已确认需求与建议口径
 

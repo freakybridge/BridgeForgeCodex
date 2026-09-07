@@ -53,6 +53,7 @@ impl StepResult {
 struct HookOutput {
     contexts: Vec<String>,
     fields: Map<String, Value>,
+    system_message: Option<String>,
 }
 
 impl HookOutput {
@@ -90,6 +91,10 @@ impl HookOutput {
     }
 
     fn finish(self, event: &str, code: i32) -> i32 {
+        let mut result = Map::new();
+        if let Some(message) = self.system_message {
+            result.insert("systemMessage".into(), Value::String(message));
+        }
         if !self.contexts.is_empty() || !self.fields.is_empty() {
             let mut specific = self.fields;
             specific.insert("hookEventName".into(), Value::String(event.into()));
@@ -99,7 +104,10 @@ impl HookOutput {
                     Value::String(self.contexts.join("\n")),
                 );
             }
-            println!("{}", json!({"hookSpecificOutput": Value::Object(specific)}));
+            result.insert("hookSpecificOutput".into(), Value::Object(specific));
+        }
+        if !result.is_empty() {
+            println!("{}", Value::Object(result));
         }
         code
     }
@@ -307,11 +315,19 @@ fn self_test() -> i32 {
     0
 }
 
-fn lifecycle(event: &str) -> i32 {
+fn lifecycle(event: &str, payload: Option<&Value>) -> i32 {
     let mut output = HookOutput::default();
     let mut first = 0;
     if matches!(event, "post-compact" | "stop") {
         if event == "stop" {
+            if let (Some(payload), Some(home)) =
+                (payload, bridgeforge_core::high_cost::codex_home())
+            {
+                match bridgeforge_core::high_cost::observe(&util::repo_root(), &home, payload) {
+                    Ok(message) => output.system_message = message,
+                    Err(error) => eprintln!("[high-cost-reminder] {error}; user task continues"),
+                }
+            }
             let step = project_map::ensure_if_dirty();
             output.absorb_map(&step);
             first = step.code;
@@ -429,7 +445,7 @@ pub fn run(args: Vec<String>) -> i32 {
         }
         return post_shell(&payload);
     }
-    lifecycle(event)
+    lifecycle(event, parse_payload(&raw).ok().as_ref())
 }
 
 #[cfg(all(test, bridgeforge_factory_tests))]
