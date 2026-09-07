@@ -37,7 +37,7 @@
             {
               "source": "skills/bridgeforge-codex/references/native-memory.md",
               "target": "references/native-memory.md",
-              "sha256": "sha256:152ffe059ef3401cf04726c5aba19d954ce48da8d4674d853090db403f591875"
+              "sha256": "sha256:59cc70e5031c37eb902ce7acec24267bf837e0dd39a375dd3b69682b6f030cef"
             },
             {
               "source": "skills/bridgeforge-codex/references/project-asset-migration.md",

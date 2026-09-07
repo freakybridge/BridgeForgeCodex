@@ -24,6 +24,7 @@ pub const CONSENT_POLICY_VERSION: u64 = 1;
 pub const CONSENT_SCOPE: &str = "~/.codex/memories/**";
 pub const CONSENT_SYNC_MODE: &str = "bidirectional";
 pub const SNAPSHOT_SCHEMA_VERSION: u64 = 1;
+pub const LOCAL_ONLY_MEMORY_FILES: &[&str] = &["MEMORY.md", "memory_summary.md", "raw_memories.md"];
 
 const EXCLUDED_NAMES: &[&str] = &[
     ".DS_Store",
@@ -464,7 +465,7 @@ pub fn require_runtime_authorization(
     Ok(authorization)
 }
 
-pub fn memory_files(source: &Path) -> MemoryResult<Vec<PathBuf>> {
+fn memory_files_including_local_only(source: &Path) -> MemoryResult<Vec<PathBuf>> {
     ensure_real_directory(source, false)?;
     let mut files = Vec::new();
     scan_directory(source, source, &mut files)?;
@@ -472,15 +473,43 @@ pub fn memory_files(source: &Path) -> MemoryResult<Vec<PathBuf>> {
     Ok(files)
 }
 
-pub fn capture_manifest(
+pub fn is_local_only_memory_path(path: &str) -> bool {
+    !path.contains('/')
+        && !path.contains('\\')
+        && LOCAL_ONLY_MEMORY_FILES
+            .iter()
+            .any(|name| path.eq_ignore_ascii_case(name))
+}
+
+pub fn memory_files(source: &Path) -> MemoryResult<Vec<PathBuf>> {
+    memory_files_including_local_only(source).map(|files| {
+        files
+            .into_iter()
+            .filter(|path| {
+                path.strip_prefix(source)
+                    .ok()
+                    .and_then(|relative| path_to_posix(relative).ok())
+                    .is_none_or(|relative| !is_local_only_memory_path(&relative))
+            })
+            .collect()
+    })
+}
+
+fn capture_manifest_with_local_only(
     source: &Path,
     revision: u64,
     captured_at: Option<&str>,
+    include_local_only: bool,
 ) -> MemoryResult<SnapshotManifest> {
     ensure_real_directory(source, false)?;
+    let paths = if include_local_only {
+        memory_files_including_local_only(source)?
+    } else {
+        memory_files(source)?
+    };
     let mut files = Vec::new();
     let mut newest = UNIX_EPOCH;
-    for path in memory_files(source)? {
+    for path in paths {
         let relative = path.strip_prefix(source).map_err(|error| {
             MemorySyncError::new(format!("cannot relativize native memory: {error}"))
         })?;
@@ -502,6 +531,14 @@ pub fn capture_manifest(
         content_sha256: sha256_hex(&content),
         files,
     })
+}
+
+pub fn capture_manifest(
+    source: &Path,
+    revision: u64,
+    captured_at: Option<&str>,
+) -> MemoryResult<SnapshotManifest> {
+    capture_manifest_with_local_only(source, revision, captured_at, false)
 }
 
 pub fn build_snapshot(
@@ -556,11 +593,28 @@ pub fn verify_snapshot(snapshot: &Path, manifest: &SnapshotManifest) -> MemoryRe
     verify_manifest_directory(&snapshot.join("memories"), manifest)
 }
 
+fn comparable_manifest_files(
+    manifest: &SnapshotManifest,
+    include_local_only: bool,
+) -> Vec<&MemoryFileEntry> {
+    let mut files: Vec<_> = manifest
+        .files
+        .iter()
+        .filter(|item| include_local_only || !is_local_only_memory_path(&item.path))
+        .collect();
+    files.sort_by(|a, b| a.path.cmp(&b.path));
+    files
+}
+
+fn same_manifest_files_exact(left: &SnapshotManifest, right: &SnapshotManifest) -> bool {
+    let left_files = comparable_manifest_files(left, true);
+    let right_files = comparable_manifest_files(right, true);
+    left_files == right_files
+}
+
 fn same_manifest_files(left: &SnapshotManifest, right: &SnapshotManifest) -> bool {
-    let mut left_files: Vec<_> = left.files.iter().collect();
-    let mut right_files: Vec<_> = right.files.iter().collect();
-    left_files.sort_by(|a, b| a.path.cmp(&b.path));
-    right_files.sort_by(|a, b| a.path.cmp(&b.path));
+    let left_files = comparable_manifest_files(left, false);
+    let right_files = comparable_manifest_files(right, false);
     left_files == right_files
 }
 
@@ -570,11 +624,11 @@ fn verify_manifest_directory(source: &Path, manifest: &SnapshotManifest) -> Memo
             "remote snapshot manifest schema is invalid",
         ));
     }
-    let actual = capture_manifest(source, manifest.revision, None)?;
+    let actual = capture_manifest_with_local_only(source, manifest.revision, None, true)?;
     // The digest authenticates the stored ordering; filesystem ordering is not
     // part of file identity and can differ across snapshot producers/platforms.
     let declared_digest = sha256_hex(&serde_json::to_vec(&manifest.files)?);
-    if !same_manifest_files(&actual, manifest) || declared_digest != manifest.content_sha256 {
+    if !same_manifest_files_exact(&actual, manifest) || declared_digest != manifest.content_sha256 {
         return Err(MemorySyncError::new(
             "remote snapshot content does not match its SHA-256 manifest",
         ));
@@ -595,6 +649,7 @@ pub fn snapshot_files(snapshot: &Path) -> MemoryResult<BTreeMap<String, Vec<u8>>
     manifest
         .files
         .into_iter()
+        .filter(|item| !is_local_only_memory_path(&item.path))
         .map(|item| {
             let relative = safe_relative(&item.path)?;
             Ok((
@@ -1240,12 +1295,53 @@ fn verify_local_unchanged(
     Ok(())
 }
 
+fn capture_local_only_files(source: &Path) -> MemoryResult<BTreeMap<String, Vec<u8>>> {
+    let mut files = BTreeMap::new();
+    if !source.exists() {
+        return Ok(files);
+    }
+    ensure_real_directory(source, false)?;
+    for name in LOCAL_ONLY_MEMORY_FILES {
+        let path = source.join(name);
+        let metadata = match fs::symlink_metadata(&path) {
+            Ok(value) => value,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(error.into()),
+        };
+        if !metadata.is_file() || is_link_or_reparse(&path)? {
+            return Err(MemorySyncError::new(format!(
+                "local-only native memory path is not a regular file: {}",
+                path.display()
+            )));
+        }
+        files.insert((*name).to_string(), fs::read(path)?);
+    }
+    Ok(files)
+}
+
+fn verify_local_only_unchanged(
+    source: &Path,
+    expected: &BTreeMap<String, Vec<u8>>,
+) -> MemoryResult<()> {
+    if capture_local_only_files(source)? != *expected {
+        return Err(MemorySyncError::new(
+            "local-only native memory files changed during replacement; reconcile again",
+        ));
+    }
+    Ok(())
+}
+
 fn replace_memories_if_unchanged(
     stage: &Path,
     destination: &Path,
     expected: Option<&SnapshotManifest>,
 ) -> MemoryResult<()> {
     verify_local_unchanged(destination, expected)?;
+    let local_only = capture_local_only_files(destination)?;
+    for (name, payload) in &local_only {
+        fs::write(stage.join(name), payload)?;
+    }
+    verify_local_only_unchanged(destination, &local_only)?;
     let timestamp = std::time::SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|error| MemorySyncError::new(error.to_string()))?
@@ -1256,7 +1352,9 @@ fn replace_memories_if_unchanged(
         fs::rename(destination, &old)?;
         // The native writer does not share our lock. Recheck the tree we actually
         // moved, not merely the path checked before rename.
-        if let Err(error) = verify_local_unchanged(&old, expected) {
+        let moved_unchanged = verify_local_unchanged(&old, expected)
+            .and_then(|()| verify_local_only_unchanged(&old, &local_only));
+        if let Err(error) = moved_unchanged {
             if !destination.exists() {
                 if let Err(restore) = fs::rename(&old, destination) {
                     return Err(MemorySyncError::new(format!(
@@ -1298,6 +1396,12 @@ fn replace_memories_if_unchanged(
     // and finish writing into the old tree after replacement. No automatic cleanup.
     if old.exists() {
         verify_local_unchanged(&old, expected).map_err(|error| {
+            MemorySyncError::new(format!(
+                "{error}; original tree retained at {}",
+                old.display()
+            ))
+        })?;
+        verify_local_only_unchanged(&old, &local_only).map_err(|error| {
             MemorySyncError::new(format!(
                 "{error}; original tree retained at {}",
                 old.display()

@@ -3,8 +3,9 @@
 ## 结论
 
 Codex 原生 `~/.codex/memories/` 由 Codex 官方机制生成和注入。BridgeForge 同步器不解释其
-内部语义、不创建或编辑正文，只在用户明确启用后把整棵目录作为不透明字节快照同步到固定
-私有 GitHub 仓库，用于多台受信电脑之间的最终一致恢复。
+内部语义、不创建或编辑正文，只在用户明确启用后把其中可同步文件作为不透明字节快照同步到
+固定私有 GitHub 仓库，用于多台受信电脑之间的最终一致恢复。根目录的 `MEMORY.md`、
+`memory_summary.md`、`raw_memories.md` 是本机 Codex 自维护索引，固定留在本机，不进入远端。
 
 Agent 的只读分析与同步器职责分开：`$summary` 检索相关记忆后阅读命中正文，必要时追溯
 历史记录，再结合当前上下文和现行约束提出 Rule / Hook / AGENTS.md 建议。流程以
@@ -35,14 +36,15 @@ Codex 官方生成/读取 ~/.codex/memories/
 
 ## Git 与合并合同
 
-- Memory 文件按 opaque bytes 计算逐文件 hash 和整树 digest；禁止依赖内部 schema。
+- 除根目录 `MEMORY.md`、`memory_summary.md`、`raw_memories.md` 外，Memory 文件按 opaque bytes 计算逐文件 hash 和整树 digest；禁止依赖内部 schema。嵌套目录中的同名文件仍属于普通同步内容。
+- 三个本机索引不进入新 manifest、Git push、三方基线或冲突选择。包含它们的旧快照必须先按原 manifest 完整验真，再投影为可同步文件；下一次发布快照自然从远端移除旧副本。
 - 校验已有快照时，整树 digest 按 manifest 声明的原始文件顺序计算；文件集合按路径与逐文件 hash 比较，不能把不同生产者或平台的排序差异当作内容损坏。重复路径、缺失、多余、篡改文件及错误 digest 仍须阻断。
-- 恢复只使用已核验 manifest 声明的文件字节，暂存后再次核验再替换原目录；未声明的缓存、锁和临时文件不进入恢复目录。声明文件损坏时保留原目录并停止。
+- 恢复只使用已核验 manifest 声明的可同步文件字节，暂存后再次核验再替换原目录；替换前必须把本机已有的三个索引逐字节带入新目录，并在安装前后复核，变化时保留原目录并停止。未声明的缓存、锁和临时文件不进入恢复目录；声明文件损坏时保留原目录并停止。
 - 冲突决议先核对 captured local；自动合并和恢复在发布前、替换前及移走原目录后复核本地指纹。期间新增或变化的本地内容导致阻断，必须重新取证。被移走的原目录保留为 memories 同级 `.memories.before-sync.<pid>.<counter>.<timestamp>.tmp`，不自动删除，供恢复或排查晚到写入使用；这不属于新的 Memory 内容源。
 - 临时读取仓库和发布仓库都必须关闭 `core.autocrlf`，并禁止 attributes、clean/smudge 或
   其他换行转换改变 LF/CRLF。通过 `hash-object --no-filters` / index plumbing 写入原始 blob，通过 `cat-file` 读取原始字节，并在发布前核对 Git 存储字节与 manifest。
 - 内容无变化必须 no-op；内容变化必须形成以远端 HEAD 为父的普通 commit，禁止 parentless commit 或 force-push 覆盖历史。
-- `last-synced.commit` 是三方基线：不同路径双机修改自动合并；同路径只有单边修改采用修改版；同路径双边修改停止并保存 local / remote 两份。
+- `last-synced.commit` 是可同步文件的三方基线：不同路径双机修改自动合并；同路径只有单边修改采用修改版；同路径双边修改停止并保存 local / remote 两份。本机索引变化不改变基线，也不阻断同步。
 - 旧 parentless 历史首次没有可信基线且两侧均变化时形成 bootstrap conflict，禁止猜测整树新旧。
 - 冲突形成后若远端 HEAD 发生变化，只有新远端内容逐字节等于冲突包中的 captured local 时，才允许把已确认决议重放到新 HEAD；任何其他变化必须停止并重新取证。
 - 任一正常 `push`、`restore`、`merge` 或 `noop` 完成后必须清除过期 active conflict；冲突证据包继续保留用于审计。

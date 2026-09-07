@@ -846,13 +846,7 @@ fn memory_sync(args: &[String]) -> CommandOutcome {
                 })
                 .collect::<Result<Vec<_>, _>>()
             {
-                Ok(value) if !value.is_empty() => value,
-                Ok(_) => {
-                    return blocked(
-                        "memory-sync",
-                        "resolve requires one --choose per conflict path",
-                    );
-                }
+                Ok(value) => value,
                 Err(error) => return blocked("memory-sync", error),
             };
             memory_operation_outcome(

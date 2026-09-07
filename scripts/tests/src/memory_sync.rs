@@ -182,12 +182,17 @@ fn filtering_manifest_and_directory_snapshot_are_stable() {
     fs::create_dir_all(memories.join(".git")).expect("create excluded git");
     fs::write(memories.join("alpha.md"), b"alpha").expect("write alpha");
     fs::write(memories.join("nested/beta.jsonl"), b"beta").expect("write beta");
+    fs::write(memories.join("MEMORY.md"), b"local index").expect("write local index");
+    fs::write(memories.join("memory_summary.md"), b"local summary").expect("write local summary");
+    fs::write(memories.join("raw_memories.md"), b"local raw index").expect("write local raw index");
+    fs::write(memories.join("nested/MEMORY.md"), b"sync nested memory")
+        .expect("write nested memory");
     fs::write(memories.join("ignored.tmp"), b"ignored").expect("write excluded suffix");
     fs::write(memories.join(".git/config"), b"ignored").expect("write excluded directory");
     fs::write(memories.join("snapshot-manifest.json"), b"ignored").expect("write excluded name");
 
     let files = memory_files(&memories).expect("scan memories");
-    assert_eq!(files.len(), 2);
+    assert_eq!(files.len(), 3);
     let manifest = capture_manifest(&memories, 7, Some("2026-09-01T00:00:00+00:00"))
         .expect("capture manifest");
     assert_eq!(manifest.revision, 7);
@@ -197,7 +202,7 @@ fn filtering_manifest_and_directory_snapshot_are_stable() {
             .iter()
             .map(|item| item.path.as_str())
             .collect::<Vec<_>>(),
-        vec!["alpha.md", "nested/beta.jsonl"]
+        vec!["alpha.md", "nested/MEMORY.md", "nested/beta.jsonl"]
     );
 
     let snapshot = temp.path().join("snapshot");
@@ -205,7 +210,11 @@ fn filtering_manifest_and_directory_snapshot_are_stable() {
     assert_eq!(built.content_sha256, manifest.content_sha256);
     let payloads = snapshot_files(&snapshot).expect("read snapshot");
     assert_eq!(payloads["alpha.md"], b"alpha");
+    assert_eq!(payloads["nested/MEMORY.md"], b"sync nested memory");
     assert_eq!(payloads["nested/beta.jsonl"], b"beta");
+    assert!(!payloads.contains_key("MEMORY.md"));
+    assert!(!payloads.contains_key("memory_summary.md"));
+    assert!(!payloads.contains_key("raw_memories.md"));
 }
 
 #[test]

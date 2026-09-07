@@ -183,6 +183,11 @@ fn legacy_snapshot_order_does_not_invalidate_verified_bytes() {
     fs::write(source.join("extensions/note.md"), b"note").unwrap();
     let snapshot = legacy.join("last-synced-snapshot");
     let mut manifest = build_snapshot(&source, &snapshot, 22).unwrap();
+    fs::write(snapshot.join("memories/MEMORY.md"), b"baseline").unwrap();
+    manifest.files.push(super::super::MemoryFileEntry {
+        path: "MEMORY.md".into(),
+        sha256: sha256_hex(b"baseline"),
+    });
     manifest.files.reverse();
     manifest.content_sha256 = sha256_hex(&serde_json::to_vec(&manifest.files).unwrap());
     atomic_write_json(&snapshot.join("snapshot-manifest.json"), &manifest).unwrap();
@@ -198,7 +203,7 @@ fn legacy_snapshot_order_does_not_invalidate_verified_bytes() {
         .unwrap();
     assert!(receipt.migrated.contains(&"baseline".into()));
     let migrated = state.join("last-synced-snapshot");
-    assert_eq!(snapshot_files(&migrated).unwrap().len(), 2);
+    assert_eq!(snapshot_files(&migrated).unwrap().len(), 1);
     assert_eq!(
         fs::read(migrated.join("snapshot-manifest.json")).unwrap(),
         fs::read(snapshot.join("snapshot-manifest.json")).unwrap()

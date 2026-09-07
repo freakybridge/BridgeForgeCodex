@@ -279,9 +279,12 @@ fn read_remote(git: &Git<'_>, work: &Path, remote: &str) -> MemoryResult<RemoteS
             commit: Some(commit),
         });
     }
+    let sync_files = snapshot_files(&extracted)?;
+    let projected = work.join("remote-sync-snapshot");
+    let projected_manifest = snapshot_from_files(&projected, &sync_files, manifest.revision)?;
     Ok(RemoteSnapshot {
-        manifest: Some(manifest),
-        path: Some(extracted),
+        manifest: Some(projected_manifest),
+        path: Some(projected),
         commit: Some(commit),
     })
 }
@@ -380,7 +383,8 @@ fn restore_snapshot(
             fs::create_dir_all(target.parent().unwrap())?;
             fs::write(target, payload)?;
         }
-        super::verify_manifest_directory(&stage, &manifest)?;
+        let projected = super::capture_manifest(&stage, manifest.revision, None)?;
+        super::verify_manifest_directory(&stage, &projected)?;
         super::replace_memories_if_unchanged(&stage, memories, expected)
     })();
     if result.is_err() {
@@ -701,7 +705,11 @@ fn apply_conflict_choices_locked(
             "native memory conflict record identity changed",
         ));
     }
-    let expected = record.conflict_paths.into_iter().collect::<BTreeSet<_>>();
+    let expected = record
+        .conflict_paths
+        .into_iter()
+        .filter(|path| !super::is_local_only_memory_path(path))
+        .collect::<BTreeSet<_>>();
     let mut selected = BTreeMap::<String, String>::new();
     for (path, side) in choices {
         let relative = Path::new(path);
@@ -790,9 +798,7 @@ pub fn resolve_conflict_with_choices(
         ));
     };
     verify_active_conflict(state_dir, conflict_id)?;
-    if !choices.is_empty() {
-        apply_conflict_choices_locked(state_dir, conflict_id, choices)?;
-    }
+    apply_conflict_choices_locked(state_dir, conflict_id, choices)?;
     let evidence = state_dir.join("conflicts").join(conflict_id);
     if !evidence.is_dir() || super::is_link_or_reparse(&evidence)? {
         return Err(MemorySyncError::new(

@@ -62,7 +62,7 @@
 - 测试代码放在 scripts/tests/**。
 - 下游业务版本以根 VERSION 为事实源，相关原生 manifest 由项目发布流程同步。
 - 骨架版本只记录在 .codex/.bridgeforge_codex_version，由统一项目同步器维护，不作为业务版本。
-- Codex 原生 Memory 保留官方生成和注入机制。BridgeForge 对其内容只读；跨电脑同步将其视为不透明整树快照，不依赖内部语义。
+- Codex 原生 Memory 保留官方生成和注入机制。BridgeForge 对其内容只读；根 `MEMORY.md`、`memory_summary.md`、`raw_memories.md` 固定留在本机，其余文件按不透明字节快照跨电脑同步，不依赖内部语义。
 - 不新建或继续使用项目 .codex/memory/，不恢复其读取、索引、写入或统计链。
 - 既有 legacy Rule / Memory 只通过 bridgeforge-codex 的受控迁移流程处理。保留逐源确认、未确认零写入和事务回滚要求；具体分类、固定退役项与执行步骤由该 Skill 及迁移手册维护。
 - 阶段总结或验收收口遵循 summary Skill。总结、验收与采纳规则建议分别判断，不因总结或验收自动修改 AGENTS、Rule、Hook 或 Memory。

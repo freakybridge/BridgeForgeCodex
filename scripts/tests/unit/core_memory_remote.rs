@@ -37,6 +37,9 @@ fn restore_uses_only_verified_manifest_files() {
     let destination = temp.0.join("memories");
     fs::create_dir(&destination).unwrap();
     fs::write(destination.join("old.md"), b"old").unwrap();
+    fs::write(destination.join("MEMORY.md"), b"local memory index").unwrap();
+    fs::write(destination.join("memory_summary.md"), b"local summary").unwrap();
+    fs::write(destination.join("raw_memories.md"), b"local raw index").unwrap();
     let expected = super::super::capture_manifest(&destination, 0, None).unwrap();
     restore_snapshot(&snapshot, &destination, Some(&expected)).unwrap();
     assert_eq!(
@@ -46,6 +49,18 @@ fn restore_uses_only_verified_manifest_files() {
     assert!(!destination.join("extra.tmp").exists());
     assert!(!destination.join(".git").exists());
     assert!(!destination.join("old.md").exists());
+    assert_eq!(
+        fs::read(destination.join("MEMORY.md")).unwrap(),
+        b"local memory index"
+    );
+    assert_eq!(
+        fs::read(destination.join("memory_summary.md")).unwrap(),
+        b"local summary"
+    );
+    assert_eq!(
+        fs::read(destination.join("raw_memories.md")).unwrap(),
+        b"local raw index"
+    );
 }
 
 #[test]
@@ -78,11 +93,13 @@ const TEST_REMOTE: &str = "https://github.com/owner/bridgeforge-codex-memories.g
 fn restore_accepts_verified_legacy_manifest_order() {
     let temp = RestoreFixture::new();
     let snapshot = temp.0.join("snapshot");
-    let files = BTreeMap::from([
-        ("MEMORY.md".into(), b"baseline".to_vec()),
-        ("extensions/note.md".into(), b"note".to_vec()),
-    ]);
+    let files = BTreeMap::from([("extensions/note.md".into(), b"note".to_vec())]);
     let mut manifest = snapshot_from_files(&snapshot, &files, 22).unwrap();
+    fs::write(snapshot.join("memories/MEMORY.md"), b"legacy remote index").unwrap();
+    manifest.files.push(super::super::MemoryFileEntry {
+        path: "MEMORY.md".into(),
+        sha256: super::super::sha256_hex(b"legacy remote index"),
+    });
     manifest.files.reverse();
     manifest.content_sha256 =
         super::super::sha256_hex(&serde_json::to_vec(&manifest.files).unwrap());
@@ -91,6 +108,7 @@ fn restore_accepts_verified_legacy_manifest_order() {
         let destination = temp.0.join(format!("restored-{exists}"));
         let expected = if exists {
             fs::create_dir(&destination).unwrap();
+            fs::write(destination.join("MEMORY.md"), b"local index").unwrap();
             Some(super::super::capture_manifest(&destination, 0, None).unwrap())
         } else {
             None
@@ -99,7 +117,46 @@ fn restore_accepts_verified_legacy_manifest_order() {
         for (path, bytes) in &files {
             assert_eq!(fs::read(destination.join(path)).unwrap(), *bytes);
         }
+        if exists {
+            assert_eq!(
+                fs::read(destination.join("MEMORY.md")).unwrap(),
+                b"local index"
+            );
+        } else {
+            assert!(!destination.join("MEMORY.md").exists());
+        }
     }
+}
+
+#[test]
+fn legacy_local_only_conflicts_do_not_require_choices() {
+    let fixture = RestoreFixture::new();
+    let state = fixture.0.join("state");
+    let evidence = state.join("conflicts/legacy");
+    fs::create_dir_all(evidence.join("merged/memories")).unwrap();
+    atomic_write_json(
+        &evidence.join("conflict.json"),
+        &ConflictRecord {
+            schema_version: 1,
+            conflict_id: "legacy".into(),
+            created_utc: "2026-09-07T00:00:00Z".into(),
+            reason: "legacy bootstrap".into(),
+            conflict_paths: vec![
+                "MEMORY.md".into(),
+                "memory_summary.md".into(),
+                "raw_memories.md".into(),
+            ],
+            remote_commit: None,
+        },
+    )
+    .unwrap();
+    apply_conflict_choices_locked(&state, "legacy", &[]).unwrap();
+    assert!(
+        apply_conflict_choices_locked(&state, "legacy", &[("MEMORY.md".into(), "local".into())])
+            .unwrap_err()
+            .to_string()
+            .contains("unknown or duplicated")
+    );
 }
 
 struct LocalGit {
