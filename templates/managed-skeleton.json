@@ -1,6 +1,6 @@
 {
   "schema_version": 4,
-  "release_version": "1.14.20",
+  "release_version": "1.14.21",
   "host": "codex",
   "stamp": ".codex/.bridgeforge_codex_version",
   "contract_target": ".codex/managed-skeleton.json",
@@ -427,14 +427,14 @@
       "source": "templates/hooks/Cargo.lock",
       "target": ".codex/hooks/Cargo.lock",
       "strategy": "whole",
-      "current_sha256": "sha256:7139ebbe3a39d982d7737e1f5d1aa8fd4709e6715cdba110da1290c3790d5925"
+      "current_sha256": "sha256:8bfcbfacd211bd75f85880e231b414ea1edbba745ab5cb3366e3602190ece6f4"
     },
     {
       "id": "codex.hooks.cargo-toml",
       "source": "templates/hooks/Cargo.toml",
       "target": ".codex/hooks/Cargo.toml",
       "strategy": "whole",
-      "current_sha256": "sha256:b1e9d1ff8b5facda4bb90d7972934785b57dd8208a870feaa7469a693961ca13"
+      "current_sha256": "sha256:32bbb2cbbac675ba3377be7fa6adf7b083ff2c0f233b5dfdb02d67b65857c981"
     },
     {
       "id": "codex.hooks.readme-md",
@@ -753,8 +753,8 @@
           "status": "ok"
         }
       },
-      "source_tree_sha256": "sha256:68983d18b3eca7b8458ed7bcb941c6e4c25921fd203e45d0378255423cd1e950",
-      "lockfile_sha256": "sha256:7139ebbe3a39d982d7737e1f5d1aa8fd4709e6715cdba110da1290c3790d5925",
+      "source_tree_sha256": "sha256:d11719a3328ac2d90f3b1128f451cd542fa6042e00b298b17900d3296c90600c",
+      "lockfile_sha256": "sha256:8bfcbfacd211bd75f85880e231b414ea1edbba745ab5cb3366e3602190ece6f4",
       "build_recipe_sha256": "sha256:d26d34aa838a1a1f5556ef92f492d2abc7b415c2163e2a4c9ea7e07121dad78a",
       "self_test_sha256": "sha256:74a8b4a4c20ff1f5cc6660697138c151d9ed2172e6d57e75cce671d773e98f5a"
     },
@@ -798,8 +798,8 @@
           "status": "ok"
         }
       },
-      "source_tree_sha256": "sha256:68983d18b3eca7b8458ed7bcb941c6e4c25921fd203e45d0378255423cd1e950",
-      "lockfile_sha256": "sha256:7139ebbe3a39d982d7737e1f5d1aa8fd4709e6715cdba110da1290c3790d5925",
+      "source_tree_sha256": "sha256:d11719a3328ac2d90f3b1128f451cd542fa6042e00b298b17900d3296c90600c",
+      "lockfile_sha256": "sha256:8bfcbfacd211bd75f85880e231b414ea1edbba745ab5cb3366e3602190ece6f4",
       "build_recipe_sha256": "sha256:079aefde96a8925913b7b6cd3ee9d8c7086014ad5e4b6e3f74a911b2ce49e537",
       "self_test_sha256": "sha256:6b0426352bb099a61fae52600d4f684c0e11bca644fa767a9b79d224e939b0e0"
     }
