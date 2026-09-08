@@ -1,6 +1,6 @@
 ---
-lifecycle: active
-validation_status: awaiting_validation
+lifecycle: completed
+validation_status: verified
 ---
 
 # Windows 长路径阻断 Native Memory 同步
@@ -47,3 +47,7 @@ validation_status: awaiting_validation
 ## 后续可靠性排查
 
 用户继续要求检查所有可能原因，见 [自动同步可靠性闭环](../1_delivery/current-baseline-project-asset-migration-and-native-memory-sync/requirements_2026-09-08_auto-sync-reliability.md)。旧用户级 1.16.0 随后再次触发相同长路径故障，证明单次手动恢复不能替代正式安装。1.17.4 又修复预约损坏、PID 身份、健康提示及基线中断恢复；05:57:22 UTC 使用项目修复版临时启动的真实后台 worker 成功清空队列并返回 healthy/noop。正常会话使用修复版的生命周期验证仍待正式发布安装，Bug 不据此关闭。
+
+## 最终验收
+
+2026-09-08 用户明确同意验收并授权 git-sync、正式安装和实测。修复版 1.17.5 已经官方 updater 从发布提交 `3e2d7e9b0639e6f2a2bed7ecf58d7e524db7d2d8` 安装到用户级；self-test、doctor 通过。真实 app-server 生命周期观察退出 0，覆盖 SessionStart、Stop 和 SessionEnd；宿主退出后后台继续完成，06:28:15 UTC 最终 healthy/noop、pending/worker 清空。完整收据与六类证据见关联需求卡，源码、传播、dogfood、fixture、正式 runtime 均已验证；真实下游业务升级不在授权范围，未执行。长路径造成的真实自动同步阻断据此关闭，保留冲突备份和原生本机索引。

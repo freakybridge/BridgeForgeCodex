@@ -124,7 +124,7 @@ delivery_layout: flat
 
 ## 当前 Bug records
 
-- [`BUG-native-memory-windows-long-path-sync.md`](2_bugs/BUG-native-memory-windows-long-path-sync.md)（Windows 长路径导致同步失败、后台测试并行干扰及真实冲突恢复，处理中）
+- [`BUG-native-memory-windows-long-path-sync.md`](2_bugs/BUG-native-memory-windows-long-path-sync.md)（Windows 长路径导致同步失败、后台测试并行干扰及真实冲突恢复；1.17.5 正式安装与自动生命周期验证完成，已验收）
 - [`BUG-native-memory-snapshot-order-compatibility.md`](2_bugs/BUG-native-memory-snapshot-order-compatibility.md)（旧快照兼容与后台句柄继承已修复；1.14.7 真实启动、回复结束及关闭后同步验证通过，等待用户验收）
 - [`BUG-managed-markdown-commented-table-ambiguity.md`](2_bugs/BUG-managed-markdown-commented-table-ambiguity.md)（项目实表与注释示例表共存时被误判为歧义，六类验证与独立审计已通过，等待发布与下游 Apply 验收）
 - [`BUG-clean-factory-git-sync-skips-runtime-repair.md`](2_bugs/BUG-clean-factory-git-sync-skips-runtime-repair.md)（干净工厂同步跳过生成资产修复，源码与真实 fixture 已修复，等待发布、四项目 batch 与 runtime 验收）

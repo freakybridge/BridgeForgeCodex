@@ -1,6 +1,6 @@
 ---
-lifecycle: active
-validation_status: awaiting_validation
+lifecycle: completed
+validation_status: verified
 ---
 
 # 项目 Hook 独立依赖
@@ -110,3 +110,7 @@ M：扩展既有构建/同步接口，不替换旧路径。45 分钟 / 20k 新�
 2026-09-08 用户再次明确 `$summary 同意验收` 与 `$git-sync`。后续 Memory 修复阶段已完成 core 147 项、Hook 24 项及 CLI 13 项通过；完整工厂回归退出 0，87 passed、0 failed、3 ignored，包含此前失败的真实工厂 git-sync runtime 和完整项目 Hook 初始化安装夹具。原 background 并行干扰已修复，git-sync invoked.timestamp 故障本次未复现，不把未复现写成根因已修。前期独立审计指出的大小写保留路径和生成源码问题均已有修复与回归；本次 Memory 独立审计也已完成。
 
 用户已验收源码及既有 fixture 结果，授权当前 Memory 与此前 Rust Hook 改动统一受管发布。真实下游业务迁移不在本次范围；正式产品安装与关联 Memory 生命周期验证仍待执行，保留 active / awaiting_validation，最终收据写入关联的 [自动同步可靠性闭环](../current-baseline-project-asset-migration-and-native-memory-sync/requirements_2026-09-08_auto-sync-reliability.md)。不新增规则，不归档。
+
+### 最终收口
+
+上述发布和关联 Memory runtime 条件现已完成：修复提交 `3e2d7e9b0639e6f2a2bed7ecf58d7e524db7d2d8` 已推送 origin/main，用户级官方产品安装为 1.17.5；真实 Memory 三生命周期实测退出 0，最终 healthy/noop 且队列清空，详细收据见关联需求卡。结合此前独立审计、57 项项目 Hook 专项及本轮完整工厂 87 项通过，用户明确验收，本交付关闭。此结论不包含未授权的 StratusAgent 等真实下游升级或业务 Hook 迁移；无自动归档或新增规则。

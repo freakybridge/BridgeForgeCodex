@@ -1,6 +1,6 @@
 ---
-lifecycle: active
-validation_status: awaiting_validation
+lifecycle: completed
+validation_status: verified
 ---
 
 # Native Memory 自动同步可靠性闭环
@@ -78,3 +78,19 @@ M 级：既有同步链的跨模块可靠性修复，不新建调度架构。45 
 2026-09-08 用户明确调用 `$summary 同意验收` 与 `$git-sync`，批准上述修复，并确认前一答复提出的提交推送、正式安装及真实生命周期验证路径。复用上一阶段的测试和独立审计收据，不为 summary 重跑测试。整项在实装与三事件完成前保持 active / awaiting_validation；发布和 runtime 验证由已授权的后续动作继续，不以用户验收代替证据。
 
 本次检索并阅读 2026-09-04 原生 Memory 状态迁移与受管发布历史，当前证据仍以本卡为准。现行 AGENTS 已要求区分源码、传播和 runtime，不新增重复 Rule / Hook / AGENTS 建议；不写入原生 Memory，不执行归档。
+
+## 正式安装与自动生命周期验收完成
+
+2026-09-08 受管 git-sync 发布修复版 1.17.5，提交 `3e2d7e9b0639e6f2a2bed7ecf58d7e524db7d2d8`，推送 origin/main，工作区 clean、ahead/behind=0/0；原有 codex_git_sync_autostash 保留。发布后 baseline clean。
+
+官方 updater 返回 `status=completed`、`source_commit=3e2d7e9b0639e6f2a2bed7ecf58d7e524db7d2d8`、`mode=updated`、`action_count=2`；用户级 CLI self-test 显示 1.17.5，doctor 通过。旧程序备份因文件占用留下 cleanup_pending=true，安装事务已提交且新程序生效；此非阻塞清理项留给下一次官方维护，未手工删除或重复运行 updater。
+
+执行 `scripts/tests/fixtures/native_memory_lifecycle_observer.ps1 -ConfirmAuthorizedMemorySync`，原始观察收据保留在 `.runtime/native-memory-lifecycle-1.17.5.jsonl`，退出 0，耗时约 122 秒。真实 app-server 临时会话验证：
+
+- SessionStart 用户级 Memory Hook 完成并启动后台任务，宿主 hook/completed 实际展示此前失败的 warning；本轮首次取得正常退出路径的失败提醒宿主证据。非零退出 Hook 的展示仍未注入验证。
+- Stop 实际触发，用户级 hook-runtime 记录 executablePath 为用户 `.codex/bin/bridgeforge.exe`、binaryVersion=1.17.5、lastEvent=Stop；启动与回复结束合并的队列于 06:27:27 UTC 清空。
+- 06:27:33 关闭 app-server stdin，SessionEnd 于 06:27:35 启动新 worker；app-server 随后退出，后台 worker 继续存活。06:28:15 worker 完成并退出，pending/worker 均清空，final-health=healthy/noop，app-server 退出 0。
+
+本次仍为 revision 33 的无变化同步，没有新增 Memory 内容提交；自动同步的真实调用链已恢复。用户既有验收授权有效，源码、产品传播、dogfood、默认 fixture、正式安装与真实 runtime 必要验收完成，因此本卡关闭。真实下游业务升级不在本次范围；网络中断、磁盘满和系统断电等未实测条件仍按前文边界保留，不承诺永不失败。独立 Skill 账本 BOM 提示及旧安装备份清理不属于本次自动同步阻断。
+
+本节是对已安装并实测的 1.17.5 及其源提交的验收。随后受管同步保存验收文档可能自动递增仓库版本；该元数据提交不改变本次测试指向的安装版本，不把未再次安装的新版本写成已安装。

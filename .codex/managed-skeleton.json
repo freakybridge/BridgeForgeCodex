@@ -1,6 +1,6 @@
 {
   "schema_version": 4,
-  "release_version": "1.17.5",
+  "release_version": "1.17.6",
   "host": "codex",
   "stamp": ".codex/.bridgeforge_codex_version",
   "contract_target": ".codex/managed-skeleton.json",
@@ -427,14 +427,14 @@
       "source": "templates/hooks/Cargo.lock",
       "target": ".codex/hooks/Cargo.lock",
       "strategy": "whole",
-      "current_sha256": "sha256:e3f50aabfa3a56be10e7b41f41ca2ae32a345d743b03a16795693374d86dd779"
+      "current_sha256": "sha256:f0e306d3da149697e832abb85c2bc0fb231b1102876bfb7fbc517d7f88fc9390"
     },
     {
       "id": "codex.hooks.cargo-toml",
       "source": "templates/hooks/Cargo.toml",
       "target": ".codex/hooks/Cargo.toml",
       "strategy": "whole",
-      "current_sha256": "sha256:8ae7908e7cebec57ddf8e53b064862cecb17847b388916fe3719d566cfcaeb5c"
+      "current_sha256": "sha256:6fb857c1d08a46b88c8fe0378306a79941c341a69babd5fb4a56986fc655eff3"
     },
     {
       "id": "codex.hooks.readme-md",
@@ -774,8 +774,8 @@
           "status": "ok"
         }
       },
-      "source_tree_sha256": "sha256:140eb97ec0fa5a31527ee912793c236083aceddb0e5bc79c5d34bf36a71ea20c",
-      "lockfile_sha256": "sha256:e3f50aabfa3a56be10e7b41f41ca2ae32a345d743b03a16795693374d86dd779",
+      "source_tree_sha256": "sha256:5c9b136a6b057ff2b106d6aa2abaf53875338c3204cc0a663530e99f1ecc75a2",
+      "lockfile_sha256": "sha256:f0e306d3da149697e832abb85c2bc0fb231b1102876bfb7fbc517d7f88fc9390",
       "build_recipe_sha256": "sha256:d26d34aa838a1a1f5556ef92f492d2abc7b415c2163e2a4c9ea7e07121dad78a",
       "self_test_sha256": "sha256:74a8b4a4c20ff1f5cc6660697138c151d9ed2172e6d57e75cce671d773e98f5a"
     },
@@ -819,8 +819,8 @@
           "status": "ok"
         }
       },
-      "source_tree_sha256": "sha256:140eb97ec0fa5a31527ee912793c236083aceddb0e5bc79c5d34bf36a71ea20c",
-      "lockfile_sha256": "sha256:e3f50aabfa3a56be10e7b41f41ca2ae32a345d743b03a16795693374d86dd779",
+      "source_tree_sha256": "sha256:5c9b136a6b057ff2b106d6aa2abaf53875338c3204cc0a663530e99f1ecc75a2",
+      "lockfile_sha256": "sha256:f0e306d3da149697e832abb85c2bc0fb231b1102876bfb7fbc517d7f88fc9390",
       "build_recipe_sha256": "sha256:079aefde96a8925913b7b6cd3ee9d8c7086014ad5e4b6e3f74a911b2ce49e537",
       "self_test_sha256": "sha256:6b0426352bb099a61fae52600d4f684c0e11bca644fa767a9b79d224e939b0e0"
     }
