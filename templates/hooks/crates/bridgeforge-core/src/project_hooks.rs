@@ -1,5 +1,5 @@
-//! Project-owned Rust hooks. Only an explicit entrypoint is compiled; dependencies
-//! come from the verified, locked managed workspace, never from a project manifest.
+//! Project-owned Rust hooks, with either legacy managed dependencies or a
+//! self-contained, project-owned Cargo package and lockfile.
 use crate::{ProcessRequest, ProcessRunner};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -12,6 +12,14 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 const REGISTRY: &str = "bridgeforgeProjectHooks";
 pub(crate) const REGISTRY_PATH: &str = ".codex/project-hooks.json";
 const HANDLER_ID: &str = "bridgeforgeProjectHookId";
+
+// Reserve the same portable names in working-tree, prospective and index inputs.
+pub(crate) fn reserved_package_component(name: &str) -> bool {
+    name.eq_ignore_ascii_case(".cargo") || name.eq_ignore_ascii_case(".bridgeforge-main.rs")
+}
+
+mod package;
+pub(crate) use package::{Input, capture_input, verify_reads};
 
 /// Merge registry inputs in memory only. The legacy root key is never serialized
 /// back into Codex's native configuration.
@@ -287,7 +295,15 @@ pub(crate) fn verify(root: &Path, contract: &Value, runtime: bool) -> Result<Vec
     let mut checked = Vec::new();
     for hook in hooks(&combined)? {
         let source = read(root, &hook.source())?.ok_or("project Rust hook source is missing")?;
-        let input = identity(&hook, &source, contract)?;
+        let input = capture_input(
+            root,
+            &hook,
+            source,
+            &BTreeMap::new(),
+            &[],
+            &mut BTreeMap::new(),
+        )?
+        .identity(&hook, contract)?;
         if runtime && !current(root, &hook, &input)? {
             return Err(format!(
                 "project Rust hook build receipt drifted: {}",
@@ -309,6 +325,26 @@ impl Drop for Temporary {
 /// The wrapper intercepts self-test before calling the user's run function.
 /// Project Rust source is trusted executable code, not a security sandbox.
 pub(crate) fn build(
+    workspace: &Path,
+    root: &Path,
+    contract: &Value,
+    inputs: &[(Hook, Input)],
+    runner: &dyn ProcessRunner,
+) -> Result<BTreeMap<PathBuf, Vec<u8>>, String> {
+    let mut writes = BTreeMap::new();
+    let mut legacy = Vec::new();
+    for (hook, input) in inputs {
+        if let Some(files) = &input.package {
+            writes.extend(package::build(root, hook, input, files, contract, runner)?);
+        } else {
+            legacy.push((hook.clone(), input.source.clone()));
+        }
+    }
+    writes.extend(build_legacy(workspace, root, contract, &legacy, runner)?);
+    Ok(writes)
+}
+
+fn build_legacy(
     workspace: &Path,
     root: &Path,
     contract: &Value,
@@ -466,6 +502,35 @@ fn verify_dependencies(
     snapshot: &Path,
     expected: &BTreeMap<String, Vec<u8>>,
 ) -> Result<(), String> {
+    verify_dependencies_with_generated(depfile, snapshot, expected, &BTreeMap::new())
+}
+
+fn verify_dependencies_with_generated(
+    depfile: &Path,
+    snapshot: &Path,
+    expected: &BTreeMap<String, Vec<u8>>,
+    generated: &BTreeMap<PathBuf, Vec<u8>>,
+) -> Result<(), String> {
+    let allowed = expected
+        .keys()
+        .map(|relative| snapshot.join(relative))
+        .chain(generated.keys().cloned())
+        .map(|path| fs::canonicalize(path).map_err(|e| e.to_string()))
+        .collect::<Result<BTreeSet<_>, _>>()?;
+    for absolute in dependency_paths(depfile, snapshot)? {
+        let canonical = fs::canonicalize(&absolute)
+            .map_err(|e| format!("cannot verify project hook dependency: {e}"))?;
+        if !allowed.contains(&canonical) {
+            return Err(format!(
+                "project Rust hook used uncaptured dependency: {}",
+                absolute.display()
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn dependency_paths(depfile: &Path, snapshot: &Path) -> Result<Vec<PathBuf>, String> {
     let text = fs::read_to_string(depfile)
         .map_err(|e| format!("project hook dependency receipt missing: {e}"))?;
     let (_, dependencies) = text
@@ -497,27 +562,17 @@ fn verify_dependencies(
     if paths.is_empty() {
         return Err("empty project hook dependency receipt".into());
     }
-    let allowed = expected
-        .keys()
-        .map(|relative| fs::canonicalize(snapshot.join(relative)).map_err(|e| e.to_string()))
-        .collect::<Result<BTreeSet<_>, _>>()?;
-    for path in paths {
-        let path = PathBuf::from(path);
-        let absolute = if path.is_absolute() {
-            path
-        } else {
-            snapshot.join(path)
-        };
-        let canonical = fs::canonicalize(&absolute)
-            .map_err(|e| format!("cannot verify project hook dependency: {e}"))?;
-        if !allowed.contains(&canonical) {
-            return Err(format!(
-                "project Rust hook used uncaptured dependency: {}",
-                absolute.display()
-            ));
-        }
-    }
-    Ok(())
+    Ok(paths
+        .into_iter()
+        .map(|path| {
+            let path = PathBuf::from(path);
+            if path.is_absolute() {
+                path
+            } else {
+                snapshot.join(path)
+            }
+        })
+        .collect())
 }
 
 fn verify_windows_gui(bytes: &[u8]) -> Result<(), String> {

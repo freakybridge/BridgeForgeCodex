@@ -1493,6 +1493,76 @@ fn project_hook_registry_migration_is_atomic_and_rejects_input_drift() {
 }
 
 #[test]
+fn project_hook_package_plan_tracks_dependency_files_and_rejects_inventory_drift() {
+    let (root, mut plan) = transaction_fixture(true);
+    let directory = root.join(".codex/hooks/project_demo");
+    fs::create_dir_all(&directory).unwrap();
+    for (path, bytes) in [
+        ("entrypoint.rs", "pub fn run(_:Vec<String>)->i32{0}"),
+        (
+            "Cargo.toml",
+            "[package]\nname=\"demo\"\nversion=\"0.1.0\"\n",
+        ),
+        ("Cargo.lock", "version=4\n"),
+        ("helper.rs", "const VALUE:i32=1;"),
+    ] {
+        fs::write(directory.join(path), bytes).unwrap();
+    }
+    fs::write(root.join(".codex/hooks.json"), br#"{"hooks":{},"bridgeforgeProjectHooks":{"schema_version":1,"hooks":[{"id":"demo","events":[{"event":"Stop"}]}]}}"#).unwrap();
+    let (inputs, reads) = plan_project_hooks(
+        &root,
+        &json!({}),
+        &mut plan.writes,
+        &[],
+        &mut plan.safe,
+        &mut plan.risk,
+        &mut plan.generated_source_fingerprints,
+    )
+    .unwrap();
+    assert!(reads.contains_key(".codex/hooks/project_demo/Cargo.lock"));
+    assert!(
+        inputs[0]
+            .1
+            .package
+            .as_ref()
+            .unwrap()
+            .contains_key("helper.rs")
+    );
+    plan.project_hook_reads = reads;
+    verify_project_hook_reads(&plan).unwrap();
+    let before = plan_fingerprint(
+        &plan.mode,
+        &plan.current_version,
+        &[],
+        &[],
+        &json!({}),
+        &plan.generated_source_fingerprints,
+    )
+    .unwrap();
+    let mut changed = plan.generated_source_fingerprints.clone();
+    changed.insert("project-hook:input:demo".into(), "changed".into());
+    assert_ne!(
+        before,
+        plan_fingerprint(
+            &plan.mode,
+            &plan.current_version,
+            &[],
+            &[],
+            &json!({}),
+            &changed
+        )
+        .unwrap()
+    );
+    fs::write(directory.join("new.rs"), "new").unwrap();
+    assert!(
+        verify_project_hook_reads(&plan)
+            .unwrap_err()
+            .contains("inventory")
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn marker_replace_preserves_project_tail() {
     let current = b"x\nBEGIN\nold\nEND\ntail\n";
     let source = b"BEGIN\nnew\nEND\n";

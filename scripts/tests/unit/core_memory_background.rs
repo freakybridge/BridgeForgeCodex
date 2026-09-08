@@ -34,6 +34,31 @@ fn background_rejects_invalid_input_and_reports_launch_errors() {
 
 #[test]
 fn background_does_not_inherit_extra_handles_and_preserves_native_contract() {
+    // Other parallel tests launch std::Command children, which can inherit this
+    // deliberately inheritable sentinel. Isolate the probe's handle table.
+    const CHILD: &str = "BRIDGEFORGE_BACKGROUND_PROBE_CHILD";
+    if std::env::var_os(CHILD).is_none() {
+        let result = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "memory::background::tests::background_does_not_inherit_extra_handles_and_preserves_native_contract",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env(CHILD, "1")
+            .creation_flags(0x08000000)
+            .output()
+            .unwrap();
+        assert!(
+            result.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&result.stdout),
+            String::from_utf8_lossy(&result.stderr)
+        );
+        return;
+    }
+    use std::os::windows::io::{FromRawHandle, OwnedHandle};
+    use windows_sys::Win32::System::Threading::{OpenProcess, WaitForSingleObject};
     let folder = std::env::temp_dir().join(format!(
         "bf-background 空格 ' $ {}",
         SystemTime::now()
@@ -91,17 +116,24 @@ fn background_does_not_inherit_extra_handles_and_preserves_native_contract() {
     args.extend(values.iter().map(OsString::from));
     let started = Instant::now();
     let pid = spawn(&binary, &args).unwrap();
+    let handle = unsafe { OpenProcess(0x00100000, 0, pid) };
+    assert!(
+        !handle.is_null(),
+        "cannot open probe process: {}",
+        std::io::Error::last_os_error()
+    );
+    let process = unsafe { OwnedHandle::from_raw_handle(handle) };
     drop(held);
     while !folder.join("ready").exists() && started.elapsed() < Duration::from_secs(2) {
         std::thread::sleep(Duration::from_millis(10));
     }
     let ready = fs::read_to_string(folder.join("ready"));
-    let still_running = super::super::worker::process_alive(pid);
+    let still_running = unsafe { WaitForSingleObject(process.as_raw_handle(), 0) } == 258;
     let reopened = OpenOptions::new().write(true).open(&sentinel);
     // Allow the bounded probe to exit even on a failing assertion.
-    while super::super::worker::process_alive(pid) && started.elapsed() < Duration::from_secs(8) {
-        std::thread::sleep(Duration::from_millis(20));
-    }
+    let waited = unsafe { WaitForSingleObject(process.as_raw_handle(), 8000) };
+    assert_eq!(waited, 0, "probe did not terminate: {waited}");
+    drop(process);
     assert_eq!(
         ready.unwrap_or_else(|error| panic!(
             "{error}; phase={:?}; pid={pid}",

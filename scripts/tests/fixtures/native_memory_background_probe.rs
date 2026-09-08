@@ -30,7 +30,8 @@ fn main() {
     std::io::stdout().write_all(b"discarded stdout").unwrap();
     std::io::stderr().write_all(b"discarded stderr").unwrap();
     println!("worker receipt");
-    std::fs::write(folder.join("ready"), args[2..].join("\n")).unwrap();
+    std::fs::write(folder.join("ready.tmp"), args[2..].join("\n")).unwrap();
+    std::fs::rename(folder.join("ready.tmp"), folder.join("ready")).unwrap();
     std::thread::sleep(std::time::Duration::from_secs(4));
     std::fs::write(folder.join("done"), b"completed").unwrap();
 }

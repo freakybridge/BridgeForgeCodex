@@ -3,7 +3,6 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fs::{self, OpenOptions};
-use std::io::Write;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
@@ -23,6 +22,14 @@ pub struct PendingState {
     pub triggers: Vec<String>,
 }
 
+impl PendingState {
+    pub fn is_valid(&self) -> bool {
+        self.schema_version == 2
+            && DateTime::parse_from_rfc3339(&self.first_pending_utc).is_ok()
+            && DateTime::parse_from_rfc3339(&self.updated_utc).is_ok()
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorkerState {
     #[serde(rename = "schemaVersion")]
@@ -39,6 +46,20 @@ pub struct WorkerState {
         skip_serializing_if = "Option::is_none"
     )]
     pub worker_started_utc: Option<String>,
+    #[serde(
+        rename = "processIdentity",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub process_identity: Option<u64>,
+}
+
+impl WorkerState {
+    pub fn is_valid(&self) -> bool {
+        self.schema_version == 1
+            && !self.token.is_empty()
+            && DateTime::parse_from_rfc3339(&self.started_utc).is_ok()
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -67,7 +88,16 @@ pub fn mark_pending(state_dir: &Path, trigger: &str) -> MemoryResult<PendingStat
     }
     let _queue = queue_lock(state_dir)?;
     let path = state_dir.join("pending.json");
-    let current = read_pending(state_dir).ok().flatten();
+    let current = read_pending(state_dir)?;
+    if current.is_none() && path.exists() {
+        if !path.is_file() || is_link_or_reparse(&path)? {
+            return Err(MemorySyncError::new("pending state is not a plain file"));
+        }
+        fs::rename(
+            &path,
+            state_dir.join(format!("pending.invalid-{}.json", unique_token())),
+        )?;
+    }
     let now = utc_now();
     let mut triggers = current
         .as_ref()
@@ -97,10 +127,8 @@ pub fn read_pending(state_dir: &Path) -> MemoryResult<Option<PendingState>> {
     if !path.is_file() || is_link_or_reparse(&path)? {
         return Ok(None);
     }
-    match serde_json::from_slice(&fs::read(path)?) {
-        Ok(value) => Ok(Some(value)),
-        Err(_) => Ok(None),
-    }
+    let value = serde_json::from_slice::<PendingState>(&fs::read(path)?).ok();
+    Ok(value.filter(PendingState::is_valid))
 }
 
 pub fn merge_migrated_pending(
@@ -235,39 +263,38 @@ pub fn reserve_worker(state_dir: &Path) -> MemoryResult<WorkerReservation> {
     fs::create_dir_all(state_dir)?;
     let _queue = queue_lock(state_dir)?;
     let path = state_dir.join("worker.json");
-    for _ in 0..2 {
-        if let Some(current) = read_worker_state(state_dir)? {
-            if worker_is_live(&current) {
+    if let Ok(metadata) = fs::symlink_metadata(&path) {
+        if !metadata.is_file() || is_link_or_reparse(&path)? {
+            return Err(MemorySyncError::new(
+                "worker reservation is not a plain file",
+            ));
+        }
+        match read_worker_state(state_dir)? {
+            Some(current) if worker_is_live(&current) => {
                 return Ok(WorkerReservation::Reused(current));
             }
-            if path.is_file() {
-                fs::remove_file(&path)?;
+            Some(_) => fs::remove_file(&path)?,
+            None => {
+                // Preserve interrupted writes for diagnosis. The queue lock makes
+                // recovery and replacement a single-launcher operation.
+                fs::rename(
+                    &path,
+                    state_dir.join(format!("worker.invalid-{}.json", unique_token())),
+                )?;
             }
-        }
-        let token = unique_token();
-        let state = WorkerState {
-            schema_version: 1,
-            token,
-            pid: 0,
-            launcher_pid: std::process::id(),
-            started_utc: utc_now(),
-            worker_started_utc: None,
-        };
-        let mut payload = serde_json::to_vec(&state)?;
-        payload.push(b'\n');
-        match OpenOptions::new().create_new(true).write(true).open(&path) {
-            Ok(mut file) => {
-                file.write_all(&payload)?;
-                file.sync_all()?;
-                return Ok(WorkerReservation::Acquired(state));
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(error) => return Err(error.into()),
         }
     }
-    let state = read_worker_state(state_dir)?
-        .ok_or_else(|| MemorySyncError::new("worker reservation raced and no state is readable"))?;
-    Ok(WorkerReservation::Reused(state))
+    let state = WorkerState {
+        schema_version: 1,
+        token: unique_token(),
+        pid: 0,
+        launcher_pid: std::process::id(),
+        started_utc: utc_now(),
+        worker_started_utc: None,
+        process_identity: None,
+    };
+    atomic_write_json(&path, &state)?;
+    Ok(WorkerReservation::Acquired(state))
 }
 
 pub fn mark_worker_started(state_dir: &Path, token: &str, pid: u32) -> MemoryResult<bool> {
@@ -280,6 +307,7 @@ pub fn mark_worker_started(state_dir: &Path, token: &str, pid: u32) -> MemoryRes
     }
     current.pid = pid;
     current.worker_started_utc = Some(utc_now());
+    current.process_identity = process_identity(pid);
     atomic_write_json(&state_dir.join("worker.json"), &current)?;
     Ok(true)
 }
@@ -302,15 +330,26 @@ pub fn read_worker_state(state_dir: &Path) -> MemoryResult<Option<WorkerState>> 
     if !path.is_file() || is_link_or_reparse(&path)? {
         return Ok(None);
     }
-    match serde_json::from_slice(&fs::read(path)?) {
-        Ok(value) => Ok(Some(value)),
-        Err(_) => Ok(None),
-    }
+    let value = serde_json::from_slice::<WorkerState>(&fs::read(path)?).ok();
+    Ok(value.filter(WorkerState::is_valid))
 }
 
 pub fn worker_is_live(value: &WorkerState) -> bool {
     if value.pid > 0 && process_alive(value.pid) {
-        return true;
+        #[cfg(windows)]
+        if let Some(actual) = process_identity(value.pid) {
+            if let Some(expected) = value.process_identity {
+                return actual == expected;
+            }
+            // Legacy reservations lack a birth-time receipt. A process created
+            // outside the bounded launch interval cannot be their worker.
+            if let Ok(started) = DateTime::parse_from_rfc3339(&value.started_utc) {
+                let birth_millis = (actual / 10_000) as i64 - 11_644_473_600_000;
+                let delta = birth_millis - started.timestamp_millis();
+                return (-1000..=WORKER_START_GRACE.as_millis() as i64).contains(&delta);
+            }
+        }
+        return true; // Query denial is not evidence that a live worker is stale.
     }
     if value.pid != 0 {
         return false;
@@ -325,6 +364,40 @@ pub fn worker_is_live(value: &WorkerState) -> bool {
         })
         .is_some_and(|elapsed| elapsed < WORKER_START_GRACE)
 }
+
+#[cfg(windows)]
+fn process_identity(pid: u32) -> Option<u64> {
+    use std::os::windows::io::{FromRawHandle, OwnedHandle};
+    use windows_sys::Win32::Foundation::FILETIME;
+    use windows_sys::Win32::System::Threading::{
+        GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+    let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
+    if handle.is_null() {
+        return None;
+    }
+    let _owned = unsafe { OwnedHandle::from_raw_handle(handle) };
+    let mut created = FILETIME {
+        dwLowDateTime: 0,
+        dwHighDateTime: 0,
+    };
+    let mut exited = created;
+    let mut kernel = created;
+    let mut user = created;
+    if unsafe { GetProcessTimes(handle, &mut created, &mut exited, &mut kernel, &mut user) } == 0 {
+        return None;
+    }
+    Some((u64::from(created.dwHighDateTime) << 32) | u64::from(created.dwLowDateTime))
+}
+
+#[cfg(not(windows))]
+fn process_identity(_pid: u32) -> Option<u64> {
+    None
+}
+
+#[cfg(all(test, bridgeforge_factory_tests))]
+#[path = "../../../../../../scripts/tests/unit/core_memory_worker.rs"]
+mod tests;
 
 pub fn try_acquire_reconcile_lock(state_dir: &Path) -> MemoryResult<Option<ReconcileLock>> {
     Ok(try_lock_file(&state_dir.join("reconcile.lock"))?.map(|file| ReconcileLock { _file: file }))

@@ -75,7 +75,7 @@ pub struct SyncPlan {
     #[serde(skip)]
     generated_source_fingerprints: BTreeMap<String, String>,
     #[serde(skip)]
-    project_hook_inputs: Vec<(crate::project_hooks::Hook, Vec<u8>)>,
+    project_hook_inputs: Vec<(crate::project_hooks::Hook, crate::project_hooks::Input)>,
     #[serde(skip)]
     project_hook_reads: BTreeMap<String, Option<Vec<u8>>>,
 }
@@ -233,7 +233,10 @@ fn sync_role_input(path: &Path) -> Result<Option<(String, bool)>, String> {
         Err(error) => return Err(error.to_string()),
     };
     if !file.metadata().map_err(|e| e.to_string())?.is_file() {
-        return Err(format!("role input is not a plain file: {}", path.display()));
+        return Err(format!(
+            "role input is not a plain file: {}",
+            path.display()
+        ));
     }
     let mut digest = Sha256::new();
     let mut buffer = [0u8; 65536];
@@ -241,15 +244,21 @@ fn sync_role_input(path: &Path) -> Result<Option<(String, bool)>, String> {
     let mut referenced = false;
     loop {
         let count = file.read(&mut buffer).map_err(|e| e.to_string())?;
-        if count == 0 { break; }
+        if count == 0 {
+            break;
+        }
         digest.update(&buffer[..count]);
         tail.extend_from_slice(&buffer[..count]);
-        referenced |= tail.windows(RETIRED_SYNC_ROLE.len())
+        referenced |= tail
+            .windows(RETIRED_SYNC_ROLE.len())
             .any(|window| window == RETIRED_SYNC_ROLE.as_bytes());
         let keep = tail.len().saturating_sub(RETIRED_SYNC_ROLE.len() - 1);
         tail.drain(..keep);
     }
-    Ok(Some((format!("sha256:{:x}", digest.finalize()), referenced)))
+    Ok(Some((
+        format!("sha256:{:x}", digest.finalize()),
+        referenced,
+    )))
 }
 
 fn sync_role_inputs(root: &Path) -> Result<BTreeMap<String, (String, bool)>, String> {
@@ -265,18 +274,43 @@ fn sync_role_inputs(root: &Path) -> Result<BTreeMap<String, (String, bool)>, Str
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
             Err(error) => return Err(error.to_string()),
             Ok(metadata) if !metadata.is_dir() => {
-                return Err(format!("role reference directory is not a plain directory: {directory}"));
+                return Err(format!(
+                    "role reference directory is not a plain directory: {directory}"
+                ));
             }
             Ok(_) => {}
         }
         for entry in WalkDir::new(&path).sort_by_file_name() {
             let entry = entry.map_err(|error| error.to_string())?;
             if crate::memory::is_link_or_reparse(entry.path()).map_err(|e| e.to_string())? {
-                return Err(format!("linked role input is unsafe: {}", entry.path().display()));
+                return Err(format!(
+                    "linked role input is unsafe: {}",
+                    entry.path().display()
+                ));
             }
             if entry.file_type().is_file() {
-                let extension = entry.path().extension().and_then(|s| s.to_str()).unwrap_or("").to_ascii_lowercase();
-                if !matches!(extension.as_str(), "md" | "toml" | "json" | "yaml" | "yml" | "txt" | "rs" | "py" | "ps1" | "sh" | "cmd" | "bat" | "js" | "ts") {
+                let extension = entry
+                    .path()
+                    .extension()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("")
+                    .to_ascii_lowercase();
+                if !matches!(
+                    extension.as_str(),
+                    "md" | "toml"
+                        | "json"
+                        | "yaml"
+                        | "yml"
+                        | "txt"
+                        | "rs"
+                        | "py"
+                        | "ps1"
+                        | "sh"
+                        | "cmd"
+                        | "bat"
+                        | "js"
+                        | "ts"
+                ) {
                     continue;
                 }
                 let target = relative_posix(root, entry.path())?;
@@ -290,14 +324,18 @@ fn sync_role_inputs(root: &Path) -> Result<BTreeMap<String, (String, bool)>, Str
 }
 
 fn sync_role_references(inputs: &BTreeMap<String, (String, bool)>) -> Vec<String> {
-    inputs.iter().filter_map(|(path, (_, referenced))| {
-        (path != RETIRED_SYNC_TARGET && *referenced)
-            .then(|| path.clone())
-    }).collect()
+    inputs
+        .iter()
+        .filter_map(|(path, (_, referenced))| {
+            (path != RETIRED_SYNC_TARGET && *referenced).then(|| path.clone())
+        })
+        .collect()
 }
 
 fn sync_role_fingerprint(inputs: &BTreeMap<String, (String, bool)>) -> Result<String, String> {
-    Ok(sha_raw(&serde_json::to_vec(inputs).map_err(|e| e.to_string())?))
+    Ok(sha_raw(
+        &serde_json::to_vec(inputs).map_err(|e| e.to_string())?,
+    ))
 }
 
 fn plan_sync_role_retirement(
@@ -313,7 +351,9 @@ fn plan_sync_role_retirement(
     for path in &references {
         gaps.push(format!("retired role {RETIRED_SYNC_ROLE} is referenced by {path}; preserve and resolve before update"));
     }
-    if !inputs.contains_key(RETIRED_SYNC_TARGET) { return Ok(()); }
+    if !inputs.contains_key(RETIRED_SYNC_TARGET) {
+        return Ok(());
+    }
     let path = safe_join(root, RETIRED_SYNC_TARGET, "retired role")?;
     // Known templates are below 4 KiB. Larger custom files need no in-memory payload.
     let hash = if fs::metadata(&path).map_err(|e| e.to_string())?.len() <= 4096 {
@@ -326,7 +366,9 @@ fn plan_sync_role_retirement(
         String::new()
     };
     if !RETIRED_SYNC_HASHES.contains(&hash.as_str()) {
-        gaps.push(format!("retired role has custom or unknown content: {RETIRED_SYNC_TARGET}; preserve for review"));
+        gaps.push(format!(
+            "retired role has custom or unknown content: {RETIRED_SYNC_TARGET}; preserve for review"
+        ));
     } else if references.is_empty() {
         safe.push(SyncAction {
             id: "retired:codex.agent.mechanical-sync-worker".into(),
@@ -366,6 +408,12 @@ fn plan_fingerprint(
     );
     if let Some(registry) = generated_source_fingerprints.get("project-hook:registry-input") {
         material.push_str(&format!("\nproject-hook:registry-input={registry}\n"));
+    }
+    for (key, value) in generated_source_fingerprints
+        .iter()
+        .filter(|(key, _)| key.starts_with("project-hook:input:"))
+    {
+        material.push_str(&format!("\n{key}={value}\n"));
     }
     if let Some(inputs) = generated_source_fingerprints.get(RETIRED_SYNC_INPUT) {
         material.push_str(&format!("\n{RETIRED_SYNC_INPUT}={inputs}\n"));
@@ -1893,7 +1941,11 @@ pub fn build_plan_with_inputs(
     plan_legacy_receipt_retirement(&project_root, &mut safe, &mut deletes)?;
     plan_project_map_retirement(&project_root, &mut safe, &mut deletes)?;
     plan_sync_role_retirement(
-        &project_root, &mut safe, &mut deletes, &mut gaps, &mut generated_source_fingerprints,
+        &project_root,
+        &mut safe,
+        &mut deletes,
+        &mut gaps,
+        &mut generated_source_fingerprints,
     )?;
     let (project_hook_inputs, project_hook_reads) = plan_project_hooks(
         &project_root,
@@ -1970,7 +2022,7 @@ fn plan_project_hooks(
     fingerprints: &mut BTreeMap<String, String>,
 ) -> Result<
     (
-        Vec<(crate::project_hooks::Hook, Vec<u8>)>,
+        Vec<(crate::project_hooks::Hook, crate::project_hooks::Input)>,
         BTreeMap<String, Option<Vec<u8>>>,
     ),
     String,
@@ -2056,7 +2108,13 @@ fn plan_project_hooks(
             .or_else(|| original.clone())
             .ok_or_else(|| format!("project Rust hook source is missing: {}", hook.source()))?;
         reads.insert(hook.source(), original);
-        let fingerprint = crate::project_hooks::identity(&hook, &source, contract)?;
+        let source =
+            crate::project_hooks::capture_input(root, &hook, source, writes, deletes, &mut reads)?;
+        let fingerprint = source.identity(&hook, contract)?;
+        fingerprints.insert(
+            format!("project-hook:input:{}", hook.id),
+            fingerprint.clone(),
+        );
         if crate::project_hooks::current(root, &hook, &fingerprint)? {
             continue;
         }
@@ -2089,14 +2147,7 @@ fn plan_project_hooks(
 }
 
 fn verify_project_hook_reads(plan: &SyncPlan) -> Result<(), String> {
-    for (relative, expected) in &plan.project_hook_reads {
-        if crate::project_hooks::read(&plan.project_root, relative)? != *expected {
-            return Err(format!(
-                "project Rust hook input changed after plan: {relative}"
-            ));
-        }
-    }
-    Ok(())
+    crate::project_hooks::verify_reads(&plan.project_root, &plan.project_hook_reads)
 }
 
 pub fn apply_plan(
@@ -2372,10 +2423,16 @@ fn apply_plan_internal(
         if let Some(observer) = before_stamp {
             observer(&plan.project_root, &stamp_path)?;
         }
-        if plan.generated_source_fingerprints.contains_key(RETIRED_SYNC_INPUT) {
+        if plan
+            .generated_source_fingerprints
+            .contains_key(RETIRED_SYNC_INPUT)
+        {
             let inputs = sync_role_inputs(&plan.project_root)?;
-            if inputs.contains_key(RETIRED_SYNC_TARGET) || !sync_role_references(&inputs).is_empty() {
-                return Err("retired role or reference appeared during apply; regenerate the plan".into());
+            if inputs.contains_key(RETIRED_SYNC_TARGET) || !sync_role_references(&inputs).is_empty()
+            {
+                return Err(
+                    "retired role or reference appeared during apply; regenerate the plan".into(),
+                );
             }
         }
         atomic_write(&stamp_path, &stamp_payload)?;
@@ -2845,13 +2902,7 @@ pub fn build_generated_assets(
         &inputs,
         runner,
     )?;
-    for (relative, expected) in &reads {
-        if crate::project_hooks::read(project_root, relative)? != *expected {
-            return Err(format!(
-                "project Rust hook input changed during build: {relative}"
-            ));
-        }
-    }
+    crate::project_hooks::verify_reads(project_root, &reads)?;
     for (hook, _) in &inputs {
         receipts.push(
             serde_json::from_slice(

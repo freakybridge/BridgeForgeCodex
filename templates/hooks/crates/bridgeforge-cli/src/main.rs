@@ -448,6 +448,11 @@ fn memory_operation_outcome(
 ) -> CommandOutcome {
     match result {
         Ok(action) => {
+            if action == "busy" {
+                return CommandOutcome::with_receipt(
+                    json!({"schema":1,"status":"busy","action":action}),
+                );
+            }
             let status = match action.as_str() {
                 "conflicted" => "conflicted",
                 "busy" => "busy",
@@ -507,6 +512,7 @@ fn record_hook_attempt(
 }
 
 fn hook_failure_outcome(
+    args: &[String],
     state: &Path,
     event: &str,
     started_utc: &str,
@@ -514,7 +520,11 @@ fn hook_failure_outcome(
 ) -> CommandOutcome {
     let detail = detail.to_string();
     let _ = record_hook_attempt(state, event, "failed", started_utc, Some(&detail));
-    memory_failure_outcome(state, detail)
+    let mut outcome = memory_failure_outcome(state, detail);
+    if let Ok(notice) = memory_hook_notice(args, state, event) {
+        outcome.receipt = notice.receipt;
+    }
+    outcome
 }
 
 fn launch_memory_worker(args: &[String], state: &Path) -> Result<String, String> {
@@ -697,7 +707,13 @@ fn memory_sync(args: &[String]) -> CommandOutcome {
             let migration = bridgeforge_core::memory::migration::status(&codex, &state_dir);
             let migration_error = migration.as_ref().err().map(ToString::to_string);
             let migration = migration.ok();
-            let (sync_health, active_alert_id) = if migration_error.is_some() {
+            let runtime_error = memory_state_error(&state_dir, worker_active);
+            let (sync_health, active_alert_id) = if runtime_error.is_some() {
+                (
+                    "failed",
+                    Some("native-memory:runtime-state-invalid".to_string()),
+                )
+            } else if migration_error.is_some() {
                 (
                     "failed",
                     Some("native-memory:state-migration-invalid".to_string()),
@@ -792,6 +808,7 @@ fn memory_sync(args: &[String]) -> CommandOutcome {
                 "alertId": alert_id,
                 "activeAlertId": active_alert_id,
                 "error": authorization_error,
+                "runtimeStateError": runtime_error,
                 })),
                 ..CommandOutcome::default()
             }
@@ -937,15 +954,15 @@ fn memory_sync(args: &[String]) -> CommandOutcome {
                 return blocked("memory-sync", error);
             }
             if let Err(error) = migrate_memory_state(&codex, &state_dir, &ledger) {
-                return hook_failure_outcome(&state_dir, &event, &started_utc, error);
+                return hook_failure_outcome(args, &state_dir, &event, &started_utc, error);
             }
             if let Err(error) = authorized_remote(&ledger, &state_dir) {
-                return hook_failure_outcome(&state_dir, &event, &started_utc, error);
+                return hook_failure_outcome(args, &state_dir, &event, &started_utc, error);
             }
             let trigger = event.to_lowercase();
             if let Err(error) = bridgeforge_core::memory::worker::mark_pending(&state_dir, &trigger)
             {
-                return hook_failure_outcome(&state_dir, &event, &started_utc, error);
+                return hook_failure_outcome(args, &state_dir, &event, &started_utc, error);
             }
             match launch_memory_worker(args, &state_dir) {
                 Ok(worker) => {
@@ -957,7 +974,7 @@ fn memory_sync(args: &[String]) -> CommandOutcome {
                         &started_utc,
                         Some(&format!("worker-{worker}")),
                     ) {
-                        return hook_failure_outcome(&state_dir, &event, &started_utc, error);
+                        return hook_failure_outcome(args, &state_dir, &event, &started_utc, error);
                     }
                     let executable = std::env::current_exe().ok();
                     if let Err(error) = bridgeforge_core::memory::atomic_write_json(
@@ -973,15 +990,115 @@ fn memory_sync(args: &[String]) -> CommandOutcome {
                             "verifiedUtc": completed_utc,
                         }),
                     ) {
-                        return hook_failure_outcome(&state_dir, &event, &started_utc, error);
+                        return hook_failure_outcome(args, &state_dir, &event, &started_utc, error);
                     }
-                    CommandOutcome::ok()
+                    match memory_hook_notice(args, &state_dir, &event) {
+                        Ok(outcome) => outcome,
+                        Err(error) => {
+                            hook_failure_outcome(args, &state_dir, &event, &started_utc, error)
+                        }
+                    }
                 }
-                Err(error) => hook_failure_outcome(&state_dir, &event, &started_utc, error),
+                Err(error) => hook_failure_outcome(args, &state_dir, &event, &started_utc, error),
             }
         }
         _ => blocked("memory-sync", format!("unknown subcommand: {command}")),
     }
+}
+
+fn memory_state_error(state: &Path, worker_active: bool) -> Option<String> {
+    let check = || -> Result<(), String> {
+        for file in [
+            "pending.json",
+            "worker.json",
+            "health.json",
+            "active-conflict.json",
+            "last-synced.json",
+        ] {
+            let path = state.join(file);
+            let metadata = match fs::symlink_metadata(&path) {
+                Ok(value) => value,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => return Err(format!("{file}: {error}")),
+            };
+            #[cfg(windows)]
+            let linked = {
+                use std::os::windows::fs::MetadataExt;
+                metadata.file_attributes() & 0x400 != 0
+            };
+            #[cfg(not(windows))]
+            let linked = metadata.file_type().is_symlink();
+            if linked || !metadata.is_file() {
+                return Err(format!("{file} is not a plain file"));
+            }
+            let bytes = match fs::read(&path) {
+                Ok(value) => value,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => return Err(format!("{file}: {error}")),
+            };
+            let value: Value =
+                serde_json::from_slice(&bytes).map_err(|e| format!("{file}: {e}"))?;
+            if !value.is_object() {
+                return Err(format!("{file} is not an object"));
+            }
+            let valid = match file {
+                "pending.json" => serde_json::from_value::<
+                    bridgeforge_core::memory::worker::PendingState,
+                >(value.clone())
+                .is_ok_and(|v| v.is_valid()),
+                "worker.json" => serde_json::from_value::<
+                    bridgeforge_core::memory::worker::WorkerState,
+                >(value.clone())
+                .is_ok_and(|v| v.is_valid()),
+                "health.json" => value["schema"].as_u64() == Some(1) && value["status"].is_string(),
+                "active-conflict.json" => value["conflictId"].is_string(),
+                "last-synced.json" => {
+                    value["schemaVersion"].as_u64() == Some(2)
+                        && value["content_sha256"].is_string()
+                }
+                _ => true,
+            };
+            if !valid {
+                return Err(format!("{file} has invalid fields"));
+            }
+        }
+        if !worker_active {
+            bridgeforge_core::memory::remote::validate_synced_baseline(state)
+                .map_err(|e| format!("baseline: {e}"))?;
+        }
+        Ok(())
+    };
+    check().err()
+}
+
+fn memory_hook_notice(
+    args: &[String],
+    state: &Path,
+    event: &str,
+) -> Result<CommandOutcome, String> {
+    if event != "SessionStart" {
+        return Ok(CommandOutcome::ok());
+    }
+    let mut query = args.to_vec();
+    query[0] = "status".into();
+    let status = memory_sync(&query)
+        .receipt
+        .ok_or("memory status receipt is unavailable")?;
+    let message = match status["syncHealth"].as_str() {
+        Some("failed") => {
+            "原生 Memory 自动同步失败，待同步任务仍保留。请检查 Memory 同步状态并处理错误。"
+        }
+        Some("conflicted") => "原生 Memory 自动同步遇到文件冲突，已保留两边版本，需要确认后继续。",
+        Some("degraded") => "原生 Memory 自动同步已超过五分钟未完成，请检查后台同步状态。",
+        _ => return Ok(CommandOutcome::ok()),
+    };
+    let emitted = bridgeforge_core::memory::emit_alert_once(state, status["alertId"].as_str())
+        .map_err(|error| error.to_string())?;
+    Ok(if emitted.is_some() {
+        CommandOutcome::with_receipt(json!({"systemMessage":message}))
+    } else {
+        CommandOutcome::ok()
+    })
 }
 
 fn batch(args: &[String]) -> CommandOutcome {

@@ -1,5 +1,87 @@
 use super::*;
 
+#[test]
+fn project_hook_index_reads_package_only_from_index() {
+    struct IndexFiles(std::collections::BTreeMap<String, Vec<u8>>);
+    impl ProcessRunner for IndexFiles {
+        fn run(&self, request: &ProcessRequest) -> std::io::Result<crate::ProcessOutput> {
+            let args = request
+                .args
+                .iter()
+                .map(|s| s.to_string_lossy().to_string())
+                .collect::<Vec<_>>();
+            let stdout = if args[0] == "ls-files" {
+                self.0
+                    .keys()
+                    .map(|p| format!("100644 abc 0\t.codex/hooks/project_demo/{p}\0"))
+                    .collect::<String>()
+                    .into_bytes()
+            } else {
+                let key = args
+                    .last()
+                    .unwrap()
+                    .strip_prefix(":.codex/hooks/project_demo/")
+                    .unwrap();
+                return Ok(crate::ProcessOutput {
+                    code: if self.0.contains_key(key) { 0 } else { 1 },
+                    stdout: self.0.get(key).cloned().unwrap_or_default(),
+                    stderr: Vec::new(),
+                    timed_out: false,
+                });
+            };
+            Ok(crate::ProcessOutput {
+                code: 0,
+                stdout,
+                stderr: Vec::new(),
+                timed_out: false,
+            })
+        }
+    }
+    let hook = crate::project_hooks::Hook {
+        id: "demo".into(),
+        events: Vec::new(),
+    };
+    let mut files = std::collections::BTreeMap::from([
+        (
+            "entrypoint.rs".into(),
+            b"pub fn run(_:Vec<String>)->i32{0}".to_vec(),
+        ),
+        (
+            "Cargo.toml".into(),
+            b"[package]\nname=\"demo\"\nversion=\"0.1.0\"\n".to_vec(),
+        ),
+    ]);
+    assert!(
+        project_hook_index_input(
+            Path::new("absent-worktree"),
+            &hook,
+            &IndexFiles(files.clone())
+        )
+        .unwrap_err()
+        .contains("Cargo.lock")
+    );
+    files.insert("Cargo.lock".into(), b"version=4\n".to_vec());
+    for name in [
+        ".cargo/config.toml",
+        ".CARGO/config.toml",
+        "nested/.CaRgO/config",
+        ".BRIDGEFORGE-MAIN.RS",
+        "nested/.BridgeForge-Main.rs",
+    ] {
+        let mut reserved = files.clone();
+        reserved.insert(name.into(), b"reserved".to_vec());
+        assert!(
+            project_hook_index_input(Path::new("absent-worktree"), &hook, &IndexFiles(reserved))
+                .unwrap_err()
+                .contains("reserved"),
+            "{name}"
+        );
+    }
+    let input =
+        project_hook_index_input(Path::new("absent-worktree"), &hook, &IndexFiles(files)).unwrap();
+    assert_eq!(input.package.unwrap().len(), 3);
+}
+
 fn factory_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .ancestors()

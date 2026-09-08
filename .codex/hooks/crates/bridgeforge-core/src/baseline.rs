@@ -968,6 +968,60 @@ fn git_index_blob(root: &Path, path: &str, runner: &dyn ProcessRunner) -> Result
     Ok(output.stdout)
 }
 
+fn project_hook_index_input(
+    root: &Path,
+    hook: &crate::project_hooks::Hook,
+    runner: &dyn ProcessRunner,
+) -> Result<crate::project_hooks::Input, String> {
+    let prefix = format!(".codex/hooks/project_{}/", hook.id);
+    let mut request = ProcessRequest::new("git", root);
+    request.args = vec![
+        "ls-files".into(),
+        "--stage".into(),
+        "-z".into(),
+        "--".into(),
+        prefix.clone().into(),
+    ];
+    request.timeout = std::time::Duration::from_secs(45);
+    let result = runner.run(&request).map_err(|e| e.to_string())?;
+    if result.timed_out || result.code != 0 {
+        return Err("cannot inspect staged project hook package".into());
+    }
+    let listing = std::str::from_utf8(&result.stdout).map_err(|e| e.to_string())?;
+    let source = git_index_blob(root, &hook.source(), runner)?;
+    std::str::from_utf8(&source).map_err(|_| "staged project Rust hook source must be UTF-8")?;
+    let manifest_path = format!("{prefix}Cargo.toml");
+    if !listing.split('\0').any(|record| {
+        record
+            .split_once('\t')
+            .is_some_and(|(_, path)| path == manifest_path)
+    }) {
+        return crate::project_hooks::Input::from_files(source, std::collections::BTreeMap::new());
+    }
+    let mut files = std::collections::BTreeMap::new();
+    for record in listing.split('\0').filter(|r| !r.is_empty()) {
+        let (metadata, path) = record.split_once('\t').ok_or("invalid staged hook file")?;
+        let fields = metadata.split_whitespace().collect::<Vec<_>>();
+        if fields.len() != 3 || !matches!(fields[0], "100644" | "100755") || fields[2] != "0" {
+            return Err("staged project hook package requires regular, merged files".into());
+        }
+        let relative = path
+            .strip_prefix(&prefix)
+            .ok_or("invalid staged hook prefix")?;
+        if relative.split('/').any(|p| matches!(p, "target" | ".git")) {
+            continue;
+        }
+        if relative
+            .split('/')
+            .any(crate::project_hooks::reserved_package_component)
+        {
+            return Err("reserved staged project hook path".into());
+        }
+        files.insert(relative.to_string(), git_index_blob(root, path, runner)?);
+    }
+    crate::project_hooks::Input::from_files(source, files)
+}
+
 pub fn verify_index(root: &Path, runner: &dyn ProcessRunner) -> Result<BaselineReport, String> {
     let contract_bytes = git_index_blob(root, ".codex/managed-skeleton.json", runner)?;
     let contract = parse_unique_json(&contract_bytes, "staged current baseline")?;
@@ -1060,10 +1114,8 @@ pub fn verify_index(root: &Path, runner: &dyn ProcessRunner) -> Result<BaselineR
             return Err("staged project Rust hook registrations drifted".into());
         }
         for hook in crate::project_hooks::hooks(&combined)? {
-            let source = git_index_blob(root, &hook.source(), runner)?;
-            std::str::from_utf8(&source)
-                .map_err(|_| "staged project Rust hook source must be UTF-8")?;
-            let input = crate::project_hooks::identity(&hook, &source, &contract)?;
+            let input =
+                project_hook_index_input(root, &hook, runner)?.identity(&hook, &contract)?;
             checked.push(format!("project-hook:{}:{input}", hook.id));
         }
     }

@@ -407,6 +407,7 @@ fn record_synced(
     manifest: &SnapshotManifest,
     commit: Option<String>,
 ) -> MemoryResult<()> {
+    recover_baseline(state_dir)?;
     let baseline = baseline_path(state_dir);
     copy_tree(snapshot, &state_dir.join(".last-synced-snapshot-new"))?;
     if baseline.exists() {
@@ -414,8 +415,7 @@ fn record_synced(
         fs::rename(&baseline, state_dir.join(".last-synced-snapshot-old"))?;
     }
     fs::rename(state_dir.join(".last-synced-snapshot-new"), &baseline)?;
-    remove_tree(&state_dir.join(".last-synced-snapshot-old"))?;
-    atomic_write_json(
+    let result = atomic_write_json(
         &state_dir.join("last-synced.json"),
         &SyncedState {
             schema_version: 2,
@@ -424,7 +424,52 @@ fn record_synced(
             commit,
             utc: utc_now(),
         },
-    )
+    );
+    if let Err(error) = result {
+        recover_baseline(state_dir).map_err(|recovery| {
+            MemorySyncError::new(format!("{error}; baseline recovery failed: {recovery}"))
+        })?;
+        return Err(error);
+    }
+    remove_tree(&state_dir.join(".last-synced-snapshot-old"))
+}
+
+fn recover_baseline(state_dir: &Path) -> MemoryResult<()> {
+    let previous = state_dir.join(".last-synced-snapshot-old");
+    if !previous.exists() {
+        return Ok(());
+    }
+    let receipt = load_synced(state_dir).ok_or_else(|| {
+        MemorySyncError::new(
+            "interrupted baseline update has no trusted receipt; snapshots were preserved",
+        )
+    })?;
+    let current = baseline_path(state_dir);
+    let matches = |path: &Path| -> bool {
+        super::read_manifest(path).ok().is_some_and(|manifest| {
+            manifest.content_sha256 == receipt.content_sha256
+                && manifest.revision == receipt.revision
+        })
+    };
+    if matches(&current) {
+        return remove_tree(&previous);
+    }
+    if !matches(&previous) {
+        return Err(MemorySyncError::new(
+            "interrupted baseline snapshots do not match the receipt; snapshots were preserved",
+        ));
+    }
+    let interrupted = super::temporary_sibling(&current, "interrupted");
+    if current.exists() {
+        fs::rename(&current, &interrupted)?;
+    }
+    if let Err(error) = fs::rename(&previous, &current) {
+        if interrupted.exists() {
+            let _ = fs::rename(&interrupted, &current);
+        }
+        return Err(error.into());
+    }
+    Ok(())
 }
 
 fn clear_active_conflict(state_dir: &Path) -> MemoryResult<()> {
@@ -437,6 +482,24 @@ fn clear_active_conflict(state_dir: &Path) -> MemoryResult<()> {
 
 fn load_synced(state_dir: &Path) -> Option<SyncedState> {
     serde_json::from_slice(&fs::read(state_dir.join("last-synced.json")).ok()?).ok()
+}
+
+pub fn validate_synced_baseline(state_dir: &Path) -> MemoryResult<()> {
+    let path = state_dir.join("last-synced.json");
+    if !path.exists() {
+        return Ok(());
+    }
+    let state: SyncedState = serde_json::from_slice(&fs::read(&path)?)?;
+    let manifest = super::read_manifest(&baseline_path(state_dir))?;
+    if state.schema_version != 2
+        || state.content_sha256 != manifest.content_sha256
+        || state.revision != manifest.revision
+    {
+        return Err(MemorySyncError::new(
+            "native memory baseline does not match its receipt",
+        ));
+    }
+    Ok(())
 }
 
 fn baseline_files(
@@ -460,6 +523,7 @@ fn reconcile_locked(
     runner: &dyn ProcessRunner,
     pending_before: Option<&[u8]>,
 ) -> MemoryResult<String> {
+    recover_baseline(state_dir)?;
     let work = unique_work_dir(state_dir)?;
     let result = (|| {
         let git = Git { runner };

@@ -4,7 +4,29 @@
 
 ## 配置与入口
 
-在 `.codex/hooks/project_demo/entrypoint.rs` 实现 `pub fn run(args: Vec<String>) -> i32`。允许使用受管 workspace 已锁定的依赖（包括 `bridgeforge_core::ProcessRunner`）；不支持项目自带 Cargo.toml、额外依赖、外部 include 文件或任意构建脚本。业务处理直接读取 stdin 并写 stdout/stderr，返回原有退出码。
+在 `.codex/hooks/project_demo/entrypoint.rs` 实现 `pub fn run(args: Vec<String>) -> i32`。业务处理直接读取 stdin 并写 stdout/stderr，返回原有退出码。
+
+没有 `Cargo.toml` 时保持既有单文件模式，使用受管 workspace 已锁定的依赖（包括 `bridgeforge_core::ProcessRunner`）。需要额外依赖或多个源码文件时，在同一目录维护独立 `Cargo.toml` 和 `Cargo.lock`，无需修改上游骨架。例如：
+
+```toml
+[package]
+name = "demo-hook"
+version = "0.1.0"
+edition = "2021"
+
+[workspace]
+
+[dependencies]
+toml_edit = "=0.23.7"
+
+[[bin]]
+name = "demo-hook"
+path = "entrypoint.rs"
+```
+
+在项目 Hook 目录用 Cargo 的正常依赖维护流程生成并保存 `Cargo.lock`；如需独立检查，可使用提供 main 的本地入口。骨架构建时在临时副本中生成 main 并选定唯一 bin，项目仍只需实现 run，不修改项目 manifest。`[workspace]` 防止本地 Cargo 操作误加入父级骨架工程。独立模式不隐式提供骨架依赖，项目自行声明所需 crate。
+
+工程必须自包含：路径依赖、源码及资源放在该 Hook 目录内；禁止路径依赖越界、符号链接、重解析点和项目 `.cargo` 配置。`target`、`.git` 不参与捕获，`.bridgeforge-main.rs` 是保留文件名。`.cargo` 和 `.bridgeforge-main.rs` 的保留名称检查忽略大小写，适用于工作区、待写入文件和暂存区，避免 Windows 大小写别名绕过；`.cargo-notes` 等不同名称不受影响。注册、完整文件集合和每个文件内容参与构建指纹；新增依赖或模块也会触发重建。首次下载第三方依赖需要 Cargo 缓存或网络。项目代码与第三方构建脚本均为受信可执行代码，临时快照不是安全沙箱。
 
 在项目所有的 `.codex/project-hooks.json` 中登记：
 
@@ -29,12 +51,14 @@ ID 和参数仅允许小写字母开头、其后小写字母/数字/下划线，
 
 使用 `$bridgeforge-codex` 的正式 project-sync plan/apply 流程。同步器合并旧的项目配置后，生成带 `bridgeforgeProjectHookId` 的命令注册，构建 `.codex/bin/project_demo.exe`（Windows）或无扩展名程序，并生成对应构建收据。源码、注册、产物、收据均在同一可回滚事务内；旧项目资产仍须逐项确认。已经生成注册的项目可使用 `bridgeforge build-assets --project-root <项目绝对路径>` 重建缺失或变更的产物；注册变化必须走 project-sync。
 
-编译发生在隔离快照中，使用受管 Cargo.lock 和 `cargo build --locked --profile release`，不修改项目受管 Cargo.toml，不在 Hook 事件触发时编译。编译依赖清单必须完全属于已捕获源码；Windows 产物必须采用 GUI subsystem，子进程须使用隐藏窗口的 ProcessRunner。构建失败、输入漂移或无效锁文件必须停止，不回退 Python。
+编译发生在隔离快照中，单文件模式使用受管 Cargo.lock，独立工程模式使用项目自己的 Cargo.lock；两者均执行 `cargo build --locked --profile release`，不自动生成或更新锁文件，不修改原始 Cargo.toml，不在 Hook 事件触发时编译。单文件模式继续限制源码依赖，独立模式捕获整个工程并核对本地路径边界；Windows 产物采用骨架生成的 GUI subsystem 入口，项目启动子进程仍须使用可验证的隐藏窗口入口。构建失败、输入漂移或无效锁文件必须停止，不回退 Python。
+
+独立工程支持 `build.rs` 在 `OUT_DIR` 生成源码并由 `include!` 引用。构建器仅捕获本次临时输出 `release/build/<package>/out/` 下、编译依赖清单实际引用的文件，并核对它们在自检期间未变化；工程外文件、其他输出路径和链接绕过仍被拒绝。旧单文件模式不放宽源码范围。
 
 `bridgeforge check baseline --root <项目绝对路径>` 核对注册、源码、锁定 workspace 与二进制收据；暂存区校验同时检查项目注册和入口源码。只有通过构建及校验的事务才最后写骨架版本戳。同名既有产物没有匹配 ownership 收据时必须列为风险，不得静默覆盖。
 
 旧版 `.codex/hooks.json` 顶层登记由同步器在同一风险确认事务中迁到 `.codex/project-hooks.json`，并移除原生配置中的旧字段；保留已有事件、参数和项目源码。两处登记同时存在且内容不一致时停止，不猜测采用哪份。独立登记文件由项目所有，骨架更新不得用模板覆盖；规划、构建、应用之间发生登记漂移必须拒绝写入。legacy 源文件迁移包应同时提供原生 `hooks.json` 与独立登记文件，二者使用 `hook-registration` 类型。
 
-暂存区校验从 Git 暂存区读取两份配置和入口源码，不能用工作区文件补齐未暂存的登记。
+暂存区校验从 Git 暂存区读取两份配置及项目工程全部文件，不能用工作区文件补齐未暂存的登记、依赖清单或锁文件。
 
 本能力不自动执行项目业务验收。真实外部写入、网络副作用或镜像删除仍须由项目在明确授权的测试环境验证。

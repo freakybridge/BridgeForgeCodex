@@ -403,6 +403,77 @@ fn project_sync_real_init_builds_and_applies_generated_assets() {
             .contains("project Rust hook")
     );
     fs::write(source_path, source).unwrap();
+    // The same downstream can opt into independent dependencies without any
+    // edit to the factory or the managed workspace manifest/lock.
+    let managed_manifest = fs::read(project.join(".codex/hooks/Cargo.toml")).unwrap();
+    let package = project.join(".codex/hooks/project_demo");
+    write(&package.join("Cargo.toml"), b"[package]\nname=\"independent-hook\"\nversion=\"0.1.0\"\nedition=\"2021\"\n[workspace]\n[dependencies]\nextra={path=\"extra\"}\n");
+    let project_lock = b"version = 4\n[[package]]\nname = \"independent-hook\"\nversion = \"0.1.0\"\ndependencies = [\"extra\"]\n[[package]]\nname = \"extra\"\nversion = \"0.1.0\"\n";
+    write(&package.join("Cargo.lock"), project_lock);
+    write(
+        &package.join("extra/Cargo.toml"),
+        b"[package]\nname=\"extra\"\nversion=\"0.1.0\"\nedition=\"2021\"\n",
+    );
+    write(
+        &package.join("extra/src/lib.rs"),
+        b"pub fn value()->i32{42}",
+    );
+    write(
+        &package.join("entrypoint.rs"),
+        b"pub fn run(_:Vec<String>)->i32{println!(\"{}\",extra::value());0}",
+    );
+    let mut independent = build_plan(&project, &factory, SyncMode::Update).unwrap();
+    attach_generated_assets(
+        &mut independent,
+        &factory,
+        &project,
+        &contract,
+        &SystemProcessRunner,
+    )
+    .unwrap();
+    let fingerprint = independent.aggregate_fingerprint.clone();
+    write(&package.join("Cargo.lock"), b"changed after build");
+    assert!(
+        apply_plan(independent.clone(), &fingerprint, false)
+            .unwrap_err()
+            .contains("input changed after plan")
+    );
+    write(&package.join("Cargo.lock"), project_lock);
+    apply_plan(independent, &fingerprint, false).unwrap();
+    assert_eq!(
+        fs::read(project.join(".codex/hooks/Cargo.toml")).unwrap(),
+        managed_manifest
+    );
+    assert_eq!(fs::read(package.join("Cargo.lock")).unwrap(), project_lock);
+    bridgeforge_core::baseline::verify(&project, None, true).unwrap();
+    assert_eq!(
+        build_plan(&project, &factory, SyncMode::Update)
+            .unwrap()
+            .status,
+        "current"
+    );
+    let output = SystemProcessRunner.run(&project_hook).unwrap();
+    assert_eq!(output.code, 0);
+    assert_eq!(String::from_utf8(output.stdout).unwrap().trim(), "42");
+    git_at(&project, &["add", "--force", "."]);
+    write(&package.join("Cargo.lock"), b"not staged");
+    bridgeforge_core::baseline::verify_index(&project, &SystemProcessRunner).unwrap();
+    write(&package.join("Cargo.lock"), project_lock);
+    git_at(
+        &project,
+        &[
+            "rm",
+            "--cached",
+            "--force",
+            "--",
+            ".codex/hooks/project_demo/Cargo.lock",
+        ],
+    );
+    assert!(
+        bridgeforge_core::baseline::verify_index(&project, &SystemProcessRunner)
+            .unwrap_err()
+            .contains("Cargo.lock")
+    );
     assert!(!project.join("scripts/tests").exists());
     let mut request = ProcessRequest::new("cargo", &project);
     request.args = [

@@ -22,6 +22,94 @@ impl Drop for RestoreFixture {
 }
 
 #[test]
+#[cfg(windows)]
+fn memory_atomic_write_handles_long_windows_paths() {
+    let temp = RestoreFixture::new();
+    let folder = temp
+        .0
+        .join("a".repeat(90))
+        .join("b".repeat(90))
+        .join("nested");
+    let target = folder.join("memory-snapshot-entry-with-a-long-name.md");
+    assert!(target.as_os_str().len() > 260);
+    super::super::atomic_write(&target, b"first").unwrap();
+    super::super::atomic_write(&target, b"replacement").unwrap();
+    assert_eq!(fs::read(&target).unwrap(), b"replacement");
+    let snapshot = folder.join("snapshot");
+    let files = BTreeMap::from([("nested/entry.md".into(), b"opaque bytes".to_vec())]);
+    snapshot_from_files(&snapshot, &files, 1).unwrap();
+    assert_eq!(snapshot_files(&snapshot).unwrap(), files);
+}
+
+#[test]
+fn interrupted_baseline_update_recovers_only_a_verified_receipt() {
+    for phase in 0..3 {
+        let temp = RestoreFixture::new();
+        let state = temp.0.join("state");
+        fs::create_dir(&state).unwrap();
+        let old = temp.0.join("old");
+        let new = temp.0.join("new");
+        let old_files = BTreeMap::from([("entry.md".into(), b"old".to_vec())]);
+        let new_files = BTreeMap::from([("entry.md".into(), b"new".to_vec())]);
+        let old_manifest = snapshot_from_files(&old, &old_files, 1).unwrap();
+        let new_manifest = snapshot_from_files(&new, &new_files, 2).unwrap();
+        record_synced(&state, &old, &old_manifest, Some("old-commit".into())).unwrap();
+        fs::rename(
+            baseline_path(&state),
+            state.join(".last-synced-snapshot-old"),
+        )
+        .unwrap();
+        if phase >= 1 {
+            copy_tree(&new, &baseline_path(&state)).unwrap();
+        }
+        if phase == 2 {
+            atomic_write_json(
+                &state.join("last-synced.json"),
+                &SyncedState {
+                    schema_version: 2,
+                    content_sha256: new_manifest.content_sha256,
+                    revision: 2,
+                    commit: Some("new-commit".into()),
+                    utc: utc_now(),
+                },
+            )
+            .unwrap();
+        }
+        recover_baseline(&state).unwrap();
+        validate_synced_baseline(&state).unwrap();
+        assert_eq!(
+            snapshot_files(&baseline_path(&state)).unwrap(),
+            if phase == 2 {
+                new_files.clone()
+            } else {
+                old_files
+            }
+        );
+        if phase == 1 {
+            let saved = fs::read_dir(&state)
+                .unwrap()
+                .filter_map(Result::ok)
+                .find(|entry| entry.file_name().to_string_lossy().contains("interrupted"))
+                .unwrap();
+            assert_eq!(snapshot_files(&saved.path()).unwrap(), new_files);
+        }
+    }
+}
+
+#[test]
+fn baseline_recovery_preserves_snapshots_without_a_matching_receipt() {
+    let temp = RestoreFixture::new();
+    let state = temp.0.join("state");
+    fs::create_dir(&state).unwrap();
+    let previous = state.join(".last-synced-snapshot-old");
+    let files = BTreeMap::from([("entry.md".into(), b"preserved".to_vec())]);
+    snapshot_from_files(&previous, &files, 1).unwrap();
+    assert!(recover_baseline(&state).is_err());
+    assert_eq!(snapshot_files(&previous).unwrap(), files);
+    assert!(!baseline_path(&state).exists());
+}
+
+#[test]
 fn restore_uses_only_verified_manifest_files() {
     let temp = RestoreFixture::new();
     let snapshot = temp.0.join("snapshot");

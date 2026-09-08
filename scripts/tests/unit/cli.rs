@@ -163,6 +163,212 @@ fn self_test_has_stable_identity() {
 }
 
 #[test]
+fn memory_session_start_notifies_failure_once_and_rearms_after_recovery() {
+    let home = std::env::temp_dir().join(format!(
+        "bf-memory-notice-{}",
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let state = home.join(".bridgeforge-codex/native-memory-sync");
+    fs::create_dir_all(&state).unwrap();
+    let args = vec![
+        "hook-run".into(),
+        "--codex-home".into(),
+        home.display().to_string(),
+    ];
+    bridgeforge_core::memory::record_health(&state, "failed", Some("network failure"), None)
+        .unwrap();
+    assert!(
+        memory_hook_notice(&args, &state, "Stop")
+            .unwrap()
+            .receipt
+            .is_none()
+    );
+    let first = memory_hook_notice(&args, &state, "SessionStart").unwrap();
+    assert!(
+        first.receipt.unwrap()["systemMessage"]
+            .as_str()
+            .unwrap()
+            .contains("Memory")
+    );
+    assert!(
+        memory_hook_notice(&args, &state, "SessionStart")
+            .unwrap()
+            .receipt
+            .is_none()
+    );
+    let query = vec![
+        "status".into(),
+        "--codex-home".into(),
+        home.display().to_string(),
+    ];
+    assert_eq!(memory_sync(&query).receipt.unwrap()["syncHealth"], "failed");
+    bridgeforge_core::memory::record_health(&state, "healthy", None, Some("noop")).unwrap();
+    bridgeforge_core::memory::record_health(&state, "failed", Some("network failure"), None)
+        .unwrap();
+    assert!(
+        memory_hook_notice(&args, &state, "SessionStart")
+            .unwrap()
+            .receipt
+            .is_some()
+    );
+    bridgeforge_core::memory::record_health(&state, "healthy", None, Some("noop")).unwrap();
+    assert!(
+        memory_hook_notice(&args, &state, "SessionStart")
+            .unwrap()
+            .receipt
+            .is_none()
+    );
+    fs::remove_dir_all(home).unwrap();
+}
+
+#[test]
+fn memory_hook_failure_notifies_and_busy_does_not_erase_the_failure() {
+    let home = std::env::temp_dir().join(format!(
+        "bf-memory-failed-hook-{}",
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let args = vec![
+        "memory-sync".into(),
+        "hook-run".into(),
+        "--codex-home".into(),
+        home.display().to_string(),
+        "--event".into(),
+        "SessionStart".into(),
+    ];
+    fs::create_dir_all(&home).unwrap();
+    fs::write(
+        home.join("config.toml"),
+        "[features]\nmemories = true\n[memories]\ngenerate_memories = true\nuse_memories = true\n",
+    )
+    .unwrap();
+    let failed = run(&args);
+    assert_ne!(failed.code, 0);
+    assert!(failed.receipt.unwrap()["systemMessage"].is_string());
+    let state = home.join(".bridgeforge-codex/native-memory-sync");
+    let before = fs::read(state.join("health.json")).unwrap();
+    memory_operation_outcome(&state, Ok("busy".into()));
+    assert_eq!(fs::read(state.join("health.json")).unwrap(), before);
+    assert!(run(&args).receipt.is_none());
+    fs::remove_dir_all(home).unwrap();
+}
+
+#[test]
+fn memory_status_rejects_corrupt_state_and_missing_baseline_without_writes() {
+    let home = std::env::temp_dir().join(format!(
+        "bf-memory-corrupt-state-{}",
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let state = home.join(".bridgeforge-codex/native-memory-sync");
+    fs::create_dir_all(&state).unwrap();
+    let args = vec![
+        "memory-sync".into(),
+        "status".into(),
+        "--codex-home".into(),
+        home.display().to_string(),
+    ];
+    for name in [
+        "pending.json",
+        "worker.json",
+        "health.json",
+        "active-conflict.json",
+        "last-synced.json",
+    ] {
+        let path = state.join(name);
+        fs::write(&path, b"{truncated").unwrap();
+        let result = run(&args);
+        assert_eq!(result.code, EXIT_BLOCKED, "{name}");
+        assert_eq!(result.receipt.unwrap()["syncHealth"], "failed");
+        assert_eq!(fs::read(&path).unwrap(), b"{truncated");
+        assert!(!state.join("alert-state.json").exists());
+        fs::remove_file(path).unwrap();
+    }
+    fs::write(state.join("last-synced.json"), json!({"schemaVersion":2,"content_sha256":"missing","revision":1,"commit":null,"utc":"2026-01-01T00:00:00Z"}).to_string()).unwrap();
+    assert!(
+        run(&args).receipt.unwrap()["runtimeStateError"]
+            .as_str()
+            .unwrap()
+            .contains("baseline")
+    );
+    fs::remove_dir_all(home).unwrap();
+}
+
+#[test]
+fn memory_conflict_and_stale_pending_notices_respect_acknowledgement() {
+    for kind in ["conflicted", "degraded"] {
+        let home = std::env::temp_dir().join(format!(
+            "bf-memory-{kind}-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let state = home.join(".bridgeforge-codex/native-memory-sync");
+        fs::create_dir_all(&state).unwrap();
+        if kind == "conflicted" {
+            fs::write(
+                state.join("active-conflict.json"),
+                json!({"schemaVersion":1,"conflictId":"fixture"}).to_string(),
+            )
+            .unwrap();
+        } else {
+            let mut pending =
+                bridgeforge_core::memory::worker::mark_pending(&state, "stop").unwrap();
+            pending.first_pending_utc = "2000-01-01T00:00:00Z".into();
+            bridgeforge_core::memory::atomic_write_json(&state.join("pending.json"), &pending)
+                .unwrap();
+        }
+        let args = vec![
+            "hook-run".into(),
+            "--codex-home".into(),
+            home.display().to_string(),
+        ];
+        assert!(
+            memory_hook_notice(&args, &state, "SessionStart")
+                .unwrap()
+                .receipt
+                .unwrap()["systemMessage"]
+                .is_string()
+        );
+        assert!(
+            memory_hook_notice(&args, &state, "SessionStart")
+                .unwrap()
+                .receipt
+                .is_none()
+        );
+        let status = memory_sync(&[
+            "status".into(),
+            "--codex-home".into(),
+            home.display().to_string(),
+        ])
+        .receipt
+        .unwrap();
+        assert_eq!(status["syncHealth"], kind);
+        fs::remove_file(state.join("alert-state.json")).unwrap();
+        bridgeforge_core::memory::acknowledge_alert(
+            &state,
+            status["activeAlertId"].as_str().unwrap(),
+        )
+        .unwrap();
+        assert!(
+            memory_hook_notice(&args, &state, "SessionStart")
+                .unwrap()
+                .receipt
+                .is_none()
+        );
+        fs::remove_dir_all(home).unwrap();
+    }
+}
+
+#[test]
 fn parser_collects_repeated_batch_roots_in_order() {
     let args = vec![
         "--project-root".into(),

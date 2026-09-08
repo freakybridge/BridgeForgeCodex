@@ -202,21 +202,25 @@ pub fn emit_alert_once(state_dir: &Path, alert_id: Option<&str>) -> MemoryResult
     let Some(alert_id) = alert_id else {
         return Ok(None);
     };
+    let Some(_lock) = worker::ReconcileLock::try_acquire(&state_dir.join("alerts"))? else {
+        return Ok(None);
+    };
     let path = state_dir.join("alert-state.json");
     let previous: Option<Value> = fs::read(&path)
         .ok()
         .and_then(|payload| serde_json::from_slice(&payload).ok());
-    if previous
-        .as_ref()
-        .and_then(|value| value["lastEmitted"].as_str())
-        == Some(alert_id)
-    {
+    if previous.as_ref().is_some_and(|value| {
+        value["lastEmitted"].as_str() == Some(alert_id)
+            || value["lastAcknowledged"].as_str() == Some(alert_id)
+    }) {
         return Ok(None);
     }
-    atomic_write_json(
-        &path,
-        &json!({"schema": 1, "lastEmitted": alert_id, "updatedUtc": utc_now()}),
-    )?;
+    let mut receipt = previous
+        .filter(Value::is_object)
+        .unwrap_or_else(|| json!({"schema":1}));
+    receipt["lastEmitted"] = json!(alert_id);
+    receipt["updatedUtc"] = json!(utc_now());
+    atomic_write_json(&path, &receipt)?;
     Ok(Some(alert_id.to_string()))
 }
 
@@ -1445,6 +1449,22 @@ fn atomic_replace_file(source: &Path, destination: &Path) -> std::io::Result<()>
     unsafe extern "system" {
         fn MoveFileExW(existing: *const u16, replacement: *const u16, flags: u32) -> i32;
     }
+    // Rust filesystem APIs support extended Windows paths, but raw Win32 calls
+    // need the same absolute verbatim spelling. The destination may not exist yet.
+    let source = fs::canonicalize(source)?;
+    let parent = destination.parent().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "destination has no parent",
+        )
+    })?;
+    let name = destination.file_name().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "destination has no filename",
+        )
+    })?;
+    let destination = fs::canonicalize(parent)?.join(name);
     let source: Vec<u16> = source.as_os_str().encode_wide().chain(Some(0)).collect();
     let destination: Vec<u16> = destination
         .as_os_str()
