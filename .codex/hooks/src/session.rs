@@ -666,7 +666,9 @@ pub fn skill_sync() -> StepResult {
     }
     let Ok(value) = fs::read_to_string(&ledger)
         .ok()
-        .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+        .and_then(|text| {
+            serde_json::from_str::<Value>(text.strip_prefix('\u{feff}').unwrap_or(&text)).ok()
+        })
         .ok_or(())
     else {
         return warning("bridgeforge-codex 托管账本无法读取");

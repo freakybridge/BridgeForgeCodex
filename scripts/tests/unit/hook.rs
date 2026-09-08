@@ -5,6 +5,45 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+#[test]
+fn skill_sync_accepts_utf8_bom_without_hiding_invalid_ledgers_or_drift() {
+    let fixture = Fixture::new();
+    let platform = fixture.root.join("fake-home/.codex");
+    let skill = platform.join("skills/bridgeforge-codex");
+    fs::create_dir_all(&skill).unwrap();
+    fs::write(skill.join("SKILL.md"), b"# Fixture\n").unwrap();
+    let ledger = platform.join("bridgeforge-codex-managed.json");
+    let valid = serde_json::to_vec(&serde_json::json!({
+        "schema_version": 1,
+        "platform": "codex",
+        "records": {"bridgeforge-codex": {"content_hash": post::source_tree_hash(&skill)}}
+    }))
+    .unwrap();
+    for prefix in [b"".as_slice(), b"\xef\xbb\xbf".as_slice()] {
+        let bytes = [prefix, valid.as_slice()].concat();
+        fs::write(&ledger, &bytes).unwrap();
+        let result = session::skill_sync();
+        assert!(result.stdout.is_empty(), "{}", result.stdout);
+        assert_eq!(fs::read(&ledger).unwrap(), bytes);
+    }
+    for bytes in [
+        b"\xef\xbb\xbf{".as_slice(),
+        b"\xff".as_slice(),
+        b"{}".as_slice(),
+    ] {
+        fs::write(&ledger, bytes).unwrap();
+        assert!(session::skill_sync().stdout.contains("[skill-sync]"));
+        assert_eq!(fs::read(&ledger).unwrap(), bytes);
+    }
+    fs::write(
+        &ledger,
+        [b"\xef\xbb\xbf".as_slice(), valid.as_slice()].concat(),
+    )
+    .unwrap();
+    fs::write(skill.join("SKILL.md"), b"# Changed\n").unwrap();
+    assert!(session::skill_sync().stdout.contains("内容漂移"));
+}
+
 #[cfg(windows)]
 #[test]
 fn session_configuration_write_failure_preserves_original_and_reports_failure() {

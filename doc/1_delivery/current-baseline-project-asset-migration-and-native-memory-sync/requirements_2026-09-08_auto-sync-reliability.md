@@ -94,3 +94,13 @@ M 级：既有同步链的跨模块可靠性修复，不新建调度架构。45 
 本次仍为 revision 33 的无变化同步，没有新增 Memory 内容提交；自动同步的真实调用链已恢复。用户既有验收授权有效，源码、产品传播、dogfood、默认 fixture、正式安装与真实 runtime 必要验收完成，因此本卡关闭。真实下游业务升级不在本次范围；网络中断、磁盘满和系统断电等未实测条件仍按前文边界保留，不承诺永不失败。独立 Skill 账本 BOM 提示及旧安装备份清理不属于本次自动同步阻断。
 
 本节是对已安装并实测的 1.17.5 及其源提交的验收。随后受管同步保存验收文档可能自动递增仓库版本；该元数据提交不改变本次测试指向的安装版本，不把未再次安装的新版本写成已安装。
+
+## 后续 Skill 账本 BOM 误报修复验收
+
+用户随后授权修复前文单列的 Skill 账本误报，并于 2026-09-08 明确调用 `$summary 同意验收` 与 `$git-sync`。账本读取只去掉文本开头的一个 UTF-8 BOM，再按原逻辑解析 JSON；不改写用户账本，不改变 schema、记录和 Skill hash 校验。模板与 dogfood 同步，源码版本 1.17.7。
+
+新增回归先复现原误报；一次补丁误匹配同文件其他读取点已撤回，最终 diff 仅涉及 skill_sync 的账本读取。最终 Hook 测试退出 0，25 passed、2 ignored，覆盖 BOM/无 BOM、损坏 JSON、非法 UTF-8、无效结构及真实 Skill 内容漂移。本机真实账本的 SessionStart Hook 退出 0，skillSyncWarning=false、ledgerUnchanged=true；原始收据为 `.runtime/skill-bom-session-start.stdout.json` 与对应 stderr 文件。build-assets 已完成，1.17.7 baseline clean、manifest --check、factory-version 与 diff --check 通过。
+
+上述源码与本仓库运行结果已获用户验收；历史“BOM 误报未修”描述为当时状态。正式发布检查继续由 git-sync 工作流完成，不为 summary 重跑验收。用户级及其他下游没有安装本次修复，不能以本仓库测试代替其安装收据。既有原生 Memory 迁移及发布历史只用于核对证据边界，现行规则已覆盖，不新增 Rule / Hook / AGENTS，不写 Memory、不归档。
+
+发布检查完成：只读 review-auditor 审查无阻断，确认仅移除首个 BOM 且其他校验和只读边界保留；`cargo test --locked --manifest-path scripts/tests/Cargo.toml -- --test-threads=1` 退出 0，87 passed、0 failed、3 ignored，耗时 897.33 秒。完整初始化安装与真实受管发布 fixture 均通过；skill-metadata、project-structure、diff --check 通过。其他未改动模块复用前述已通过证据；后续由受管 git-sync 自动维护最终发布版本和产物。此次提交效果仅为合法 BOM 账本不再误报，损坏账本和 Skill 内容漂移仍报警，不改写用户账本。
