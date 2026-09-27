@@ -588,6 +588,12 @@ fn factory_repository(name: &str) -> (RealRepository, PathBuf) {
     let (repo, remote) = managed_repository(name);
     fs::remove_file(repo.0.join(".codex/.bridgeforge_codex_version")).unwrap();
     fs::create_dir_all(repo.0.join("templates/hooks")).unwrap();
+    fs::create_dir_all(repo.0.join("templates/user")).unwrap();
+    fs::write(
+        repo.0.join(crate::user_agents::SOURCE),
+        b"user instructions\n",
+    )
+    .unwrap();
     fs::create_dir_all(repo.0.join(".codex/hooks")).unwrap();
     fs::write(repo.0.join("templates/managed.txt"), b"old\n").unwrap();
     fs::write(
@@ -663,6 +669,12 @@ impl ProcessRunner for GeneratedRunner {
                     b"external edit\n",
                 )?;
             }
+            if self.mode == "user-agents-drift" {
+                fs::write(
+                    self.root.join(crate::user_agents::SOURCE),
+                    b"external user template edit\n",
+                )?;
+            }
             return Ok(out(0, ""));
         }
         if request.args.first().is_some_and(|arg| arg == "self-test") {
@@ -686,9 +698,10 @@ impl ProcessRunner for GeneratedRunner {
 
 #[test]
 fn factory_build_failure_and_input_drift_do_not_apply_release() {
-    for mode in ["fail", "drift", "release-drift"] {
+    for mode in ["fail", "drift", "release-drift", "user-agents-drift"] {
         let (repo, remote) = factory_repository(mode);
         let manifest = fs::read(repo.0.join("templates/managed-skeleton.json")).unwrap();
+        let user_manifest = fs::read(repo.0.join(crate::user_agents::MANIFEST)).unwrap();
         let outcome = sync(
             &repo.0,
             &GeneratedRunner {
@@ -714,6 +727,16 @@ fn factory_build_failure_and_input_drift_do_not_apply_release() {
             manifest
         );
         assert!(!repo.0.join(".codex/bin/build-receipt-cli.json").exists());
+        assert_eq!(
+            fs::read(repo.0.join(crate::user_agents::MANIFEST)).unwrap(),
+            user_manifest
+        );
+        if mode == "user-agents-drift" {
+            assert_eq!(
+                fs::read(repo.0.join(crate::user_agents::SOURCE)).unwrap(),
+                b"external user template edit\n"
+            );
+        }
         if mode == "drift" {
             assert_eq!(
                 fs::read(repo.0.join("templates/hooks/Cargo.lock")).unwrap(),
@@ -733,6 +756,12 @@ fn factory_build_failure_and_input_drift_do_not_apply_release() {
 #[test]
 fn factory_rejected_commit_restores_versions_binaries_receipts_and_index() {
     let (repo, remote) = factory_repository("generated-rollback");
+    let user_manifest_before = fs::read(repo.0.join(crate::user_agents::MANIFEST)).unwrap();
+    fs::write(
+        repo.0.join(crate::user_agents::SOURCE),
+        b"authorized template edit\n",
+    )
+    .unwrap();
     fs::create_dir_all(repo.0.join(".codex/bin")).unwrap();
     let cli = repo.0.join(if cfg!(windows) {
         ".codex/bin/bridgeforge.exe"
@@ -771,6 +800,14 @@ fn factory_rejected_commit_restores_versions_binaries_receipts_and_index() {
             skip_push: true,
             ..Default::default()
         },
+    );
+    assert_eq!(
+        fs::read(repo.0.join(crate::user_agents::MANIFEST)).unwrap(),
+        user_manifest_before
+    );
+    assert_eq!(
+        fs::read(repo.0.join(crate::user_agents::SOURCE)).unwrap(),
+        b"authorized template edit\n"
     );
     assert_eq!(outcome.code, 2, "{}", outcome.stderr);
     assert!(

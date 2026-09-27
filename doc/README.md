@@ -63,6 +63,8 @@ delivery_layout: flat
 
 ## Delivery topic
 
+用户级指令分发：[确认卡与验证记录](1_delivery/user-agents-distribution/requirements_2026-09-27_user-agents.md)。
+
 | Topic | 主要记录 |
 |---|---|
 | `gpt6-skeleton-upgrade` | [初审](1_delivery/gpt6-skeleton-upgrade/audit-01_2026-09-05.md)；[一](1_delivery/gpt6-skeleton-upgrade/requirements_2026-09-05_block1.md)、[二](1_delivery/gpt6-skeleton-upgrade/requirements_2026-09-05_block2.md)、[三](1_delivery/gpt6-skeleton-upgrade/requirements_2026-09-05_block3.md)已交付；[四及课题一至五实施记录](1_delivery/gpt6-skeleton-upgrade/requirements_2026-09-05_block4.md)：课题一至五已确认问题完成源码修复和定向核验；模型行为、真实自动触发以及预算和 summary 候选待验证（2026-09-06）；[高耗能提醒 Hook 实施与验收](1_delivery/gpt6-skeleton-upgrade/requirements_2026-09-07_high-cost-reminder.md)（2026-09-07） |

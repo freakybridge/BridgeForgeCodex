@@ -178,6 +178,7 @@ pub fn build_release_plan(paths: impl IntoIterator<Item = String>) -> ReleasePla
             || path == "README.md"
             || path == "CHANGELOG.md"
             || path == "bridgeforge-codex-manifest.json"
+            || path == crate::user_agents::MANIFEST
             || path.starts_with(".codex/")
             || path.starts_with(".githooks/")
             || path.starts_with("doc/")

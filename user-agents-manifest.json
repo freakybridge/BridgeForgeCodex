@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "asset_id": "codex.user-agents",
+  "source": "templates/user/AGENTS.md",
+  "target": "~/.codex/AGENTS.md",
+  "ownership_strategy": "backup_then_replace",
+  "sha256": "sha256:27c9f2e8c761427870a4c96c42b7c44f2c53540c705699a6fbbefd7e7c3c6a95"
+}

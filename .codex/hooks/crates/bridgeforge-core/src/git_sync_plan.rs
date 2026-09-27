@@ -74,6 +74,8 @@ impl WritePlan {
         let skills: serde_json::Value =
             serde_json::from_slice(&distribution_bytes).map_err(|e| e.to_string())?;
         let mut paths = BTreeSet::from(["VERSION".to_string()]);
+        paths.insert(crate::user_agents::SOURCE.into());
+        paths.insert(crate::user_agents::MANIFEST.into());
         plan.source_inventory = crate::manifest::generated_sources(&root.join("templates/hooks"))?;
         paths.extend(
             plan.source_inventory
@@ -142,6 +144,10 @@ impl WritePlan {
         writes.insert(managed, managed_after.clone());
         writes.insert(join(root, ".codex/managed-skeleton.json")?, managed_after);
         writes.insert(distribution, distribution_after);
+        writes.insert(
+            join(root, crate::user_agents::MANIFEST)?,
+            crate::user_agents::render_manifest(&temporary.0)?,
+        );
         let platform = if cfg!(windows) {
             "windows-x86_64"
         } else if cfg!(target_os = "linux") {

@@ -2,6 +2,16 @@ use super::*;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[test]
+fn user_instruction_staging_rejects_preview_flags_before_writing() {
+    for flag in ["--check", "--dry-run"] {
+        let args = vec!["user-agents-stage".into(), flag.into()];
+        let outcome = run(&args);
+        assert_eq!(outcome.code, EXIT_BLOCKED);
+        assert!(outcome.stderr.contains("preview flags are not supported"));
+    }
+}
+
+#[test]
 fn explicit_memory_parameters_cannot_bypass_consent_or_scope() {
     let home = std::env::temp_dir().join(format!(
         "bf-auth-scope-{}",

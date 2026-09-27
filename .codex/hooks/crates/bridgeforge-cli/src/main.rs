@@ -1234,6 +1234,21 @@ fn run(args: &[String]) -> CommandOutcome {
             }
         }
         "project-sync" => project_sync(args),
+        "user-agents-stage" => {
+            if has(args, "--check") || has(args, "--dry-run") {
+                return blocked("user-agents-stage", "staging is a write operation; preview flags are not supported");
+            }
+            let result = (|| {
+                let root = path_value(args, "--product-root")?;
+                let profile = path_value(args, "--user-profile")?;
+                let operation = value(args, "--operation-id").ok_or("--operation-id is required")?;
+                bridgeforge_core::user_agents::stage(&root, &profile, &operation)
+            })();
+            match result {
+                Ok(plan) => CommandOutcome::with_receipt(plan),
+                Err(error) => blocked("user-agents-stage", error),
+            }
+        }
         "git-sync" => git_sync(args),
         "memory-sync" => memory_sync(&args[1..]),
         "manifest" => match ProjectContext::discover(value(args, "--root").as_deref().map(Path::new)) {

@@ -17,6 +17,7 @@ pub mod proposal_contract;
 pub mod release;
 pub mod runtime;
 pub mod skill_metadata;
+pub mod user_agents;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;

@@ -17,7 +17,7 @@ argument: 仅支持无参数
 
 ## 1. 刷新产品入口
 
-维护仅支持 Windows；其他平台在下载或写入前停止。获准维护后从薄入口运行一次 updater：
+维护仅支持 Windows；其他平台在下载或写入前停止。维护同时更新用户级 `~/.codex/AGENTS.md`：采用仓库统一模板，本地内容不同则先备份再覆盖，相同则不写。向用户说明这一范围后，复用已有维护授权，从薄入口运行一次 updater：
 
 ```powershell
 $BRIDGEFORGE_CODEX_ENTRY = Join-Path $env:USERPROFILE ".codex\skills\bridgeforge-codex"
@@ -26,7 +26,9 @@ $BRIDGEFORGE_CODEX_HOME = Join-Path $env:USERPROFILE ".bridgeforge-codex"
   (Join-Path $BRIDGEFORGE_CODEX_ENTRY "scripts\bridgeforge_codex_shared_update.ps1")
 ```
 
-成功收据必须包含 `BRIDGEFORGE_CODEX_SHARED_UPDATE_RECEIPT`。随后重新读取 `$BRIDGEFORGE_CODEX_HOME\skills\bridgeforge-codex\SKILL.md` 并以新版本继续，本轮禁止再次刷新。
+成功收据必须包含 `BRIDGEFORGE_CODEX_SHARED_UPDATE_RECEIPT`。随后重新读取 `$BRIDGEFORGE_CODEX_HOME\skills\bridgeforge-codex\SKILL.md` 并以新版本继续。仅在旧入口成功收据完全缺少 `user_agents` 字段时，说明新增覆盖范围并从刚更新的薄入口补跑一次 updater；这是一次性版本过渡，其他情况本轮禁止再次刷新。过渡前的授权若明确限于 Skills 或项目文件，必须先确认用户级覆盖；无范围限制的维护授权直接复用。第二次仍缺字段、字段为空或状态不是 `updated/noop` 时停止，不循环重试或声称用户指令已更新。
+
+结果简要展示 `user_agents.status`；覆盖时给出收据中的备份路径。`override_present=true` 时说明原有 `AGENTS.override.md` 可能优先生效，禁止删除它。用户指令由新会话加载，不声称当前会话已经重载。
 
 薄入口只是 Codex 可发现入口，完整产品只能来自包含 `templates/hooks/Cargo.toml` 与受管 `bridgeforge` 二进制的官方产品 home。updater 失败、产品 home 缺文件、非普通目录、工作树不干净或 origin 不匹配时，读取 [用户级受管 Skill 维护](references/user-skill-maintenance.md) 后停止；禁止从旧用户目录、本地 clone 或当前项目补文件，也禁止读取、迁移或删除旧 BridgeForge/Claude 遗留。
 

@@ -17,7 +17,7 @@ bridgeforge-codex 只支持 Windows、Rust/Cargo 1.88+ 和 Codex。Cargo 在安�
    Set-Location "$env:USERPROFILE\tools\bridgeforge-codex"
    ```
 
-2. 用锁定的 Cargo workspace 构建工厂 dogfood 工具，再安装用户级入口和通用 Skills：
+2. 用锁定的 Cargo workspace 构建工厂 dogfood 工具，再安装用户级入口、通用 Skills 和统一用户指令：
 
    ```powershell
    cargo build --locked --release --manifest-path .\templates\hooks\Cargo.toml
@@ -33,7 +33,14 @@ bridgeforge-codex 只支持 Windows、Rust/Cargo 1.88+ 和 Codex。Cargo 在安�
 安装器会把完整产品仓库原子安装到 `~/.bridgeforge-codex`，只在
 `~/.codex/skills/bridgeforge-codex` 保留供 Codex 发现的薄入口，并把其他受管 Skills
 写入 `~/.codex/skills/`。`~/.codex/bridgeforge-codex-managed.json` 记录哪些用户级
-资产由产品管理，避免覆盖来源不明或被人工修改的文件。
+Skills 由产品管理，避免覆盖来源不明或被人工修改的 Skill 文件。
+
+安装和获准维护同时分发 `templates/user/AGENTS.md` 到默认 `~/.codex/AGENTS.md`。
+文本相同则不写；本地有不同内容（包括个人编辑）时，原始文件先保存为
+`~/.codex/.AGENTS.bridgeforge-backup-<operation_id>.md`，再覆盖为统一标准版。
+备份成功后保留，收据给出具体路径；需要恢复时可用对应备份替换 AGENTS.md，但下次维护仍会恢复标准版。
+这不改变项目专区保留规则，也不删除 `AGENTS.override.md`；现有会话不保证重载，请新开会话。
+自定义 `CODEX_HOME` 不在本功能管理范围。旧薄入口首次刷新缺少用户指令收据时，按新版 Skill 补跑一次入口完成过渡。
 
 项目侧运行面包括 `AGENTS.md`、`.codex/` 和 `.githooks/pre-commit`。项目同步器会先给出
 计划，需要决定的项目会停下来确认；无法安全判断的冲突直接停止，应用失败时回滚。项目

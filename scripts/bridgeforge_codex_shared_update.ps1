@@ -28,6 +28,7 @@ $CommandHomeName = ".bridgeforge-codex"
 $CommandHomeLogName = ".bridgeforge-codex-home-update.json"
 $script:PhaseTimings = [ordered]@{}
 $script:CleanupPending = $false
+$script:UserAgentsReceipt = $null
 $script:UpdateTimer = [Diagnostics.Stopwatch]::StartNew()
 
 function Complete-PhaseTiming {
@@ -58,6 +59,7 @@ function Write-UpdateReceipt {
         action_count = $ActionCount
         timings_ms = $script:PhaseTimings
         cleanup_pending = $script:CleanupPending
+        user_agents = $script:UserAgentsReceipt
     }
     if (-not [string]::IsNullOrWhiteSpace($ErrorMessage)) {
         $receipt["error"] = $ErrorMessage
@@ -886,6 +888,12 @@ function Assert-BundlePlan {
         $stage = Join-Path $bin ".bridgeforge-stage-$OperationId.exe"
         $backup = Join-Path $bin ".bridgeforge-backup-$OperationId.exe"
     }
+    elseif ([string]$Plan.kind -eq "user-agents") {
+        $codexRoot = Join-Path $UserProfile ".codex"
+        $target = Join-Path $codexRoot "AGENTS.md"
+        $stage = Join-Path $codexRoot ".AGENTS.bridgeforge-stage-$OperationId"
+        $backup = Join-Path $codexRoot ".AGENTS.bridgeforge-backup-$OperationId.md"
+    }
     else { throw "Invalid shared bundle component kind." }
     if ([string]$Plan.target -ne $target -or [string]$Plan.stage -ne $stage -or [string]$Plan.backup -ne $backup) {
         throw "Shared bundle recovery contains unexpected paths."
@@ -916,7 +924,13 @@ function Restore-BundlePlan {
         if (-not (Test-Path -LiteralPath $target) -or (Get-BundleHash -Plan $Plan -Path $target) -ne [string]$Plan.desired_hash) {
             throw "Committed shared bundle target is missing or changed: $target"
         }
-        Remove-BundlePath -Plan $Plan -Path $backup
+        if ([string]$Plan.kind -eq "user-agents" -and [bool]$Plan.had_original) {
+            if (-not (Test-Path -LiteralPath $backup -PathType Leaf) -or
+                (Get-BundleHash -Plan $Plan -Path $backup) -ne [string]$Plan.original_hash) {
+                throw "Committed user instruction backup is missing or changed: $backup"
+            }
+        }
+        else { Remove-BundlePath -Plan $Plan -Path $backup }
     }
     elseif (Test-Path -LiteralPath $backup) {
         if (-not [bool]$Plan.had_original -or (Get-BundleHash -Plan $Plan -Path $backup) -ne [string]$Plan.original_hash) {
@@ -958,7 +972,12 @@ function Restore-InterruptedOperation {
     }
     $bundles = @()
     if ($null -ne $log.PSObject.Properties["bundles"]) { $bundles = @($log.bundles) }
-    foreach ($bundle in $bundles) { Assert-BundlePlan -Plan $bundle -UserProfile $UserProfile -OperationId $operationId }
+    $seenBundles = @{}
+    foreach ($bundle in $bundles) {
+        Assert-BundlePlan -Plan $bundle -UserProfile $UserProfile -OperationId $operationId
+        if ($seenBundles.ContainsKey([string]$bundle.kind)) { throw "Duplicate shared bundle component." }
+        $seenBundles[[string]$bundle.kind] = $true
+    }
     $seenPlatforms = @{}
     foreach ($platformPlan in @($log.platforms)) {
         $platform = [string]$platformPlan.platform
@@ -1155,11 +1174,13 @@ function Invoke-UpdateTransaction {
         [Parameter(Mandatory = $true)][string]$OperationId,
         [Parameter(Mandatory = $true)]$PlatformPlans,
         $CommandHomePlan,
-        $RustCliPlan
+        $RustCliPlan,
+        $UserAgentsPlan
     )
     Initialize-BundlePlan -Plan $CommandHomePlan -Kind "home"
     Initialize-BundlePlan -Plan $RustCliPlan -Kind "cli"
-    $bundles = @(@($CommandHomePlan, $RustCliPlan) | Where-Object { $null -ne $_ })
+    # User instruction witnesses come from Rust staging, before the transaction.
+    $bundles = @(@($CommandHomePlan, $RustCliPlan, $UserAgentsPlan) | Where-Object { $null -ne $_ })
     foreach ($bundle in $bundles) { Assert-BundlePlan -Plan $bundle -UserProfile $UserProfile -OperationId $OperationId }
     $log = [ordered]@{
         schema_version = 1
@@ -1177,6 +1198,10 @@ function Invoke-UpdateTransaction {
     try {
         if ($null -ne $CommandHomePlan) { Install-CommandHome -Plan $CommandHomePlan }
         if ($null -ne $RustCliPlan) { Install-RustCli -Plan $RustCliPlan }
+        if ($null -ne $UserAgentsPlan) {
+            Install-UserAgents -Plan $UserAgentsPlan -UserProfile $UserProfile -OperationId $OperationId
+            if ($TestFailAfterSwap -eq "user-agents") { throw "Injected test failure after user-agents swap." }
+        }
         Write-JsonAtomic -Path $LogPath -Value $log
         foreach ($platformPlan in $PlatformPlans) {
             $platformManifest = Get-PlatformManifest -Manifest $Manifest -Platform ([string]$platformPlan.platform
@@ -1257,6 +1282,10 @@ function Invoke-UpdateTransaction {
                 -PlatformManifest (Get-PlatformManifest -Manifest $Manifest -Platform $platform) `
                 -SkillsRoot ([string]$platformPlan.skills_root) `
                 -Platform $platform
+        }
+        if ($null -ne $UserAgentsPlan -and
+            (Get-Sha256 -Path ([string]$UserAgentsPlan.target)) -ne [string]$UserAgentsPlan.desired_hash) {
+            throw "User instructions changed before shared commit."
         }
         $log.committed = $true
         Write-JsonAtomic -Path $LogPath -Value $log
@@ -1600,6 +1629,42 @@ function Undo-RustCli {
     }
 }
 
+function New-UserAgentsPlan {
+    param([string]$RepositoryRoot, [string]$UserProfile, [string]$OperationId, $RustCliPlan)
+    $binary = if ([bool]$RustCliPlan.needs_swap) { [string]$RustCliPlan.stage } else { [string]$RustCliPlan.target }
+    $previousEncoding = [Console]::OutputEncoding
+    try {
+        [Console]::OutputEncoding = New-Object Text.UTF8Encoding($false)
+        $output = & $binary user-agents-stage --product-root $RepositoryRoot --user-profile $UserProfile --operation-id $OperationId
+        if ($LASTEXITCODE -ne 0) { throw "Managed Rust user instruction staging failed." }
+    }
+    finally { [Console]::OutputEncoding = $previousEncoding }
+    return (($output -join [Environment]::NewLine) | ConvertFrom-Json)
+}
+
+function Install-UserAgents {
+    param($Plan, [string]$UserProfile, [string]$OperationId)
+    Assert-BundlePlan -Plan $Plan -UserProfile $UserProfile -OperationId $OperationId
+    $exists = Test-Path -LiteralPath ([string]$Plan.target)
+    if ($exists -ne [bool]$Plan.had_original -or
+        ($exists -and ((Get-Sha256 -Path ([string]$Plan.target)) -ne [string]$Plan.original_hash))) {
+        throw "User instructions changed after planning; preserving the current file."
+    }
+    if (-not [bool]$Plan.needs_swap) { return }
+    if (Test-Path -LiteralPath ([string]$Plan.backup)) { throw "User instruction backup already exists." }
+    if ((Get-Sha256 -Path ([string]$Plan.stage)) -ne [string]$Plan.desired_hash) {
+        throw "User instruction stage changed after planning."
+    }
+    if ([bool]$Plan.had_original) {
+        Move-Item -LiteralPath ([string]$Plan.target) -Destination ([string]$Plan.backup)
+        if ((Get-Sha256 -Path ([string]$Plan.backup)) -ne [string]$Plan.original_hash) {
+            throw "User instruction backup differs from the planned original."
+        }
+    }
+    Move-Item -LiteralPath ([string]$Plan.stage) -Destination ([string]$Plan.target)
+    $Plan.status = "installed"
+}
+
 function Invoke-Main {
     Assert-Windows
     $userProfile = [string]$env:USERPROFILE
@@ -1620,6 +1685,7 @@ function Invoke-Main {
         $cloneRoot = $null
         $commandHomePlan = $null
         $rustCliPlan = $null
+        $userAgentsPlan = $null
         $commit = $null
         $resultMode = $null
         $actionCount = 0
@@ -1654,6 +1720,7 @@ function Invoke-Main {
                 -RepositoryRoot $repositoryRoot `
                 -UserProfile $userProfile `
                 -OperationId $operationId
+            $userAgentsPlan = New-UserAgentsPlan -RepositoryRoot $repositoryRoot -UserProfile $userProfile -OperationId $operationId -RustCliPlan $rustCliPlan
             $phase = [Diagnostics.Stopwatch]::StartNew()
             $platformPlans = @(
                 New-UpdatePlan `
@@ -1671,6 +1738,7 @@ function Invoke-Main {
             if ([bool]$rustCliPlan.needs_swap) {
                 $actionCount += 1
             }
+            if ([bool]$userAgentsPlan.needs_swap) { $actionCount += 1 }
             $needsTransaction = [bool]($actionCount -gt 0 -or @(
                 $platformPlans | Where-Object { [bool]$_.ledger_needs_update }
             ).Count -gt 0)
@@ -1695,10 +1763,18 @@ function Invoke-Main {
                         -UserProfile $userProfile `
                         -LogPath $logPath `
                         -OperationId $operationId `
-                        -PlatformPlans $platformPlans -CommandHomePlan $commandHomePlan -RustCliPlan $rustCliPlan
+                        -PlatformPlans $platformPlans -CommandHomePlan $commandHomePlan -RustCliPlan $rustCliPlan -UserAgentsPlan $userAgentsPlan
                 Complete-PhaseTiming -Name "transaction" -Stopwatch $phase
                 Write-Host "bridgeforge-codex shared skills updated to commit $commit."
                 $resultMode = "updated"
+            }
+            $script:UserAgentsReceipt = [ordered]@{
+                status = if ([bool]$userAgentsPlan.needs_swap) { "updated" } else { "noop" }
+                target = [string]$userAgentsPlan.target
+                backup = if ([bool]$userAgentsPlan.needs_swap -and [bool]$userAgentsPlan.had_original) { [string]$userAgentsPlan.backup } else { $null }
+                original_sha256 = $userAgentsPlan.original_hash
+                installed_sha256 = $userAgentsPlan.desired_hash
+                override_present = [bool]$userAgentsPlan.override_present
             }
         }
         finally {
@@ -1712,6 +1788,9 @@ function Invoke-Main {
             }
             if ($cloneRoot -and (Test-Path -LiteralPath $cloneRoot)) {
                 Remove-SafeTree -Path $cloneRoot
+            }
+            if ($null -ne $userAgentsPlan -and -not (Test-Path -LiteralPath $logPath)) {
+                Remove-BundlePath -Plan $userAgentsPlan -Path ([string]$userAgentsPlan.stage)
             }
             Complete-PhaseTiming -Name "cleanup" -Stopwatch $phase
         }

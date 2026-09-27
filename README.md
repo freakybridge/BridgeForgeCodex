@@ -46,6 +46,7 @@ $bridgeforge-codex
 - `~/.bridgeforge-codex`：完整、可信的产品仓库。
 - `~/.codex/skills/bridgeforge-codex`：Codex 用来发现产品的薄入口。
 - `~/.codex/skills/`：由产品维护的通用 Skills。
+- `~/.codex/AGENTS.md`：仓库统一用户指令；相同不写，不同先备份再覆盖，详见 [安装说明](INSTALL.md)。
 - `~/.codex/memories/`：Codex 原生 Memory；用户授权后可作为不透明目录跨电脑同步，
   同步器不解析正文语义；summary 可只读检索、阅读并提出建议，不改写正文。
 

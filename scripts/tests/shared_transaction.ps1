@@ -53,6 +53,10 @@ foreach ($scenario in @('rollback', 'committed-cleanup')) {
     Copy-Item -LiteralPath (Join-Path $RepositoryRoot '.codex/bin/bridgeforge-hook.exe') -Destination $cli.target
     [IO.File]::WriteAllText($cli.stage, 'new cli transaction bytes')
     $oldCliHash = Get-Sha256 -Path $cli.target
+    $userTarget = Join-Path $fixtureProfile '.codex/AGENTS.md'
+    [IO.File]::WriteAllBytes($userTarget, [byte[]]@(255, 0, 34, 13, 10))
+    $oldUserHash = Get-Sha256 -Path $userTarget
+    $userPlan = New-UserAgentsPlan -RepositoryRoot $RepositoryRoot -UserProfile $fixtureProfile -OperationId $op -RustCliPlan @{ needs_swap = $false; target = (Join-Path $RepositoryRoot '.codex/bin/bridgeforge.exe') }
     $fileHash = Get-Sha256 -Path (Join-Path $repo 'SKILL.md')
     $manifest = @{ platforms = @{ codex = @{ skills = @(@{ name = 'probe'; files = @(@{ source = 'SKILL.md'; target = 'SKILL.md'; sha256 = $fileHash }) }) } } } | ConvertTo-Json -Depth 8 | ConvertFrom-Json
     $plans = @(New-UpdatePlan -Manifest $manifest -UserProfile $fixtureProfile -OperationId $op -Commit $commit)
@@ -78,7 +82,7 @@ foreach ($scenario in @('rollback', 'committed-cleanup')) {
         $TestFailAfterSwap = if ($scenario -eq 'rollback') { 'codex:1' } else { '' }
         $failed = $false
         try {
-            Invoke-UpdateTransaction -RepositoryRoot $repo -Manifest $manifest -Commit $commit -ManifestHash ('b' * 64) -UserProfile $fixtureProfile -LogPath $log -OperationId $op -PlatformPlans $plans -CommandHomePlan $bundleHome -RustCliPlan $cli
+            Invoke-UpdateTransaction -RepositoryRoot $repo -Manifest $manifest -Commit $commit -ManifestHash ('b' * 64) -UserProfile $fixtureProfile -LogPath $log -OperationId $op -PlatformPlans $plans -CommandHomePlan $bundleHome -RustCliPlan $cli -UserAgentsPlan $userPlan
         }
         catch {
             if ($scenario -ne 'rollback' -or $_.Exception.Message -notlike '*Injected test failure*') { throw }
@@ -90,6 +94,8 @@ foreach ($scenario in @('rollback', 'committed-cleanup')) {
             Assert-True ([IO.File]::ReadAllText((Join-Path $bundleHome.target 'VERSION')) -eq 'old home') 'Home was not rolled back'
             Assert-True (-not (Test-Path (Join-Path $skills 'probe'))) 'Skill was not rolled back'
             Assert-True (-not (Test-Path $log)) 'Successful rollback left a journal'
+            Assert-True ((Get-Sha256 -Path $userTarget) -eq $oldUserHash) 'User instructions were not rolled back byte for byte'
+            Assert-True (-not (Test-Path $userPlan.backup)) 'Rollback left a redundant backup'
         }
         else {
             Assert-True $script:CleanupPending 'Running image should defer backup cleanup'
@@ -103,6 +109,8 @@ foreach ($scenario in @('rollback', 'committed-cleanup')) {
             Assert-True (-not (Test-Path $log)) 'Deferred cleanup did not recover'
             Assert-True (-not (Test-Path $cli.backup)) 'CLI backup was not cleaned after process exit'
             Assert-True ([IO.File]::ReadAllText($cli.target) -eq 'new cli transaction bytes') 'Cleanup changed committed CLI'
+            Assert-True ((Get-Sha256 -Path $userTarget) -eq $userPlan.desired_hash) 'Committed user instructions were reverted'
+            Assert-True ((Get-Sha256 -Path $userPlan.backup) -eq $oldUserHash) 'Committed cleanup deleted or changed the user backup'
         }
     }
     finally {
@@ -111,5 +119,62 @@ foreach ($scenario in @('rollback', 'committed-cleanup')) {
             $child.Dispose()
         }
     }
+}
+foreach ($scenario in @('create', 'noop', 'failure', 'interrupted', 'drift', 'backup-conflict')) {
+    $script:CleanupPending = $false
+    $fixtureProfile = Join-Path $Base ("user-" + [char]0x7528 + [char]0x6237 + "-$scenario")
+    New-Item -ItemType Directory -Path (Join-Path $fixtureProfile '.codex') -Force | Out-Null
+    $userTarget = Join-Path $fixtureProfile '.codex/AGENTS.md'
+    if ($scenario -ne 'create') { [IO.File]::WriteAllText($userTarget, 'local preference') }
+    if ($scenario -eq 'noop') { Copy-Item -LiteralPath (Join-Path $RepositoryRoot 'templates/user/AGENTS.md') -Destination $userTarget }
+    $op = [Guid]::NewGuid().ToString('N')
+    $originalEncoding = [Console]::OutputEncoding
+    try {
+        [Console]::OutputEncoding = [Text.Encoding]::GetEncoding(437)
+        $userPlan = New-UserAgentsPlan -RepositoryRoot $RepositoryRoot -UserProfile $fixtureProfile -OperationId $op -RustCliPlan @{ needs_swap = $false; target = (Join-Path $RepositoryRoot '.codex/bin/bridgeforge.exe') }
+        Assert-True ([Console]::OutputEncoding.CodePage -eq 437) 'CLI staging did not restore console encoding'
+    }
+    finally { [Console]::OutputEncoding = $originalEncoding }
+    $log = Join-Path $fixtureProfile '.bridgeforge-codex-shared-update.json'
+    $manifest = @{ platforms = @{ codex = @{ skills = @() } } } | ConvertTo-Json -Depth 8 | ConvertFrom-Json
+    $plans = @(New-UpdatePlan -Manifest $manifest -UserProfile $fixtureProfile -OperationId $op -Commit ('a' * 40))
+    $TestFailAfterSwap = if ($scenario -eq 'failure') { 'user-agents' } else { '' }
+    if ($scenario -eq 'drift') { [IO.File]::WriteAllText($userTarget, 'external edit') }
+    if ($scenario -eq 'backup-conflict') { [IO.File]::WriteAllText($userPlan.backup, 'external backup') }
+    $failed = $false
+    try {
+        if ($scenario -eq 'interrupted') {
+            Write-JsonAtomic -Path $log -Value @{ schema_version = 1; operation_id = $op; committed = $false; platforms = $plans; bundles = @($userPlan) }
+            Install-UserAgents -Plan $userPlan -UserProfile $fixtureProfile -OperationId $op
+            Restore-InterruptedOperation -LogPath $log -UserProfile $fixtureProfile
+        }
+        elseif ($scenario -in @('drift', 'backup-conflict')) {
+            Install-UserAgents -Plan $userPlan -UserProfile $fixtureProfile -OperationId $op
+        }
+        else {
+            Invoke-UpdateTransaction -RepositoryRoot $RepositoryRoot -Manifest $manifest -Commit ('a' * 40) -ManifestHash ('b' * 64) -UserProfile $fixtureProfile -LogPath $log -OperationId $op -PlatformPlans $plans -UserAgentsPlan $userPlan
+        }
+    }
+    catch {
+        if ($scenario -notin @('failure', 'drift', 'backup-conflict')) { throw }
+        $failed = $true
+    }
+    if ($scenario -in @('failure', 'drift', 'backup-conflict')) { Assert-True $failed "Expected rejection for $scenario" }
+    if ($scenario -in @('failure', 'interrupted', 'backup-conflict')) {
+        Assert-True ([IO.File]::ReadAllText($userTarget) -eq 'local preference') "Original file lost for $scenario"
+    }
+    elseif ($scenario -eq 'drift') {
+        Assert-True ([IO.File]::ReadAllText($userTarget) -eq 'external edit') 'Concurrent edit was overwritten'
+    }
+    else {
+        Assert-True ((Get-Sha256 -Path $userTarget) -eq $userPlan.desired_hash) "Installed content differs for $scenario"
+        Assert-True (-not (Test-Path $userPlan.backup)) "Unnecessary backup for $scenario"
+    }
+    if ($scenario -eq 'noop') { Assert-True (-not $userPlan.needs_swap) 'Identical content was scheduled for replacement' }
+    if ($scenario -in @('create', 'noop', 'failure', 'interrupted')) {
+        Assert-True (-not (Test-Path $log)) "Completed recovery left a journal for $scenario"
+        Assert-True (-not $script:CleanupPending) "Cleanup was unexpectedly deferred for $scenario"
+    }
+    if ($scenario -eq 'backup-conflict') { Assert-True ([IO.File]::ReadAllText($userPlan.backup) -eq 'external backup') 'Existing backup was overwritten' }
 }
 Write-Output 'shared bundle rollback and deferred committed cleanup passed'

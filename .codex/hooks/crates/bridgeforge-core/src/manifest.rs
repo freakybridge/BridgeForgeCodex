@@ -376,6 +376,10 @@ pub fn rebuild(root: &Path, check: bool) -> Result<bool, String> {
         ),
         (root.join(".codex/managed-skeleton.json"), contract),
         (root.join("bridgeforge-codex-manifest.json"), distribution),
+        (
+            root.join(crate::user_agents::MANIFEST),
+            crate::user_agents::render_manifest(root)?,
+        ),
     ];
     let changed = targets
         .iter()
