@@ -82,12 +82,27 @@
           ]
         },
         {
+          "name": "autopilot",
+          "files": [
+            {
+              "source": "skills/autopilot/SKILL.md",
+              "target": "SKILL.md",
+              "sha256": "sha256:93f29f8cb530a8dca82182551ee557ca1dc447fe0f38dd4360ecf238b79a40a5"
+            },
+            {
+              "source": "skills/autopilot/references/runtime.md",
+              "target": "references/runtime.md",
+              "sha256": "sha256:131e24d81124f0bcd4cbf0b8890594addee8fd7f94f3df34c304b4127598c0ee"
+            }
+          ]
+        },
+        {
           "name": "collab",
           "files": [
             {
               "source": "skills/collab/SKILL.md",
               "target": "SKILL.md",
-              "sha256": "sha256:c0bc316c55ced36df3e37da79ff98966a815e081c9d87f1f92f89f2ca648932c"
+              "sha256": "sha256:fe437265811f13ff1f7d58b466010cc23f7551193d0cbea90db3131ad8d2fe5d"
             }
           ]
         },
@@ -97,7 +112,12 @@
             {
               "source": "skills/confirm/SKILL.md",
               "target": "SKILL.md",
-              "sha256": "sha256:0f11a72279c6b4e2ca3db42d3f3de106dbc1dd74f1ae175ac5ac9d94550a126d"
+              "sha256": "sha256:daf7b6bffd6381f8690a1025a11f33fe8128f797d421e14f513a813b0b8cb6f9"
+            },
+            {
+              "source": "skills/confirm/references/weekly-quota.md",
+              "target": "references/weekly-quota.md",
+              "sha256": "sha256:4dc91f611b1b594e8a5b33a6e16cce2bc049a7751be77ce918da5a28c61652ed"
             }
           ]
         },
@@ -127,7 +147,7 @@
             {
               "source": "skills/debate/SKILL.md",
               "target": "SKILL.md",
-              "sha256": "sha256:7873d0a0006dfd0257462d76226461734af2aa3d42b0fe2271c4b3191bb6c131"
+              "sha256": "sha256:cf41d29f58b7c9acc599bbc61e4e8d124fabb36da7f768152da967a23004fdbe"
             }
           ]
         },
@@ -147,7 +167,7 @@
             {
               "source": "skills/develop/SKILL.md",
               "target": "SKILL.md",
-              "sha256": "sha256:4d374d7cc362ca812377842d305c14a93a24a3685e7ec8ff23b91e8426308ec6"
+              "sha256": "sha256:c143690810277c9d7a14b672aa11ca8133fe794f6964b8765e79d15c7060ff51"
             }
           ]
         },
@@ -157,7 +177,7 @@
             {
               "source": "skills/escalate/SKILL.md",
               "target": "SKILL.md",
-              "sha256": "sha256:fcfd227eed9cd8e32068bdcd5df281b89dbd0298e92ad4800bd301d8beb19a84"
+              "sha256": "sha256:f0647f3c0a70176b384a0764a61121fa2502ca6aa20214438fd35b8b00fae236"
             }
           ]
         },
@@ -217,7 +237,7 @@
             {
               "source": "skills/resume/SKILL.md",
               "target": "SKILL.md",
-              "sha256": "sha256:7d0361a2dcbb9b9f4e3739c10b427abf3fe333913cb70d6f773d68063f4e00f7"
+              "sha256": "sha256:83760c11b24e9716b0d9860d117d510abc02713ee21e0a688425c055eacb4c3c"
             }
           ]
         },
@@ -227,7 +247,7 @@
             {
               "source": "skills/snapshot/SKILL.md",
               "target": "SKILL.md",
-              "sha256": "sha256:b03b015fc30e2e1c5d6a6238e4104c995cd7af3968a71c937b55a90588630660"
+              "sha256": "sha256:83fb8358e37e9118c14ec52c2160181c49e4ef61587242ffab522d1e83b22c24"
             }
           ]
         },
@@ -272,7 +292,7 @@
             {
               "source": "skills/sync-docs/SKILL.md",
               "target": "SKILL.md",
-              "sha256": "sha256:66d606ff881f926237c66d9bd100ba3338e6a51421f86e67ee8f96293dd16027"
+              "sha256": "sha256:2736b7ae19b26c9e92a8e2dcff76cf69a440b0da7dc187cc712870aa49847b51"
             }
           ]
         },

@@ -177,4 +177,28 @@ foreach ($scenario in @('create', 'noop', 'failure', 'interrupted', 'drift', 'ba
     }
     if ($scenario -eq 'backup-conflict') { Assert-True ([IO.File]::ReadAllText($userPlan.backup) -eq 'external backup') 'Existing backup was overwritten' }
 }
+# Exercise the new Skill through the existing transaction, in this isolated profile only.
+# Source provenance (canonical main) is tested by the updater; this case checks packaging and swap.
+$fixtureProfile = Join-Path $Base 'autopilot-install'
+New-Item -ItemType Directory -Path (Join-Path $fixtureProfile '.codex/skills') -Force | Out-Null
+$catalog = [IO.File]::ReadAllText((Join-Path $RepositoryRoot 'bridgeforge-codex-manifest.json')) | ConvertFrom-Json
+$selected = @($catalog.platforms.codex.skills | Where-Object { $_.name -in @('autopilot', 'confirm') })
+Assert-True ($selected.Count -eq 2 -and @($selected.name | Select-Object -Unique).Count -eq 2) 'Budget Skills are missing or duplicated in the distribution catalog'
+$manifest = @{ platforms = @{ codex = @{ skills = $selected } } } | ConvertTo-Json -Depth 12 | ConvertFrom-Json
+$op = [Guid]::NewGuid().ToString('N')
+$TestFailAfterSwap = ''
+$plans = @(New-UpdatePlan -Manifest $manifest -UserProfile $fixtureProfile -OperationId $op -Commit ('a' * 40))
+$log = Join-Path $fixtureProfile '.bridgeforge-codex-shared-update.json'
+Invoke-UpdateTransaction -RepositoryRoot $RepositoryRoot -Manifest $manifest -Commit ('a' * 40) -ManifestHash ('b' * 64) -UserProfile $fixtureProfile -LogPath $log -OperationId $op -PlatformPlans $plans
+foreach ($skill in $selected) {
+    foreach ($file in $skill.files) {
+        $installed = Join-Path (Join-Path (Join-Path $fixtureProfile '.codex/skills') $skill.name) $file.target
+        Assert-True ((Get-Sha256 -Path $installed) -eq (Get-Sha256 -Path (Join-Path $RepositoryRoot $file.source))) ('Installed Skill file differs: ' + $skill.name + '/' + $file.target)
+    }
+}
+$repeat = @(New-UpdatePlan -Manifest $manifest -UserProfile $fixtureProfile -OperationId ([Guid]::NewGuid().ToString('N')) -Commit ('a' * 40))
+Assert-True (@($repeat[0].actions).Count -eq 0) 'Identical autopilot reinstall is not a no-op'
+Assert-True (-not (Test-Path -LiteralPath $log)) 'Completed Skill installation left an active transaction'
+Write-Output 'autopilot isolated packaging and no-op installation passed'
+Write-Output 'confirm weekly quota reference packaging passed'
 Write-Output 'shared bundle rollback and deferred committed cleanup passed'

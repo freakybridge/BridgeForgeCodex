@@ -1,6 +1,6 @@
 {
   "schema_version": 4,
-  "release_version": "1.19.0",
+  "release_version": "1.22.0",
   "host": "codex",
   "stamp": ".codex/.bridgeforge_codex_version",
   "contract_target": ".codex/managed-skeleton.json",
@@ -427,14 +427,14 @@
       "source": "templates/hooks/Cargo.lock",
       "target": ".codex/hooks/Cargo.lock",
       "strategy": "whole",
-      "current_sha256": "sha256:1b73c6f328762bec966dad1790c39da5909e887d3dc7dc34617f64c5dd4a5c47"
+      "current_sha256": "sha256:43eaa7042ad20dba18ea777133221b2041e15fbf5005c8a9ad645069edecbec1"
     },
     {
       "id": "codex.hooks.cargo-toml",
       "source": "templates/hooks/Cargo.toml",
       "target": ".codex/hooks/Cargo.toml",
       "strategy": "whole",
-      "current_sha256": "sha256:55645e26388e9c37a8a3da12905e348530822a2f023f9c00f9b8c5597811a269"
+      "current_sha256": "sha256:c1c5c3b327f91de71c5ffb80fc24409a1c8505b16c1594a1262ac86200368aa3"
     },
     {
       "id": "codex.hooks.readme-md",
@@ -781,8 +781,8 @@
           "status": "ok"
         }
       },
-      "source_tree_sha256": "sha256:c0a60b32136b44f345793c1422c3f1278cb1e3032e4c51a4168317306a5a1796",
-      "lockfile_sha256": "sha256:1b73c6f328762bec966dad1790c39da5909e887d3dc7dc34617f64c5dd4a5c47",
+      "source_tree_sha256": "sha256:50e83b2322b452671ce4cd97a2bc0e464292b6100f709c22b4544fd54773117c",
+      "lockfile_sha256": "sha256:43eaa7042ad20dba18ea777133221b2041e15fbf5005c8a9ad645069edecbec1",
       "build_recipe_sha256": "sha256:d26d34aa838a1a1f5556ef92f492d2abc7b415c2163e2a4c9ea7e07121dad78a",
       "self_test_sha256": "sha256:74a8b4a4c20ff1f5cc6660697138c151d9ed2172e6d57e75cce671d773e98f5a"
     },
@@ -826,8 +826,8 @@
           "status": "ok"
         }
       },
-      "source_tree_sha256": "sha256:c0a60b32136b44f345793c1422c3f1278cb1e3032e4c51a4168317306a5a1796",
-      "lockfile_sha256": "sha256:1b73c6f328762bec966dad1790c39da5909e887d3dc7dc34617f64c5dd4a5c47",
+      "source_tree_sha256": "sha256:50e83b2322b452671ce4cd97a2bc0e464292b6100f709c22b4544fd54773117c",
+      "lockfile_sha256": "sha256:43eaa7042ad20dba18ea777133221b2041e15fbf5005c8a9ad645069edecbec1",
       "build_recipe_sha256": "sha256:079aefde96a8925913b7b6cd3ee9d8c7086014ad5e4b6e3f74a911b2ce49e537",
       "self_test_sha256": "sha256:6b0426352bb099a61fae52600d4f684c0e11bca644fa767a9b79d224e939b0e0"
     }
