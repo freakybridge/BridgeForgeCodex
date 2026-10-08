@@ -19,6 +19,8 @@ argument: 可选：release
 
 显式 `release` 另需 `git-sync-prepared-release-v1`。先用 `git-sync --release-status` 核对 develop 已生成的准备记录；缺失或失效时报告原因并返回开发收口，不在本 Skill 中自动执行准备、Cargo、全量测试或独立审计。普通同步与显式发布的授权仍分别判断。
 
+支持 `git-sync-release-readiness-v1` 的工具会一次报告项目发布接入与版本基线阻断：`setup-required`、`blocked`、`not-prepared`、`stale` 或 `not-applicable` 均不是可发布状态，只有 `prepared` 才能继续。展示全部 `blockers` 和明确恢复路径，不只让用户再次试跑 release；不自动生成空检查、不复制工厂清单、不手改或降回已发布 VERSION。升级成功不能表述为业务发布就绪。普通同步不运行 release-status，也不需要发布检查配置。
+
 | 用户用法 | 执行行为 |
 |---|---|
 | `$git-sync` | 提交并同步；不自动修改版本、原生 manifest/lock 或 CHANGELOG |

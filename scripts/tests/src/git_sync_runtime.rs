@@ -89,7 +89,6 @@ fn real_cli_release_flow(policy: &str) {
     let fixture = Fixture(std::env::temp_dir().join(fixture_name));
     let root = fixture.0.join("project");
     fs::create_dir_all(root.join(".codex")).unwrap();
-    fixture_development_checks(&root);
     let call = |args: &[&str]| {
         let mut request = ProcessRequest::new(cli.as_os_str(), &root);
         request.args = args.iter().map(Into::into).collect();
@@ -107,7 +106,7 @@ fn real_cli_release_flow(policy: &str) {
             .as_array()
             .unwrap()
             .iter()
-            .any(|v| v == "git-sync-release-only-v1")
+            .any(|v| v == "git-sync-release-readiness-v1")
     );
     for flag in ["--dry-run", "--check"] {
         let mut probe = ProcessRequest::new(cli.as_os_str(), &root);
@@ -164,6 +163,21 @@ fn real_cli_release_flow(policy: &str) {
         &["remote", "add", "origin", remote.to_str().unwrap()],
     );
     git(&root, &["push", "-u", "origin", "HEAD"]);
+    let initial_head = git(&root, &["rev-parse", "HEAD"]);
+    let initial_index = fs::read(root.join(".git/index")).unwrap();
+    fs::write(root.join("VERSION"), b"0.9.9\n").unwrap();
+    let mut probe = ProcessRequest::new(cli.as_os_str(), &root);
+    probe.args = ["git-sync", "--release-status"].iter().map(Into::into).collect();
+    let output = SystemProcessRunner.run(&probe).unwrap();
+    assert_eq!(output.code, 2);
+    let setup: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(setup["status"], "setup-required");
+    assert_eq!(setup["blockers"].as_array().unwrap().len(), 2);
+    assert_eq!(git(&root, &["rev-parse", "HEAD"]), initial_head);
+    assert_eq!(fs::read(root.join(".git/index")).unwrap(), initial_index);
+    assert!(!root.join(".runtime").exists());
+    assert!(!root.join(".codex/development-checks.json").exists());
+    fs::write(root.join("VERSION"), b"1.0.0\n").unwrap();
     let version_files = ["VERSION", "Cargo.toml", "Cargo.lock", "CHANGELOG.md"];
     let version_bytes = version_files.map(|name| fs::read(root.join(name)).unwrap());
     let policy_bytes = fs::read(&policy_path).ok();
@@ -181,6 +195,9 @@ fn real_cli_release_flow(policy: &str) {
         assert_eq!(&fs::read(root.join(name)).unwrap(), bytes, "{policy}: {name}");
     }
     assert_eq!(fs::read(&policy_path).ok(), policy_bytes);
+    // Ordinary sync succeeded without release checks. Only development setup
+    // creates the project-owned checks before preparing an explicit release.
+    fixture_development_checks(&root);
     let before = git(&root, &["rev-parse", "HEAD"]);
     let index = fs::read(root.join(".git/index")).unwrap();
     let fetch = fs::read(root.join(".git/FETCH_HEAD")).unwrap();

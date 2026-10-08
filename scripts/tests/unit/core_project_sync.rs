@@ -74,6 +74,35 @@ fn fixed_baseline_does_not_move_with_the_release() {
 }
 
 #[test]
+fn upgrade_keeps_skeleton_ready_and_preserves_project_release_checks() {
+    for payload in [None, Some(br#"{"schema":1,"checks":[{"id":"project","program":"git","args":["diff","--check"],"timeout_seconds":30}]}"#.as_slice()), Some(b"invalid project config\r\n".as_slice())] {
+        let (root, project, factory) = upgrade_fixture("1.8.6", "1.8.7");
+        fs::write(project.join("VERSION"), b"1.0.0\n").unwrap();
+        let config = project.join(".codex/development-checks.json");
+        if let Some(bytes) = payload { fs::write(&config, bytes).unwrap(); }
+        let plan = build_plan(&project, &factory, SyncMode::Update).unwrap();
+        assert_eq!(plan.readiness, "ready");
+        assert!(!plan.confirmation_required);
+        assert!(plan.gaps.is_empty());
+        let expected = match payload { None => "not-configured", Some(bytes) if bytes.starts_with(b"{") => "configured", _ => "invalid-config" };
+        assert_eq!(plan.release_setup["status"], expected);
+        assert!(!plan.safe.iter().any(|action| action.target == ".codex/development-checks.json"));
+        assert_eq!(fs::read(&config).ok().as_deref(), payload);
+        let fingerprint = plan.aggregate_fingerprint.clone();
+        let receipt = apply_plan(plan, &fingerprint, false).unwrap();
+        assert_eq!(receipt.project_readiness, "ready");
+        assert_eq!(receipt.release_setup["status"], expected);
+        assert_eq!(fs::read(&config).ok().as_deref(), payload);
+        let rendered = outcome_receipt_with_format(Ok(receipt), "combined").receipt.unwrap();
+        assert_eq!(rendered["human"]["conclusion"], if expected == "configured" { "已完成" } else { "已完成但仍有待处理项" });
+        let next = build_plan(&project, &factory, SyncMode::Update).unwrap();
+        assert_eq!(next.status, "current");
+        if expected != "configured" { assert!(!human_plan(&next)["pending"].as_array().unwrap().is_empty()); }
+        fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[test]
 fn compatible_update_retires_old_project_map_paths() {
     let (root, project, factory) = upgrade_fixture("1.8.6", "1.8.7");
     for target in [".codex/find-doc.map.md", ".codex/sync-docs.map.md"] {
@@ -1226,6 +1255,7 @@ fn transaction_fixture(valid_asset_hash: bool) -> (PathBuf, SyncPlan) {
         schema: 1,
         status: "planned".into(),
         readiness: "ready".into(),
+        release_setup: json!({"status":"not-applicable"}),
         mode: SyncMode::Update,
         previous_version: Some("1.0.0".into()),
         current_version: "2.0.0".into(),

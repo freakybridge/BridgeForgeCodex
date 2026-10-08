@@ -198,13 +198,10 @@ fn release_boundary(root: &Path, head: &str, runner: &dyn ProcessRunner) -> Resu
     Err("explicit release requires a committed VERSION baseline".into())
 }
 
-pub fn build_explicit_release_plan(
+pub fn validate_release_baseline(
     root: &Path,
-    message: &str,
-    changed: Vec<String>,
     runner: &dyn ProcessRunner,
-) -> Result<Option<FileReleasePlan>, String> {
-    // A read-only preview and the write transaction use the same planner.
+) -> Result<(String, String), String> {
     explicit_release_policy(root)?;
     if git(root, runner, &["rev-parse", "--is-shallow-repository"])?.trim() != "false" {
         return Err("explicit release requires complete Git history".into());
@@ -226,7 +223,20 @@ pub fn build_explicit_release_plan(
                 .into(),
         );
     }
-    version.trim().parse::<SemVer>()?;
+    validate_native_versions(root, version.trim().parse::<SemVer>()?)?;
+    Ok((head.to_string(), boundary.to_string()))
+}
+
+pub fn build_explicit_release_plan(
+    root: &Path,
+    message: &str,
+    changed: Vec<String>,
+    runner: &dyn ProcessRunner,
+) -> Result<Option<FileReleasePlan>, String> {
+    // Diagnostics and the write transaction validate the same release baseline.
+    let (head, boundary) = validate_release_baseline(root, runner)?;
+    let head = head.as_str();
+    let boundary = boundary.as_str();
     let factory = root.join("templates/managed-skeleton.json").is_file();
     let range = format!("{boundary}..{head}");
     let commits = git(

@@ -98,6 +98,23 @@ fn config(root: &Path) -> Result<Config, String> {
     Ok(cfg)
 }
 
+pub(super) fn setup_status(root: &Path) -> serde_json::Value {
+    if !root.join("VERSION").exists() {
+        return json!({"status":"not-applicable"});
+    }
+    let file = match path(root, CONFIG) {
+        Ok(file) => file,
+        Err(error) => return json!({"status":"invalid-config","config":CONFIG,"reason":error}),
+    };
+    if !file.exists() {
+        return json!({"status":"not-configured","config":CONFIG});
+    }
+    match config(root) {
+        Ok(_) => json!({"status":"configured","config":CONFIG}),
+        Err(error) => json!({"status":"invalid-config","config":CONFIG,"reason":error}),
+    }
+}
+
 fn is_record(relative: &str, cfg: &Config) -> bool {
     relative.ends_with(".md")
         && !relative.split('/').any(|part| part.eq_ignore_ascii_case("AGENTS.md") || part.eq_ignore_ascii_case("SKILL.md"))
@@ -277,6 +294,38 @@ fn validate_audit(cfg: &Config, audit: Option<&Audit>, key: &str) -> Result<(), 
 }
 
 pub(super) fn status(root: &Path, runner: &dyn ProcessRunner) -> Result<serde_json::Value, String> {
+    let setup = setup_status(root);
+    if setup["status"] == "not-applicable" {
+        return Ok(json!({"schema":1,"status":"not-applicable","setup":setup}));
+    }
+    let mut blockers = Vec::new();
+    match setup["status"].as_str() {
+        Some("not-configured") => blockers.push(json!({
+            "code":"development-checks-missing", "path":CONFIG,
+            "message":"项目尚未接入发布检查；先由开发流程根据项目实际构建和测试入口配置检查清单"
+        })),
+        Some("invalid-config") => blockers.push(json!({
+            "code":"development-checks-invalid", "path":CONFIG,
+            "message":"项目发布检查配置无效，需先修正；不会自动覆盖或降级为空检查",
+            "reason":setup["reason"]
+        })),
+        _ => (),
+    }
+    if let Err(error) = crate::release::validate_release_baseline(root, runner) {
+        blockers.push(json!({
+            "code":"release-baseline-blocked",
+            "message":"发布版本基线无法通过验证；先核对 VERSION、原生版本文件和已提交发布历史",
+            "reason":error
+        }));
+    }
+    if !blockers.is_empty() {
+        return Ok(json!({
+            "schema":1,
+            "status":if setup["status"] == "configured" { "blocked" } else { "setup-required" },
+            "setup":setup,"blockers":blockers,
+            "next_step":"返回开发流程完成项目发布接入并处理上述全部阻断，再生成发布准备记录；普通同步无需此记录"
+        }));
+    }
     let git = Git { root, runner };
     let current = inputs(root, &git)?;
     let cfg = config(root)?;

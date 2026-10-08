@@ -231,6 +231,99 @@ fn versioned_repository(name: &str, explicit: bool) -> (RealRepository, PathBuf)
 }
 
 #[test]
+fn release_readiness_reports_missing_config_and_version_drift_without_writes() {
+    let (repo, remote) = versioned_repository("release-readiness", true);
+    fs::remove_file(repo.0.join(".codex/development-checks.json")).unwrap();
+    fs::write(repo.0.join("VERSION"), b"0.9.9\n").unwrap();
+    let index = fs::read(repo.0.join(".git/index")).unwrap();
+    let head = fs::read(repo.0.join(".git/HEAD")).unwrap();
+    let outcome = release_status(&repo.0, &SystemProcessRunner);
+    assert_eq!(outcome.code, crate::EXIT_BLOCKED);
+    let receipt = outcome.receipt.unwrap();
+    assert_eq!(receipt["status"], "setup-required");
+    let blockers = receipt["blockers"].as_array().unwrap();
+    assert_eq!(blockers.len(), 2);
+    assert_eq!(blockers[0]["code"], "development-checks-missing");
+    assert_eq!(blockers[1]["code"], "release-baseline-blocked");
+    assert!(blockers[1]["reason"].as_str().unwrap().contains("VERSION differs"));
+    assert_eq!(fs::read(repo.0.join(".git/index")).unwrap(), index);
+    assert_eq!(fs::read(repo.0.join(".git/HEAD")).unwrap(), head);
+    assert_eq!(fs::read(repo.0.join("VERSION")).unwrap(), b"0.9.9\n");
+    assert!(!repo.0.join(".runtime").exists());
+    assert!(!repo.0.join(".codex/development-checks.json").exists());
+    fs::write(repo.0.join("VERSION"), b"1.0.0\n").unwrap();
+    for bytes in [b"{bad".as_slice(), br#"{"schema":1,"checks":[]}"#.as_slice()] {
+        fs::write(repo.0.join(".codex/development-checks.json"), bytes).unwrap();
+        let outcome = release_status(&repo.0, &SystemProcessRunner);
+        assert_eq!(outcome.code, crate::EXIT_BLOCKED);
+        let value = outcome.receipt.unwrap();
+        assert_eq!(value["setup"]["status"], "invalid-config");
+        assert_eq!(fs::read(repo.0.join(".codex/development-checks.json")).unwrap(), bytes);
+    }
+    install_development_check(&repo.0);
+    let outcome = release_status(&repo.0, &SystemProcessRunner);
+    assert_eq!(outcome.code, 0);
+    assert_eq!(outcome.receipt.unwrap()["status"], "not-prepared");
+    fs::remove_dir_all(remote).unwrap();
+}
+
+#[test]
+fn release_readiness_checks_current_manifests_and_locks_before_preparation() {
+    let (repo, remote) = versioned_repository("native-readiness", true);
+    let config = repo.0.join(".codex/development-checks.json");
+    fs::remove_file(&config).unwrap();
+    let manifest = repo.0.join("Cargo.toml");
+    let lock = repo.0.join("Cargo.lock");
+    let policy = repo.0.join(".codex/bridgeforge-version.json");
+    let originals = [&manifest, &lock, &policy].map(|path| fs::read(path).unwrap());
+    for mode in ["manifest", "lock", "manifest-list"] {
+        for (path, bytes) in [&manifest, &lock, &policy].iter().zip(&originals) { fs::write(path, bytes).unwrap(); }
+        match mode {
+            "manifest" => fs::write(&manifest, b"[package]\nname=\"sample\"\nversion=\"0.9.9\"\n").unwrap(),
+            "lock" => fs::write(&lock, b"version=4\n[[package]]\nname=\"sample\"\nversion=\"0.9.9\"\n").unwrap(),
+            _ => fs::write(&policy, br#"{"schema_version":1,"manifests":["missing/Cargo.toml"]}"#).unwrap(),
+        }
+        let before = [&manifest, &lock, &policy].map(|path| fs::read(path).unwrap());
+        let index = fs::read(repo.0.join(".git/index")).unwrap();
+        let head = fs::read(repo.0.join(".git/HEAD")).unwrap();
+        let outcome = release_status(&repo.0, &SystemProcessRunner);
+        assert_eq!(outcome.code, crate::EXIT_BLOCKED, "{mode}");
+        let value = outcome.receipt.unwrap();
+        assert_eq!(value["blockers"].as_array().unwrap().len(), 2, "{mode}");
+        assert_eq!(value["blockers"][1]["code"], "release-baseline-blocked");
+        for (path, bytes) in [&manifest, &lock, &policy].iter().zip(&before) { assert_eq!(&fs::read(path).unwrap(), bytes); }
+        assert_eq!(fs::read(repo.0.join(".git/index")).unwrap(), index);
+        assert_eq!(fs::read(repo.0.join(".git/HEAD")).unwrap(), head);
+        assert!(!config.exists());
+        assert!(!repo.0.join(".runtime").exists());
+    }
+    fs::remove_dir_all(remote).unwrap();
+}
+
+#[test]
+fn release_readiness_reports_unsupported_js_locks_before_preparation() {
+    let (repo, remote) = versioned_repository("js-readiness", true);
+    fs::remove_file(repo.0.join(".codex/development-checks.json")).unwrap();
+    fs::write(repo.0.join(".codex/bridgeforge-version.json"), br#"{"schema_version":1,"manifests":["package.json"]}"#).unwrap();
+    fs::write(repo.0.join("package.json"), br#"{"name":"sample","version":"1.0.0"}"#).unwrap();
+    for name in ["pnpm-lock.yaml", "yarn.lock"] {
+        let lock = repo.0.join(name);
+        fs::write(&lock, b"project-owned unsupported lock\n").unwrap();
+        let index = fs::read(repo.0.join(".git/index")).unwrap();
+        let head = fs::read(repo.0.join(".git/HEAD")).unwrap();
+        let value = release_status(&repo.0, &SystemProcessRunner).receipt.unwrap();
+        assert_eq!(value["blockers"].as_array().unwrap().len(), 2);
+        assert_eq!(value["blockers"][1]["reason"], format!("unsupported JavaScript lock file: {name}"));
+        assert_eq!(fs::read(&lock).unwrap(), b"project-owned unsupported lock\n");
+        assert_eq!(fs::read(repo.0.join(".git/index")).unwrap(), index);
+        assert_eq!(fs::read(repo.0.join(".git/HEAD")).unwrap(), head);
+        assert!(!repo.0.join(".runtime").exists());
+        fs::remove_file(lock).unwrap();
+    }
+    fs::remove_dir_all(remote).unwrap();
+}
+
+#[test]
 fn explicit_policy_syncs_twice_then_releases_clean_history_once() {
     let (repo, remote) = versioned_repository("explicit-flow", true);
     let names = ["VERSION", "Cargo.toml", "Cargo.lock", "CHANGELOG.md"];

@@ -55,6 +55,8 @@ pub struct SyncPlan {
     pub schema: u32,
     pub status: String,
     pub readiness: String,
+    #[serde(default)]
+    pub release_setup: Value,
     pub mode: SyncMode,
     pub previous_version: Option<String>,
     pub current_version: String,
@@ -93,6 +95,8 @@ pub struct SyncReceipt {
     pub rollback_performed: bool,
     pub stamp_written_last: bool,
     pub project_readiness: String,
+    #[serde(default)]
+    pub release_setup: Value,
     pub asset_migration_manifest_sha256: Option<String>,
     pub preserved_asset_ids: Vec<String>,
 }
@@ -1992,6 +1996,7 @@ pub fn build_plan_with_inputs(
             "ready"
         }
         .into(),
+        release_setup: crate::git_sync::release_setup_status(&project_root),
         mode,
         previous_version,
         current_version: version,
@@ -2506,6 +2511,7 @@ fn apply_plan_internal(
         rollback_performed: false,
         stamp_written_last: true,
         project_readiness: "ready".into(),
+        release_setup: crate::git_sync::release_setup_status(&plan.project_root),
         asset_migration_manifest_sha256: plan.asset_migration["manifest_sha256"]
             .as_str()
             .map(str::to_string),
@@ -2525,7 +2531,7 @@ fn apply_plan_internal(
 }
 
 fn human_plan(plan: &SyncPlan) -> Value {
-    let (conclusion, next_step) = if !plan.blockers.is_empty() {
+    let (conclusion, mut next_step) = if !plan.blockers.is_empty() {
         ("未完成", "先处理同步器报告的阻断项，再重新生成计划")
     } else if !plan.gaps.is_empty() || plan.confirmation_required {
         ("等待确认", "完成当前计划中的用户决定后重新生成计划")
@@ -2534,7 +2540,7 @@ fn human_plan(plan: &SyncPlan) -> Value {
     } else {
         ("可直接执行", "按当前计划执行骨架事务")
     };
-    let pending = if !plan.blockers.is_empty() {
+    let mut pending = if !plan.blockers.is_empty() {
         vec![format!("仍有 {} 项阻断需要处理", plan.blockers.len())]
     } else if !plan.gaps.is_empty() {
         vec![format!("仍有 {} 项决定需要确认", plan.gaps.len())]
@@ -2543,11 +2549,18 @@ fn human_plan(plan: &SyncPlan) -> Value {
     } else {
         Vec::new()
     };
+    if matches!(plan.release_setup["status"].as_str(), Some("not-configured" | "invalid-config")) {
+        pending.push("骨架状态与业务发布状态分别判断：项目发布检查尚未接入或配置无效，先由开发流程完成发布接入；普通同步可继续".into());
+        if plan.status == "current" && plan.blockers.is_empty() && plan.gaps.is_empty() {
+            next_step = "骨架无需修改；需要业务发布时先由开发流程完成项目发布接入";
+        }
+    }
     json!({
         "conclusion": conclusion,
         "pending": pending,
         "next_step": next_step,
-        "current_version": plan.current_version
+        "current_version": plan.current_version,
+        "release_setup": plan.release_setup
     })
 }
 
@@ -2604,11 +2617,13 @@ pub fn outcome_receipt_with_format(
 ) -> CommandOutcome {
     match result {
         Ok(receipt) => {
+            let release_gap = matches!(receipt.release_setup["status"].as_str(), Some("not-configured" | "invalid-config"));
             let human = json!({
-                "conclusion": "已完成",
-                "pending": [],
+                "conclusion": if release_gap { "已完成但仍有待处理项" } else { "已完成" },
+                "pending": if release_gap { vec!["骨架升级已完成；业务发布检查尚未接入或配置无效，需由开发流程处理；普通同步可继续"] } else { vec![] },
                 "next_step": "需要保存到 GitHub 时运行 $git-sync",
                 "current_version": receipt.current_version,
+                "release_setup": receipt.release_setup,
                 "changed_count": receipt.applied.len()
             });
             let machine = serde_json::to_value(receipt)

@@ -14,9 +14,18 @@ mod write_plan;
 
 pub fn release_status(root: &Path, runner: &dyn ProcessRunner) -> CommandOutcome {
     match preparation::status(root, runner) {
+        Ok(value) if matches!(value["status"].as_str(), Some("setup-required" | "blocked")) => CommandOutcome {
+            code: crate::EXIT_BLOCKED,
+            receipt: Some(value),
+            ..CommandOutcome::default()
+        },
         Ok(value) => CommandOutcome::with_receipt(value),
         Err(error) => CommandOutcome::blocked(format!("[release-status] {error}\n")),
     }
+}
+
+pub fn release_setup_status(root: &Path) -> serde_json::Value {
+    preparation::setup_status(root)
 }
 
 pub fn prepare_release(

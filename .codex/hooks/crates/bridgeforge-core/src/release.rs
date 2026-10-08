@@ -15,7 +15,7 @@ use crate::{ProcessRequest, ProcessRunner};
 
 #[path = "release_history.rs"]
 mod history;
-pub use history::{build_explicit_release_plan, explicit_release_policy, preview};
+pub use history::{build_explicit_release_plan, explicit_release_policy, preview, validate_release_baseline};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct SemVer {
@@ -259,6 +259,32 @@ fn configured_manifests(root: &Path) -> Result<Vec<PathBuf>, String> {
         .map(|name| root.join(name))
         .filter(|path| path.is_file())
         .collect())
+}
+
+fn validate_native_versions(root: &Path, version: SemVer) -> Result<(), String> {
+    for path in configured_manifests(root)? {
+        release_input(&path)?;
+        let cargo = path.file_name().and_then(|name| name.to_str()) == Some("Cargo.toml");
+        let current = if cargo { cargo_version(&path)? } else { json_version(&path)? }
+            .ok_or_else(|| format!("configured manifest has no static version: {}", path.display()))?;
+        if current != version {
+            return Err(format!("native manifest disagrees with VERSION: {}", path.display()));
+        }
+        if cargo {
+            render_cargo(&path, version, version)?;
+            let lock = path.with_file_name("Cargo.lock");
+            if release_input(&lock)?.is_some() { render_cargo_lock(&lock, version, version)?; }
+        } else {
+            let lock = path.with_file_name("package-lock.json");
+            if release_input(&lock)?.is_some() { render_package_lock(&lock, version, version)?; }
+            for unsupported in ["pnpm-lock.yaml", "yarn.lock"] {
+                if release_input(&path.with_file_name(unsupported))?.is_some() {
+                    return Err(format!("unsupported JavaScript lock file: {unsupported}"));
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 fn cargo_version(path: &Path) -> Result<Option<SemVer>, String> {
@@ -1108,26 +1134,10 @@ fn build_selected_release_plan(
         .map(|info| bump(old_version, info))
         .max()
         .unwrap();
+    validate_native_versions(root, old_version)?;
     let mut writes = BTreeMap::new();
     writes.insert(version_path, format!("{new_version}\n").into_bytes());
     for path in manifests {
-        let current = if path.file_name().and_then(|value| value.to_str()) == Some("Cargo.toml") {
-            cargo_version(&path)?
-        } else {
-            json_version(&path)?
-        }
-        .ok_or_else(|| {
-            format!(
-                "configured manifest has no static version: {}",
-                path.display()
-            )
-        })?;
-        if current != old_version {
-            return Err(format!(
-                "native manifest disagrees with VERSION: {}",
-                path.display()
-            ));
-        }
         if path.file_name().and_then(|value| value.to_str()) == Some("Cargo.toml") {
             writes.insert(path.clone(), render_cargo(&path, old_version, new_version)?);
             let lock = path.with_file_name("Cargo.lock");
@@ -1145,11 +1155,6 @@ fn build_selected_release_plan(
                     lock.clone(),
                     render_package_lock(&lock, old_version, new_version)?,
                 );
-            }
-            for unsupported in ["pnpm-lock.yaml", "yarn.lock"] {
-                if path.with_file_name(unsupported).is_file() {
-                    return Err(format!("unsupported JavaScript lock file: {unsupported}"));
-                }
             }
         }
     }
