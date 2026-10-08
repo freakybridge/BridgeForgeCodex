@@ -5,6 +5,8 @@ validation_status: verified
 
 # git-sync 显式发布
 
+> 本文保留原交付的需求与证据。后续用户已授权取消缺省/`per_commit` 的普通同步自动升版，当前修复与验证以[普通同步自动升版修复](requirements_2026-10-08_release-only.md)为准。
+
 ## 决定与授权
 
 - 来源：对话 `01a119c7-91ed-7ee0-8f21-b30a6e4dd026` 及当前对话。

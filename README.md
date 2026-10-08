@@ -36,6 +36,10 @@ $bridgeforge-codex
 
 ## 文档入口
 
+普通 `$git-sync` 只提交和同步；只有 `$git-sync release` 才自动升级版本并更新发布记录。
+旧项目缺少版本策略或保留 `per_commit` 时也遵守这条规则，先通过受管骨架升级取得新工具。
+用法与工具能力检查见 [git-sync Skill](skills/git-sync/SKILL.md)。
+
 单项目长任务或多个已讨论任务需要托管时，在该项目的新对话中输入：
 
 ```text

@@ -292,20 +292,56 @@ fn explicit_policy_syncs_twice_then_releases_clean_history_once() {
 }
 
 #[test]
-fn legacy_policy_still_bumps_on_ordinary_sync() {
-    let (repo, remote) = versioned_repository("legacy-release", false);
-    fs::write(repo.0.join("tracked.txt"), b"change\n").unwrap();
-    let outcome = sync(
-        &repo.0,
-        &SystemProcessRunner,
-        GitSyncOptions {
-            message: Some("fix: repair".into()),
-            ..Default::default()
-        },
-    );
-    assert_eq!(outcome.code, 0, "{}", outcome.stderr);
-    assert_eq!(outcome.receipt.unwrap()["version_after"], "1.0.1");
-    fs::remove_dir_all(remote).unwrap();
+fn ordinary_sync_never_bumps_even_with_missing_or_legacy_config() {
+    for policy in ["missing-file", "missing-field", "per_commit", "explicit_release"] {
+        let (repo, remote) = versioned_repository(policy, false);
+        let path = repo.0.join(".codex/bridgeforge-version.json");
+        if policy == "missing-file" {
+            fs::remove_file(&path).unwrap();
+        } else if policy != "missing-field" {
+            fs::write(&path, serde_json::to_vec(&json!({
+                "schema_version": 1, "release_policy": policy, "manifests": ["Cargo.toml"]
+            })).unwrap()).unwrap();
+        }
+        git_ok(&repo.0, &["add", "."]);
+        git_ok(&repo.0, &["commit", "--allow-empty", "-m", "chore: policy baseline"]);
+        git_ok(&repo.0, &["push"]);
+        let config_before = fs::read(&path).ok();
+        let names = ["VERSION", "Cargo.toml", "Cargo.lock", "CHANGELOG.md"];
+        let before = names.map(|name| fs::read(repo.0.join(name)).unwrap());
+        fs::write(repo.0.join("tracked.txt"), b"change\n").unwrap();
+        let outcome = sync(
+            &repo.0,
+            &SystemProcessRunner,
+            GitSyncOptions {
+                message: Some("fix: repair".into()),
+                ..Default::default()
+            },
+        );
+        assert_eq!(outcome.code, 0, "{policy}: {}", outcome.stderr);
+        let receipt = outcome.receipt.unwrap();
+        assert_eq!(receipt["release_policy"], "explicit_release");
+        assert_eq!(receipt["release_requested"], false);
+        assert_eq!(receipt["version_bumped"], false);
+        assert_eq!(receipt["version_before"], "1.0.0");
+        assert_eq!(receipt["version_after"], "1.0.0");
+        assert_eq!(receipt["working_tree"], "clean");
+        assert_eq!(receipt["ahead"], 0);
+        assert_eq!(receipt["behind"], 0);
+        for (name, bytes) in names.iter().zip(&before) {
+            assert_eq!(&fs::read(repo.0.join(name)).unwrap(), bytes, "{policy}: {name}");
+        }
+        assert_eq!(fs::read(&path).ok(), config_before);
+        let prepared = prepare_release(&repo.0, &SystemProcessRunner, "fix: release", None);
+        assert_eq!(prepared.code, 0, "{policy}: {}", prepared.stderr);
+        let released = sync(&repo.0, &SystemProcessRunner, GitSyncOptions {
+            release: true, message: Some("fix: release".into()), ..Default::default()
+        });
+        assert_eq!(released.code, 0, "{policy}: {}", released.stderr);
+        assert_eq!(released.receipt.unwrap()["version_after"], "1.0.1");
+        assert_eq!(fs::read(&path).ok(), config_before);
+        fs::remove_dir_all(remote).unwrap();
+    }
 }
 
 #[test]
@@ -1278,8 +1314,8 @@ struct GeneratedRunner {
 }
 impl ProcessRunner for GeneratedRunner {
     fn run(&self, request: &ProcessRequest) -> std::io::Result<ProcessOutput> {
-        if self.mode == "release-drift" && request.args.iter().any(|arg| arg == "check-ignore") {
-            fs::write(self.root.join("CHANGELOG.md"), b"external changelog edit\n")?;
+        if self.mode == "policy-drift" && request.args.iter().any(|arg| arg == "check-ignore") {
+            fs::write(self.root.join(".codex/bridgeforge-version.json"), b"external policy edit\n")?;
         }
         if request.program == "cargo" {
             assert_eq!(
@@ -1342,7 +1378,7 @@ impl ProcessRunner for GeneratedRunner {
 
 #[test]
 fn factory_build_failure_and_input_drift_do_not_apply_release() {
-    for mode in ["fail", "drift", "release-drift", "user-agents-drift"] {
+    for mode in ["fail", "drift", "policy-drift", "user-agents-drift"] {
         let (repo, remote) = factory_repository(mode);
         let manifest = fs::read(repo.0.join("templates/managed-skeleton.json")).unwrap();
         let user_manifest = fs::read(repo.0.join(crate::user_agents::MANIFEST)).unwrap();
@@ -1387,10 +1423,10 @@ fn factory_build_failure_and_input_drift_do_not_apply_release() {
                 b"external edit\n"
             );
         }
-        if mode == "release-drift" {
+        if mode == "policy-drift" {
             assert_eq!(
-                fs::read(repo.0.join("CHANGELOG.md")).unwrap(),
-                b"external changelog edit\n"
+                fs::read(repo.0.join(".codex/bridgeforge-version.json")).unwrap(),
+                b"external policy edit\n"
             );
         }
         fs::remove_dir_all(remote).unwrap();

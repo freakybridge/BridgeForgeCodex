@@ -2,15 +2,17 @@ use super::*;
 
 pub fn explicit_release_policy(root: &Path) -> Result<bool, String> {
     let Some(payload) = release_input(&root.join(".codex/bridgeforge-version.json"))? else {
-        return Ok(false);
+        return Ok(true);
     };
     let value = crate::baseline::parse_unique_json(&payload, "version sync config")?;
     if value["schema_version"].as_u64() != Some(1) {
         return Err("version sync config must use schema_version=1".into());
     }
     match value.get("release_policy") {
-        None => Ok(false),
-        Some(Value::String(policy)) if policy == "per_commit" => Ok(false),
+        // Legacy configuration remains readable, but cannot authorize a release.
+        // Only the explicit CLI release flag may create version writes.
+        None => Ok(true),
+        Some(Value::String(policy)) if policy == "per_commit" => Ok(true),
         Some(Value::String(policy)) if policy == "explicit_release" => Ok(true),
         _ => Err("release_policy must be per_commit or explicit_release".into()),
     }

@@ -66,6 +66,12 @@ fn prepare_fixture(cli: &Path, root: &Path, message: &str) {
 
 #[test]
 fn real_cli_explicit_release_preview_and_execution() {
+    for policy in ["missing-file", "missing-field", "per_commit", "explicit_release"] {
+        real_cli_release_flow(policy);
+    }
+}
+
+fn real_cli_release_flow(policy: &str) {
     let source = Path::new(env!("CARGO_MANIFEST_DIR"))
         .ancestors()
         .nth(2)
@@ -101,7 +107,7 @@ fn real_cli_explicit_release_preview_and_execution() {
             .as_array()
             .unwrap()
             .iter()
-            .any(|v| v == "git-sync-explicit-release-v1")
+            .any(|v| v == "git-sync-release-only-v1")
     );
     for flag in ["--dry-run", "--check"] {
         let mut probe = ProcessRequest::new(cli.as_os_str(), &root);
@@ -122,11 +128,15 @@ fn real_cli_explicit_release_preview_and_execution() {
     fs::write(root.join("CHANGELOG.md"), b"# Changelog\n").unwrap();
     fs::write(root.join(".gitignore"), b".runtime/\n").unwrap();
     fs::write(root.join(".codex/.bridgeforge_codex_version"), b"1.0.0\n").unwrap();
-    fs::write(
-        root.join(".codex/bridgeforge-version.json"),
-        br#"{"schema_version":1,"release_policy":"explicit_release","manifests":["Cargo.toml"]}"#,
-    )
-    .unwrap();
+    let policy_path = root.join(".codex/bridgeforge-version.json");
+    if policy != "missing-file" {
+        let mut config = serde_json::json!({"schema_version": 1, "manifests": ["Cargo.toml"]});
+        if policy != "missing-field" {
+            config["release_policy"] = serde_json::json!(policy);
+        }
+        fs::write(&policy_path, serde_json::to_vec(&config).unwrap()).unwrap();
+    }
+    fs::write(root.join("Cargo.lock"), b"version = 4\n[[package]]\nname = \"demo\"\nversion = \"1.0.0\"\n").unwrap();
     use sha2::{Digest, Sha256};
     fs::write(root.join("managed.txt"), b"managed\n").unwrap();
     let contract = serde_json::json!({
@@ -154,9 +164,23 @@ fn real_cli_explicit_release_preview_and_execution() {
         &["remote", "add", "origin", remote.to_str().unwrap()],
     );
     git(&root, &["push", "-u", "origin", "HEAD"]);
+    let version_files = ["VERSION", "Cargo.toml", "Cargo.lock", "CHANGELOG.md"];
+    let version_bytes = version_files.map(|name| fs::read(root.join(name)).unwrap());
+    let policy_bytes = fs::read(&policy_path).ok();
     fs::write(root.join("business.txt"), b"feature\n").unwrap();
     let ordinary = call(&["git-sync", "--message", "feat: new capability"]);
     assert_eq!(ordinary["version_bumped"], false);
+    assert_eq!(ordinary["release_requested"], false);
+    assert_eq!(ordinary["release_policy"], "explicit_release");
+    assert_eq!(ordinary["version_before"], "1.0.0");
+    assert_eq!(ordinary["version_after"], "1.0.0");
+    assert_eq!(ordinary["working_tree"], "clean");
+    assert_eq!(ordinary["ahead"], 0);
+    assert_eq!(ordinary["behind"], 0);
+    for (name, bytes) in version_files.iter().zip(&version_bytes) {
+        assert_eq!(&fs::read(root.join(name)).unwrap(), bytes, "{policy}: {name}");
+    }
+    assert_eq!(fs::read(&policy_path).ok(), policy_bytes);
     let before = git(&root, &["rev-parse", "HEAD"]);
     let index = fs::read(root.join(".git/index")).unwrap();
     let fetch = fs::read(root.join(".git/FETCH_HEAD")).unwrap();
@@ -173,6 +197,9 @@ fn real_cli_explicit_release_preview_and_execution() {
     );
     let released = call(&["git-sync", "--release", "--message", "fix: release"]);
     assert_eq!(released["version_after"], "1.1.0");
+    assert_eq!(released["release_requested"], true);
+    assert_eq!(released["version_bumped"], true);
+    assert_eq!(fs::read(&policy_path).ok(), policy_bytes);
     assert_eq!(released["working_tree"], "clean");
     assert_eq!(released["ahead"], 0);
     assert_eq!(released["behind"], 0);

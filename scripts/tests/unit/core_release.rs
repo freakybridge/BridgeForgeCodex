@@ -615,16 +615,16 @@ fn explicit_release_excludes_historical_skeleton_commits_using_their_own_contrac
 }
 
 #[test]
-fn release_policy_is_opt_in_and_rejects_unknown_or_duplicate_values() {
+fn release_policy_is_always_explicit_and_rejects_unknown_or_duplicate_values() {
     let repo = explicit_repository("policy");
-    assert!(!explicit_release_policy(&repo.0).unwrap());
-    for (policy, expected) in [("per_commit", false), ("explicit_release", true)] {
+    assert!(explicit_release_policy(&repo.0).unwrap());
+    for policy in ["per_commit", "explicit_release"] {
         fs::write(
             repo.0.join(".codex/bridgeforge-version.json"),
             serde_json::to_vec(&json!({"schema_version": 1, "release_policy": policy})).unwrap(),
         )
         .unwrap();
-        assert_eq!(explicit_release_policy(&repo.0).unwrap(), expected);
+        assert!(explicit_release_policy(&repo.0).unwrap());
     }
     for value in [br#"{"schema_version":1,"release_policy":"typo"}"#.as_slice(), br#"{"schema_version":1,"release_policy":"per_commit","release_policy":"explicit_release"}"#.as_slice()] {
         fs::write(repo.0.join(".codex/bridgeforge-version.json"), value).unwrap();

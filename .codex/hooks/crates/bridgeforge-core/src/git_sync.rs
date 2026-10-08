@@ -582,10 +582,9 @@ pub fn sync(
     let factory = root.join("templates/managed-skeleton.json").is_file();
     let policy_path = root.join(".codex/bridgeforge-version.json");
     let policy_before = fs::read(&policy_path).ok();
-    let explicit_policy = match crate::release::explicit_release_policy(root) {
-        Ok(value) => value,
-        Err(error) => return blocked(error),
-    };
+    if let Err(error) = crate::release::explicit_release_policy(root) {
+        return blocked(error);
+    }
     let version_before = fs::read_to_string(root.join("VERSION"))
         .ok()
         .map(|v| v.trim().to_string());
@@ -633,10 +632,8 @@ pub fn sync(
             }
             let planning = if options.release {
                 crate::release::build_explicit_release_plan(root, &message, changed_paths, runner)
-            } else if explicit_policy {
-                Ok(None)
             } else {
-                crate::release::build_file_release_plan(root, &message, changed_paths, runner)
+                Ok(None)
             };
             let release = match planning {
                 Ok(value) => value,
@@ -1010,11 +1007,7 @@ pub fn sync(
         behind,
         autostashed
     ));
-    final_receipt["release_policy"] = json!(if explicit_policy {
-        "explicit_release"
-    } else {
-        "per_commit"
-    });
+    final_receipt["release_policy"] = json!("explicit_release");
     final_receipt["release_requested"] = json!(options.release);
     final_receipt["version_bumped"] = json!(version_before != version_after);
     final_receipt["version_before"] = json!(version_before);
