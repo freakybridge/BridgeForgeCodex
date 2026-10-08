@@ -2,7 +2,7 @@
 
 这个目录放 bridgeforge-codex 自身的 Rust 回归检查。Git 集成测试只在隔离临时仓库中提交和推送，不修改真实项目或访问真实 Memory 远端。
 
-在工厂根目录运行全部检查：
+开发收口的完整检查以 `.codex/development-checks.json` 为唯一入口清单；先证明模板与 dogfood 全树一致，再运行 dogfood 完整 workspace 和工厂 fixture，避免重复执行相同测试。需要诊断模板单独构建时可使用下列模板命令：
 
 ```powershell
 cargo test --locked --config scripts/tests/factory-cargo.toml --manifest-path templates/hooks/Cargo.toml --workspace -- --test-threads=1
@@ -25,7 +25,7 @@ cargo test --locked --manifest-path scripts/tests/Cargo.toml -- --test-threads=1
 - Git 暂存守卫的启动失败、超时、非零退出及敏感文件保护。
 - 工厂版本计划同步三个 Cargo manifest 与 lock，预览零写入；旧 CPython 需求卡不再作为活动运行合同。
 - project-sync apply/build-assets 全程互斥、Git 主仓库与 worktree 共享锁，以及已识别旧收据的事务退役和回滚。
-- SessionStart、Stop、PostCompact、PostToolUse 生命周期及状态/收据落盘失败；Memory 恢复排除未声明文件并在损坏时保留原目录。
+- SessionStart、Stop、PostToolUse 生命周期及收据落盘失败；会话快照退役后不创建状态目录、保留历史文件、拒绝旧手动入口；Memory 恢复排除未声明文件并在损坏时保留原目录。
 - 进程的大输入/双路大输出、非零退出、无人读取 stdin、父进程退出后后代占用管道及 Windows 后代终止；子进程辅助测试仅由回归显式启动。
 - 构建收据的实测输入哈希、陈旧合同、原始输入/独立快照/产物漂移和失败零替换；另有真实 Cargo 构建与临时项目安装回归。
 - Native Memory 的精确 GitHub 身份、私有性与 Git URL 改写保护；GitHub 查询使用测试替身。

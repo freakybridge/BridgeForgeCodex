@@ -7,8 +7,75 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+#[path = "release_preparation.rs"]
+mod preparation;
 #[path = "git_sync_plan.rs"]
 mod write_plan;
+
+pub fn release_status(root: &Path, runner: &dyn ProcessRunner) -> CommandOutcome {
+    match preparation::status(root, runner) {
+        Ok(value) => CommandOutcome::with_receipt(value),
+        Err(error) => CommandOutcome::blocked(format!("[release-status] {error}\n")),
+    }
+}
+
+pub fn prepare_release(
+    root: &Path,
+    runner: &dyn ProcessRunner,
+    message: &str,
+    audit_file: Option<&Path>,
+) -> CommandOutcome {
+    match preparation::prepare(root, runner, message, audit_file) {
+        Ok(value) => CommandOutcome::with_receipt(value),
+        Err(error) => CommandOutcome::blocked(format!("[prepare-release] {error}\n")),
+    }
+}
+
+fn requested_message(options: &GitSyncOptions) -> Result<String, String> {
+    let message = if let Some(path) = &options.message_file {
+        fs::read_to_string(path).map_err(|e| format!("cannot read commit message: {e}"))?
+    } else {
+        options.message.clone().unwrap_or_default()
+    };
+    if message.trim().is_empty() {
+        return Err("commit message is required for release".into());
+    }
+    Ok(message.trim().to_string())
+}
+
+fn release_guard_path(root: &Path) -> Result<PathBuf, String> {
+    write_plan::join(
+        root,
+        ".runtime/bridgeforge-codex/release-preparation/commit-guard.json",
+    )
+}
+
+fn check_release_commit_guard(git: &Git<'_>) -> Result<(), String> {
+    let file = release_guard_path(git.root)?;
+    let bytes = match fs::read(&file) {
+        Ok(bytes) => bytes,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(e.to_string()),
+    };
+    let guard = crate::baseline::parse_unique_json(&bytes, "release commit guard")?;
+    let parent = guard["parent"]
+        .as_str()
+        .ok_or("invalid release commit guard")?;
+    let tree = guard["tree"]
+        .as_str()
+        .ok_or("invalid release commit guard")?;
+    let head = git.required(&["rev-parse", "HEAD"], Duration::from_secs(30))?;
+    let accepted = head == parent
+        || (git.required(&["rev-parse", "HEAD^"], Duration::from_secs(30))? == parent
+            && git.required(&["rev-parse", "HEAD^{tree}"], Duration::from_secs(30))? == tree);
+    if !accepted {
+        return Err("previous prepared release commit differs from verified content; commit preserved locally, manual review required before any push".into());
+    }
+    if fs::read(&file).map_err(|e| e.to_string())? != bytes {
+        return Err("release commit guard changed concurrently".into());
+    }
+    fs::remove_file(file).map_err(|e| e.to_string())
+}
 
 #[derive(Clone, Debug, Default)]
 pub struct GitSyncOptions {
@@ -348,6 +415,28 @@ pub fn sync(
         Ok(value) => value,
         Err(error) => return blocked(error),
     };
+    if let Err(error) = check_release_commit_guard(&git) {
+        return blocked(error);
+    }
+    // Fail before network/stash/fast-forward when development preparation is
+    // absent or stale. Recheck after fetch because the remote may change inputs.
+    if options.release {
+        let preflight = (|| {
+            let message = requested_message(&options)?;
+            if let Some(release) = crate::release::build_explicit_release_plan(
+                root,
+                &message,
+                git.changed_paths()?,
+                runner,
+            )? {
+                preparation::load(root, &git, &release.new_version.to_string())?;
+            }
+            Ok::<(), String>(())
+        })();
+        if let Err(error) = preflight {
+            return blocked(error);
+        }
+    }
     let push_target = match git.required(
         &[
             "rev-parse",
@@ -559,6 +648,17 @@ pub fn sync(
         } else {
             (String::new(), None)
         };
+        let prepared = if options.release {
+            match &release {
+                Some(plan) => match preparation::load(root, &git, &plan.new_version.to_string()) {
+                    Ok(record) => Some(record),
+                    Err(error) => return blocked(error),
+                },
+                None => None,
+            }
+        } else {
+            None
+        };
         if let Some(plan) = &release {
             version_after = Some(plan.new_version.to_string());
         }
@@ -589,12 +689,20 @@ pub fn sync(
         let (mut release_inputs, release_writes) =
             release.map(|p| (p.inputs, p.writes)).unwrap_or_default();
         release_inputs.insert(policy_path, policy_before);
-        let plan = match write_plan::WritePlan::prepare(
+        let prepared_artifacts = match &prepared {
+            Some(record) => match record.artifacts(root) {
+                Ok(files) => files,
+                Err(error) => return blocked(error),
+            },
+            None => Default::default(),
+        };
+        let plan = match write_plan::WritePlan::prepare_with_artifacts(
             root,
             release_writes,
             release_inputs,
             factory,
             runner,
+            options.release.then_some(&prepared_artifacts),
         ) {
             Ok(plan) => plan,
             Err(error) => {
@@ -605,6 +713,11 @@ pub fn sync(
         };
         generated_reused = plan.generated_reused;
         generated_built = plan.generated_built;
+        if let Some(record) = &prepared {
+            if let Err(error) = record.validate(root, &git) {
+                return blocked(error);
+            }
+        }
         if RepositoryIdentity::capture(&git).as_ref() != Ok(&identity)
             || fs::read(&identity.index_path).ok().as_ref() != Some(&original_index)
         {
@@ -659,6 +772,11 @@ pub fn sync(
                 snapshots,
             );
         }
+        if let Some(record) = &prepared {
+            if let Err(error) = record.verify_applied(root, &git, &plan.writes) {
+                return fail(error, &original_index, snapshots);
+            }
+        }
         if let Err(error) = git.required(&["add", "."], Duration::from_secs(120)) {
             return fail(error, &original_index, snapshots);
         }
@@ -672,6 +790,11 @@ pub fn sync(
                 );
             }
         };
+        if let Some(record) = &prepared {
+            if let Err(error) = record.verify_applied(root, &git, &plan.writes) {
+                return fail(error, &post_add_index, snapshots);
+            }
+        }
         let post_add_semantic =
             match git.required(&["ls-files", "--stage", "-v"], Duration::from_secs(30)) {
                 Ok(value) => value,
@@ -682,6 +805,32 @@ pub fn sync(
                 Ok(value) => value,
                 Err(error) => return fail(error, &post_add_index, snapshots),
             };
+        let expected_tree = if code == 1 && prepared.is_some() {
+            let tree = match git.required(&["write-tree"], Duration::from_secs(30)) {
+                Ok(tree) => tree,
+                Err(error) => return fail(error, &post_add_index, snapshots),
+            };
+            if let Err(error) = git.required(&["diff", "--quiet"], Duration::from_secs(30)) {
+                return fail(
+                    format!("index differs from verified worktree: {error}"),
+                    &post_add_index,
+                    snapshots,
+                );
+            }
+            let file = match release_guard_path(root) {
+                Ok(file) => file,
+                Err(error) => return fail(error, &post_add_index, snapshots),
+            };
+            if let Err(error) = crate::memory::atomic_write_json(
+                &file,
+                &json!({"schema":1,"parent":identity.head_oid,"tree":tree}),
+            ) {
+                return fail(error.to_string(), &post_add_index, snapshots);
+            }
+            Some(tree)
+        } else {
+            None
+        };
         if code == 1
             && let Err(error) = git.required(&["commit", "-m", &message], Duration::from_secs(180))
         {
@@ -723,6 +872,19 @@ pub fn sync(
                 return blocked(
                     "HIGH: HEAD changed unexpectedly during commit; no automatic push".into(),
                 );
+            }
+            if let Some(expected_tree) = &expected_tree {
+                let tree =
+                    match git.required(&["rev-parse", "HEAD^{tree}"], Duration::from_secs(30)) {
+                        Ok(tree) => tree,
+                        Err(error) => return blocked(error),
+                    };
+                if &tree != expected_tree {
+                    return blocked("commit hook changed verified content; commit preserved locally and push blocked; manual review required".into());
+                }
+                if let Err(error) = check_release_commit_guard(&git) {
+                    return blocked(error);
+                }
             }
             let committed_identity = match RepositoryIdentity::capture(&git) {
                 Ok(value) => value,

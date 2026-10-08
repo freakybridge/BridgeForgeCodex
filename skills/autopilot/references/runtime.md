@@ -41,7 +41,7 @@
 ## Skill、Hook 与权限
 
 - 只消费当前会话实际发现的 Skill，主路径复用 `confirm`、`develop`、`collab`；按需要使用
-  `sync-docs`、`snapshot`、`resume`、`escalate` / `debate`，用户验收才进入 `summary`。
+  `sync-docs`、`summary switch`、`escalate` / `debate`；用户验收使用 `summary accept`。
   继承整包授权；若 Skill 默认流程与约定冲突，保留用户明确决定，只报告真正未决的分叉。
 - 核对项目 AGENTS、`.codex/hooks.json`、受管 runtime 及验证入口。Hook 由对应工具和生命周期
   事件触发；SessionStart、Stop 等可能含写入，不手工重放来伪造就绪状态。
@@ -52,7 +52,7 @@
 - 平台拒绝时遵守审批流程；可用原授权内更窄的合法路径，不换工具绕过拒绝。预检能减少
   中断，不能保证网络、登录、额度和权限在整个任务期间不变化。
 - 本地工作依赖宿主可用。提前告知保持机器、客户端和项目可访问；不擅改电源、安装守护进程
-  或创建定时任务。snapshot 提供恢复资料，不是自动唤醒器。
+  或创建定时任务。交接文档提供恢复资料，不是自动唤醒器。
 
 ## 证据与官方参考
 

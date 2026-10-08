@@ -815,8 +815,15 @@ pub(crate) fn verify_generated(root: &Path, generated: &Value) -> Result<String,
     let receipt = safe_target(root, &generated["receipt_target"], "generated receipt")?;
     let binary_payload =
         fs::read(&binary).map_err(|_| format!("generated binary is missing: {id}"))?;
+    let receipt_payload = fs::read(&receipt).map_err(|_| format!("generated receipt is missing: {id}"))?;
+    verify_generated_payload(generated, &binary_payload, &receipt_payload)
+}
+
+pub(crate) fn verify_generated_payload(generated: &Value, binary_payload: &[u8], receipt_payload: &[u8]) -> Result<String, String> {
+    let id = generated["id"].as_str().ok_or("generated asset id is missing")?;
+    let key = platform_key()?;
     let document: Value = serde_json::from_slice(
-        &fs::read(&receipt).map_err(|_| format!("generated receipt is missing: {id}"))?,
+        receipt_payload,
     )
     .map_err(|error| format!("invalid generated receipt: {error}"))?;
     if document["schema_version"].as_u64() != Some(2)

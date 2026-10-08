@@ -51,7 +51,7 @@ fn self_test() -> CommandOutcome {
         "name": "bridgeforge",
         "status": "ok",
         "version": env!("CARGO_PKG_VERSION"),
-        "capabilities": ["git-sync-explicit-release-v1"]
+        "capabilities": ["git-sync-explicit-release-v1", "git-sync-prepared-release-v1"]
     }))
 }
 
@@ -341,11 +341,51 @@ fn project_sync(args: &[String]) -> CommandOutcome {
 }
 
 fn git_sync(args: &[String]) -> CommandOutcome {
+    if has(args, "--check") || has(args, "--dry-run") {
+        return blocked(
+            "git-sync",
+            "--check/--dry-run cannot execute synchronization or preparation; use --release-status or --release-preview",
+        );
+    }
     let root = value(args, "--root").map(PathBuf::from);
     let context = match ProjectContext::discover(root.as_deref()) {
         Ok(value) => value,
         Err(error) => return blocked("git-sync", error),
     };
+    let modes = [
+        "--release",
+        "--release-preview",
+        "--prepare-release",
+        "--release-status",
+    ]
+    .iter()
+    .filter(|flag| has(args, flag))
+    .count();
+    if modes > 1 {
+        return blocked("git-sync", "release modes are mutually exclusive");
+    }
+    if has(args, "--release-status") {
+        return bridgeforge_core::git_sync::release_status(context.root(), &SystemProcessRunner);
+    }
+    if has(args, "--prepare-release") {
+        let message = if let Some(path) = value(args, "--message-file") {
+            match fs::read_to_string(path) {
+                Ok(value) => value,
+                Err(error) => return blocked("git-sync", error),
+            }
+        } else {
+            value(args, "--message")
+                .or_else(|| value(args, "-m"))
+                .unwrap_or_default()
+        };
+        let audit = value(args, "--audit-file").map(PathBuf::from);
+        return bridgeforge_core::git_sync::prepare_release(
+            context.root(),
+            &SystemProcessRunner,
+            &message,
+            audit.as_deref(),
+        );
+    }
     if has(args, "--release-preview") {
         let message = if let Some(path) = value(args, "--message-file") {
             match fs::read_to_string(path) {

@@ -105,7 +105,7 @@
 - Skill 或 Agent 增删改名必须同步分发登记、dogfood 与引用校验；禁止维护第二份角色路由表。
 - `--check` / `--dry-run` 必须零写入；`init/adopt/update` 必须只经受管 `bridgeforge project-sync` apply。
 - Bug 关闭必须分别记录源码、产品传播、dogfood、fixture、真实下游与 runtime 六类证据；缺失项必须标为未验证。
-- 发布前必须通过 factory dogfood、skill metadata、manifest `--check`、project structure、mirror drift、完整 fixture、完整自动测试与独立审计。
+- 工厂开发收口遵循 [开发收口清单](doc/0_architecture/design/development-completion.md)，由 develop 完成检查、独立审计与发布准备；验收后的 `git-sync release` 只核对并复用有效记录，不重新启动编译、全量测试或审计。
 - 未执行真实下游或 runtime smoke 时，禁止宣称对应验证已通过。
 
 ### 项目业务与安全红线

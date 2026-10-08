@@ -87,12 +87,12 @@
             {
               "source": "skills/autopilot/SKILL.md",
               "target": "SKILL.md",
-              "sha256": "sha256:93f29f8cb530a8dca82182551ee557ca1dc447fe0f38dd4360ecf238b79a40a5"
+              "sha256": "sha256:b4f59bd47d7d0cd9cbe470b77159fafe3440f5c86ba7393160395e44ff550dcf"
             },
             {
               "source": "skills/autopilot/references/runtime.md",
               "target": "references/runtime.md",
-              "sha256": "sha256:131e24d81124f0bcd4cbf0b8890594addee8fd7f94f3df34c304b4127598c0ee"
+              "sha256": "sha256:c3e8ec00a4778e2792908a194fdeaca640f465c7ba9d18a6e6e55d37d423ceac"
             }
           ]
         },
@@ -162,12 +162,17 @@
             {
               "source": "skills/develop/references/ml-delivery.md",
               "target": "references/ml-delivery.md",
-              "sha256": "sha256:1d8844f0021fbdbd0e5da8253dab41ab178bffc24bf23e8171fdce2b9801095a"
+              "sha256": "sha256:608c19e4f3bb50a52302173b895ef4219f5c0012c993b2071d036e29496da287"
+            },
+            {
+              "source": "skills/develop/references/completion-release.md",
+              "target": "references/completion-release.md",
+              "sha256": "sha256:2a752ba4fe60fd281a9e7c7b0704c3bd264473d292be02f46262766d892f7457"
             },
             {
               "source": "skills/develop/SKILL.md",
               "target": "SKILL.md",
-              "sha256": "sha256:c143690810277c9d7a14b672aa11ca8133fe794f6964b8765e79d15c7060ff51"
+              "sha256": "sha256:5adbbde7ccc04e7e6e9722cc6dbfc6477bf1ae3609a3be67ec7dfbc3540ba405"
             }
           ]
         },
@@ -197,7 +202,7 @@
             {
               "source": "skills/find-doc/SKILL.md",
               "target": "SKILL.md",
-              "sha256": "sha256:a254ef3d0f995e040002f2233bb5fd3320a61bd076d212a42fa005c4a2cbe6be"
+              "sha256": "sha256:a2065b87b0c8fdb34ab2f422a1be918db8b0f6731e144d6a5099a4dd024add92"
             }
           ]
         },
@@ -217,7 +222,7 @@
             {
               "source": "skills/git-sync/SKILL.md",
               "target": "SKILL.md",
-              "sha256": "sha256:2d71b40c8688dcaec8facc1848b049b580fab3a552abf505daf345f4cd3c66a2"
+              "sha256": "sha256:eeff318b1a2a8f57e653c1d669f8b2400e926c5cc5047346219691cbe2532cc9"
             }
           ]
         },
@@ -232,32 +237,12 @@
           ]
         },
         {
-          "name": "resume",
-          "files": [
-            {
-              "source": "skills/resume/SKILL.md",
-              "target": "SKILL.md",
-              "sha256": "sha256:83760c11b24e9716b0d9860d117d510abc02713ee21e0a688425c055eacb4c3c"
-            }
-          ]
-        },
-        {
-          "name": "snapshot",
-          "files": [
-            {
-              "source": "skills/snapshot/SKILL.md",
-              "target": "SKILL.md",
-              "sha256": "sha256:83fb8358e37e9118c14ec52c2160181c49e4ef61587242ffab522d1e83b22c24"
-            }
-          ]
-        },
-        {
           "name": "spinoff",
           "files": [
             {
               "source": "skills/spinoff/SKILL.md",
               "target": "SKILL.md",
-              "sha256": "sha256:29638bb9110f45d0c006b312c5b24637cb19f0871b2b046e8f6c7884531fd738"
+              "sha256": "sha256:09c0b4d514e192ae1ead8c40c861371c31185b426b9bfb6d8a19769c7a06a4a4"
             }
           ]
         },
@@ -267,22 +252,27 @@
             {
               "source": "skills/summary/references/acceptance-mode.md",
               "target": "references/acceptance-mode.md",
-              "sha256": "sha256:cffaaaf61f6eca791c7085dce7e6f9c406f8dc10e8c317a6f7508b78e3211461"
+              "sha256": "sha256:28fcee88004e6258f2407ec3a4622bb1a7993617006720154e312021ed055ef9"
             },
             {
               "source": "skills/summary/references/deep-steps.md",
               "target": "references/deep-steps.md",
-              "sha256": "sha256:2cb0a11f96f53703425023b8a1cfd9f6a8bcc50d19e4feecae9f952841d3ea2a"
+              "sha256": "sha256:9a14062a8a412cb7074e59269d4ca83520f1bacc656222263872bc5036eea725"
             },
             {
               "source": "skills/summary/references/ordinary-mode.md",
               "target": "references/ordinary-mode.md",
-              "sha256": "sha256:7b936a3786328260bffc1319bd3a3266e3eb957ba2a7ad6a38bb554f7864fa84"
+              "sha256": "sha256:08d9fe41cad6d85bd4c5bb2de94caf30b50f5e529215aa926ceebbd17e2fdff6"
             },
             {
               "source": "skills/summary/SKILL.md",
               "target": "SKILL.md",
-              "sha256": "sha256:bccc6d2e8071845b8ceb952408b3d3131e2cdba147ddac4fa45383b6e13d9898"
+              "sha256": "sha256:3d96dfa4fd1b619aa13d0a6acfdc60f56d46437850421e178f06b9aa72d65c7c"
+            },
+            {
+              "source": "skills/summary/references/switch-mode.md",
+              "target": "references/switch-mode.md",
+              "sha256": "sha256:2a582e07423c05384ff2f85ad8dcf66f8d07b91229924d1ec12ce65df007c6b1"
             }
           ]
         },

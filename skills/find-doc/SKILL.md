@@ -79,6 +79,6 @@ argument: 主题关键词（中英混合，例 "auth oauth" / "数据库 schema"
 - 禁止先读完整文件理解上下文；先检索，再按需读。
 - 禁止扫描源代码、项目 `.codex/memory/`、原生 `~/.codex/memories/` 或全量 rules。
 - 禁止要求用户创建、补充或修复自动生成的 Map。
-- 禁止用 `todo`、`resume`、`summary` 的能力替代本 skill；新建文档、跨会话接续和对话总结应转交对应 skill。
+- 禁止用 `todo`、`summary` 的能力替代本 skill；经验沉淀和交接文档使用 summary，继续任务须直接读取交接并核对现场。
 
 输入：`$ARGUMENTS`

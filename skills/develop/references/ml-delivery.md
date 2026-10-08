@@ -14,7 +14,7 @@
 ## 2. 同步事实
 
 - 已确认范围内的实现细节、事实补全和验证状态直接更新需求包或设计文档；开始实施时把 `validation_status` 从 `not_started` 改为 `in_progress`。
-- 完成实现后按证据更新 `validation_status` 为 `awaiting_validation` 或 `awaiting_user_acceptance`，并更新变更记录、每项验收状态及相关设计或 rules；`lifecycle` 保持 `active`，只有 `$summary 同意验收` 可以结算为 `completed`。
+- 完成实现后按证据更新 `validation_status` 为 `awaiting_validation` 或 `awaiting_user_acceptance`，并更新变更记录、每项验收状态及相关设计或 rules；`lifecycle` 保持 `active`，只有 `$summary accept` 可以结算为 `completed`。
 - 实质变化按主入口重核受影响授权；用户新指令已明确决定则更新记录，否则暂停相关动作。
 
 ## 3. 验证与试用
@@ -23,6 +23,7 @@
    依据升级为全量测试。
 2. 规则和可执行测试优先于 LLM review。需要 Agent review 时再读取 `agent-execution.md`。
 3. 交付改动、需求卡、验证收据、用户试用主路径和剩余风险。
+   交付前完成主入口规定的开发收口与发布准备；不得把完整验证和目标版本构建留给 git-sync release。可核验的 prepared 记录是发布交接依据，不能只写“测试通过”。
 4. 当前需求内的小 Bug 直接修复并更新同一需求包；独立 Bug 建立
    `doc/2_bugs/BUG-<id>-<topic>.md`；新范围进入新的 `confirm` / `develop`。
 5. 修复失败与恢复按公共 AGENTS 执行，禁止切换阶段清零计数。

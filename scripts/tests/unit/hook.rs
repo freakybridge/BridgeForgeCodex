@@ -359,23 +359,27 @@ fn project_map_rejects_non_file_targets_before_writing_any_map() {
 }
 
 #[test]
-fn lifecycle_snapshots_stop_dedup_and_manual_route_succeed() {
+fn retired_snapshots_do_not_write_or_delete_history() {
     let fixture = Fixture::new();
+    let directory = fixture.root.join(".runtime/session_state");
     assert_eq!(lifecycle("session-start", None), 0);
     assert_eq!(lifecycle("post-compact", None), 0);
-    let directory = fixture.root.join(".runtime/session_state");
-    let paths = fs::read_dir(&directory)
-        .unwrap()
-        .map(|entry| entry.unwrap().path())
-        .collect::<Vec<_>>();
-    assert_eq!(paths.len(), 1);
-    let before = fs::read(&paths[0]).unwrap();
-    assert!(String::from_utf8_lossy(&before).contains("post-compact"));
     assert_eq!(lifecycle("stop", None), 0);
-    assert_eq!(fs::read(&paths[0]).unwrap(), before);
-    assert_eq!(run(vec!["snapshot".into(), "manual".into()]), 0);
-    assert_eq!(fs::read_dir(&directory).unwrap().count(), 2);
-    assert_eq!(fs::read(&paths[0]).unwrap(), before);
+    assert!(!directory.exists());
+    for route in ["manual", "latest", "list"] {
+        assert_eq!(run(vec!["snapshot".into(), route.into()]), 2);
+    }
+    assert!(!directory.exists());
+    fs::create_dir_all(&directory).unwrap();
+    let history = directory.join("old.md");
+    fs::write(&history, b"existing history").unwrap();
+    assert_eq!(lifecycle("post-compact", None), 0);
+    assert_eq!(lifecycle("stop", None), 0);
+    assert_eq!(fs::read(&history).unwrap(), b"existing history");
+    assert_eq!(fs::read_dir(&directory).unwrap().count(), 1);
+    let state = session::show_state();
+    assert!(!state.stdout.contains("resume"));
+    assert!(!state.stdout.contains("[snapshot]"));
 }
 
 #[test]
@@ -442,7 +446,7 @@ fn hook_topic4_map_failures_propagate_without_skipping_other_work() {
     fs::create_dir(map_root.join("find-doc.map.md")).unwrap();
     assert_eq!(lifecycle("session-start", None), 1);
     assert_eq!(lifecycle("stop", None), 1);
-    assert!(fixture.root.join(".runtime/session_state").is_dir());
+    assert!(!fixture.root.join(".runtime/session_state").exists());
     let failed = project_map::ensure_current();
     let mut output = HookOutput::default();
     output.absorb_map(&failed);
@@ -501,14 +505,8 @@ fn hook_topic4_patch_smell_matches_edit_and_ignores_unchanged_removed_or_split_c
     assert!(post::fallback_smell(&moved[2]).stdout.is_empty());
 }
 
-fn handoff_text(event: &str) -> String {
-    format!(
-        "**Event**: {event}\n## 交接摘要（agent 填）\n### 已完成\n- checked\n### 关键决定 / 当前假设\n- read only\n### 改动文件\n- none\n### 下一步\n- inspect\n"
-    )
-}
-
 #[test]
-fn snapshot_git_observation_distinguishes_failure_clean_unborn_and_detached() {
+fn session_git_observation_distinguishes_failure_clean_unborn_and_detached() {
     for text in [None, Some(""), Some("# branch.head main\n")] {
         let state = session::parse_git_state(text);
         assert!(!state.known);
@@ -535,127 +533,18 @@ fn snapshot_git_observation_distinguishes_failure_clean_unborn_and_detached() {
 }
 
 #[test]
-fn snapshot_failed_git_query_is_saved_as_unknown_not_clean() {
-    let fixture = Fixture::new(); // Not a Git repository: the real command exits nonzero.
-    let result = session::snapshot("manual");
-    assert_eq!(result.code, 0); // File saved, even though Git observation is unknown.
-    let candidates = session::snapshot_candidates(&fixture.root.join(".runtime/session_state"));
-    assert_eq!(candidates.len(), 1);
-    assert!(!candidates[0].1);
-    let content = fs::read_to_string(&candidates[0].0).unwrap();
-    assert!(
-        result
-            .stdout
-            .contains(&candidates[0].0.display().to_string())
-    );
-    assert!(content.contains("**Git observation**: unknown"));
-    assert!(content.contains("**HEAD**: unknown"));
-    assert!(!content.contains("(clean)"));
-    assert!(!content.contains("no-upstream"));
-    assert!(session::show_state().stdout.contains("dirty=unknown"));
-}
-
-#[test]
-fn snapshot_same_timestamp_concurrent_creation_preserves_both_files() {
+fn session_failed_git_query_is_unknown_not_clean() {
     let fixture = Fixture::new();
-    let directory = fixture.root.join("snapshots");
-    fs::create_dir(&directory).unwrap();
-    let barrier = std::sync::Barrier::new(2);
-    let paths = std::thread::scope(|scope| {
-        let first = scope.spawn(|| {
-            barrier.wait();
-            session::write_new_snapshot(&directory, "2026-09-06_120000", b"first").unwrap()
-        });
-        let second = scope.spawn(|| {
-            barrier.wait();
-            session::write_new_snapshot(&directory, "2026-09-06_120000", b"second").unwrap()
-        });
-        (first.join().unwrap(), second.join().unwrap())
-    });
-    assert_ne!(paths.0, paths.1);
-    assert_eq!(fs::read(paths.0).unwrap(), b"first");
-    assert_eq!(fs::read(paths.1).unwrap(), b"second");
-    assert_eq!(fs::read_dir(directory).unwrap().count(), 2);
-}
-
-#[test]
-fn snapshot_selection_and_retention_preserve_handoffs_and_unknown_files() {
-    let fixture = Fixture::new();
-    let directory = fixture.root.join(".runtime/session_state");
-    fs::create_dir_all(&directory).unwrap();
-    let handoff = directory.join("old-manual.md");
-    let complete = handoff_text("manual").replace('\n', "\r\n");
-    fs::write(&handoff, &complete).unwrap();
-    let incomplete = directory.join("incomplete-manual.md");
-    fs::write(&incomplete, "**Event**: manual\n").unwrap();
-    let unknown = directory.join("legacy.md");
-    fs::write(&unknown, "unrecognized legacy content").unwrap();
-    let appended = directory.join("annotated-stop.md");
-    fs::write(&appended, "**Event**: stop\n## 交接摘要\npartial").unwrap();
-    for index in 0..25 {
-        let path = directory.join(format!("auto-{index:02}.md"));
-        fs::write(&path, "**Event**: stop\n").unwrap();
-        fs::File::options()
-            .write(true)
-            .open(path)
-            .unwrap()
-            .set_times(
-                fs::FileTimes::new()
-                    .set_modified(SystemTime::now() + Duration::from_secs(index + 1)),
-            )
-            .unwrap();
-    }
-    assert_eq!(
-        session::snapshot_candidates(&directory),
-        vec![(handoff.clone(), true)]
-    );
-    let before_count = fs::read_dir(&directory).unwrap().count();
-    let selected = session::select_snapshot(false);
-    assert!(selected.stdout.contains(&handoff.display().to_string()));
-    assert!(!selected.stdout.contains("state-only"));
-    assert!(
-        session::show_state()
-            .stdout
-            .contains(&handoff.display().to_string())
-    );
-    assert_eq!(fs::read_dir(&directory).unwrap().count(), before_count);
-    assert_eq!(session::retain_automatic_snapshots(&directory).unwrap(), 5);
-    assert_eq!(fs::read_to_string(&handoff).unwrap(), complete);
-    assert!(incomplete.exists() && unknown.exists() && appended.exists());
-    assert!(!directory.join("auto-00.md").exists());
-    assert!(directory.join("auto-24.md").exists());
-    assert_eq!(fs::read_dir(&directory).unwrap().count(), 24);
-}
-
-#[test]
-fn snapshot_selector_is_read_only_and_labels_missing_handoff() {
-    let fixture = Fixture::new();
-    let directory = fixture.root.join(".runtime/session_state");
-    assert_eq!(run(vec!["snapshot".into(), "latest".into()]), 1);
-    assert!(!directory.exists());
-    fs::create_dir_all(&directory).unwrap();
-    let path = directory.join("auto.md");
-    let body = "**Event**: post-compact\n";
-    fs::write(&path, body).unwrap();
-    let result = session::select_snapshot(false);
-    assert_eq!(result.code, 0);
-    assert!(result.stdout.contains("state-only / incomplete"));
-    assert_eq!(run(vec!["snapshot".into(), "list".into()]), 0);
-    assert_eq!(fs::read_to_string(path).unwrap(), body);
-    assert_eq!(fs::read_dir(directory).unwrap().count(), 1);
+    let state = session::show_state();
+    assert!(state.stdout.contains("dirty=unknown"));
+    assert!(!fixture.root.join(".runtime/session_state").exists());
 }
 
 #[test]
 fn lifecycle_write_failures_are_observable_without_success_output() {
     let fixture = Fixture::new();
     fs::write(fixture.root.join(".runtime"), b"not a directory").unwrap();
-    for event in ["manual", "post-compact", "stop"] {
-        let result = session::snapshot(event);
-        assert_eq!(result.code, 1);
-        assert!(result.stdout.is_empty());
-        assert!(result.stderr.contains("state operation failed"));
-    }
-    assert_eq!(lifecycle("post-compact", None), 1);
+    assert_eq!(lifecycle("post-compact", None), 0);
     assert_eq!(lifecycle("stop", None), 1);
     fs::write(
         fixture.root.join(".codex/settings.json"),
@@ -810,7 +699,6 @@ fn registered_hook_routes_have_lifecycle_and_tool_coverage() {
             "pre-tool",
             "post-edit",
             "post-shell",
-            "post-compact",
             "stop",
             "session-start"
         ]

@@ -1,0 +1,14 @@
+{
+  "schema": 1,
+  "audit_required": true,
+  "record_documents": ["doc/README.md", "doc/0_architecture/TODO-INDEX.md", "doc/1_delivery/", "doc/2_bugs/", "doc/3_reference/", "doc/5_project_knowledgebase/"],
+  "checks": [
+    {"id": "baseline", "program": "{bridgeforge}", "args": ["check", "baseline", "--root", "."], "timeout_seconds": 120},
+    {"id": "metadata", "program": "{bridgeforge}", "args": ["check", "skill-metadata", "--root", "."], "timeout_seconds": 60},
+    {"id": "manifest", "program": "{bridgeforge}", "args": ["manifest", "--root", ".", "--check"], "timeout_seconds": 60},
+    {"id": "structure", "program": "{bridgeforge}", "args": ["check", "project-structure", "--root", "."], "timeout_seconds": 60},
+    {"id": "mirror-drift", "program": "cargo", "args": ["test", "--locked", "--manifest-path", "scripts/tests/Cargo.toml", "rust_source_is_identical_in_template_and_dogfood", "--", "--test-threads=1"], "timeout_seconds": 600},
+    {"id": "dogfood-tests", "program": "cargo", "args": ["test", "--locked", "--config", "scripts/tests/factory-cargo.toml", "--manifest-path", ".codex/hooks/Cargo.toml", "--workspace", "--", "--test-threads=1"], "timeout_seconds": 3600},
+    {"id": "factory-fixtures", "program": "cargo", "args": ["test", "--locked", "--manifest-path", "scripts/tests/Cargo.toml", "--", "--test-threads=1"], "timeout_seconds": 7200}
+  ]
+}

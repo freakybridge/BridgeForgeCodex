@@ -41,18 +41,6 @@
         ]
       }
     ],
-    "PostCompact": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "bridgeforgeCodexId": "bridgeforge-codex.project-hook.v1:post-compact",
-            "command": ".codex/bin/bridgeforge-hook post-compact",
-            "commandWindows": ".codex\\bin\\bridgeforge-hook.exe post-compact"
-          }
-        ]
-      }
-    ],
     "Stop": [
       {
         "hooks": [

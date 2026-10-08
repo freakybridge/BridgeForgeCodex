@@ -14,7 +14,7 @@ pub(super) struct WritePlan {
     source_inventory: Vec<String>,
 }
 
-fn join(root: &Path, relative: &str) -> Result<PathBuf, String> {
+pub(super) fn join(root: &Path, relative: &str) -> Result<PathBuf, String> {
     if relative.is_empty()
         || relative.contains('\\')
         || Path::new(relative)
@@ -45,10 +45,21 @@ impl Drop for Temporary {
 impl WritePlan {
     pub fn prepare(
         root: &Path,
+        writes: BTreeMap<PathBuf, Vec<u8>>,
+        release_inputs: BTreeMap<PathBuf, Option<Vec<u8>>>,
+        factory: bool,
+        runner: &dyn ProcessRunner,
+    ) -> Result<Self, String> {
+        Self::prepare_with_artifacts(root, writes, release_inputs, factory, runner, None)
+    }
+
+    pub fn prepare_with_artifacts(
+        root: &Path,
         mut writes: BTreeMap<PathBuf, Vec<u8>>,
         release_inputs: BTreeMap<PathBuf, Option<Vec<u8>>>,
         factory: bool,
         runner: &dyn ProcessRunner,
+        prepared: Option<&BTreeMap<PathBuf, Vec<u8>>>,
     ) -> Result<Self, String> {
         crate::release::verify_release_inputs(&release_inputs)?;
         let mut plan = Self {
@@ -179,7 +190,23 @@ impl WritePlan {
             plan.before.insert(binary.clone(), read_optional(&binary)?);
             plan.before
                 .insert(receipt.clone(), read_optional(&receipt)?);
-            if reusable_generated(root, asset, &binary, runner) {
+            if let Some(prepared) = prepared {
+                if prepared.is_empty() && reusable_generated(root, asset, &binary, runner) {
+                    plan.generated_reused += 1;
+                    continue;
+                }
+                let payload = prepared.get(&binary).ok_or(
+                    "release preparation missing: return to develop; no build was started",
+                )?;
+                let receipt_payload = prepared
+                    .get(&receipt)
+                    .ok_or("prepared build receipt missing")?;
+                crate::baseline::verify_generated_payload(asset, payload, receipt_payload)?;
+                writes.insert(binary.clone(), payload.clone());
+                writes.insert(receipt, receipt_payload.clone());
+                plan.binaries.insert(binary);
+                plan.generated_reused += 1;
+            } else if reusable_generated(root, asset, &binary, runner) {
                 plan.generated_reused += 1;
             } else {
                 pending_assets.push(asset.clone());

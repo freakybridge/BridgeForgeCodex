@@ -43,6 +43,27 @@ fn git(root: &Path, args: &[&str]) -> String {
     String::from_utf8(output.stdout).unwrap().trim().into()
 }
 
+fn fixture_development_checks(root: &Path) {
+    fs::write(root.join(".codex/development-checks.json"), br#"{"schema":1,"checks":[{"id":"fixture-diff","program":"git","args":["diff","--check"],"timeout_seconds":30}]}"#).unwrap();
+}
+
+fn prepare_fixture(cli: &Path, root: &Path, message: &str) {
+    let mut request = ProcessRequest::new(cli.as_os_str(), root);
+    request.args = ["git-sync", "--prepare-release", "--message", message]
+        .iter()
+        .map(Into::into)
+        .collect();
+    request.timeout = Duration::from_secs(2400);
+    let output = SystemProcessRunner.run(&request).unwrap();
+    assert!(
+        !output.timed_out && output.code == 0,
+        "prepare: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let receipt: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(receipt["status"], "prepared");
+}
+
 #[test]
 fn real_cli_explicit_release_preview_and_execution() {
     let source = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -62,6 +83,7 @@ fn real_cli_explicit_release_preview_and_execution() {
     let fixture = Fixture(std::env::temp_dir().join(fixture_name));
     let root = fixture.0.join("project");
     fs::create_dir_all(root.join(".codex")).unwrap();
+    fixture_development_checks(&root);
     let call = |args: &[&str]| {
         let mut request = ProcessRequest::new(cli.as_os_str(), &root);
         request.args = args.iter().map(Into::into).collect();
@@ -81,6 +103,16 @@ fn real_cli_explicit_release_preview_and_execution() {
             .iter()
             .any(|v| v == "git-sync-explicit-release-v1")
     );
+    for flag in ["--dry-run", "--check"] {
+        let mut probe = ProcessRequest::new(cli.as_os_str(), &root);
+        probe.args = ["git-sync", "--prepare-release", flag]
+            .iter()
+            .map(Into::into)
+            .collect();
+        let result = SystemProcessRunner.run(&probe).unwrap();
+        assert_eq!(result.code, 2);
+        assert!(!root.join(".runtime").exists());
+    }
     fs::write(root.join("VERSION"), b"1.0.0\n").unwrap();
     fs::write(
         root.join("Cargo.toml"),
@@ -134,11 +166,17 @@ fn real_cli_explicit_release_preview_and_execution() {
     assert_eq!(fs::read(root.join(".git/index")).unwrap(), index);
     assert_eq!(fs::read(root.join(".git/FETCH_HEAD")).unwrap(), fetch);
     assert_eq!(fs::read(root.join("VERSION")).unwrap(), b"1.0.0\n");
+    prepare_fixture(&cli, &root, "fix: release");
+    assert_eq!(
+        call(&["git-sync", "--release-status"])["status"],
+        "prepared"
+    );
     let released = call(&["git-sync", "--release", "--message", "fix: release"]);
     assert_eq!(released["version_after"], "1.1.0");
     assert_eq!(released["working_tree"], "clean");
     assert_eq!(released["ahead"], 0);
     assert_eq!(released["behind"], 0);
+    assert_eq!(released["generated_assets_built"], 0);
     let repeated = call(&["git-sync", "--release", "--message", "feat!: ignored"]);
     assert_eq!(repeated["version_bumped"], false);
     assert_eq!(repeated["commit"], released["commit"]);
@@ -160,6 +198,7 @@ fn real_factory_cli_sync_builds_new_runtime_and_commits_through_precommit() {
         )));
     let root = fixture.0.join("factory");
     copy_tree(source, &root);
+    fixture_development_checks(&root);
     git(&root, &["init"]);
     git(&root, &["config", "user.name", "BridgeForge Fixture"]);
     git(&root, &["config", "user.email", "fixture@example.invalid"]);
@@ -189,6 +228,7 @@ fn real_factory_cli_sync_builds_new_runtime_and_commits_through_precommit() {
     let mut readme = fs::read(root.join("README.md")).unwrap();
     readme.extend_from_slice(b"\nFixture: exercise complete automatic release.\n");
     fs::write(root.join("README.md"), &readme).unwrap();
+    prepare_fixture(&cli, &root, "fix: verify factory automatic runtime release");
     let mut request = ProcessRequest::new(cli.as_os_str(), &root);
     request.args = [
         "git-sync",
@@ -305,6 +345,7 @@ fn factory_ordinary_sync_performance() {
         Fixture(std::env::temp_dir().join(format!("bf-sync-perf-{}-{nonce}", std::process::id())));
     let root = fixture.0.join("factory");
     copy_tree(source, &root);
+    fixture_development_checks(&root);
     let config_path = root.join(".codex/bridgeforge-version.json");
     let mut config: serde_json::Value =
         serde_json::from_slice(&fs::read(&config_path).unwrap()).unwrap();
@@ -372,6 +413,7 @@ fn factory_ordinary_sync_performance() {
         let mut readme = fs::read(root.join("README.md")).unwrap();
         readme.extend_from_slice(b"\nPerformance fixture: explicit release.\n");
         fs::write(root.join("README.md"), readme).unwrap();
+        prepare_fixture(&cli, &root, "docs: benchmark ordinary sync");
         request.args.insert(1, "--release".into());
         println!("performance explicit release starts now");
         let started = std::time::Instant::now();
@@ -384,8 +426,8 @@ fn factory_ordinary_sync_performance() {
         );
         let receipt: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
         assert_eq!(receipt["version_bumped"], true);
-        assert_eq!(receipt["generated_assets_reused"], 0);
-        assert_eq!(receipt["generated_assets_built"], 2);
+        assert_eq!(receipt["generated_assets_reused"], 2);
+        assert_eq!(receipt["generated_assets_built"], 0);
         assert_eq!(receipt["working_tree"], "clean");
         assert_eq!(receipt["ahead"], 0);
         assert_eq!(receipt["behind"], 0);

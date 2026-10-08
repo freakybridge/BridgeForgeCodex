@@ -332,15 +332,13 @@ fn lifecycle(event: &str, payload: Option<&Value>) -> i32 {
             output.absorb_map(&step);
             first = step.code;
         }
-        let step = session::snapshot(event);
-        output.absorb(&step);
         return output.finish(
             if event == "post-compact" {
                 "PostCompact"
             } else {
                 "Stop"
             },
-            if first != 0 { first } else { step.code },
+            first,
         );
     }
     let step = project_map::ensure_current();
@@ -379,18 +377,6 @@ pub fn run(args: Vec<String>) -> i32 {
     if args.as_slice() == ["instruction-source", "--pre-commit"] {
         return post::precommit_instruction_source();
     }
-    if args.as_slice() == ["snapshot", "manual"] {
-        let step = session::snapshot("manual");
-        print!("{}", step.stdout);
-        eprint!("{}", step.stderr);
-        return step.code;
-    }
-    if args.as_slice() == ["snapshot", "latest"] || args.as_slice() == ["snapshot", "list"] {
-        let step = session::select_snapshot(args[1] == "list");
-        print!("{}", step.stdout);
-        eprint!("{}", step.stderr);
-        return step.code;
-    }
     if args.as_slice() == ["project-map", "ensure-current"] {
         let step = project_map::ensure_current();
         print!("{}", step.stdout);
@@ -398,9 +384,7 @@ pub fn run(args: Vec<String>) -> i32 {
         return step.code;
     }
     if args.len() != 1 {
-        eprintln!(
-            "usage: bridgeforge-hook EVENT | snapshot manual|latest|list | project-map ensure-current"
-        );
+        eprintln!("usage: bridgeforge-hook EVENT | project-map ensure-current");
         return 2;
     }
     let event = &args[0];

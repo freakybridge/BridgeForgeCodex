@@ -20,7 +20,7 @@ Template `templates/doc/README.md` 是生命周期字段、允许值和转换红
 
 - `$confirm` 创建需求卡并写入初始生命周期。
 - `$develop` 只推进验证状态，不负责验收关闭。
-- `$summary 同意验收` 在全部条件满足时把当前事项结算为 completed。
+- `$summary accept` 在全部条件满足时把当前事项结算为 completed，并更新本次相关 TODO。
 - `$archive-scan` 只在用户确认移动后写 archived；被替代事项必须保留 `superseded_by`。
 
 ## 迁移

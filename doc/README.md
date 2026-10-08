@@ -8,6 +8,8 @@ delivery_layout: flat
 
 ## 从这里开始
 
+项目后续事项见 [待办总表](0_architecture/TODO-INDEX.md)。
+
 | 你要做什么 | 先读这里 |
 |---|---|
 | 当前架构 | [`0_architecture/`](0_architecture/)；项目必须在该目录索引当前有效的架构资料 |
@@ -57,6 +59,7 @@ delivery_layout: flat
 
 ## 架构
 
+- 工厂专属[开发收口清单](0_architecture/design/development-completion.md)：质量检查、发布准备与轻量发布的职责边界。
 - 设计资料：[`0_architecture/design/`](0_architecture/design/)，包括 [`codex-project-sync.md`](0_architecture/design/codex-project-sync.md)、[`codex-native-instruction-architecture.md`](0_architecture/design/codex-native-instruction-architecture.md)、[`codex-native-memory-sync.md`](0_architecture/design/codex-native-memory-sync.md)、[`user-facing-result-contract.md`](0_architecture/design/user-facing-result-contract.md)、`design-rationale.md` 与上游同步 playbook。
 - 操作参考：[`codex-project-operating-guide.md`](3_reference/codex-project-operating-guide.md)、[项目自有 Rust Hook](3_reference/project-rust-hooks.md) 与主动澄清参考 [`codex-hook-signals.md`](3_reference/codex-hook-signals.md)；自动 Clarify / Focus Hook 已退役。
 - `$bridgeforge-codex` 的运行手册属于产品源码，位于 [`skills/bridgeforge-codex/references/`](../skills/bridgeforge-codex/references/)，不纳入 `doc/`。
@@ -67,7 +70,8 @@ delivery_layout: flat
 
 | Topic | 主要记录 |
 |---|---|
-| `git-sync-performance` | [普通同步与发布构建耗时优化](1_delivery/git-sync-performance/requirements_2026-10-08_git-sync-performance.md)：工厂策略、可信产物复用、共享构建与前后实测 |
+| `summary-workflow` | [Summary 三模式与会话状态快照退役](1_delivery/summary-workflow/requirements_2026-10-08_summary-workflow.md)；[本轮经验教训](1_delivery/summary-workflow/lessons_2026-10-08.md) |
+| `git-sync-performance` | [普通同步与发布构建耗时优化](1_delivery/git-sync-performance/requirements_2026-10-08_git-sync-performance.md)；[开发收口与轻量发布](1_delivery/git-sync-performance/requirements_2026-10-08_prepared-release.md)：检查前移、发布准备记录和端到端验收 |
 | `git-sync-explicit-release` | [显式发布计划与版本规则](1_delivery/git-sync-explicit-release/requirements_2026-10-08_git-sync-explicit-release.md)：项目策略、累计 SemVer、同步与发布分离及验证记录 |
 | `weekly-quota-budget` | [token 与周额度双数字预算](1_delivery/weekly-quota-budget/requirements_2026-10-02_weekly-quota-budget.md)：临时系数、分配置估算与有效样本校准 |
 | `autopilot` | [单项目任务托管需求与验证](1_delivery/autopilot/requirements_2026-10-02_autopilot.md)：自然语言/多对话链接接管、整包预算、Skill/Hook 衔接与当前对话验收 |

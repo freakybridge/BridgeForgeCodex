@@ -200,5 +200,40 @@ $repeat = @(New-UpdatePlan -Manifest $manifest -UserProfile $fixtureProfile -Ope
 Assert-True (@($repeat[0].actions).Count -eq 0) 'Identical autopilot reinstall is not a no-op'
 Assert-True (-not (Test-Path -LiteralPath $log)) 'Completed Skill installation left an active transaction'
 Write-Output 'autopilot isolated packaging and no-op installation passed'
+# A released catalog retires only ledger-owned, byte-identical legacy Skills.
+foreach ($scenario in @('retire', 'retire-drift')) {
+    $fixtureProfile = Join-Path $Base $scenario
+    $skillsRoot = Join-Path $fixtureProfile '.codex/skills'
+    $records = [ordered]@{}
+    foreach ($name in @('snapshot', 'resume')) {
+        $target = Join-Path $skillsRoot $name
+        New-Item -ItemType Directory -Path $target -Force | Out-Null
+        [IO.File]::WriteAllText((Join-Path $target 'SKILL.md'), "legacy $name")
+        $records[$name] = @{ source_commit = ('a' * 40); content_hash = (Get-DirectoryContentHash -Root $target); installed_at = '2026-10-08T00:00:00Z' }
+    }
+    $ledger = Join-Path $fixtureProfile '.codex/bridgeforge-codex-managed.json'
+    [IO.File]::WriteAllText($ledger, (@{ schema_version = 1; platform = 'codex'; records = $records } | ConvertTo-Json -Depth 10))
+    if ($scenario -eq 'retire-drift') { [IO.File]::WriteAllText((Join-Path $skillsRoot 'resume/SKILL.md'), 'custom content') }
+    $selected = @($catalog.platforms.codex.skills | Where-Object { $_.name -eq 'summary' })
+    Assert-True ($selected.Count -eq 1) 'summary is absent from catalog'
+    Assert-True (@($catalog.platforms.codex.skills | Where-Object { $_.name -in @('snapshot', 'resume') }).Count -eq 0) 'Retired Skill is still distributed'
+    $manifest = @{ platforms = @{ codex = @{ skills = $selected } } } | ConvertTo-Json -Depth 12 | ConvertFrom-Json
+    $op = [Guid]::NewGuid().ToString('N')
+    if ($scenario -eq 'retire-drift') {
+        $rejected = $false
+        try { $null = New-UpdatePlan -Manifest $manifest -UserProfile $fixtureProfile -OperationId $op -Commit ('b' * 40) }
+        catch { if ($_.Exception.Message -notlike '*content drifted*') { throw }; $rejected = $true }
+        Assert-True $rejected 'Customized retired Skill must block removal'
+        Assert-True ([IO.File]::ReadAllText((Join-Path $skillsRoot 'resume/SKILL.md')) -eq 'custom content') 'Customized content changed'
+        continue
+    }
+    $plans = @(New-UpdatePlan -Manifest $manifest -UserProfile $fixtureProfile -OperationId $op -Commit ('b' * 40))
+    Assert-True (@($plans[0].actions | Where-Object { $_.kind -eq 'remove' }).Count -eq 2) 'Missing retirement actions'
+    $log = Join-Path $fixtureProfile '.bridgeforge-codex-shared-update.json'
+    Invoke-UpdateTransaction -RepositoryRoot $RepositoryRoot -Manifest $manifest -Commit ('b' * 40) -ManifestHash ('c' * 64) -UserProfile $fixtureProfile -LogPath $log -OperationId $op -PlatformPlans $plans
+    foreach ($name in @('snapshot', 'resume')) { Assert-True (-not (Test-Path -LiteralPath (Join-Path $skillsRoot $name))) 'Retired Skill remains installed' }
+    Assert-True (Test-Path -LiteralPath (Join-Path $skillsRoot 'summary/references/switch-mode.md')) 'Cross-machine handoff reference was not installed'
+}
+Write-Output 'summary installation and legacy Skill retirement passed'
 Write-Output 'confirm weekly quota reference packaging passed'
 Write-Output 'shared bundle rollback and deferred committed cleanup passed'
