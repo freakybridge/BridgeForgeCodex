@@ -17,6 +17,7 @@ pub struct GitSyncOptions {
     pub remote: String,
     pub skip_fetch: bool,
     pub skip_push: bool,
+    pub release: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -490,6 +491,16 @@ pub fn sync(
         };
     }
     let factory = root.join("templates/managed-skeleton.json").is_file();
+    let policy_path = root.join(".codex/bridgeforge-version.json");
+    let policy_before = fs::read(&policy_path).ok();
+    let explicit_policy = match crate::release::explicit_release_policy(root) {
+        Ok(value) => value,
+        Err(error) => return blocked(error),
+    };
+    let version_before = fs::read_to_string(root.join("VERSION"))
+        .ok()
+        .map(|v| v.trim().to_string());
+    let mut version_after = version_before.clone();
     let factory_runtime_repair = if factory && !dirty {
         if let Err(error) = crate::baseline::verify(root, None, false) {
             return blocked(format!("current baseline blocked git-sync: {error}"));
@@ -498,7 +509,7 @@ pub fn sync(
     } else {
         false
     };
-    if dirty || factory_runtime_repair {
+    if dirty || factory_runtime_repair || options.release {
         let identity = match RepositoryIdentity::capture(&git) {
             Ok(value) => value,
             Err(error) => return blocked(error),
@@ -510,7 +521,7 @@ pub fn sync(
         let adaptation_path = root.join(".runtime/bridgeforge-codex/explicit-adaptation.json");
         let adaptation_before = fs::read(&adaptation_path).ok();
         transaction_identity = Some(identity.clone());
-        let (message, release) = if dirty {
+        let (message, release) = if dirty || options.release {
             let message = match (&options.message_file, &options.message) {
                 (Some(path), _) => match fs::read_to_string(path) {
                     Ok(value) if !value.trim().is_empty() => value.trim().to_string(),
@@ -526,12 +537,17 @@ pub fn sync(
                 Ok(value) => value,
                 Err(error) => return blocked(error),
             };
-            let release = match crate::release::build_file_release_plan(
-                root,
-                &message,
-                changed_paths,
-                runner,
-            ) {
+            if let Err(error) = crate::release::parse_commit_message(&message) {
+                return blocked(error);
+            }
+            let planning = if options.release {
+                crate::release::build_explicit_release_plan(root, &message, changed_paths, runner)
+            } else if explicit_policy {
+                Ok(None)
+            } else {
+                crate::release::build_file_release_plan(root, &message, changed_paths, runner)
+            };
+            let release = match planning {
                 Ok(value) => value,
                 Err(error) => {
                     return blocked(format!("automatic release planning failed: {error}"));
@@ -541,6 +557,9 @@ pub fn sync(
         } else {
             (String::new(), None)
         };
+        if let Some(plan) = &release {
+            version_after = Some(plan.new_version.to_string());
+        }
         let _project_lock = if factory {
             match crate::project_sync::ProjectLock::acquire(root) {
                 Ok(lock) => Some(lock),
@@ -565,8 +584,9 @@ pub fn sync(
                 return blocked(error);
             }
         }
-        let (release_inputs, release_writes) =
+        let (mut release_inputs, release_writes) =
             release.map(|p| (p.inputs, p.writes)).unwrap_or_default();
+        release_inputs.insert(policy_path, policy_before);
         let plan = match write_plan::WritePlan::prepare(
             root,
             release_writes,
@@ -814,6 +834,25 @@ pub fn sync(
         "remaining-state"
     };
     drop(sync_lock);
+    let mut final_receipt = json!(receipt(
+        status,
+        commit,
+        Some(push_target),
+        pushed,
+        dirty,
+        ahead,
+        behind,
+        autostashed
+    ));
+    final_receipt["release_policy"] = json!(if explicit_policy {
+        "explicit_release"
+    } else {
+        "per_commit"
+    });
+    final_receipt["release_requested"] = json!(options.release);
+    final_receipt["version_bumped"] = json!(version_before != version_after);
+    final_receipt["version_before"] = json!(version_before);
+    final_receipt["version_after"] = json!(version_after);
     CommandOutcome {
         code: if status == "synced" {
             0
@@ -822,16 +861,7 @@ pub fn sync(
         } else {
             3
         },
-        receipt: Some(json!(receipt(
-            status,
-            commit,
-            Some(push_target),
-            pushed,
-            dirty,
-            ahead,
-            behind,
-            autostashed
-        ))),
+        receipt: Some(final_receipt),
         stdout: if status == "synced" {
             "[git-sync] synced\n".into()
         } else {

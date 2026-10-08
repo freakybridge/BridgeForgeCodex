@@ -200,6 +200,146 @@ struct FakeRunner {
     outputs: RefCell<Vec<ProcessOutput>>,
 }
 
+fn versioned_repository(name: &str, explicit: bool) -> (RealRepository, PathBuf) {
+    let (repo, remote) = managed_repository(name);
+    fs::write(repo.0.join("VERSION"), b"1.0.0\n").unwrap();
+    fs::write(repo.0.join("CHANGELOG.md"), b"# Changelog\n").unwrap();
+    fs::write(
+        repo.0.join("Cargo.toml"),
+        b"[package]\nname = \"sample\"\nversion = \"1.0.0\"\n",
+    )
+    .unwrap();
+    fs::write(
+        repo.0.join("Cargo.lock"),
+        b"version = 4\n[[package]]\nname = \"sample\"\nversion = \"1.0.0\"\n",
+    )
+    .unwrap();
+    let mut config = json!({"schema_version": 1, "manifests": ["Cargo.toml"]});
+    if explicit {
+        config["release_policy"] = json!("explicit_release");
+    }
+    fs::write(
+        repo.0.join(".codex/bridgeforge-version.json"),
+        serde_json::to_vec(&config).unwrap(),
+    )
+    .unwrap();
+    git_ok(&repo.0, &["add", "."]);
+    git_ok(&repo.0, &["commit", "-m", "chore: version baseline"]);
+    git_ok(&repo.0, &["push"]);
+    (repo, remote)
+}
+
+#[test]
+fn explicit_policy_syncs_twice_then_releases_clean_history_once() {
+    let (repo, remote) = versioned_repository("explicit-flow", true);
+    let names = ["VERSION", "Cargo.toml", "Cargo.lock", "CHANGELOG.md"];
+    let before = names.map(|name| fs::read(repo.0.join(name)).unwrap());
+    for message in ["feat: add feature", "fix: repair feature"] {
+        fs::write(repo.0.join("tracked.txt"), message).unwrap();
+        let outcome = sync(
+            &repo.0,
+            &SystemProcessRunner,
+            GitSyncOptions {
+                message: Some(message.into()),
+                ..Default::default()
+            },
+        );
+        assert_eq!(outcome.code, 0, "{}", outcome.stderr);
+        assert_eq!(outcome.receipt.unwrap()["version_bumped"], false);
+        for (name, bytes) in names.iter().zip(&before) {
+            assert_eq!(&fs::read(repo.0.join(name)).unwrap(), bytes);
+        }
+    }
+    let preview = crate::release::preview(&repo.0, "fix: release", &SystemProcessRunner);
+    assert_eq!(preview.code, 0, "{}", preview.stderr);
+    assert_eq!(preview.receipt.unwrap()["version_after"], "1.1.0");
+    let outcome = sync(
+        &repo.0,
+        &SystemProcessRunner,
+        GitSyncOptions {
+            release: true,
+            message: Some("fix: release".into()),
+            ..Default::default()
+        },
+    );
+    assert_eq!(outcome.code, 0, "{}", outcome.stderr);
+    let receipt = outcome.receipt.unwrap();
+    assert_eq!(receipt["version_before"], "1.0.0");
+    assert_eq!(receipt["version_after"], "1.1.0");
+    assert_eq!(receipt["ahead"], 0);
+    assert_eq!(receipt["behind"], 0);
+    assert_eq!(receipt["working_tree"], "clean");
+    let log = fs::read_to_string(repo.0.join("CHANGELOG.md")).unwrap();
+    assert!(log.contains("add feature") && log.contains("repair feature"));
+    let outcome = sync(
+        &repo.0,
+        &SystemProcessRunner,
+        GitSyncOptions {
+            release: true,
+            message: Some("feat!: no repeated release".into()),
+            ..Default::default()
+        },
+    );
+    assert_eq!(outcome.code, 0, "{}", outcome.stderr);
+    let repeated = outcome.receipt.unwrap();
+    assert_eq!(repeated["version_bumped"], false);
+    assert_eq!(repeated["commit"], receipt["commit"]);
+    assert_eq!(repeated["push_performed"], false);
+    fs::remove_dir_all(remote).unwrap();
+}
+
+#[test]
+fn legacy_policy_still_bumps_on_ordinary_sync() {
+    let (repo, remote) = versioned_repository("legacy-release", false);
+    fs::write(repo.0.join("tracked.txt"), b"change\n").unwrap();
+    let outcome = sync(
+        &repo.0,
+        &SystemProcessRunner,
+        GitSyncOptions {
+            message: Some("fix: repair".into()),
+            ..Default::default()
+        },
+    );
+    assert_eq!(outcome.code, 0, "{}", outcome.stderr);
+    assert_eq!(outcome.receipt.unwrap()["version_after"], "1.0.1");
+    fs::remove_dir_all(remote).unwrap();
+}
+
+#[test]
+fn explicit_release_rejected_hook_restores_native_versions_log_and_index() {
+    let (repo, remote) = versioned_repository("explicit-rollback", true);
+    fs::write(repo.0.join("tracked.txt"), b"uncommitted feature\n").unwrap();
+    fs::write(repo.0.join(".git/hooks/pre-commit"), b"#!/bin/sh\nexit 1\n").unwrap();
+    git_ok(&repo.0, &["status", "--porcelain=v1"]);
+    let index = fs::read(repo.0.join(".git/index")).unwrap();
+    let names = ["VERSION", "Cargo.toml", "Cargo.lock", "CHANGELOG.md"];
+    let before = names.map(|name| fs::read(repo.0.join(name)).unwrap());
+    let outcome = sync(
+        &repo.0,
+        &SystemProcessRunner,
+        GitSyncOptions {
+            release: true,
+            message: Some("feat: new feature".into()),
+            ..Default::default()
+        },
+    );
+    assert_eq!(outcome.code, 2, "{}", outcome.stderr);
+    assert!(
+        outcome.stderr.contains("were rolled back"),
+        "{}",
+        outcome.stderr
+    );
+    for (name, bytes) in names.iter().zip(&before) {
+        assert_eq!(&fs::read(repo.0.join(name)).unwrap(), bytes);
+    }
+    assert_eq!(fs::read(repo.0.join(".git/index")).unwrap(), index);
+    assert_eq!(
+        fs::read(repo.0.join("tracked.txt")).unwrap(),
+        b"uncommitted feature\n"
+    );
+    fs::remove_dir_all(remote).unwrap();
+}
+
 impl ProcessRunner for FakeRunner {
     fn run(&self, _: &ProcessRequest) -> std::io::Result<ProcessOutput> {
         Ok(self.outputs.borrow_mut().remove(0))
@@ -527,6 +667,7 @@ fn rejected_commit_hook_restores_index_but_preserves_user_worktree() {
             skip_push: true,
             message: Some("chore: verify rejected hook recovery".into()),
             message_file: None,
+            release: false,
         },
     );
     assert_eq!(outcome.code, 2, "{}", outcome.stderr);
@@ -575,6 +716,7 @@ fn dirty_commit_push_identity_drift_never_claims_synced() {
             skip_push: false,
             message: Some("chore: update managed skeleton".into()),
             message_file: None,
+            release: false,
         },
     );
     assert_eq!(outcome.code, 2, "{}", outcome.stderr);

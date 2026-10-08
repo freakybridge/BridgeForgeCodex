@@ -44,6 +44,107 @@ fn git(root: &Path, args: &[&str]) -> String {
 }
 
 #[test]
+fn real_cli_explicit_release_preview_and_execution() {
+    let source = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .ancestors()
+        .nth(2)
+        .unwrap();
+    let cli = source.join(if cfg!(windows) {
+        ".codex/bin/bridgeforge.exe"
+    } else {
+        ".codex/bin/bridgeforge"
+    });
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let fixture_name = format!("bf-explicit-cli-{}-{nonce}", std::process::id());
+    let fixture = Fixture(std::env::temp_dir().join(fixture_name));
+    let root = fixture.0.join("project");
+    fs::create_dir_all(root.join(".codex")).unwrap();
+    let call = |args: &[&str]| {
+        let mut request = ProcessRequest::new(cli.as_os_str(), &root);
+        request.args = args.iter().map(Into::into).collect();
+        request.timeout = Duration::from_secs(120);
+        let output = SystemProcessRunner.run(&request).unwrap();
+        assert!(
+            !output.timed_out && output.code == 0,
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap()
+    };
+    assert!(
+        call(&["self-test", "--json"])["capabilities"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|v| v == "git-sync-explicit-release-v1")
+    );
+    fs::write(root.join("VERSION"), b"1.0.0\n").unwrap();
+    fs::write(
+        root.join("Cargo.toml"),
+        b"[package]\nname = \"demo\"\nversion = \"1.0.0\"\n",
+    )
+    .unwrap();
+    fs::write(root.join("CHANGELOG.md"), b"# Changelog\n").unwrap();
+    fs::write(root.join(".gitignore"), b".runtime/\n").unwrap();
+    fs::write(root.join(".codex/.bridgeforge_codex_version"), b"1.0.0\n").unwrap();
+    fs::write(
+        root.join(".codex/bridgeforge-version.json"),
+        br#"{"schema_version":1,"release_policy":"explicit_release","manifests":["Cargo.toml"]}"#,
+    )
+    .unwrap();
+    use sha2::{Digest, Sha256};
+    fs::write(root.join("managed.txt"), b"managed\n").unwrap();
+    let contract = serde_json::json!({
+        "schema_version": 4, "release_version": "1.0.0", "host": "codex",
+        "stamp": ".codex/.bridgeforge_codex_version", "contract_target": ".codex/managed-skeleton.json",
+        "assets": [{"id": "managed.asset", "source": "templates/managed.txt", "target": "managed.txt",
+            "strategy": "whole", "current_sha256": format!("sha256:{:x}", Sha256::digest(b"managed\n"))}],
+        "generated_assets": [], "baseline_model": "current-only", "compatibility_baseline": "1.0.0"
+    });
+    fs::write(
+        root.join(".codex/managed-skeleton.json"),
+        serde_json::to_vec_pretty(&contract).unwrap(),
+    )
+    .unwrap();
+    git(&root, &["init"]);
+    git(&root, &["config", "user.name", "BridgeForge Test"]);
+    git(&root, &["config", "user.email", "test@example.invalid"]);
+    git(&root, &["config", "core.hooksPath", ".git/hooks"]);
+    git(&root, &["add", "."]);
+    git(&root, &["commit", "-m", "baseline"]);
+    let remote = fixture.0.join("origin.git");
+    git(&root, &["init", "--bare", remote.to_str().unwrap()]);
+    git(
+        &root,
+        &["remote", "add", "origin", remote.to_str().unwrap()],
+    );
+    git(&root, &["push", "-u", "origin", "HEAD"]);
+    fs::write(root.join("business.txt"), b"feature\n").unwrap();
+    let ordinary = call(&["git-sync", "--message", "feat: new capability"]);
+    assert_eq!(ordinary["version_bumped"], false);
+    let before = git(&root, &["rev-parse", "HEAD"]);
+    let index = fs::read(root.join(".git/index")).unwrap();
+    let fetch = fs::read(root.join(".git/FETCH_HEAD")).unwrap();
+    let preview = call(&["git-sync", "--release-preview", "--message", "fix: release"]);
+    assert_eq!(preview["version_after"], "1.1.0");
+    assert_eq!(git(&root, &["rev-parse", "HEAD"]), before);
+    assert_eq!(fs::read(root.join(".git/index")).unwrap(), index);
+    assert_eq!(fs::read(root.join(".git/FETCH_HEAD")).unwrap(), fetch);
+    assert_eq!(fs::read(root.join("VERSION")).unwrap(), b"1.0.0\n");
+    let released = call(&["git-sync", "--release", "--message", "fix: release"]);
+    assert_eq!(released["version_after"], "1.1.0");
+    assert_eq!(released["working_tree"], "clean");
+    assert_eq!(released["ahead"], 0);
+    assert_eq!(released["behind"], 0);
+    let repeated = call(&["git-sync", "--release", "--message", "feat!: ignored"]);
+    assert_eq!(repeated["version_bumped"], false);
+    assert_eq!(repeated["commit"], released["commit"]);
+}
+
+#[test]
 fn real_factory_cli_sync_builds_new_runtime_and_commits_through_precommit() {
     let source = Path::new(env!("CARGO_MANIFEST_DIR"))
         .ancestors()

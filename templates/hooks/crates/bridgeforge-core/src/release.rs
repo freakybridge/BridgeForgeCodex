@@ -13,6 +13,10 @@ use std::time::Duration;
 
 use crate::{ProcessRequest, ProcessRunner};
 
+#[path = "release_history.rs"]
+mod history;
+pub use history::{build_explicit_release_plan, explicit_release_policy, preview};
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct SemVer {
     pub major: u64,
@@ -259,6 +263,10 @@ fn configured_manifests(root: &Path) -> Result<Vec<PathBuf>, String> {
 
 fn cargo_version(path: &Path) -> Result<Option<SemVer>, String> {
     let text = fs::read_to_string(path).map_err(|error| format!("{}: {error}", path.display()))?;
+    cargo_version_text(&text, &path.display().to_string())
+}
+
+fn cargo_version_text(text: &str, label: &str) -> Result<Option<SemVer>, String> {
     let value =
         Regex::new(r#"(?m)^version\s*=\s*"([^"]+)"\s*$"#).map_err(|error| error.to_string())?;
     let mut versions = Vec::new();
@@ -276,10 +284,7 @@ fn cargo_version(path: &Path) -> Result<Option<SemVer>, String> {
     match versions.as_slice() {
         [] => Ok(None),
         [only] => Ok(Some(*only)),
-        _ => Err(format!(
-            "ambiguous Cargo version fields in {}",
-            path.display()
-        )),
+        _ => Err(format!("ambiguous Cargo version fields in {label}")),
     }
 }
 
@@ -749,13 +754,22 @@ fn head_payload(
     relative: &str,
     runner: &dyn ProcessRunner,
 ) -> Result<Option<Vec<u8>>, String> {
+    revision_payload(root, "HEAD", relative, runner)
+}
+
+fn revision_payload(
+    root: &Path,
+    revision: &str,
+    relative: &str,
+    runner: &dyn ProcessRunner,
+) -> Result<Option<Vec<u8>>, String> {
     let mut exists = ProcessRequest::new("git", root);
     exists.args = [
         "-c".into(),
         format!("safe.directory={}", root.display()).into(),
         "ls-tree".into(),
         "-z".into(),
-        "HEAD".into(),
+        revision.into(),
         "--".into(),
         relative.into(),
     ]
@@ -779,7 +793,7 @@ fn head_payload(
         "-c".into(),
         format!("safe.directory={}", root.display()).into(),
         "show".into(),
-        format!("HEAD:{relative}").into(),
+        format!("{revision}:{relative}").into(),
     ]
     .to_vec();
     request.timeout = Duration::from_secs(30);
@@ -806,13 +820,27 @@ fn classify(
     }
     let contract_path = root.join(".codex/managed-skeleton.json");
     let current_bytes = fs::read(&contract_path).map_err(|_| "current-only baseline is missing")?;
+    classify_payloads(
+        changed,
+        &current_bytes,
+        |path| head_payload(root, path, runner),
+        |path| release_input(&root.join(path)),
+    )
+}
+
+fn classify_payloads(
+    changed: &[String],
+    current_bytes: &[u8],
+    before: impl Fn(&str) -> Result<Option<Vec<u8>>, String>,
+    after: impl Fn(&str) -> Result<Option<Vec<u8>>, String>,
+) -> Result<ReleaseKind, String> {
     let current = crate::baseline::parse_unique_json(&current_bytes, "current-only baseline")?;
     let (current_by_target, current_by_id) = contract_assets(&current, "current")?;
     let contract_target = current["contract_target"]
         .as_str()
         .unwrap_or(".codex/managed-skeleton.json")
         .replace('\\', "/");
-    let head_contract_bytes = head_payload(root, &contract_target, runner)?;
+    let head_contract_bytes = before(&contract_target)?;
     let contract_transition = head_contract_bytes
         .as_deref()
         .is_none_or(|payload| git_bytes(payload) != git_bytes(&current_bytes));
@@ -871,10 +899,10 @@ fn classify(
             let target = asset["target"]
                 .as_str()
                 .ok_or("gitattributes target is missing")?;
-            let current_payload = fs::read(root.join(target)).unwrap_or_default();
+            let current_payload = after(target)?.unwrap_or_default();
             verify_contract_payload(asset, &current_payload)
                 .map_err(|error| format!("current ownership baseline is invalid: {error}"))?;
-            let before_payload = head_payload(root, target, runner)?.unwrap_or_default();
+            let before_payload = before(target)?.unwrap_or_default();
             let (_, old_project) = ownership_projection(asset, &before_payload)?;
             let (_, new_project) = ownership_projection(asset, &current_payload)?;
             public_changed = true;
@@ -904,8 +932,8 @@ fn classify(
         }
         let current_target = current_asset["target"].as_str().unwrap().replace('\\', "/");
         let head_target = head_asset["target"].as_str().unwrap().replace('\\', "/");
-        let current_payload = fs::read(root.join(&current_target)).unwrap_or_default();
-        let Some(before_payload) = head_payload(root, &head_target, runner)? else {
+        let current_payload = after(&current_target)?.unwrap_or_default();
+        let Some(before_payload) = before(&head_target)? else {
             public_changed = true;
             project_changed = true;
             continue;
@@ -945,7 +973,7 @@ fn classify(
 fn render_changelog(
     root: &Path,
     version: SemVer,
-    info: &CommitInfo,
+    infos: &[CommitInfo],
     kind: &ReleaseKind,
     changed: &[String],
 ) -> Result<Vec<u8>, String> {
@@ -983,13 +1011,22 @@ fn render_changelog(
     } else {
         String::new()
     };
-    let breaking = if info.breaking { " **BREAKING:**" } else { "" };
-    let entry = format!(
-        "## [{version}] - {}\n\n### {}\n\n- {prefix}{}{breaking}\n\n",
-        Local::now().date_naive(),
-        info.section,
-        info.description
-    );
+    let mut entry = format!("## [{version}] - {}\n\n", Local::now().date_naive());
+    for section in ["Added", "Fixed", "Changed"] {
+        let matching = infos
+            .iter()
+            .filter(|info| info.section == section)
+            .collect::<Vec<_>>();
+        if matching.is_empty() {
+            continue;
+        }
+        entry.push_str(&format!("### {section}\n\n"));
+        for info in matching {
+            let breaking = if info.breaking { " **BREAKING:**" } else { "" };
+            entry.push_str(&format!("- {prefix}{}{breaking}\n", info.description));
+        }
+        entry.push('\n');
+    }
     let headings = Regex::new(r"(?m)^## \[").map_err(|error| error.to_string())?;
     let positions = headings
         .find_iter(&text)
@@ -1030,6 +1067,18 @@ pub fn build_file_release_plan(
     if kind == ReleaseKind::SkeletonOnly {
         return Ok(None);
     }
+    build_selected_release_plan(root, &[info], kind, &changed)
+}
+
+fn build_selected_release_plan(
+    root: &Path,
+    infos: &[CommitInfo],
+    kind: ReleaseKind,
+    changed: &[String],
+) -> Result<Option<FileReleasePlan>, String> {
+    if infos.is_empty() {
+        return Ok(None);
+    }
     let mut inputs = BTreeMap::new();
     let config = root.join(".codex/bridgeforge-version.json");
     inputs.insert(config.clone(), release_input(&config)?);
@@ -1054,7 +1103,11 @@ pub fn build_file_release_plan(
         .map_err(|_| "root VERSION is missing")?
         .trim()
         .parse::<SemVer>()?;
-    let new_version = bump(old_version, &info);
+    let new_version = infos
+        .iter()
+        .map(|info| bump(old_version, info))
+        .max()
+        .unwrap();
     let mut writes = BTreeMap::new();
     writes.insert(version_path, format!("{new_version}\n").into_bytes());
     for path in manifests {
@@ -1102,7 +1155,7 @@ pub fn build_file_release_plan(
     }
     writes.insert(
         root.join("CHANGELOG.md"),
-        render_changelog(root, new_version, &info, &kind, &changed)?,
+        render_changelog(root, new_version, infos, &kind, changed)?,
     );
     verify_release_inputs(&inputs)?;
     Ok(Some(FileReleasePlan {

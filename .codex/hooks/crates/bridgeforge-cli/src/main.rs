@@ -50,7 +50,8 @@ fn self_test() -> CommandOutcome {
         "schema": 1,
         "name": "bridgeforge",
         "status": "ok",
-        "version": env!("CARGO_PKG_VERSION")
+        "version": env!("CARGO_PKG_VERSION"),
+        "capabilities": ["git-sync-explicit-release-v1"]
     }))
 }
 
@@ -345,6 +346,19 @@ fn git_sync(args: &[String]) -> CommandOutcome {
         Ok(value) => value,
         Err(error) => return blocked("git-sync", error),
     };
+    if has(args, "--release-preview") {
+        let message = if let Some(path) = value(args, "--message-file") {
+            match fs::read_to_string(path) {
+                Ok(value) => value,
+                Err(error) => return blocked("git-sync", error),
+            }
+        } else {
+            value(args, "--message")
+                .or_else(|| value(args, "-m"))
+                .unwrap_or_else(|| "chore: release accumulated changes".into())
+        };
+        return bridgeforge_core::release::preview(context.root(), &message, &SystemProcessRunner);
+    }
     bridgeforge_core::git_sync::sync(
         context.root(),
         &SystemProcessRunner,
@@ -354,6 +368,7 @@ fn git_sync(args: &[String]) -> CommandOutcome {
             remote: value(args, "--remote").unwrap_or_else(|| "origin".into()),
             skip_fetch: has(args, "--skip-fetch"),
             skip_push: has(args, "--skip-push"),
+            release: has(args, "--release"),
         },
     )
 }
