@@ -2,7 +2,7 @@
 name: git-sync
 description: 分析当前 Git 变更，生成简体中文提交消息与代码变动效果摘要，并安全完成 fetch、必要的快进更新、commit、push 和最终同步核验；用户明确调用 /git-sync 或 $git-sync 时使用。
 user_invocable: true
-argument: 可选：发布新版本
+argument: 可选：release
 ---
 
 # git-sync — 提交并推送
@@ -20,7 +20,7 @@ argument: 可选：发布新版本
 | 用户用法 | 执行行为 |
 |---|---|
 | `$git-sync` | 提交并同步；启用 `explicit_release` 的项目不自动修改版本、原生 manifest/lock 或 CHANGELOG |
-| `$git-sync 发布新版本` | 先只读预览累计发布计划，再使用 `--release` 升版并同步 |
+| `$git-sync release` | 先只读预览累计发布计划，再使用 `--release` 升版并同步 |
 
 显式发布取上次 VERSION 发布边界以来全部未发布业务改动的最高级别，只升一次：`!` 或 `BREAKING CHANGE:` 升 major；否则含 `feat` 升 minor；其他合法 `fix/perf/refactor/docs/chore` 升 patch。major/minor 后低位归零。纯骨架升级不参与；当前未提交业务改动使用经 diff 审查的消息参与；干净工作区不能用发布命令的消息覆盖历史级别。
 
@@ -48,7 +48,7 @@ Codex 项目使用 `.codex/bin/bridgeforge[.exe] git-sync`。二进制存在时�
 .codex/bin/bridgeforge git-sync --message "<类型>: <描述>"
 ```
 
-用户明确要求发布新版本时，先执行零写入预览并展示目标版本、累计改动及升级依据：
+用户调用 `$git-sync release` 时，先执行零写入预览并展示目标版本、累计改动及升级依据。`release` 是 Skill 参数，底层 CLI 仍使用 `--release`：
 
 ```text
 .codex/bin/bridgeforge git-sync --release-preview --message "<类型>: <描述>"
@@ -70,6 +70,7 @@ Codex 项目使用 `.codex/bin/bridgeforge[.exe] git-sync`。二进制存在时�
 - 当前分支、upstream、同步前后的 ahead / behind。
 - 实际提交消息、commit id 和 push 目标。
 - 项目策略、是否要求发布、是否实际升版，以及升版前后版本；普通同步完成不能表述为版本发布完成。
+- 收据提供 `generated_assets_reused` / `generated_assets_built` 时，报告工厂产物复用和重建数量，便于区分无构建同步与实际重建。
 - 同步成功后输出此前固化的“代码变动效果”，最多 3 条；显式发布概括累计改动。若既无本地变更也无累计发布，则说明本轮没有新提交，并按收据说明远端同步结果。
 - 工作区最终状态；只有状态干净且实际 push 目标的 ahead / behind 为 `0 0` 才报告同步完成。upstream 与 push 目标不同时，禁止以上游一致代替推送完成。
 - 失败时给出原始错误阶段和保留的现场状态。

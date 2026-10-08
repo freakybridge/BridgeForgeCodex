@@ -806,7 +806,7 @@ fn platform_key() -> Result<&'static str, String> {
     }
 }
 
-fn verify_generated(root: &Path, generated: &Value) -> Result<String, String> {
+pub(crate) fn verify_generated(root: &Path, generated: &Value) -> Result<String, String> {
     let id = generated["id"]
         .as_str()
         .ok_or("generated asset id is missing")?;

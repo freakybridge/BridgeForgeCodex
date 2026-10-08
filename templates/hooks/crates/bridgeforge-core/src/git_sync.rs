@@ -501,6 +501,8 @@ pub fn sync(
         .ok()
         .map(|v| v.trim().to_string());
     let mut version_after = version_before.clone();
+    let mut generated_reused = 0;
+    let mut generated_built = 0;
     let factory_runtime_repair = if factory && !dirty {
         if let Err(error) = crate::baseline::verify(root, None, false) {
             return blocked(format!("current baseline blocked git-sync: {error}"));
@@ -601,6 +603,8 @@ pub fn sync(
                 ));
             }
         };
+        generated_reused = plan.generated_reused;
+        generated_built = plan.generated_built;
         if RepositoryIdentity::capture(&git).as_ref() != Ok(&identity)
             || fs::read(&identity.index_path).ok().as_ref() != Some(&original_index)
         {
@@ -853,6 +857,8 @@ pub fn sync(
     final_receipt["version_bumped"] = json!(version_before != version_after);
     final_receipt["version_before"] = json!(version_before);
     final_receipt["version_after"] = json!(version_after);
+    final_receipt["generated_assets_reused"] = json!(generated_reused);
+    final_receipt["generated_assets_built"] = json!(generated_built);
     CommandOutcome {
         code: if status == "synced" {
             0

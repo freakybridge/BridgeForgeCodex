@@ -67,6 +67,7 @@ delivery_layout: flat
 
 | Topic | 主要记录 |
 |---|---|
+| `git-sync-performance` | [普通同步与发布构建耗时优化](1_delivery/git-sync-performance/requirements_2026-10-08_git-sync-performance.md)：工厂策略、可信产物复用、共享构建与前后实测 |
 | `git-sync-explicit-release` | [显式发布计划与版本规则](1_delivery/git-sync-explicit-release/requirements_2026-10-08_git-sync-explicit-release.md)：项目策略、累计 SemVer、同步与发布分离及验证记录 |
 | `weekly-quota-budget` | [token 与周额度双数字预算](1_delivery/weekly-quota-budget/requirements_2026-10-02_weekly-quota-budget.md)：临时系数、分配置估算与有效样本校准 |
 | `autopilot` | [单项目任务托管需求与验证](1_delivery/autopilot/requirements_2026-10-02_autopilot.md)：自然语言/多对话链接接管、整包预算、Skill/Hook 衔接与当前对话验收 |

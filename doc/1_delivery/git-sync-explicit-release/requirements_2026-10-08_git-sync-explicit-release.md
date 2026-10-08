@@ -16,11 +16,11 @@ validation_status: verified
 ## 用户行为与版本规则
 
 1. 项目配置 `release_policy: explicit_release` 后，普通 `git-sync` 提交并同步，不自动改 VERSION、原生版本或 CHANGELOG。
-2. `git-sync 发布新版本` 映射到受管 CLI 的 `--release`，汇总上次发布以来的业务改动；工作区干净但存在未发布提交时仍可发布。
+2. `git-sync release` 映射到受管 CLI 的 `--release`，汇总上次发布以来的业务改动；工作区干净但存在未发布提交时仍可发布。
 3. 累计改动取最高级别，只升一次：`!` / `BREAKING CHANGE:` 为 major；否则含 `feat` 为 minor；其余合法 `fix/perf/refactor/docs/chore` 为 patch。例如 `1.47.11` 加两个 fix 和一个 feat，发布为 `1.48.0`。major/minor 升级后低位归零。
 4. 发布命令本身的消息不覆盖累计提交级别。当前未提交的业务改动使用经实际 diff 审查的提交消息参与判断。
 5. 没有未发布业务改动不升版、不创建空提交；纯骨架升级不升业务版本。
-6. 未配置或 `per_commit` 保持既有行为；本工厂自身保留 per_commit。非法策略、不可判定的版本历史或业务提交格式停止发布，保留现场。
+6. 未配置或 `per_commit` 保持既有行为。原交付时工厂保留 per_commit；用户后续已确认工厂切换 explicit_release，当前策略与验证见[性能优化计划](../git-sync-performance/requirements_2026-10-08_git-sync-performance.md)。非法策略、不可判定的版本历史或业务提交格式停止发布，保留现场。
 7. 原生 manifest 和 lock 按既有发布事务同步；根 VERSION 仍是版本事实源。
 8. Skill 执行前展示版本依据；收据区分同步与发布，保留分支、commit、推送目标、实际 ahead/behind、工作区与 stash 结果。
 9. 发布边界要求 VERSION 语义值增加、新增唯一对应 CHANGELOG 版本节、历史原生 manifest 一致；仅空白等格式修改不改变边界、不驱动版本升级。首次引入 VERSION 兼容为初始化基线。
@@ -49,6 +49,7 @@ validation_status: verified
 
 ## 执行记录
 
+- 2026-10-08 发布后用户要求将 Skill 用法改为 `git-sync release`；已更新入口参数与当前用法说明，CLI `--release` 和版本规则不变。此前用户授权的原话保留作历史记录。此更名为待发布产品改动，不代表已再次提交或安装；版本与正式 CHANGELOG 由下一次受管发布事务统一生成，无 Rust 镜像改动。
 - 前期试改已撤回；开工前工作区干净。
 - 已实现：策略读取、累计发布计划、逐提交所有权分类、最高 SemVer、CHANGELOG 分组、只读预览、CLI 能力标记、同步版本收据；Skill 在调用新参数前验证能力，避免旧 CLI 忽略参数造成副作用。
 - 已验证：release 单元测试 16/16；git_sync 单元测试 21/21；补充 mixed region 与 merge 边界后 explicit_release 定向集 7/7。三个测试集共有 39 个不同测试通过。测试仓库与 bare remote 均在临时目录。

@@ -971,3 +971,240 @@ fn factory_rejected_commit_restores_versions_binaries_receipts_and_index() {
     );
     fs::remove_dir_all(remote).unwrap();
 }
+
+fn factory_with_valid_generated_assets(name: &str) -> (RealRepository, PathBuf) {
+    let (repo, remote) = factory_repository(name);
+    let runner = GeneratedRunner {
+        root: repo.0.clone(),
+        mode: "ok",
+    };
+    let plan = write_plan::WritePlan::prepare(
+        &repo.0,
+        Default::default(),
+        Default::default(),
+        true,
+        &runner,
+    )
+    .unwrap();
+    assert_eq!(plan.generated_built, 2);
+    for (path, bytes) in plan.writes {
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, bytes).unwrap();
+    }
+    (repo, remote)
+}
+
+#[test]
+fn factory_unchanged_generated_inputs_reuse_without_cargo_or_binary_writes() {
+    let (repo, remote) = factory_with_valid_generated_assets("reuse");
+    let runner = GeneratedRunner {
+        root: repo.0.clone(),
+        mode: "fail",
+    };
+    let plan = write_plan::WritePlan::prepare(
+        &repo.0,
+        Default::default(),
+        Default::default(),
+        true,
+        &runner,
+    )
+    .unwrap();
+    assert_eq!(plan.generated_reused, 2);
+    assert_eq!(plan.generated_built, 0);
+    assert!(
+        !plan
+            .writes
+            .keys()
+            .any(|p| p.starts_with(repo.0.join(".codex/bin")))
+    );
+    plan.verify_unchanged(&repo.0).unwrap();
+    let cli = repo.0.join(if cfg!(windows) {
+        ".codex/bin/bridgeforge.exe"
+    } else {
+        ".codex/bin/bridgeforge"
+    });
+    fs::write(&cli, b"external concurrent replacement").unwrap();
+    assert!(
+        plan.verify_unchanged(&repo.0)
+            .unwrap_err()
+            .contains("changed concurrently")
+    );
+    fs::remove_dir_all(remote).unwrap();
+}
+
+#[test]
+fn factory_reuse_invalidates_source_lock_binary_and_receipt_mismatches() {
+    for mode in ["source", "lock", "binary", "receipt"] {
+        let (repo, remote) = factory_with_valid_generated_assets(mode);
+        let path = match mode {
+            "source" => repo.0.join("templates/hooks/new.rs"),
+            "lock" => repo.0.join("templates/hooks/Cargo.lock"),
+            "binary" => repo.0.join(if cfg!(windows) {
+                ".codex/bin/bridgeforge.exe"
+            } else {
+                ".codex/bin/bridgeforge"
+            }),
+            _ => repo.0.join(".codex/bin/build-receipt-cli.json"),
+        };
+        fs::write(path, b"changed\n").unwrap();
+        let runner = GeneratedRunner {
+            root: repo.0.clone(),
+            mode: "ok",
+        };
+        let plan = write_plan::WritePlan::prepare(
+            &repo.0,
+            Default::default(),
+            Default::default(),
+            true,
+            &runner,
+        )
+        .unwrap();
+        let count = if matches!(mode, "source" | "lock") {
+            2
+        } else {
+            1
+        };
+        assert_eq!(plan.generated_built, count, "{mode}");
+        assert_eq!(plan.generated_reused, 2 - count, "{mode}");
+        fs::remove_dir_all(remote).unwrap();
+    }
+}
+
+#[test]
+fn factory_release_never_reuses_previous_version_binaries() {
+    let (repo, remote) = factory_with_valid_generated_assets("release-miss");
+    let runner = GeneratedRunner {
+        root: repo.0.clone(),
+        mode: "ok",
+    };
+    let release = crate::release::build_file_release_plan(
+        &repo.0,
+        "fix: release",
+        vec!["tracked.txt".into()],
+        &runner,
+    )
+    .unwrap()
+    .unwrap();
+    let plan =
+        write_plan::WritePlan::prepare(&repo.0, release.writes, release.inputs, true, &runner)
+            .unwrap();
+    assert_eq!(plan.generated_built, 2);
+    assert_eq!(plan.generated_reused, 0);
+    assert_eq!(fs::read(repo.0.join("VERSION")).unwrap(), b"1.0.0\n");
+    fs::remove_dir_all(remote).unwrap();
+}
+
+#[test]
+fn factory_reuse_self_test_failure_rebuilds_and_drift_blocks_apply() {
+    struct ReuseRunner {
+        inner: GeneratedRunner,
+        drift: bool,
+    }
+    impl ProcessRunner for ReuseRunner {
+        fn run(&self, request: &ProcessRequest) -> std::io::Result<ProcessOutput> {
+            if Path::new(&request.program).starts_with(self.inner.root.join(".codex/bin")) {
+                if self.drift {
+                    fs::write(&request.program, b"external change")?;
+                    return self.inner.run(request);
+                }
+                return Ok(out(0, "{}"));
+            }
+            self.inner.run(request)
+        }
+    }
+    for drift in [false, true] {
+        let (repo, remote) = factory_with_valid_generated_assets("self-test-reuse");
+        let runner = ReuseRunner {
+            inner: GeneratedRunner {
+                root: repo.0.clone(),
+                mode: "ok",
+            },
+            drift,
+        };
+        let result = write_plan::WritePlan::prepare(
+            &repo.0,
+            Default::default(),
+            Default::default(),
+            true,
+            &runner,
+        );
+        if drift {
+            assert!(result.err().unwrap().contains("changed concurrently"));
+        } else {
+            let plan = result.unwrap();
+            assert_eq!(plan.generated_built, 2);
+            assert_eq!(plan.generated_reused, 0);
+        }
+        fs::remove_dir_all(remote).unwrap();
+    }
+}
+
+#[test]
+fn factory_partial_reuse_rejected_commit_preserves_reused_asset_and_restores_miss() {
+    let (repo, remote) = factory_with_valid_generated_assets("partial-reuse-rollback");
+    let config_path = repo.0.join(".codex/bridgeforge-version.json");
+    let mut config: serde_json::Value =
+        serde_json::from_slice(&fs::read(&config_path).unwrap()).unwrap();
+    config["release_policy"] = json!("explicit_release");
+    fs::write(config_path, serde_json::to_vec(&config).unwrap()).unwrap();
+    let hook = repo.0.join(if cfg!(windows) {
+        ".codex/bin/bridgeforge-hook.exe"
+    } else {
+        ".codex/bin/bridgeforge-hook"
+    });
+    let cli = repo.0.join(if cfg!(windows) {
+        ".codex/bin/bridgeforge.exe"
+    } else {
+        ".codex/bin/bridgeforge"
+    });
+    let receipt = repo.0.join(".codex/bin/build-receipt-cli.json");
+    let hook_before = fs::read(&hook).unwrap();
+    let hook_time = fs::metadata(&hook).unwrap().modified().unwrap();
+    fs::write(&cli, b"broken original CLI").unwrap();
+    fs::write(&receipt, b"{}").unwrap();
+    fs::write(repo.0.join(".git/hooks/pre-commit"), b"#!/bin/sh\nexit 1\n").unwrap();
+    git_ok(&repo.0, &["status", "--porcelain=v1"]);
+    let index = fs::read(repo.0.join(".git/index")).unwrap();
+    struct CountingRunner {
+        inner: GeneratedRunner,
+        cargo: std::cell::Cell<usize>,
+    }
+    impl ProcessRunner for CountingRunner {
+        fn run(&self, request: &ProcessRequest) -> std::io::Result<ProcessOutput> {
+            if request.program == "cargo" {
+                self.cargo.set(self.cargo.get() + 1);
+            }
+            self.inner.run(request)
+        }
+    }
+    let runner = CountingRunner {
+        inner: GeneratedRunner {
+            root: repo.0.clone(),
+            mode: "ok",
+        },
+        cargo: Default::default(),
+    };
+    let outcome = sync(
+        &repo.0,
+        &runner,
+        GitSyncOptions {
+            message: Some("docs: partial reuse rollback".into()),
+            skip_fetch: true,
+            skip_push: true,
+            ..Default::default()
+        },
+    );
+    assert_eq!(outcome.code, 2, "{}", outcome.stderr);
+    assert!(outcome.stderr.contains("rolled back"), "{}", outcome.stderr);
+    assert_eq!(runner.cargo.get(), 1);
+    assert_eq!(fs::read(&hook).unwrap(), hook_before);
+    assert_eq!(fs::metadata(&hook).unwrap().modified().unwrap(), hook_time);
+    assert_eq!(fs::read(&cli).unwrap(), b"broken original CLI");
+    assert_eq!(fs::read(&receipt).unwrap(), b"{}");
+    assert_eq!(fs::read(repo.0.join(".git/index")).unwrap(), index);
+    assert_eq!(
+        fs::read(repo.0.join("tracked.txt")).unwrap(),
+        b"user change\n"
+    );
+    fs::remove_dir_all(remote).unwrap();
+}

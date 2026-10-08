@@ -192,6 +192,7 @@ fn real_factory_cli_sync_builds_new_runtime_and_commits_through_precommit() {
     let mut request = ProcessRequest::new(cli.as_os_str(), &root);
     request.args = [
         "git-sync",
+        "--release",
         "--message",
         "fix: verify factory automatic runtime release",
     ]
@@ -287,4 +288,110 @@ fn real_factory_cli_sync_builds_new_runtime_and_commits_through_precommit() {
     println!(
         "real factory CLI: version {old} -> {next}; clean runtime self-healed without a release; healthy fast path did not rewrite runtime; real pre-commit accepted; runtime and index verified; local remote parity 0/0"
     );
+}
+
+#[test]
+#[ignore = "explicit factory performance experiment using isolated local Git only"]
+fn factory_ordinary_sync_performance() {
+    let source = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .ancestors()
+        .nth(2)
+        .unwrap();
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let fixture =
+        Fixture(std::env::temp_dir().join(format!("bf-sync-perf-{}-{nonce}", std::process::id())));
+    let root = fixture.0.join("factory");
+    copy_tree(source, &root);
+    let config_path = root.join(".codex/bridgeforge-version.json");
+    let mut config: serde_json::Value =
+        serde_json::from_slice(&fs::read(&config_path).unwrap()).unwrap();
+    config["release_policy"] = serde_json::json!("explicit_release");
+    fs::write(config_path, serde_json::to_vec_pretty(&config).unwrap()).unwrap();
+    git(&root, &["init"]);
+    git(&root, &["config", "user.name", "BridgeForge Benchmark"]);
+    git(
+        &root,
+        &["config", "user.email", "benchmark@example.invalid"],
+    );
+    git(&root, &["config", "core.autocrlf", "false"]);
+    git(&root, &["config", "core.hooksPath", ".git/hooks"]);
+    git(&root, &["add", "."]);
+    git(&root, &["commit", "-m", "chore: benchmark baseline"]);
+    git(&root, &["config", "core.hooksPath", ".githooks"]);
+    let remote = fixture.0.join("origin.git");
+    git(&root, &["init", "--bare", remote.to_str().unwrap()]);
+    git(
+        &root,
+        &["remote", "add", "origin", remote.to_str().unwrap()],
+    );
+    git(&root, &["push", "-u", "origin", "HEAD"]);
+    let version = fs::read(root.join("VERSION")).unwrap();
+    let cli = root.join(if cfg!(windows) {
+        ".codex/bin/bridgeforge.exe"
+    } else {
+        ".codex/bin/bridgeforge"
+    });
+    let cli_before = fs::metadata(&cli).unwrap().modified().unwrap();
+    let mut readme = fs::read(root.join("README.md")).unwrap();
+    readme.extend_from_slice(b"\nPerformance fixture: documentation-only change.\n");
+    fs::write(root.join("README.md"), readme).unwrap();
+    let mut request = ProcessRequest::new(cli.as_os_str(), &root);
+    request.args = ["git-sync", "--message", "docs: benchmark ordinary sync"]
+        .iter()
+        .map(Into::into)
+        .collect();
+    request.timeout = Duration::from_secs(1200);
+    println!("performance fixture prepared; timed CLI starts now");
+    let started = std::time::Instant::now();
+    let output = SystemProcessRunner.run(&request).unwrap();
+    let elapsed_ms = started.elapsed().as_millis();
+    assert!(
+        !output.timed_out && output.code == 0,
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let receipt: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(receipt["version_bumped"], false);
+    assert_eq!(fs::read(root.join("VERSION")).unwrap(), version);
+    assert_eq!(receipt["working_tree"], "clean");
+    assert_eq!(receipt["ahead"], 0);
+    assert_eq!(receipt["behind"], 0);
+    if std::env::var_os("BRIDGEFORGE_PERF_EXPECT_REUSE").is_some() {
+        assert_eq!(receipt["generated_assets_reused"], 2);
+        assert_eq!(receipt["generated_assets_built"], 0);
+        assert_eq!(fs::metadata(&cli).unwrap().modified().unwrap(), cli_before);
+    }
+    println!(
+        "PERF {}",
+        serde_json::json!({"elapsed_ms": elapsed_ms, "receipt": receipt})
+    );
+    if std::env::var_os("BRIDGEFORGE_PERF_RELEASE").is_some() {
+        let mut readme = fs::read(root.join("README.md")).unwrap();
+        readme.extend_from_slice(b"\nPerformance fixture: explicit release.\n");
+        fs::write(root.join("README.md"), readme).unwrap();
+        request.args.insert(1, "--release".into());
+        println!("performance explicit release starts now");
+        let started = std::time::Instant::now();
+        let output = SystemProcessRunner.run(&request).unwrap();
+        let elapsed_ms = started.elapsed().as_millis();
+        assert!(
+            !output.timed_out && output.code == 0,
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let receipt: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(receipt["version_bumped"], true);
+        assert_eq!(receipt["generated_assets_reused"], 0);
+        assert_eq!(receipt["generated_assets_built"], 2);
+        assert_eq!(receipt["working_tree"], "clean");
+        assert_eq!(receipt["ahead"], 0);
+        assert_eq!(receipt["behind"], 0);
+        println!(
+            "PERF_RELEASE {}",
+            serde_json::json!({"elapsed_ms": elapsed_ms, "receipt": receipt})
+        );
+    }
 }

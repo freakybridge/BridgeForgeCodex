@@ -474,3 +474,40 @@ fn successful_cargo_without_fresh_binary_cannot_reuse_another_build() {
     assert_eq!(runner.calls.get(), 3);
     fixture.assert_preserved();
 }
+
+#[test]
+fn both_binaries_share_one_isolated_dependency_target() {
+    struct RecordingRunner<'a> {
+        inner: Runner<'a>,
+        targets: std::cell::RefCell<Vec<PathBuf>>,
+    }
+    impl ProcessRunner for RecordingRunner<'_> {
+        fn run(&self, request: &ProcessRequest) -> std::io::Result<ProcessOutput> {
+            if request.program == "cargo" {
+                self.targets
+                    .borrow_mut()
+                    .push(PathBuf::from(&request.args[7]));
+            }
+            self.inner.run(request)
+        }
+    }
+    let fixture = Fixture::new();
+    let runner = RecordingRunner {
+        inner: Runner {
+            root: &fixture.root,
+            mode: "ok",
+            calls: Cell::new(0),
+        },
+        targets: Default::default(),
+    };
+    assert_eq!(
+        build_generated_assets(&fixture.root, &fixture.contract, &runner)
+            .unwrap()
+            .len(),
+        2
+    );
+    let targets = runner.targets.borrow();
+    assert_eq!(targets.len(), 2);
+    assert_eq!(targets[0], targets[1]);
+    assert!(!targets[0].starts_with(&fixture.root));
+}

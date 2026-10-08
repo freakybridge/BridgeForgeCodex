@@ -2696,8 +2696,24 @@ pub(crate) fn generated_writes(
             let binary_name = item["build"]["binary_name"]
                 .as_str()
                 .ok_or("generated binary_name is missing")?;
-            // A successful Cargo invocation must not reuse a previous asset's binary.
-            let output_dir = target_dir.join(format!("output-{}", receipts.len()));
+            // One target per isolated workspace shares dependency compilation.
+            // Remove this asset's final executable first: a successful no-op
+            // runner must never be able to validate the previous asset's output.
+            let output_dir = inputs.snapshot.with_extension("target");
+            let built = output_dir.join("release").join(if cfg!(windows) {
+                format!("{binary_name}.exe")
+            } else {
+                binary_name.into()
+            });
+            match fs::remove_file(&built) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    return Err(format!(
+                        "cannot clear generated binary before build: {error}"
+                    ));
+                }
+            }
             let mut request = ProcessRequest::new("cargo", &inputs.snapshot);
             request.args = vec![
                 OsString::from("build"),
@@ -2719,11 +2735,6 @@ pub(crate) fn generated_writes(
                     String::from_utf8_lossy(&output.stderr).trim()
                 ));
             }
-            let built = output_dir.join("release").join(if cfg!(windows) {
-                format!("{binary_name}.exe")
-            } else {
-                binary_name.into()
-            });
             let platform = if cfg!(windows) {
                 "windows-x86_64"
             } else if cfg!(target_os = "linux") {
