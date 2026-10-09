@@ -260,7 +260,7 @@ fn blob(root: &Path, hash: &str) -> Result<PathBuf, String> {
 
 fn save_blob(root: &Path, bytes: &[u8]) -> Result<String, String> {
     let hash = payload_sha(bytes);
-    crate::memory::atomic_write(&blob(root, &hash)?, bytes).map_err(|e| e.to_string())?;
+    crate::persistence::atomic_write(&blob(root, &hash)?, bytes).map_err(|e| e.to_string())?;
     Ok(hash)
 }
 
@@ -468,7 +468,7 @@ pub(super) fn prepare(
     };
     let target_version = release.new_version.to_string();
     let current = path(root, &format!("{CACHE}/current.json"))?;
-    crate::memory::atomic_write_json(&current, &json!({"schema":1,"status":"preparing"}))
+    crate::persistence::atomic_write_json(&current, &json!({"schema":1,"status":"preparing"}))
         .map_err(|e| e.to_string())?;
     let mut checks = Vec::new();
     for check in cfg.checks {
@@ -575,7 +575,7 @@ pub(super) fn prepare(
         artifacts,
     };
     let check_count = record.checks.len();
-    crate::memory::atomic_write_json(
+    crate::persistence::atomic_write_json(
         &current,
         &serde_json::to_value(record).map_err(|e| e.to_string())?,
     )

@@ -330,7 +330,7 @@ fn restore_snapshots(
         let result = match before {
             Some(payload) if binary => crate::runtime::write_binary(root, &path, &payload),
             Some(payload) => {
-                crate::memory::atomic_write(&path, &payload).map_err(|error| error.to_string())
+                crate::persistence::atomic_write(&path, &payload).map_err(|error| error.to_string())
             }
             None if path.exists() => fs::remove_file(&path).map_err(|error| error.to_string()),
             None => Ok(()),
@@ -751,7 +751,7 @@ pub fn sync(
             let result = if plan.binaries.contains(path) {
                 crate::runtime::write_binary(root, path, payload)
             } else {
-                crate::memory::atomic_write(path, payload).map_err(|e| e.to_string())
+                crate::persistence::atomic_write(path, payload).map_err(|e| e.to_string())
             };
             if let Err(error) = result {
                 return fail(
@@ -807,7 +807,7 @@ pub fn sync(
                 Ok(file) => file,
                 Err(error) => return fail(error, &post_add_index, snapshots),
             };
-            if let Err(error) = crate::memory::atomic_write_json(
+            if let Err(error) = crate::persistence::atomic_write_json(
                 &file,
                 &json!({"schema":1,"parent":identity.head_oid,"tree":tree}),
             ) {

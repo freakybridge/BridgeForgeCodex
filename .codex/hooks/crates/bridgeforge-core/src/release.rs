@@ -1175,7 +1175,7 @@ fn build_selected_release_plan(
 pub fn apply_file_release_plan(plan: &FileReleasePlan) -> Result<(), String> {
     verify_release_inputs(&plan.inputs)?;
     for (path, payload) in &plan.writes {
-        crate::memory::atomic_write(path, payload).map_err(|error| error.to_string())?;
+        crate::persistence::atomic_write(path, payload).map_err(|error| error.to_string())?;
     }
     Ok(())
 }

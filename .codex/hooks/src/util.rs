@@ -210,5 +210,5 @@ where
 }
 
 pub fn atomic_write(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
-    bridgeforge_core::memory::atomic_write(path, bytes).map_err(std::io::Error::other)
+    bridgeforge_core::persistence::atomic_write(path, bytes).map_err(std::io::Error::other)
 }

@@ -123,7 +123,7 @@ const RETIRED_PROJECT_MAPS: &[(&str, &str)] = &[
 fn legacy_receipt(root: &Path) -> Result<Option<(PathBuf, Vec<u8>)>, String> {
     let path = safe_join(root, LEGACY_RECEIPT, "legacy build receipt")?;
     for ancestor in path.ancestors().filter(|path| path.exists()) {
-        if crate::memory::is_link_or_reparse(ancestor).map_err(|error| error.to_string())? {
+        if crate::persistence::is_link_or_reparse(ancestor).map_err(|error| error.to_string())? {
             return Err("legacy build receipt traverses a link; refusing to delete".into());
         }
     }
@@ -133,7 +133,7 @@ fn legacy_receipt(root: &Path) -> Result<Option<(PathBuf, Vec<u8>)>, String> {
         Err(error) => return Err(error.to_string()),
     };
     if !metadata.is_file()
-        || crate::memory::is_link_or_reparse(&path).map_err(|error| error.to_string())?
+        || crate::persistence::is_link_or_reparse(&path).map_err(|error| error.to_string())?
     {
         return Err(
             "legacy build receipt is not a plain file; preserve it for manual inspection".into(),
@@ -286,7 +286,7 @@ fn sync_role_inputs(root: &Path) -> Result<BTreeMap<String, (String, bool)>, Str
         }
         for entry in WalkDir::new(&path).sort_by_file_name() {
             let entry = entry.map_err(|error| error.to_string())?;
-            if crate::memory::is_link_or_reparse(entry.path()).map_err(|e| e.to_string())? {
+            if crate::persistence::is_link_or_reparse(entry.path()).map_err(|e| e.to_string())? {
                 return Err(format!(
                     "linked role input is unsafe: {}",
                     entry.path().display()
@@ -460,7 +460,7 @@ fn safe_join(root: &Path, raw: &str, label: &str) -> Result<PathBuf, String> {
 }
 
 fn atomic_write(path: &Path, payload: &[u8]) -> Result<(), String> {
-    crate::memory::atomic_write(path, payload).map_err(|error| error.to_string())
+    crate::persistence::atomic_write(path, payload).map_err(|error| error.to_string())
 }
 
 fn marker_replace(
@@ -1093,7 +1093,7 @@ fn project_identity(root: &Path) -> Result<Option<(String, bool)>, String> {
             Err(error) => return Err(error.to_string()),
         };
         if !metadata.is_file()
-            || crate::memory::is_link_or_reparse(&path).map_err(|e| e.to_string())?
+            || crate::persistence::is_link_or_reparse(&path).map_err(|e| e.to_string())?
         {
             return Err("version stamp must be a plain file".into());
         }
@@ -1366,7 +1366,7 @@ fn destructive_inventory(
             }
             let relative = relative_posix(project_root, &child)?;
             let linked =
-                crate::memory::is_link_or_reparse(&child).map_err(|error| error.to_string())?;
+                crate::persistence::is_link_or_reparse(&child).map_err(|error| error.to_string())?;
             if child.is_file() && !linked {
                 // Plain project_* files are handled by the exact-file inventory below.
                 continue;
@@ -2167,7 +2167,7 @@ fn validate_transaction_path(path: &Path) -> Result<(), String> {
     for ancestor in path.ancestors() {
         match fs::symlink_metadata(ancestor) {
             Ok(_) => {
-                if crate::memory::is_link_or_reparse(ancestor).map_err(|error| error.to_string())? {
+                if crate::persistence::is_link_or_reparse(ancestor).map_err(|error| error.to_string())? {
                     return Err(format!(
                         "transaction path traverses a link: {}",
                         ancestor.display()

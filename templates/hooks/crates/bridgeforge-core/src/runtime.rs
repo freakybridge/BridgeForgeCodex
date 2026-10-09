@@ -194,7 +194,7 @@ pub(crate) fn write_binary(root: &Path, path: &Path, payload: &[u8]) -> Result<(
         time::{SystemTime, UNIX_EPOCH},
     };
     for ancestor in path.ancestors().filter(|p| p.exists()) {
-        if crate::memory::is_link_or_reparse(ancestor).map_err(|e| e.to_string())? {
+        if crate::persistence::is_link_or_reparse(ancestor).map_err(|e| e.to_string())? {
             return Err(format!("binary path traverses a link: {}", path.display()));
         }
     }
@@ -271,7 +271,7 @@ pub(crate) fn write_binary(root: &Path, path: &Path, payload: &[u8]) -> Result<(
 fn image_directory(root: &Path) -> Result<PathBuf, String> {
     let directory = root.join(".runtime/bridgeforge-codex/git-sync-images");
     for ancestor in directory.ancestors().filter(|p| p.exists()) {
-        if crate::memory::is_link_or_reparse(ancestor).map_err(|e| e.to_string())? {
+        if crate::persistence::is_link_or_reparse(ancestor).map_err(|e| e.to_string())? {
             return Err("running-image directory traverses a link".into());
         }
     }
@@ -296,7 +296,7 @@ pub(crate) fn cleanup_images(root: &Path) -> Result<(), String> {
             || !parts[1..]
                 .iter()
                 .all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()))
-            || crate::memory::is_link_or_reparse(&entry.path()).map_err(|e| e.to_string())?
+            || crate::persistence::is_link_or_reparse(&entry.path()).map_err(|e| e.to_string())?
         {
             continue;
         }

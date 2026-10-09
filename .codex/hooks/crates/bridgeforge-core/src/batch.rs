@@ -332,7 +332,7 @@ fn write_state(state_path: &Path, state: &BatchState) -> Result<(), String> {
         .parent()
         .ok_or_else(|| "batch state path has no parent".to_string())?;
     fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-    crate::memory::atomic_write_json(state_path, state).map_err(|error| error.to_string())
+    crate::persistence::atomic_write_json(state_path, state).map_err(|error| error.to_string())
 }
 
 pub fn load(state_path: &Path) -> Result<BatchState, String> {

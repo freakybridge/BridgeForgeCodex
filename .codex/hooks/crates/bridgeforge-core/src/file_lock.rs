@@ -10,7 +10,7 @@ pub(crate) struct FileLock {
 impl FileLock {
     pub(crate) fn acquire(path: &Path) -> Result<Self, String> {
         for ancestor in path.ancestors().filter(|item| item.exists()) {
-            if crate::memory::is_link_or_reparse(ancestor).map_err(|error| error.to_string())? {
+            if crate::persistence::is_link_or_reparse(ancestor).map_err(|error| error.to_string())? {
                 return Err(format!(
                     "lock traverses linked path: {}",
                     ancestor.display()

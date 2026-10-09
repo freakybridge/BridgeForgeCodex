@@ -60,6 +60,7 @@ delivery_layout: flat
 ## 架构
 
 - 工厂专属[开发收口清单](0_architecture/design/development-completion.md)：质量检查、发布准备与轻量发布的职责边界。
+- 工厂[独立构建产物缓存](0_architecture/design/factory-artifact-cache.md)：编译身份、缓存所有权、有限清理和中断恢复；当前 R04 的结果见交付卡。
 - 设计资料：[`0_architecture/design/`](0_architecture/design/)，包括 [`codex-project-sync.md`](0_architecture/design/codex-project-sync.md)、[`codex-native-instruction-architecture.md`](0_architecture/design/codex-native-instruction-architecture.md)、[`codex-native-memory-sync.md`](0_architecture/design/codex-native-memory-sync.md)、[`user-facing-result-contract.md`](0_architecture/design/user-facing-result-contract.md)、`design-rationale.md` 与上游同步 playbook。
 - 操作参考：[`codex-project-operating-guide.md`](3_reference/codex-project-operating-guide.md)、[项目自有 Rust Hook](3_reference/project-rust-hooks.md) 与主动澄清参考 [`codex-hook-signals.md`](3_reference/codex-hook-signals.md)；自动 Clarify / Focus Hook 已退役。
 - `$bridgeforge-codex` 的运行手册属于产品源码，位于 [`skills/bridgeforge-codex/references/`](../skills/bridgeforge-codex/references/)，不纳入 `doc/`。
@@ -70,7 +71,7 @@ delivery_layout: flat
 
 | Topic | 主要记录 |
 |---|---|
-| `refactor-scan` | [Skill 开发验收](1_delivery/refactor-scan/requirements_2026-10-09_refactor-scan.md)已完成；[工厂重构候选与经验](1_delivery/refactor-scan/scan_2026-10-09_factory-refactor.md)为待选择方案，R01–R04 未授权实施；[换机交接](1_delivery/refactor-scan/handoff_2026-10-09_factory-refactor.md)；真实项目试用见 TODO-004 |
+| `refactor-scan` | [Skill 开发验收](1_delivery/refactor-scan/requirements_2026-10-09_refactor-scan.md)已完成；[工厂重构候选与经验](1_delivery/refactor-scan/scan_2026-10-09_factory-refactor.md)记录扫描时事实；[R01 清理](1_delivery/refactor-scan/requirements_2026-10-09_r01-cleanup.md)、[R02 公共持久化](1_delivery/refactor-scan/requirements_2026-10-09_r02-persistence.md)、[R03 Memory CLI](1_delivery/refactor-scan/requirements_2026-10-09_r03-memory-cli.md)及 [R04 独立缓存](1_delivery/refactor-scan/requirements_2026-10-10_r04-artifact-cache.md)均工程验证通过并于 2026-10-10 获用户验收；累计收据与验收边界见 R04；[扫描换机交接](1_delivery/refactor-scan/handoff_2026-10-09_factory-refactor.md)为历史记录；真实项目试用见 TODO-004 |
 | `summary-workflow` | [Summary 三模式与会话状态快照退役](1_delivery/summary-workflow/requirements_2026-10-08_summary-workflow.md)；[本轮经验教训](1_delivery/summary-workflow/lessons_2026-10-08.md) |
 | `git-sync-performance` | [普通同步与发布构建耗时优化](1_delivery/git-sync-performance/requirements_2026-10-08_git-sync-performance.md)；[开发收口与轻量发布](1_delivery/git-sync-performance/requirements_2026-10-08_prepared-release.md)：检查前移、发布准备记录和端到端验收 |
 | `git-sync-explicit-release` | [独立同步与用户可选升版](1_delivery/git-sync-explicit-release/requirements_2026-10-09_independent-git-sync.md)：当前需求；[旧项目接入诊断历史](1_delivery/git-sync-explicit-release/requirements_2026-10-09_release-onboarding.md)；[普通同步不升版](1_delivery/git-sync-explicit-release/requirements_2026-10-08_release-only.md)；[原显式发布交付](1_delivery/git-sync-explicit-release/requirements_2026-10-08_git-sync-explicit-release.md) |

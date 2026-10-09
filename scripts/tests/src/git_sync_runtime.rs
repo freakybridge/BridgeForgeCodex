@@ -468,3 +468,44 @@ fn factory_ordinary_sync_performance() {
         );
     }
 }
+
+#[test]
+#[ignore = "explicit R04 real artifact cache comparison using isolated local Git only"]
+fn factory_artifact_cache_performance() {
+    let source=Path::new(env!("CARGO_MANIFEST_DIR")).ancestors().nth(2).unwrap();
+    let nonce=SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+    let fixture=Fixture(std::env::temp_dir().join(format!("bf-artifact-perf-{}-{nonce}",std::process::id())));
+    let mut measurements=Vec::new();
+    for warm in [false,true] {
+        let root=fixture.0.join(if warm {"warm"} else {"cold"});copy_tree(source,&root);fixture_development_checks(&root);
+        let config_path=root.join(".codex/bridgeforge-version.json");
+        let mut config:serde_json::Value=serde_json::from_slice(&fs::read(&config_path).unwrap()).unwrap();
+        config["release_policy"]=serde_json::json!("explicit_release");fs::write(config_path,serde_json::to_vec_pretty(&config).unwrap()).unwrap();
+        git(&root,&["init"]);git(&root,&["config","user.name","BridgeForge Cache Benchmark"]);
+        git(&root,&["config","user.email","cache-benchmark@example.invalid"]);git(&root,&["config","core.autocrlf","false"]);
+        git(&root,&["config","core.hooksPath",".git/hooks"]);git(&root,&["add","."]);git(&root,&["commit","-m","chore: cache baseline"]);
+        git(&root,&["config","core.hooksPath",".githooks"]);
+        let remote=fixture.0.join(if warm {"warm-origin.git"} else {"cold-origin.git"});
+        git(&root,&["init","--bare",remote.to_str().unwrap()]);git(&root,&["remote","add","origin",remote.to_str().unwrap()]);git(&root,&["push","-u","origin","HEAD"]);
+        let mut readme=fs::read(root.join("README.md")).unwrap();readme.extend_from_slice(b"\nR04 identical documentation-only release workload.\n");fs::write(root.join("README.md"),readme).unwrap();
+        let cli=root.join(if cfg!(windows){".codex/bin/bridgeforge.exe"}else{".codex/bin/bridgeforge"});
+        let before_version=fs::read(root.join("VERSION")).unwrap();
+        let mut request=ProcessRequest::new(cli.as_os_str(),&root);
+        request.args=["git-sync","--prepare-release","--message","perf: cache benchmark"].iter().map(Into::into).collect();request.timeout=Duration::from_secs(1800);
+        let prepared=SystemProcessRunner.run(&request).unwrap();assert_eq!(prepared.code,0,"{}",String::from_utf8_lossy(&prepared.stderr));
+        assert_eq!(fs::read(root.join("VERSION")).unwrap(),before_version);
+        let cache=root.join(".runtime/bridgeforge-codex/build-artifact-cache");assert!(cache.join("owner.json").is_file(),"benchmark requires supported compiler inputs");
+        if !warm {fs::remove_dir_all(&cache).unwrap();}
+        // A corrupted prepared record must have no influence on actual cache reuse.
+        fs::write(root.join(".runtime/bridgeforge-codex/release-preparation/current.json"),b"invalid prepared/audit").unwrap();
+        request.args=["git-sync","--release","--message","perf: cache benchmark"].iter().map(Into::into).collect();
+        let started=std::time::Instant::now();let output=SystemProcessRunner.run(&request).unwrap();let elapsed_ms=started.elapsed().as_millis();
+        assert!(!output.timed_out && output.code==0,"{}",String::from_utf8_lossy(&output.stderr));
+        let receipt:serde_json::Value=serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(receipt["generated_assets_reused"],if warm{2}else{0});assert_eq!(receipt["generated_assets_built"],if warm{0}else{2});
+        assert_eq!(receipt["working_tree"],"clean");assert_eq!(receipt["ahead"],0);assert_eq!(receipt["behind"],0);
+        let measurement=serde_json::json!({"cache":if warm{"warm"}else{"cold"},"elapsed_ms":elapsed_ms,"receipt":receipt});
+        println!("R04_PERF {measurement}");measurements.push(measurement);
+    }
+    println!("R04_COMPARE {}",serde_json::to_string(&measurements).unwrap());
+}

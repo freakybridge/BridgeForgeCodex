@@ -4,6 +4,12 @@ lifecycle: active
 
 # BridgeForge 工厂重构候选扫描
 
+> 本文保留扫描时事实。后续用户已授权 R01 开发，最新范围与验证见
+> [R01 开发确认卡](requirements_2026-10-09_r01-cleanup.md)。R02 已授权实施，最新范围与证据见
+> [公共持久化确认卡](requirements_2026-10-09_r02-persistence.md)。R03 也已授权实施，最新范围及证据见
+> [Memory CLI 确认卡](requirements_2026-10-09_r03-memory-cli.md)。R04亦已获预算与实施授权并取得工程证据，
+> 最新累计工作区结果与 2026-10-10 的 R01–R04 工程范围用户验收见 [独立缓存确认卡](requirements_2026-10-10_r04-artifact-cache.md)。下文候选表保留扫描时状态。
+
 ## 范围、结论与授权
 
 基准 HEAD 为 0425b2da9ed5bf285ff6268ccd55b68e0d846c86，版本 2.1.0。

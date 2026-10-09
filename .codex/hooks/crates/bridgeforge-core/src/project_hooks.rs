@@ -144,7 +144,7 @@ pub(crate) fn read(root: &Path, relative: &str) -> Result<Option<Vec<u8>>, Strin
     for path in target.ancestors() {
         match fs::symlink_metadata(path) {
             Ok(metadata) => {
-                if crate::memory::is_link_or_reparse(path).map_err(|e| e.to_string())? {
+                if crate::persistence::is_link_or_reparse(path).map_err(|e| e.to_string())? {
                     return Err(format!(
                         "project Rust hook path traverses a link: {relative}"
                     ));

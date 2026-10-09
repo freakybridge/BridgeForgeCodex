@@ -25,7 +25,7 @@ pub(super) fn join(root: &Path, relative: &str) -> Result<PathBuf, String> {
     }
     let path = root.join(relative);
     for ancestor in path.ancestors().filter(|p| p.exists()) {
-        if crate::memory::is_link_or_reparse(ancestor).map_err(|e| e.to_string())? {
+        if crate::persistence::is_link_or_reparse(ancestor).map_err(|e| e.to_string())? {
             return Err(format!(
                 "factory input traverses a link: {}",
                 path.display()
@@ -45,21 +45,10 @@ impl Drop for Temporary {
 impl WritePlan {
     pub fn prepare(
         root: &Path,
-        writes: BTreeMap<PathBuf, Vec<u8>>,
-        release_inputs: BTreeMap<PathBuf, Option<Vec<u8>>>,
-        factory: bool,
-        runner: &dyn ProcessRunner,
-    ) -> Result<Self, String> {
-        Self::prepare_with_artifacts(root, writes, release_inputs, factory, runner, None)
-    }
-
-    pub fn prepare_with_artifacts(
-        root: &Path,
         mut writes: BTreeMap<PathBuf, Vec<u8>>,
         release_inputs: BTreeMap<PathBuf, Option<Vec<u8>>>,
         factory: bool,
         runner: &dyn ProcessRunner,
-        prepared: Option<&BTreeMap<PathBuf, Vec<u8>>>,
     ) -> Result<Self, String> {
         crate::release::verify_release_inputs(&release_inputs)?;
         let mut plan = Self {
@@ -171,6 +160,14 @@ impl WritePlan {
             "macos-x86_64"
         };
         let mut pending_assets = Vec::new();
+        let all_assets = contract_after["generated_assets"]
+            .as_array()
+            .ok_or("missing generated assets")?
+            .clone();
+        let mut built_assets = BTreeSet::new();
+        let mut cache = None;
+        let mut cache_attempted = false;
+        let mut cache_context = None;
         for asset in contract_after["generated_assets"]
             .as_array()
             .ok_or("missing generated assets")?
@@ -190,26 +187,38 @@ impl WritePlan {
             plan.before.insert(binary.clone(), read_optional(&binary)?);
             plan.before
                 .insert(receipt.clone(), read_optional(&receipt)?);
-            if let Some(prepared) = prepared {
-                if prepared.is_empty() && reusable_generated(root, asset, &binary, runner) {
-                    plan.generated_reused += 1;
-                    continue;
-                }
-                let payload = prepared.get(&binary).ok_or(
-                    "release preparation missing: return to develop; no build was started",
-                )?;
-                let receipt_payload = prepared
-                    .get(&receipt)
-                    .ok_or("prepared build receipt missing")?;
-                crate::baseline::verify_generated_payload(asset, payload, receipt_payload)?;
-                writes.insert(binary.clone(), payload.clone());
-                writes.insert(receipt, receipt_payload.clone());
-                plan.binaries.insert(binary);
-                plan.generated_reused += 1;
-            } else if reusable_generated(root, asset, &binary, runner) {
+            if reusable_generated(root, asset, &binary, runner) {
                 plan.generated_reused += 1;
             } else {
-                pending_assets.push(asset.clone());
+                if !cache_attempted {
+                    let context = Temporary(std::env::temp_dir().join(format!(
+                        "bridgeforge-cache-context-{}-{nonce}",
+                        std::process::id()
+                    )));
+                    let source = join(
+                        &temporary.0,
+                        asset["source_root"].as_str().ok_or("missing source_root")?,
+                    )?;
+                    let inputs = crate::project_sync::build_inputs::BuildInputs::capture(
+                        &source,
+                        context.0.join("source-0"),
+                        asset,
+                    )?;
+                    cache = crate::artifact_cache::Cache::open(root, &inputs.snapshot, runner);
+                    cache_context = Some((inputs, context));
+                    cache_attempted = true;
+                }
+                if let Some((payload, receipt_payload)) =
+                    cache.as_mut().and_then(|cache| cache.load(asset, runner))
+                {
+                    writes.insert(binary.clone(), payload);
+                    writes.insert(receipt, receipt_payload);
+                    plan.generated_reused += 1;
+                } else {
+                    pending_assets.push(asset.clone());
+                    built_assets
+                        .insert(asset["id"].as_str().ok_or("missing asset id")?.to_string());
+                }
                 plan.binaries.insert(binary);
             }
         }
@@ -231,7 +240,41 @@ impl WritePlan {
             )?;
             writes.extend(generated);
         }
+        if let Some((inputs, _)) = &cache_context {
+            inputs.verify_unchanged()?;
+        }
         plan.writes = writes;
+        plan.verify_unchanged(root)?;
+        if let Some(cache) = cache.as_mut() {
+            for asset in &all_assets {
+                if !built_assets.contains(asset["id"].as_str().ok_or("missing asset id")?) {
+                    continue;
+                }
+                let binary = join(
+                    root,
+                    asset["binary_targets"][platform]
+                        .as_str()
+                        .ok_or("missing binary target")?,
+                )?;
+                let receipt = join(
+                    root,
+                    asset["receipt_target"]
+                        .as_str()
+                        .ok_or("missing receipt target")?,
+                )?;
+                if let (Some(payload), Some(receipt_payload)) =
+                    (plan.writes.get(&binary), plan.writes.get(&receipt))
+                {
+                    // Loaded cache entries already have a lease and fresh recency.
+                    if let Err(error) = cache.store(asset, payload, receipt_payload, runner) {
+                        eprintln!("[artifact-cache] optional cache publication skipped: {error}");
+                    }
+                }
+            }
+        }
+        if let Some((inputs, _)) = &cache_context {
+            inputs.verify_unchanged()?;
+        }
         plan.verify_unchanged(root)?;
         Ok(plan)
     }

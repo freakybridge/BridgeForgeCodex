@@ -40,7 +40,7 @@ fn inventory(root: &Path, prefix: &str) -> Result<BTreeMap<String, Vec<u8>>, Str
         directory: &str,
         files: &mut BTreeMap<String, Vec<u8>>,
     ) -> Result<(), String> {
-        if crate::memory::is_link_or_reparse(&root.join(directory)).map_err(|e| e.to_string())? {
+        if crate::persistence::is_link_or_reparse(&root.join(directory)).map_err(|e| e.to_string())? {
             return Err(format!(
                 "project hook package traverses a link: {directory}"
             ));
@@ -58,7 +58,7 @@ fn inventory(root: &Path, prefix: &str) -> Result<BTreeMap<String, Vec<u8>>, Str
                 return Err(format!("reserved project hook package path: {name}"));
             }
             let relative = format!("{directory}/{name}");
-            if crate::memory::is_link_or_reparse(&entry.path()).map_err(|e| e.to_string())? {
+            if crate::persistence::is_link_or_reparse(&entry.path()).map_err(|e| e.to_string())? {
                 return Err(format!("project hook package traverses a link: {relative}"));
             }
             if entry.file_type().map_err(|e| e.to_string())?.is_dir() {

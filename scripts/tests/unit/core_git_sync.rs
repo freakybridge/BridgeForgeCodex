@@ -509,8 +509,8 @@ fn preparation_record_documents_reuse_artifacts_but_bind_release_content() {
     let result = sync(&repo.0, &GeneratedRunner { root: repo.0.clone(), mode: "ok" }, GitSyncOptions { release: true, message: Some("fix: release records".into()), ..Default::default() });
     assert_eq!(result.code, 0, "{}", result.stderr);
     let receipt = result.receipt.unwrap();
-    assert_eq!(receipt["generated_assets_built"], 2);
-    assert_eq!(receipt["generated_assets_reused"], 0);
+    assert_eq!(receipt["generated_assets_built"], 0);
+    assert_eq!(receipt["generated_assets_reused"], 2);
     assert_eq!(receipt["working_tree"], "clean");
     let committed = Git { root: &repo.0, runner: &SystemProcessRunner }
         .required(&["show", "HEAD:doc/3_reference/lessons.md"], Duration::from_secs(30)).unwrap();
@@ -554,7 +554,7 @@ fn preparation_record_scope_does_not_exempt_instructions_code_or_invalid_documen
 }
 
 #[test]
-fn independent_preparation_preserves_worktree_and_direct_release_builds_tools() {
+fn independent_preparation_preserves_worktree_and_direct_release_reuses_cached_tools() {
     let (repo, remote) = factory_repository("prepared-factory");
     install_development_check(&repo.0);
     let before_version = fs::read(repo.0.join("VERSION")).unwrap();
@@ -587,8 +587,8 @@ fn independent_preparation_preserves_worktree_and_direct_release_builds_tools() 
     assert_eq!(result.code, 0, "{}", result.stderr);
     let receipt = result.receipt.unwrap();
     assert_eq!(receipt["version_after"], "1.0.1");
-    assert_eq!(receipt["generated_assets_built"], 2);
-    assert_eq!(receipt["generated_assets_reused"], 0);
+    assert_eq!(receipt["generated_assets_built"], 0);
+    assert_eq!(receipt["generated_assets_reused"], 2);
     assert!(
         fs::read_to_string(repo.0.join("CHANGELOG.md"))
             .unwrap()
@@ -1339,6 +1339,10 @@ struct GeneratedRunner {
 }
 impl ProcessRunner for GeneratedRunner {
     fn run(&self, request: &ProcessRequest) -> std::io::Result<ProcessOutput> {
+        if request.args.first().is_some_and(|arg|arg=="--version") &&
+            (request.program=="cargo" || request.program=="rustc") {
+            return Ok(out(0,&format!("{} 1.88.0 (fixture)",request.program.to_string_lossy())));
+        }
         if self.mode == "policy-drift" && request.args.iter().any(|arg| arg == "check-ignore") {
             fs::write(self.root.join(".codex/bridgeforge-version.json"), b"external policy edit\n")?;
         }
@@ -1622,11 +1626,8 @@ fn factory_reuse_invalidates_source_lock_binary_and_receipt_mismatches() {
             &runner,
         )
         .unwrap();
-        let count = if matches!(mode, "source" | "lock") {
-            2
-        } else {
-            1
-        };
+        // Corrupt installed outputs can be repaired from the independent valid cache.
+        let count = if matches!(mode, "source" | "lock") { 2 } else { 0 };
         assert_eq!(plan.generated_built, count, "{mode}");
         assert_eq!(plan.generated_reused, 2 - count, "{mode}");
         fs::remove_dir_all(remote).unwrap();
@@ -1665,7 +1666,8 @@ fn factory_reuse_self_test_failure_rebuilds_and_drift_blocks_apply() {
     }
     impl ProcessRunner for ReuseRunner {
         fn run(&self, request: &ProcessRequest) -> std::io::Result<ProcessOutput> {
-            if Path::new(&request.program).starts_with(self.inner.root.join(".codex/bin")) {
+            if Path::new(&request.program).starts_with(self.inner.root.join(".codex/bin")) ||
+                Path::new(&request.program).starts_with(self.inner.root.join(crate::artifact_cache::DIRECTORY)) {
                 if self.drift {
                     fs::write(&request.program, b"external change")?;
                     return self.inner.run(request);
@@ -1705,6 +1707,8 @@ fn factory_reuse_self_test_failure_rebuilds_and_drift_blocks_apply() {
 #[test]
 fn factory_partial_reuse_rejected_commit_preserves_reused_asset_and_restores_miss() {
     let (repo, remote) = factory_with_valid_generated_assets("partial-reuse-rollback");
+    // Keep this scenario as one installed hit plus one real build, not two cache hits.
+    fs::remove_dir_all(repo.0.join(crate::artifact_cache::DIRECTORY)).unwrap();
     let config_path = repo.0.join(".codex/bridgeforge-version.json");
     let mut config: serde_json::Value =
         serde_json::from_slice(&fs::read(&config_path).unwrap()).unwrap();
@@ -1734,7 +1738,7 @@ fn factory_partial_reuse_rejected_commit_preserves_reused_asset_and_restores_mis
     }
     impl ProcessRunner for CountingRunner {
         fn run(&self, request: &ProcessRequest) -> std::io::Result<ProcessOutput> {
-            if request.program == "cargo" {
+            if request.program == "cargo" && request.args.first().is_some_and(|arg|arg=="build") {
                 self.cargo.set(self.cargo.get() + 1);
             }
             self.inner.run(request)
@@ -1769,5 +1773,82 @@ fn factory_partial_reuse_rejected_commit_preserves_reused_asset_and_restores_mis
         fs::read(repo.0.join("tracked.txt")).unwrap(),
         b"user change\n"
     );
+    fs::remove_dir_all(remote).unwrap();
+}
+
+#[test]
+fn independent_cache_release_ignores_missing_or_corrupted_prepared() {
+    for corrupt in [false,true] {
+        let (repo,remote)=factory_repository("independent-cache-record");
+        install_development_check(&repo.0);
+        let runner=GeneratedRunner{root:repo.0.clone(),mode:"ok"};
+        assert_eq!(prepare_release(&repo.0,&runner,"fix: cache",None).code,0);
+        let record=repo.0.join(".runtime/bridgeforge-codex/release-preparation/current.json");
+        if corrupt {fs::write(&record,b"{invalid prepared/audit").unwrap();} else {fs::remove_file(record).unwrap();}
+        struct NoBuild<'a>(&'a GeneratedRunner);
+        impl ProcessRunner for NoBuild<'_> {
+            fn run(&self,r:&ProcessRequest)->std::io::Result<ProcessOutput> {
+                assert!(!(r.program=="cargo" && r.args.first().is_some_and(|a|a=="build")),"cache hit must not compile");
+                self.0.run(r)
+            }
+        }
+        let result=sync(&repo.0,&NoBuild(&runner),GitSyncOptions{release:true,message:Some("fix: new description".into()),..Default::default()});
+        assert_eq!(result.code,0,"{}",result.stderr);
+        let receipt=result.receipt.unwrap();assert_eq!(receipt["generated_assets_built"],0);assert_eq!(receipt["generated_assets_reused"],2);
+        fs::remove_dir_all(remote).unwrap();
+    }
+}
+
+#[test]
+fn mixed_cache_hit_and_build_rejected_commit_restore_all_targets() {
+    let (repo,remote)=factory_repository("mixed-cache-rollback");install_development_check(&repo.0);
+    let runner=GeneratedRunner{root:repo.0.clone(),mode:"ok"};assert_eq!(prepare_release(&repo.0,&runner,"fix: cache",None).code,0);
+    let directory=repo.0.join(crate::artifact_cache::DIRECTORY);
+    for item in fs::read_dir(&directory).unwrap() {
+        let item=item.unwrap();let meta=item.path().join("entry.json");
+        if meta.is_file() {
+            let value:serde_json::Value=serde_json::from_slice(&fs::read(meta).unwrap()).unwrap();
+            if value["identity"]["id"]=="codex.bridgeforge-cli" {fs::remove_dir_all(item.path()).unwrap();}
+        }
+    }
+    fs::write(repo.0.join(".git/hooks/pre-commit"),b"#!/bin/sh\nexit 1\n").unwrap();
+    git_ok(&repo.0,&["status","--porcelain=v1"]);let index=fs::read(repo.0.join(".git/index")).unwrap();
+    struct MixedRunner {inner:GeneratedRunner,builds:std::cell::Cell<usize>,hits:std::cell::Cell<usize>}
+    impl ProcessRunner for MixedRunner {
+        fn run(&self,r:&ProcessRequest)->std::io::Result<ProcessOutput> {
+            if r.program=="cargo" && r.args.first().is_some_and(|a|a=="build") {self.builds.set(self.builds.get()+1);}
+            if Path::new(&r.program).starts_with(self.inner.root.join(crate::artifact_cache::DIRECTORY)) &&
+                r.args.first().is_some_and(|a|a=="self-test") {self.hits.set(self.hits.get()+1);}
+            self.inner.run(r)
+        }
+    }
+    let paths=["VERSION","CHANGELOG.md","templates/hooks/Cargo.toml","templates/hooks/Cargo.lock",
+        ".codex/hooks/Cargo.toml",".codex/hooks/Cargo.lock","templates/managed-skeleton.json",".codex/managed-skeleton.json",
+        "bridgeforge-codex-manifest.json",crate::user_agents::MANIFEST,
+        ".codex/bin/build-receipt-cli.json",".codex/bin/build-receipt-hook.json"];
+    let mut before=paths.into_iter().map(|p|{let p=repo.0.join(p);let bytes=fs::read(&p).ok();(p,bytes)}).collect::<std::collections::BTreeMap<_,_>>();
+    for name in ["bridgeforge","bridgeforge-hook"] {
+        let path=repo.0.join(".codex/bin").join(if cfg!(windows){format!("{name}.exe")}else{name.into()});
+        before.insert(path.clone(),fs::read(path).ok());
+    }
+    let counted=MixedRunner{inner:runner,builds:Default::default(),hits:Default::default()};
+    let result=sync(&repo.0,&counted,GitSyncOptions{release:true,message:Some("fix: mixed cache".into()),skip_fetch:true,skip_push:true,..Default::default()});
+    assert_eq!(result.code,2,"{}",result.stderr);assert!(result.stderr.contains("rolled back"));
+    assert_eq!(fs::read(repo.0.join("VERSION")).unwrap(),b"1.0.0\n");assert_eq!(fs::read(repo.0.join(".git/index")).unwrap(),index);
+    assert!(!repo.0.join(".codex/bin/bridgeforge.exe").exists());assert!(!repo.0.join(".codex/bin/bridgeforge-hook.exe").exists());
+    assert_eq!(counted.builds.get(),1,"mixed scenario must really compile one miss");
+    assert_eq!(counted.hits.get(),1,"mixed scenario must really self-test one cache hit");
+    for (path,bytes) in before {assert_eq!(fs::read(&path).ok(),bytes,"automatic target drift: {}",path.display());}
+    fs::remove_dir_all(remote).unwrap();
+}
+
+#[test]
+fn factory_read_only_status_queries_do_not_initialize_artifact_cache() {
+    let (repo,remote)=factory_repository("cache-readonly");
+    assert!(!repo.0.join(crate::artifact_cache::DIRECTORY).exists());
+    let runner=GeneratedRunner{root:repo.0.clone(),mode:"fail"};
+    let _=release_status(&repo.0,&runner);let _=development_status(&repo.0,&runner);
+    assert!(!repo.0.join(crate::artifact_cache::DIRECTORY).exists());
+    assert_eq!(fs::read(repo.0.join("VERSION")).unwrap(),b"1.0.0\n");
     fs::remove_dir_all(remote).unwrap();
 }

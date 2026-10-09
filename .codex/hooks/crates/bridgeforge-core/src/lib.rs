@@ -1,4 +1,5 @@
 pub mod archive_scan;
+mod artifact_cache;
 pub mod asset_migration;
 pub mod audit_user_allow;
 pub mod baseline;
@@ -9,6 +10,7 @@ pub mod git_sync;
 pub mod high_cost;
 pub mod manifest;
 pub mod memory;
+pub mod persistence;
 mod process;
 mod project_hooks;
 pub mod project_structure;
