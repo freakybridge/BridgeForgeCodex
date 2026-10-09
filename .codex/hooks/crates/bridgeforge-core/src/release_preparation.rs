@@ -52,8 +52,6 @@ pub(super) struct Prepared {
     checks: Vec<CheckResult>,
     audit: Option<Audit>,
     artifacts: BTreeMap<String, String>,
-    #[serde(skip)]
-    release_inputs: Option<Inputs>,
 }
 
 fn path(root: &Path, relative: &str) -> Result<PathBuf, String> {
@@ -302,11 +300,11 @@ pub(super) fn status(root: &Path, runner: &dyn ProcessRunner) -> Result<serde_js
     match setup["status"].as_str() {
         Some("not-configured") => blockers.push(json!({
             "code":"development-checks-missing", "path":CONFIG,
-            "message":"项目尚未接入发布检查；先由开发流程根据项目实际构建和测试入口配置检查清单"
+            "message":"独立开发验证尚未配置检查清单；Git 同步和升版不依赖该清单"
         })),
         Some("invalid-config") => blockers.push(json!({
             "code":"development-checks-invalid", "path":CONFIG,
-            "message":"项目发布检查配置无效，需先修正；不会自动覆盖或降级为空检查",
+            "message":"独立开发检查配置无效，不会自动覆盖或降级为空检查；不阻断 Git 同步和升版",
             "reason":setup["reason"]
         })),
         _ => (),
@@ -323,7 +321,7 @@ pub(super) fn status(root: &Path, runner: &dyn ProcessRunner) -> Result<serde_js
             "schema":1,
             "status":if setup["status"] == "configured" { "blocked" } else { "setup-required" },
             "setup":setup,"blockers":blockers,
-            "next_step":"返回开发流程完成项目发布接入并处理上述全部阻断，再生成发布准备记录；普通同步无需此记录"
+            "next_step":"需要独立开发验证时按项目约定配置并执行检查；Git 同步及升版不需要该验证记录"
         }));
     }
     let git = Git { root, runner };
@@ -373,9 +371,6 @@ impl Prepared {
         let current = inputs(root, git)?;
         if development_inputs(&current, &cfg) != development_inputs(&self.inputs, &cfg) {
             return Err("development inputs changed; return to develop to prepare again".into());
-        }
-        if self.release_inputs.as_ref().is_some_and(|bound| bound != &exact) {
-            return Err("record documents changed during release; retry after review".into());
         }
         check_records(root, &current, &cfg)?;
         if RepositoryIdentity::capture(git)?.common_config_sha256 != self.git_config_sha256 {
@@ -440,59 +435,6 @@ impl Prepared {
         Ok(exact)
     }
 
-    pub(super) fn artifacts(&self, root: &Path) -> Result<BTreeMap<PathBuf, Vec<u8>>, String> {
-        self.artifacts
-            .iter()
-            .map(|(relative, hash)| Ok((path(root, relative)?, load_blob(root, hash)?)))
-            .collect()
-    }
-
-    pub(super) fn verify_applied(
-        &self,
-        root: &Path,
-        git: &Git<'_>,
-        writes: &BTreeMap<PathBuf, Vec<u8>>,
-    ) -> Result<(), String> {
-        let mut current = raw_inputs(root, git)?;
-        let bound = self.release_inputs.as_ref().unwrap_or(&self.inputs);
-        for (file, planned) in writes {
-            if fs::read(file).map_err(|e| e.to_string())? != *planned {
-                return Err(format!(
-                    "prepared release target changed concurrently: {}",
-                    file.display()
-                ));
-            }
-            let relative = file
-                .strip_prefix(root)
-                .map_err(|e| e.to_string())?
-                .to_string_lossy()
-                .replace('\\', "/");
-            if let Some(before) = bound.get(&relative) {
-                current.insert(relative, before.clone());
-            } else {
-                current.remove(&relative);
-            }
-        }
-        if current != *bound {
-            return Err("development inputs changed during release; no unverified commit".into());
-        }
-        Ok(())
-    }
-}
-
-pub(super) fn load(root: &Path, git: &Git<'_>, version: &str) -> Result<Prepared, String> {
-    let mut record: Prepared =
-        read_json(&path(root, &format!("{CACHE}/current.json"))?).map_err(|e| {
-            format!(
-                "release preparation missing or invalid; return to develop; no build started: {e}"
-            )
-        })?;
-    let current = record.validate(root, git)?;
-    record.release_inputs = Some(current);
-    if record.target_version != version {
-        return Err("prepared target version differs; return to develop".into());
-    }
-    Ok(record)
 }
 
 pub(super) fn prepare(
@@ -631,7 +573,6 @@ pub(super) fn prepare(
         checks,
         audit,
         artifacts,
-        release_inputs: None,
     };
     let check_count = record.checks.len();
     crate::memory::atomic_write_json(

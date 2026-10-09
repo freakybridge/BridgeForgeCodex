@@ -231,13 +231,13 @@ fn versioned_repository(name: &str, explicit: bool) -> (RealRepository, PathBuf)
 }
 
 #[test]
-fn release_readiness_reports_missing_config_and_version_drift_without_writes() {
+fn development_readiness_reports_missing_config_and_version_drift_without_writes() {
     let (repo, remote) = versioned_repository("release-readiness", true);
     fs::remove_file(repo.0.join(".codex/development-checks.json")).unwrap();
     fs::write(repo.0.join("VERSION"), b"0.9.9\n").unwrap();
     let index = fs::read(repo.0.join(".git/index")).unwrap();
     let head = fs::read(repo.0.join(".git/HEAD")).unwrap();
-    let outcome = release_status(&repo.0, &SystemProcessRunner);
+    let outcome = development_status(&repo.0, &SystemProcessRunner);
     assert_eq!(outcome.code, crate::EXIT_BLOCKED);
     let receipt = outcome.receipt.unwrap();
     assert_eq!(receipt["status"], "setup-required");
@@ -254,21 +254,21 @@ fn release_readiness_reports_missing_config_and_version_drift_without_writes() {
     fs::write(repo.0.join("VERSION"), b"1.0.0\n").unwrap();
     for bytes in [b"{bad".as_slice(), br#"{"schema":1,"checks":[]}"#.as_slice()] {
         fs::write(repo.0.join(".codex/development-checks.json"), bytes).unwrap();
-        let outcome = release_status(&repo.0, &SystemProcessRunner);
+        let outcome = development_status(&repo.0, &SystemProcessRunner);
         assert_eq!(outcome.code, crate::EXIT_BLOCKED);
         let value = outcome.receipt.unwrap();
         assert_eq!(value["setup"]["status"], "invalid-config");
         assert_eq!(fs::read(repo.0.join(".codex/development-checks.json")).unwrap(), bytes);
     }
     install_development_check(&repo.0);
-    let outcome = release_status(&repo.0, &SystemProcessRunner);
+    let outcome = development_status(&repo.0, &SystemProcessRunner);
     assert_eq!(outcome.code, 0);
     assert_eq!(outcome.receipt.unwrap()["status"], "not-prepared");
     fs::remove_dir_all(remote).unwrap();
 }
 
 #[test]
-fn release_readiness_checks_current_manifests_and_locks_before_preparation() {
+fn development_readiness_checks_current_manifests_and_locks_before_preparation() {
     let (repo, remote) = versioned_repository("native-readiness", true);
     let config = repo.0.join(".codex/development-checks.json");
     fs::remove_file(&config).unwrap();
@@ -286,7 +286,7 @@ fn release_readiness_checks_current_manifests_and_locks_before_preparation() {
         let before = [&manifest, &lock, &policy].map(|path| fs::read(path).unwrap());
         let index = fs::read(repo.0.join(".git/index")).unwrap();
         let head = fs::read(repo.0.join(".git/HEAD")).unwrap();
-        let outcome = release_status(&repo.0, &SystemProcessRunner);
+        let outcome = development_status(&repo.0, &SystemProcessRunner);
         assert_eq!(outcome.code, crate::EXIT_BLOCKED, "{mode}");
         let value = outcome.receipt.unwrap();
         assert_eq!(value["blockers"].as_array().unwrap().len(), 2, "{mode}");
@@ -301,7 +301,7 @@ fn release_readiness_checks_current_manifests_and_locks_before_preparation() {
 }
 
 #[test]
-fn release_readiness_reports_unsupported_js_locks_before_preparation() {
+fn development_readiness_reports_unsupported_js_locks_before_preparation() {
     let (repo, remote) = versioned_repository("js-readiness", true);
     fs::remove_file(repo.0.join(".codex/development-checks.json")).unwrap();
     fs::write(repo.0.join(".codex/bridgeforge-version.json"), br#"{"schema_version":1,"manifests":["package.json"]}"#).unwrap();
@@ -311,7 +311,7 @@ fn release_readiness_reports_unsupported_js_locks_before_preparation() {
         fs::write(&lock, b"project-owned unsupported lock\n").unwrap();
         let index = fs::read(repo.0.join(".git/index")).unwrap();
         let head = fs::read(repo.0.join(".git/HEAD")).unwrap();
-        let value = release_status(&repo.0, &SystemProcessRunner).receipt.unwrap();
+        let value = development_status(&repo.0, &SystemProcessRunner).receipt.unwrap();
         assert_eq!(value["blockers"].as_array().unwrap().len(), 2);
         assert_eq!(value["blockers"][1]["reason"], format!("unsupported JavaScript lock file: {name}"));
         assert_eq!(fs::read(&lock).unwrap(), b"project-owned unsupported lock\n");
@@ -347,8 +347,6 @@ fn explicit_policy_syncs_twice_then_releases_clean_history_once() {
     let preview = crate::release::preview(&repo.0, "fix: release", &SystemProcessRunner);
     assert_eq!(preview.code, 0, "{}", preview.stderr);
     assert_eq!(preview.receipt.unwrap()["version_after"], "1.1.0");
-    let prepared = prepare_release(&repo.0, &SystemProcessRunner, "fix: release", None);
-    assert_eq!(prepared.code, 0, "{}", prepared.stderr);
     let outcome = sync(
         &repo.0,
         &SystemProcessRunner,
@@ -425,8 +423,6 @@ fn ordinary_sync_never_bumps_even_with_missing_or_legacy_config() {
             assert_eq!(&fs::read(repo.0.join(name)).unwrap(), bytes, "{policy}: {name}");
         }
         assert_eq!(fs::read(&path).ok(), config_before);
-        let prepared = prepare_release(&repo.0, &SystemProcessRunner, "fix: release", None);
-        assert_eq!(prepared.code, 0, "{policy}: {}", prepared.stderr);
         let released = sync(&repo.0, &SystemProcessRunner, GitSyncOptions {
             release: true, message: Some("fix: release".into()), ..Default::default()
         });
@@ -442,8 +438,6 @@ fn explicit_release_rejected_hook_restores_native_versions_log_and_index() {
     let (repo, remote) = versioned_repository("explicit-rollback", true);
     fs::write(repo.0.join("tracked.txt"), b"uncommitted feature\n").unwrap();
     fs::write(repo.0.join(".git/hooks/pre-commit"), b"#!/bin/sh\nexit 1\n").unwrap();
-    let prepared = prepare_release(&repo.0, &SystemProcessRunner, "feat: new feature", None);
-    assert_eq!(prepared.code, 0, "{}", prepared.stderr);
     git_ok(&repo.0, &["status", "--porcelain=v1"]);
     let index = fs::read(repo.0.join(".git/index")).unwrap();
     let names = ["VERSION", "Cargo.toml", "Cargo.lock", "CHANGELOG.md"];
@@ -498,29 +492,25 @@ fn preparation_record_documents_reuse_artifacts_but_bind_release_content() {
     let key = prepared.receipt.unwrap()["validation_fingerprint"].clone();
     fs::write(repo.0.join("doc/3_reference/lessons.md"), b"# Lessons\nA tested solution.\n").unwrap();
     fs::write(repo.0.join("doc/0_architecture/TODO-INDEX.md"), b"# TODO\n- [x] Completed\n- [ ] Known remaining issue\n").unwrap();
-    let status = release_status(&repo.0, &SystemProcessRunner).receipt.unwrap();
+    let status = development_status(&repo.0, &SystemProcessRunner).receipt.unwrap();
     assert_eq!(status["status"], "prepared");
     assert_eq!(status["validation_fingerprint"], key);
     assert_eq!(status["record_documents_changed"], true);
     assert_eq!(status["record_documents_check"], "passed");
-    let bound = preparation::load(&repo.0, &Git { root: &repo.0, runner: &SystemProcessRunner }, "1.0.1").unwrap();
     fs::write(repo.0.join("doc/3_reference/lessons.md"), b"# Changed after binding\n").unwrap();
-    assert!(bound.validate(&repo.0, &Git { root: &repo.0, runner: &SystemProcessRunner }).is_err());
-    assert!(bound.verify_applied(&repo.0, &Git { root: &repo.0, runner: &SystemProcessRunner }, &Default::default()).is_err());
-    let record = repo.0.join("doc/1_delivery/sample/requirements.md");
+    assert_eq!(development_status(&repo.0, &SystemProcessRunner).receipt.unwrap()["status"], "prepared");
+    let record = repo.0.join("doc/1_delivery/sample/requirements_2026-10-09_sample.md");
     fs::create_dir_all(record.parent().unwrap()).unwrap();
-    fs::write(repo.0.join("doc/README.md"), b"---\ndelivery_layout: flat\n---\n[sample](1_delivery/sample/requirements.md)\n").unwrap();
+    fs::write(repo.0.join("doc/README.md"), b"---\ndelivery_layout: flat\n---\n[sample](1_delivery/sample/requirements_2026-10-09_sample.md)\n").unwrap();
     fs::write(&record, b"---\nlifecycle: active\nvalidation_status: in_progress\n---\n# Task\n").unwrap();
-    let bound = preparation::load(&repo.0, &Git { root: &repo.0, runner: &SystemProcessRunner }, "1.0.1").unwrap();
-    fs::write(&record, b"---\nlifecycle: completed\nvalidation_status: in_progress\n---\n# Task\n").unwrap();
-    assert!(bound.validate(&repo.0, &Git { root: &repo.0, runner: &SystemProcessRunner }).is_err());
-    assert!(bound.verify_applied(&repo.0, &Git { root: &repo.0, runner: &SystemProcessRunner }, &Default::default()).is_err());
+    fs::write(&record, b"---\nlifecycle: invalid-lifecycle\nvalidation_status: in_progress\n---\n# Task\n").unwrap();
+    assert_eq!(development_status(&repo.0, &SystemProcessRunner).receipt.unwrap()["status"], "stale");
     fs::write(&record, b"---\nlifecycle: completed\nvalidation_status: verified\n---\n# Task\n").unwrap();
-    let result = sync(&repo.0, &GeneratedRunner { root: repo.0.clone(), mode: "fail" }, GitSyncOptions { release: true, message: Some("fix: release records".into()), ..Default::default() });
+    let result = sync(&repo.0, &GeneratedRunner { root: repo.0.clone(), mode: "ok" }, GitSyncOptions { release: true, message: Some("fix: release records".into()), ..Default::default() });
     assert_eq!(result.code, 0, "{}", result.stderr);
     let receipt = result.receipt.unwrap();
-    assert_eq!(receipt["generated_assets_built"], 0);
-    assert_eq!(receipt["generated_assets_reused"], 2);
+    assert_eq!(receipt["generated_assets_built"], 2);
+    assert_eq!(receipt["generated_assets_reused"], 0);
     assert_eq!(receipt["working_tree"], "clean");
     let committed = Git { root: &repo.0, runner: &SystemProcessRunner }
         .required(&["show", "HEAD:doc/3_reference/lessons.md"], Duration::from_secs(30)).unwrap();
@@ -538,15 +528,15 @@ fn preparation_record_scope_does_not_exempt_instructions_code_or_invalid_documen
         let file = repo.0.join(relative);
         fs::create_dir_all(file.parent().unwrap()).unwrap();
         fs::write(&file, b"new input\n").unwrap();
-        assert_eq!(release_status(&repo.0, &SystemProcessRunner).receipt.unwrap()["status"], "stale", "{relative}");
+        assert_eq!(development_status(&repo.0, &SystemProcessRunner).receipt.unwrap()["status"], "stale", "{relative}");
         fs::remove_file(file).unwrap();
     }
     let doc = repo.0.join("doc/3_reference/invalid.md");
     fs::write(&doc, b"\xff\x00").unwrap();
-    assert_eq!(release_status(&repo.0, &SystemProcessRunner).receipt.unwrap()["status"], "stale");
+    assert_eq!(development_status(&repo.0, &SystemProcessRunner).receipt.unwrap()["status"], "stale");
     fs::remove_file(&doc).unwrap();
     fs::write(repo.0.join("doc/README.md"), b"missing layout\n").unwrap();
-    assert_eq!(release_status(&repo.0, &SystemProcessRunner).receipt.unwrap()["status"], "stale");
+    assert_eq!(development_status(&repo.0, &SystemProcessRunner).receipt.unwrap()["status"], "stale");
     fs::write(repo.0.join("doc/README.md"), b"---\ndelivery_layout: flat\n---\n# Docs\n").unwrap();
     let cfg_path = repo.0.join(".codex/development-checks.json");
     let cfg: serde_json::Value = serde_json::from_slice(&fs::read(&cfg_path).unwrap()).unwrap();
@@ -554,17 +544,17 @@ fn preparation_record_scope_does_not_exempt_instructions_code_or_invalid_documen
         let mut bad = cfg.clone();
         bad["record_documents"] = json!([scope]);
         fs::write(&cfg_path, serde_json::to_vec(&bad).unwrap()).unwrap();
-        assert_ne!(release_status(&repo.0, &SystemProcessRunner).code, 0, "{scope}");
+        assert_ne!(development_status(&repo.0, &SystemProcessRunner).code, 0, "{scope}");
     }
     let mut changed = cfg;
     changed["record_documents"] = json!(["doc/README.md"]);
     fs::write(&cfg_path, serde_json::to_vec(&changed).unwrap()).unwrap();
-    assert_eq!(release_status(&repo.0, &SystemProcessRunner).receipt.unwrap()["status"], "stale");
+    assert_eq!(development_status(&repo.0, &SystemProcessRunner).receipt.unwrap()["status"], "stale");
     fs::remove_dir_all(remote).unwrap();
 }
 
 #[test]
-fn preparation_preserves_worktree_and_release_reuses_target_without_building() {
+fn independent_preparation_preserves_worktree_and_direct_release_builds_tools() {
     let (repo, remote) = factory_repository("prepared-factory");
     install_development_check(&repo.0);
     let before_version = fs::read(repo.0.join("VERSION")).unwrap();
@@ -586,7 +576,7 @@ fn preparation_preserves_worktree_and_release_reuses_target_without_building() {
         &repo.0,
         &GeneratedRunner {
             root: repo.0.clone(),
-            mode: "fail",
+            mode: "ok",
         },
         GitSyncOptions {
             release: true,
@@ -597,8 +587,8 @@ fn preparation_preserves_worktree_and_release_reuses_target_without_building() {
     assert_eq!(result.code, 0, "{}", result.stderr);
     let receipt = result.receipt.unwrap();
     assert_eq!(receipt["version_after"], "1.0.1");
-    assert_eq!(receipt["generated_assets_built"], 0);
-    assert_eq!(receipt["generated_assets_reused"], 2);
+    assert_eq!(receipt["generated_assets_built"], 2);
+    assert_eq!(receipt["generated_assets_reused"], 0);
     assert!(
         fs::read_to_string(repo.0.join("CHANGELOG.md"))
             .unwrap()
@@ -608,49 +598,36 @@ fn preparation_preserves_worktree_and_release_reuses_target_without_building() {
 }
 
 #[test]
-fn preparation_missing_stale_or_corrupt_blocks_release_before_fetch() {
-    struct NoFetch;
-    impl ProcessRunner for NoFetch {
-        fn run(&self, request: &ProcessRequest) -> std::io::Result<ProcessOutput> {
-            assert!(
-                !request
-                    .args
-                    .iter()
-                    .any(|arg| arg == "fetch" || arg == "push"),
-                "must fail before network"
-            );
-            SystemProcessRunner.run(request)
-        }
-    }
-    for mode in ["missing", "source", "target", "config"] {
+fn direct_release_ignores_missing_invalid_failed_or_stale_development_state() {
+    for mode in ["missing", "invalid", "failed", "stale"] {
         let (repo, remote) = versioned_repository(mode, true);
-        fs::write(repo.0.join("tracked.txt"), b"new\n").unwrap();
+        let config = repo.0.join(".codex/development-checks.json");
+        if mode == "missing" { fs::remove_file(&config).unwrap(); }
+        else if mode == "invalid" { fs::write(&config, b"not-json\n").unwrap(); }
+        else { fs::write(&config, br#"{"schema":1,"audit_required":true,"checks":[{"id":"must-not-run","program":"not-a-real-test-program","args":[],"timeout_seconds":1}]}"#).unwrap(); }
+        let before_config = fs::read(&config).ok();
+        let record = repo.0.join(".runtime/bridgeforge-codex/release-preparation/current.json");
         if mode != "missing" {
-            let result = prepare_release(&repo.0, &SystemProcessRunner, "fix: prepare", None);
-            assert_eq!(result.code, 0, "{}", result.stderr);
+            fs::create_dir_all(record.parent().unwrap()).unwrap();
+            fs::write(&record, br#"{"schema":1,"status":"failed","root":"another repository","target_version":"9.9.9"}"#).unwrap();
         }
-        if mode == "source" {
-            fs::write(repo.0.join("tracked.txt"), b"changed after checking\n").unwrap();
-        }
-        if mode == "config" {
-            git_ok(&repo.0, &["config", "bridgeforge.changed", "true"]);
-        }
-        let message = if mode == "target" {
-            "feat: different target"
-        } else {
-            "fix: release"
-        };
-        let result = sync(
-            &repo.0,
-            &NoFetch,
-            GitSyncOptions {
-                release: true,
-                message: Some(message.into()),
-                ..Default::default()
-            },
-        );
-        assert_eq!(result.code, 2, "{mode}: {}", result.stderr);
-        assert_eq!(fs::read(repo.0.join("VERSION")).unwrap(), b"1.0.0\n");
+        let before_record = fs::read(&record).ok();
+        fs::write(repo.0.join("tracked.txt"), b"new business change\n").unwrap();
+        let state = release_status(&repo.0, &SystemProcessRunner);
+        assert_eq!(state.code, 0, "{mode}: {}", state.stderr);
+        assert_eq!(state.receipt.unwrap()["status"], "release-ready");
+        let result = sync(&repo.0, &SystemProcessRunner, GitSyncOptions {
+            release: true, message: Some("fix: direct release".into()), ..Default::default()
+        });
+        assert_eq!(result.code, 0, "{mode}: {}", result.stderr);
+        let receipt = result.receipt.unwrap();
+        assert_eq!(receipt["version_before"], "1.0.0");
+        assert_eq!(receipt["version_after"], "1.0.1");
+        assert_eq!(receipt["working_tree"], "clean");
+        assert_eq!(receipt["ahead"], 0);
+        assert_eq!(receipt["behind"], 0);
+        assert_eq!(fs::read(&config).ok(), before_config);
+        assert_eq!(fs::read(&record).ok(), before_record);
         fs::remove_dir_all(remote).unwrap();
     }
 }
@@ -674,14 +651,14 @@ fn preparation_accepts_only_status_metadata_changes_and_checks_new_file_inventor
     )
     .unwrap();
     assert_eq!(
-        release_status(&repo.0, &SystemProcessRunner)
+        development_status(&repo.0, &SystemProcessRunner)
             .receipt
             .unwrap()["status"],
         "prepared"
     );
     fs::write(repo.0.join("new-unverified.txt"), b"new file\n").unwrap();
     assert_eq!(
-        release_status(&repo.0, &SystemProcessRunner)
+        development_status(&repo.0, &SystemProcessRunner)
             .receipt
             .unwrap()["status"],
         "stale"
@@ -693,7 +670,7 @@ fn preparation_accepts_only_status_metadata_changes_and_checks_new_file_inventor
     )
     .unwrap();
     assert_eq!(
-        release_status(&repo.0, &SystemProcessRunner)
+        development_status(&repo.0, &SystemProcessRunner)
             .receipt
             .unwrap()["status"],
         "stale"
@@ -708,7 +685,7 @@ fn preparation_failed_check_and_mismatched_audit_never_certify() {
     fs::write(repo.0.join(".codex/development-checks.json"), br#"{"schema":1,"audit_required":true,"checks":[{"id":"diff","program":"git","args":["diff","--exit-code"],"timeout_seconds":30}]}"#).unwrap();
     let no_audit = prepare_release(&repo.0, &SystemProcessRunner, "fix: prepare", None);
     assert_eq!(no_audit.code, 2);
-    let key = release_status(&repo.0, &SystemProcessRunner)
+    let key = development_status(&repo.0, &SystemProcessRunner)
         .receipt
         .unwrap()["validation_fingerprint"]
         .clone();
@@ -728,7 +705,7 @@ fn preparation_failed_check_and_mismatched_audit_never_certify() {
         failed.stderr
     );
     assert_ne!(
-        release_status(&repo.0, &SystemProcessRunner)
+        development_status(&repo.0, &SystemProcessRunner)
             .receipt
             .unwrap()["status"],
         "prepared"
@@ -759,7 +736,7 @@ fn preparation_corrupt_artifact_and_foreign_record_cannot_be_consumed() {
     incomplete["artifacts"].as_object_mut().unwrap().clear();
     fs::write(&file, serde_json::to_vec(&incomplete).unwrap()).unwrap();
     assert_eq!(
-        release_status(&repo.0, &SystemProcessRunner)
+        development_status(&repo.0, &SystemProcessRunner)
             .receipt
             .unwrap()["status"],
         "stale"
@@ -767,7 +744,7 @@ fn preparation_corrupt_artifact_and_foreign_record_cannot_be_consumed() {
     record["root"] = json!("another repository");
     fs::write(&file, serde_json::to_vec(&record).unwrap()).unwrap();
     assert_eq!(
-        release_status(&repo.0, &SystemProcessRunner)
+        development_status(&repo.0, &SystemProcessRunner)
             .receipt
             .unwrap()["status"],
         "stale"
@@ -791,7 +768,7 @@ fn preparation_corrupt_artifact_and_foreign_record_cannot_be_consumed() {
     )
     .unwrap();
     assert_eq!(
-        release_status(&repo.0, &SystemProcessRunner)
+        development_status(&repo.0, &SystemProcessRunner)
             .receipt
             .unwrap()["status"],
         "stale"
@@ -800,7 +777,7 @@ fn preparation_corrupt_artifact_and_foreign_record_cannot_be_consumed() {
 }
 
 #[test]
-fn prepared_unstaged_deletion_can_release_but_reappearance_invalidates_it() {
+fn direct_release_uses_current_deletion_or_reappearance_without_development_gate() {
     for reappear in [false, true] {
         let (repo, remote) = versioned_repository("prepared-deletion", true);
         fs::remove_file(repo.0.join("tracked.txt")).unwrap();
@@ -825,7 +802,7 @@ fn prepared_unstaged_deletion_can_release_but_reappearance_invalidates_it() {
         );
         assert_eq!(
             result.code,
-            if reappear { 2 } else { 0 },
+            0,
             "{}",
             result.stderr
         );
@@ -842,69 +819,25 @@ fn prepared_unstaged_deletion_can_release_but_reappearance_invalidates_it() {
 }
 
 #[test]
-fn prepared_contract_drift_after_loading_record_blocks_before_apply() {
-    let (repo, remote) = factory_repository("prepared-contract-drift");
+fn independent_preparation_rejects_contract_drift_without_gating_git() {
+    let (repo, remote) = factory_repository("development-contract-drift");
     install_development_check(&repo.0);
-    let ready = prepare_release(
-        &repo.0,
-        &GeneratedRunner {
-            root: repo.0.clone(),
-            mode: "ok",
-        },
-        "fix: prepare",
-        None,
-    );
+    let ready = prepare_release(&repo.0, &GeneratedRunner { root:repo.0.clone(), mode:"ok" }, "fix: prepare", None);
     assert_eq!(ready.code, 0, "{}", ready.stderr);
-    struct ContractDrift {
-        root: PathBuf,
-    }
-    impl ProcessRunner for ContractDrift {
-        fn run(&self, request: &ProcessRequest) -> std::io::Result<ProcessOutput> {
-            if request.args.iter().any(|arg| arg == "check-ignore") {
-                let file = self.root.join("templates/managed-skeleton.json");
-                let mut contract: serde_json::Value =
-                    serde_json::from_slice(&fs::read(&file)?).unwrap();
-                contract["external_marker"] = json!(true);
-                fs::write(file, serde_json::to_vec(&contract).unwrap())?;
-            }
-            assert!(request.program != "cargo");
-            assert!(
-                !request
-                    .args
-                    .iter()
-                    .any(|arg| arg == "commit" || arg == "push")
-            );
-            SystemProcessRunner.run(request)
-        }
-    }
-    let result = sync(
-        &repo.0,
-        &ContractDrift {
-            root: repo.0.clone(),
-        },
-        GitSyncOptions {
-            release: true,
-            skip_fetch: true,
-            message: Some("fix: release".into()),
-            ..Default::default()
-        },
-    );
-    assert_eq!(result.code, 2);
-    assert!(
-        result.stderr.contains("development inputs changed"),
-        "{}",
-        result.stderr
-    );
-    let contract: serde_json::Value =
-        serde_json::from_slice(&fs::read(repo.0.join("templates/managed-skeleton.json")).unwrap())
-            .unwrap();
-    assert_eq!(contract["external_marker"], true);
+    let file = repo.0.join("templates/managed-skeleton.json");
+    let mut contract: serde_json::Value = serde_json::from_slice(&fs::read(&file).unwrap()).unwrap();
+    contract["external_marker"] = json!(true);
+    fs::write(&file, serde_json::to_vec(&contract).unwrap()).unwrap();
+    let state = development_status(&repo.0, &SystemProcessRunner).receipt.unwrap();
+    assert_eq!(state["status"], "stale");
     assert_eq!(fs::read(repo.0.join("VERSION")).unwrap(), b"1.0.0\n");
+    assert_eq!(serde_json::from_slice::<serde_json::Value>(&fs::read(file).unwrap()).unwrap()["external_marker"], true);
     fs::remove_dir_all(remote).unwrap();
 }
 
 #[test]
-fn prepared_hook_rewrite_blocks_push_and_later_ordinary_retry() {
+fn all_sync_modes_block_hook_rewrites_and_later_ordinary_retry() {
+    for release in [false, true] {
     let (repo, remote) = versioned_repository("prepared-hook-rewrite", true);
     git_ok(&repo.0, &["config", "core.hooksPath", ".git/hooks"]);
     fs::write(repo.0.join("tracked.txt"), b"validated change\n").unwrap();
@@ -915,13 +848,11 @@ fn prepared_hook_rewrite_blocks_push_and_later_ordinary_retry() {
         use std::os::unix::fs::PermissionsExt;
         fs::set_permissions(&hook, fs::Permissions::from_mode(0o755)).unwrap();
     }
-    let prepared = prepare_release(&repo.0, &SystemProcessRunner, "fix: prepare", None);
-    assert_eq!(prepared.code, 0, "{}", prepared.stderr);
     let result = sync(
         &repo.0,
         &SystemProcessRunner,
         GitSyncOptions {
-            release: true,
+            release,
             message: Some("fix: release".into()),
             ..Default::default()
         },
@@ -948,6 +879,7 @@ fn prepared_hook_rewrite_blocks_push_and_later_ordinary_retry() {
     assert!(retry.stderr.contains("manual review required"));
     assert_eq!(git.ahead_behind().unwrap(), (1, 0));
     fs::remove_dir_all(remote).unwrap();
+    }
 }
 
 #[test]
@@ -963,7 +895,7 @@ fn preparation_check_cannot_silently_stage_current_repository() {
         result.stderr
     );
     assert_ne!(
-        release_status(&repo.0, &SystemProcessRunner)
+        development_status(&repo.0, &SystemProcessRunner)
             .receipt
             .unwrap()["status"],
         "prepared"

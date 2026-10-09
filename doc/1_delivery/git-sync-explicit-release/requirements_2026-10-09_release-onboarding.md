@@ -5,6 +5,8 @@ validation_status: awaiting_user_acceptance
 
 # 旧项目发布接入与版本基线修复
 
+> 本文保留已发布 2.0.2 的历史需求和证据。用户后续确认 Git 同步/升版不依赖开发清单和收据，当前规则以[独立 Git 同步](requirements_2026-10-09_independent-git-sync.md)为准。
+
 ## 授权、范围与预算
 
 来源：当前对话，用户确认六步 fix 计划后说“开始吧”。实施范围为 BridgeForge 上游诊断、升级提示、共享 Skill、测试、dogfood、分发合同，以及 StratusAgent 隔离测试 worktree 的发布接入和基线恢复。仅在隔离仓库使用本地提交与本地 bare remote 验证完整发布，不提交、推送、发布工厂或真实 StratusAgent，不修改真实项目的现有 14 个文件。

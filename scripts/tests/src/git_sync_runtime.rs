@@ -47,23 +47,6 @@ fn fixture_development_checks(root: &Path) {
     fs::write(root.join(".codex/development-checks.json"), br#"{"schema":1,"checks":[{"id":"fixture-diff","program":"git","args":["diff","--check"],"timeout_seconds":30}]}"#).unwrap();
 }
 
-fn prepare_fixture(cli: &Path, root: &Path, message: &str) {
-    let mut request = ProcessRequest::new(cli.as_os_str(), root);
-    request.args = ["git-sync", "--prepare-release", "--message", message]
-        .iter()
-        .map(Into::into)
-        .collect();
-    request.timeout = Duration::from_secs(2400);
-    let output = SystemProcessRunner.run(&request).unwrap();
-    assert!(
-        !output.timed_out && output.code == 0,
-        "prepare: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let receipt: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(receipt["status"], "prepared");
-}
-
 #[test]
 fn real_cli_explicit_release_preview_and_execution() {
     for policy in ["missing-file", "missing-field", "per_commit", "explicit_release"] {
@@ -106,7 +89,7 @@ fn real_cli_release_flow(policy: &str) {
             .as_array()
             .unwrap()
             .iter()
-            .any(|v| v == "git-sync-release-readiness-v1")
+            .any(|v| v == "git-sync-direct-release-v1")
     );
     for flag in ["--dry-run", "--check"] {
         let mut probe = ProcessRequest::new(cli.as_os_str(), &root);
@@ -171,8 +154,8 @@ fn real_cli_release_flow(policy: &str) {
     let output = SystemProcessRunner.run(&probe).unwrap();
     assert_eq!(output.code, 2);
     let setup: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(setup["status"], "setup-required");
-    assert_eq!(setup["blockers"].as_array().unwrap().len(), 2);
+    assert_eq!(setup["status"], "blocked");
+    assert_eq!(setup["development_checks_required"], false);
     assert_eq!(git(&root, &["rev-parse", "HEAD"]), initial_head);
     assert_eq!(fs::read(root.join(".git/index")).unwrap(), initial_index);
     assert!(!root.join(".runtime").exists());
@@ -195,9 +178,14 @@ fn real_cli_release_flow(policy: &str) {
         assert_eq!(&fs::read(root.join(name)).unwrap(), bytes, "{policy}: {name}");
     }
     assert_eq!(fs::read(&policy_path).ok(), policy_bytes);
-    // Ordinary sync succeeded without release checks. Only development setup
-    // creates the project-owned checks before preparing an explicit release.
-    fixture_development_checks(&root);
+    // Deliberately missing, invalid, or failing development data must never gate release.
+    let development = root.join(".codex/development-checks.json");
+    if policy == "missing-field" { fs::write(&development, b"not-json\n").unwrap(); }
+    else if policy != "missing-file" { fs::write(&development, br#"{"schema":1,"audit_required":true,"checks":[{"id":"must-not-run","program":"not-a-real-test-program","args":[],"timeout_seconds":1}]}"#).unwrap(); }
+    let development_bytes = fs::read(&development).ok();
+    let record = root.join(".runtime/bridgeforge-codex/release-preparation/current.json");
+    if policy != "missing-file" { fs::create_dir_all(record.parent().unwrap()).unwrap(); fs::write(&record, br#"{"status":"failed","root":"another repository"}"#).unwrap(); }
+    let record_bytes = fs::read(&record).ok();
     let before = git(&root, &["rev-parse", "HEAD"]);
     let index = fs::read(root.join(".git/index")).unwrap();
     let fetch = fs::read(root.join(".git/FETCH_HEAD")).unwrap();
@@ -207,10 +195,9 @@ fn real_cli_release_flow(policy: &str) {
     assert_eq!(fs::read(root.join(".git/index")).unwrap(), index);
     assert_eq!(fs::read(root.join(".git/FETCH_HEAD")).unwrap(), fetch);
     assert_eq!(fs::read(root.join("VERSION")).unwrap(), b"1.0.0\n");
-    prepare_fixture(&cli, &root, "fix: release");
     assert_eq!(
         call(&["git-sync", "--release-status"])["status"],
-        "prepared"
+        "release-ready"
     );
     let released = call(&["git-sync", "--release", "--message", "fix: release"]);
     assert_eq!(released["version_after"], "1.1.0");
@@ -221,6 +208,8 @@ fn real_cli_release_flow(policy: &str) {
     assert_eq!(released["ahead"], 0);
     assert_eq!(released["behind"], 0);
     assert_eq!(released["generated_assets_built"], 0);
+    assert_eq!(fs::read(&development).ok(), development_bytes);
+    assert_eq!(fs::read(&record).ok(), record_bytes);
     let repeated = call(&["git-sync", "--release", "--message", "feat!: ignored"]);
     assert_eq!(repeated["version_bumped"], false);
     assert_eq!(repeated["commit"], released["commit"]);
@@ -272,7 +261,6 @@ fn real_factory_cli_sync_builds_new_runtime_and_commits_through_precommit() {
     let mut readme = fs::read(root.join("README.md")).unwrap();
     readme.extend_from_slice(b"\nFixture: exercise complete automatic release.\n");
     fs::write(root.join("README.md"), &readme).unwrap();
-    prepare_fixture(&cli, &root, "fix: verify factory automatic runtime release");
     let mut request = ProcessRequest::new(cli.as_os_str(), &root);
     request.args = [
         "git-sync",
@@ -457,7 +445,6 @@ fn factory_ordinary_sync_performance() {
         let mut readme = fs::read(root.join("README.md")).unwrap();
         readme.extend_from_slice(b"\nPerformance fixture: explicit release.\n");
         fs::write(root.join("README.md"), readme).unwrap();
-        prepare_fixture(&cli, &root, "docs: benchmark ordinary sync");
         request.args.insert(1, "--release".into());
         println!("performance explicit release starts now");
         let started = std::time::Instant::now();
@@ -470,8 +457,8 @@ fn factory_ordinary_sync_performance() {
         );
         let receipt: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
         assert_eq!(receipt["version_bumped"], true);
-        assert_eq!(receipt["generated_assets_reused"], 2);
-        assert_eq!(receipt["generated_assets_built"], 0);
+        assert_eq!(receipt["generated_assets_reused"], 0);
+        assert_eq!(receipt["generated_assets_built"], 2);
         assert_eq!(receipt["working_tree"], "clean");
         assert_eq!(receipt["ahead"], 0);
         assert_eq!(receipt["behind"], 0);

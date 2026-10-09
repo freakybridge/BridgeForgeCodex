@@ -84,7 +84,7 @@ fn upgrade_keeps_skeleton_ready_and_preserves_project_release_checks() {
         assert_eq!(plan.readiness, "ready");
         assert!(!plan.confirmation_required);
         assert!(plan.gaps.is_empty());
-        let expected = match payload { None => "not-configured", Some(bytes) if bytes.starts_with(b"{") => "configured", _ => "invalid-config" };
+        let expected = "not-required";
         assert_eq!(plan.release_setup["status"], expected);
         assert!(!plan.safe.iter().any(|action| action.target == ".codex/development-checks.json"));
         assert_eq!(fs::read(&config).ok().as_deref(), payload);
@@ -94,10 +94,10 @@ fn upgrade_keeps_skeleton_ready_and_preserves_project_release_checks() {
         assert_eq!(receipt.release_setup["status"], expected);
         assert_eq!(fs::read(&config).ok().as_deref(), payload);
         let rendered = outcome_receipt_with_format(Ok(receipt), "combined").receipt.unwrap();
-        assert_eq!(rendered["human"]["conclusion"], if expected == "configured" { "已完成" } else { "已完成但仍有待处理项" });
+        assert_eq!(rendered["human"]["conclusion"], "已完成");
         let next = build_plan(&project, &factory, SyncMode::Update).unwrap();
         assert_eq!(next.status, "current");
-        if expected != "configured" { assert!(!human_plan(&next)["pending"].as_array().unwrap().is_empty()); }
+        assert!(human_plan(&next)["pending"].as_array().unwrap().is_empty());
         fs::remove_dir_all(root).unwrap();
     }
 }

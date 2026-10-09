@@ -51,7 +51,7 @@ fn self_test() -> CommandOutcome {
         "name": "bridgeforge",
         "status": "ok",
         "version": env!("CARGO_PKG_VERSION"),
-        "capabilities": ["git-sync-explicit-release-v1", "git-sync-prepared-release-v1", "git-sync-release-only-v1", "git-sync-release-readiness-v1"]
+        "capabilities": ["git-sync-explicit-release-v1", "git-sync-prepared-release-v1", "git-sync-release-only-v1", "git-sync-release-readiness-v1", "git-sync-direct-release-v1"]
     }))
 }
 
@@ -357,6 +357,7 @@ fn git_sync(args: &[String]) -> CommandOutcome {
         "--release-preview",
         "--prepare-release",
         "--release-status",
+        "--development-status",
     ]
     .iter()
     .filter(|flag| has(args, flag))
@@ -366,6 +367,9 @@ fn git_sync(args: &[String]) -> CommandOutcome {
     }
     if has(args, "--release-status") {
         return bridgeforge_core::git_sync::release_status(context.root(), &SystemProcessRunner);
+    }
+    if has(args, "--development-status") {
+        return bridgeforge_core::git_sync::development_status(context.root(), &SystemProcessRunner);
     }
     if has(args, "--prepare-release") {
         let message = if let Some(path) = value(args, "--message-file") {

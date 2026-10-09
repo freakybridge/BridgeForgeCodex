@@ -15,11 +15,11 @@ argument: 可选：release
 
 普通同步始终不自动升版，只有用户显式调用 `release` 才可生成版本、原生 manifest/lock 和 CHANGELOG 更新。项目 `.codex/bridgeforge-version.json` 缺失、未填写 `release_policy` 或保留旧值 `per_commit` 时也遵守同一规则；旧配置仍可读取，不自动改写项目配置。未知值、非法 schema 或重复字段仍须停止并报告。
 
-任何同步前，先运行受管二进制 `self-test --json`，确认 `capabilities` 包含 `git-sync-release-only-v1`；显式发布还需 `git-sync-explicit-release-v1`。旧二进制的普通同步可能自动升版，也可能忽略未知参数，不能直接试跑同步或新参数探测能力；缺能力时停止并提示先升级骨架。
+任何同步前，先运行受管二进制 `self-test --json`，确认 `capabilities` 包含 `git-sync-release-only-v1`；显式发布还需 `git-sync-explicit-release-v1` 和 `git-sync-direct-release-v1`。旧二进制可能自动升版或要求开发收据，不能试跑未知参数探测能力；缺能力时明确提示升级工具，不归咎于项目缺开发 JSON。
 
-显式 `release` 另需 `git-sync-prepared-release-v1`。先用 `git-sync --release-status` 核对 develop 已生成的准备记录；缺失或失效时报告原因并返回开发收口，不在本 Skill 中自动执行准备、Cargo、全量测试或独立审计。普通同步与显式发布的授权仍分别判断。
+普通同步和显式发布均不依赖 develop、development-checks.json、prepared 或审计收据。无配置、非法配置、过期或失败开发记录都不是使用阻断。不得在本 Skill 运行 --development-status/--prepare-release，或要求先完成开发验收。显式 release 是用户选定的升版功能，不因缺开发记录静默退回普通同步。
 
-支持 `git-sync-release-readiness-v1` 的工具会一次报告项目发布接入与版本基线阻断：`setup-required`、`blocked`、`not-prepared`、`stale` 或 `not-applicable` 均不是可发布状态，只有 `prepared` 才能继续。展示全部 `blockers` 和明确恢复路径，不只让用户再次试跑 release；不自动生成空检查、不复制工厂清单、不手改或降回已发布 VERSION。升级成功不能表述为业务发布就绪。普通同步不运行 release-status，也不需要发布检查配置。
+--release-status 只读检查 VERSION、原生版本数据和发布历史，不构建或运行测试。版本非法或无法可靠计算时说明实际数据问题，保留现场，不猜 patch、不手改或降回已发布 VERSION。--development-status 仅供独立开发验证查看收据，与同步和升版使用无关。
 
 | 用户用法 | 执行行为 |
 |---|---|
@@ -61,11 +61,11 @@ Codex 项目使用 `.codex/bin/bridgeforge[.exe] git-sync`。二进制存在时�
 
 预览无需再次索取已有发布授权；只在结果暴露新的范围或兼容性疑问时澄清。预览返回 `nothing-to-release` 时说明不升版，仍可按原授权完成同步。实际同步在 fetch/快进后重新计算发布计划，以最终收据为准。多行消息优先写入临时文件并传 `--message-file`，预览与执行使用同一消息。
 
-开发完成且内容未变时，release 只增加版本、CHANGELOG 和原生 manifest 更新，安装已准备的对应版本产物；不在同步过程中重新开发验证。时间报告以用户发出指令到最终回复为准，CLI 耗时单独标注。
+release 更新版本、CHANGELOG 和原生 manifest/lock；受管 CLI/Hook 需要刷新时，同一入口自动构建并生成真实收据，优先复用有效缓存。必要构建不是业务测试。工具链、锁文件或构建实际失败必须说明原因，不回退解释器或伪造产物。时间报告以用户指令到最终回复为准，CLI 耗时单独标注。
 
-项目显式声明 record_documents 时，summary 新增或更新的记录类 Markdown 由受管入口轻量检查 UTF-8 和文档结构，再绑定当前完整提交内容；这类记录变化不触发重新编译。文档检查不代表语义审计或用户验收。不得由 Skill 临时扩大允许路径；源码、Skill、配置、未声明输入或目标版本变化仍需返回 develop。
+保留项目轻量 pre-commit（编码、文档索引、版本和产物一致性），不以 --no-verify 绕过。检查失败指出具体文件/阶段和原因；不主动组织业务测试、全量回归、独立审计、用户验收或启动业务程序。源码和文档变化都可直接同步，不要求更新开发收据；构建需求只由受管产物真实输入决定。
 
-需要审批时只为该项目脚本申请合理前缀，不分别为 fetch、add、commit 和 push 申请持久规则。脚本执行 fetch、ahead / behind 判断、安全 stash、`pull --ff-only`、版本事务、add、commit、push 和最终检查。显式 release 只消费开发阶段准备的 Hook/CLI 及收据，将版本、manifest、二进制和收据纳入同一回滚事务；pre-commit 只读验证。普通同步不自动升版，纯 `$bridgeforge-codex` 骨架更新不升级项目版本。
+需要审批时只为该项目脚本申请合理前缀，不分别为 fetch、add、commit 和 push 申请持久规则。脚本执行 fetch、ahead / behind 判断、安全 stash、`pull --ff-only`、版本事务、必要构建、add、commit、push 和最终检查。版本、manifest、产物和真实构建收据纳入同一回滚事务；pre-commit 只读验证。普通同步不自动升版，纯骨架更新不升级项目版本。
 
 若首次运行在 `git fetch`、`.git/FETCH_HEAD`、`Permission denied` 或 `Access is denied` 阶段失败，主 agent 必须立即以**完全相同的 repo-local 脚本命令**、`require_escalated` 重试。审批说明仅限：允许 Git 更新当前项目的 `.git/FETCH_HEAD` 等元数据，以完成用户已授权的同步。不得改走手工 Git 命令、修改 `.git` ACL 或扩大到无关目录。重试仍失败时保留原始错误与现场并停止；不得把网络、分叉或凭据错误伪报为权限恢复成功。
 
@@ -90,7 +90,7 @@ Codex 项目使用 `.codex/bin/bridgeforge[.exe] git-sync`。二进制存在时�
 - `stash pop` 冲突时保留 stash 和冲突现场，交给用户处理。
 - push 失败时重新 fetch 并判定一次；若出现竞态或分叉，停止，不强推。
 - pre-commit 或衍生产物刷新失败时停止，不绕过检查。
-- 准备式发布报告提交 tree 被 Hook 改写时，保留本地提交和 guard，停止推送与自动重试；先由主对话核对差异，不自动 reset 或清除 guard。
+- 提交 tree 被 Hook 改写时，保留本地提交和 guard，停止推送与自动重试；先核对差异，不自动 reset 或清除 guard。这是提交内容保护，不是开发验收门槛。
 
 ## 禁止事项
 

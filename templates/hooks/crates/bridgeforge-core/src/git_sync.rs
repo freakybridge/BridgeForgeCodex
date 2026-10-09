@@ -13,6 +13,22 @@ mod preparation;
 mod write_plan;
 
 pub fn release_status(root: &Path, runner: &dyn ProcessRunner) -> CommandOutcome {
+    if !root.join("VERSION").exists() {
+        return CommandOutcome::with_receipt(json!({"schema":1,"status":"not-applicable","development_checks_required":false}));
+    }
+    match crate::release::validate_release_baseline(root, runner) {
+        Ok(_) => CommandOutcome::with_receipt(json!({
+            "schema":1,"status":"release-ready","development_checks_required":false,
+            "version_before":fs::read_to_string(root.join("VERSION")).ok().map(|v|v.trim().to_string())
+        })),
+        Err(error) => CommandOutcome { code:crate::EXIT_BLOCKED, receipt:Some(json!({
+            "schema":1,"status":"blocked","development_checks_required":false,
+            "reason":error,"message":"版本数据无法用于升版，请核对 VERSION、原生版本文件及发布历史"
+        })), ..CommandOutcome::default() }
+    }
+}
+
+pub fn development_status(root: &Path, runner: &dyn ProcessRunner) -> CommandOutcome {
     match preparation::status(root, runner) {
         Ok(value) if matches!(value["status"].as_str(), Some("setup-required" | "blocked")) => CommandOutcome {
             code: crate::EXIT_BLOCKED,
@@ -25,7 +41,7 @@ pub fn release_status(root: &Path, runner: &dyn ProcessRunner) -> CommandOutcome
 }
 
 pub fn release_setup_status(root: &Path) -> serde_json::Value {
-    preparation::setup_status(root)
+    json!({"status":if root.join("VERSION").exists() { "not-required" } else { "not-applicable" },"development_checks_required":false})
 }
 
 pub fn prepare_release(
@@ -78,7 +94,7 @@ fn check_release_commit_guard(git: &Git<'_>) -> Result<(), String> {
         || (git.required(&["rev-parse", "HEAD^"], Duration::from_secs(30))? == parent
             && git.required(&["rev-parse", "HEAD^{tree}"], Duration::from_secs(30))? == tree);
     if !accepted {
-        return Err("previous prepared release commit differs from verified content; commit preserved locally, manual review required before any push".into());
+            return Err("previous Git commit differs from reviewed content; commit preserved locally, manual review required before any push".into());
     }
     if fs::read(&file).map_err(|e| e.to_string())? != bytes {
         return Err("release commit guard changed concurrently".into());
@@ -427,19 +443,17 @@ pub fn sync(
     if let Err(error) = check_release_commit_guard(&git) {
         return blocked(error);
     }
-    // Fail before network/stash/fast-forward when development preparation is
-    // absent or stale. Recheck after fetch because the remote may change inputs.
+    // Check only version planning before network changes. Development checks
+    // and preparation receipts are independent of Git synchronization.
     if options.release {
         let preflight = (|| {
             let message = requested_message(&options)?;
-            if let Some(release) = crate::release::build_explicit_release_plan(
+            crate::release::build_explicit_release_plan(
                 root,
                 &message,
                 git.changed_paths()?,
                 runner,
-            )? {
-                preparation::load(root, &git, &release.new_version.to_string())?;
-            }
+            )?;
             Ok::<(), String>(())
         })();
         if let Err(error) = preflight {
@@ -654,17 +668,6 @@ pub fn sync(
         } else {
             (String::new(), None)
         };
-        let prepared = if options.release {
-            match &release {
-                Some(plan) => match preparation::load(root, &git, &plan.new_version.to_string()) {
-                    Ok(record) => Some(record),
-                    Err(error) => return blocked(error),
-                },
-                None => None,
-            }
-        } else {
-            None
-        };
         if let Some(plan) = &release {
             version_after = Some(plan.new_version.to_string());
         }
@@ -695,20 +698,12 @@ pub fn sync(
         let (mut release_inputs, release_writes) =
             release.map(|p| (p.inputs, p.writes)).unwrap_or_default();
         release_inputs.insert(policy_path, policy_before);
-        let prepared_artifacts = match &prepared {
-            Some(record) => match record.artifacts(root) {
-                Ok(files) => files,
-                Err(error) => return blocked(error),
-            },
-            None => Default::default(),
-        };
-        let plan = match write_plan::WritePlan::prepare_with_artifacts(
+        let plan = match write_plan::WritePlan::prepare(
             root,
             release_writes,
             release_inputs,
             factory,
             runner,
-            options.release.then_some(&prepared_artifacts),
         ) {
             Ok(plan) => plan,
             Err(error) => {
@@ -719,11 +714,6 @@ pub fn sync(
         };
         generated_reused = plan.generated_reused;
         generated_built = plan.generated_built;
-        if let Some(record) = &prepared {
-            if let Err(error) = record.validate(root, &git) {
-                return blocked(error);
-            }
-        }
         if RepositoryIdentity::capture(&git).as_ref() != Ok(&identity)
             || fs::read(&identity.index_path).ok().as_ref() != Some(&original_index)
         {
@@ -778,11 +768,6 @@ pub fn sync(
                 snapshots,
             );
         }
-        if let Some(record) = &prepared {
-            if let Err(error) = record.verify_applied(root, &git, &plan.writes) {
-                return fail(error, &original_index, snapshots);
-            }
-        }
         if let Err(error) = git.required(&["add", "."], Duration::from_secs(120)) {
             return fail(error, &original_index, snapshots);
         }
@@ -796,11 +781,6 @@ pub fn sync(
                 );
             }
         };
-        if let Some(record) = &prepared {
-            if let Err(error) = record.verify_applied(root, &git, &plan.writes) {
-                return fail(error, &post_add_index, snapshots);
-            }
-        }
         let post_add_semantic =
             match git.required(&["ls-files", "--stage", "-v"], Duration::from_secs(30)) {
                 Ok(value) => value,
@@ -811,7 +791,7 @@ pub fn sync(
                 Ok(value) => value,
                 Err(error) => return fail(error, &post_add_index, snapshots),
             };
-        let expected_tree = if code == 1 && prepared.is_some() {
+        let expected_tree = if code == 1 {
             let tree = match git.required(&["write-tree"], Duration::from_secs(30)) {
                 Ok(tree) => tree,
                 Err(error) => return fail(error, &post_add_index, snapshots),
