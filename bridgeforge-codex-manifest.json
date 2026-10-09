@@ -157,22 +157,22 @@
             {
               "source": "skills/develop/references/agent-execution.md",
               "target": "references/agent-execution.md",
-              "sha256": "sha256:4260a3b9bb05d8ef42a2384c127db1a5afb374698988cf1b3ff225d0d4bf787f"
+              "sha256": "sha256:003cac443d30cf1dff1c189008943651561374ef4b5ccae53c99af29ad40440a"
             },
             {
               "source": "skills/develop/references/ml-delivery.md",
               "target": "references/ml-delivery.md",
-              "sha256": "sha256:608c19e4f3bb50a52302173b895ef4219f5c0012c993b2071d036e29496da287"
+              "sha256": "sha256:6dea3ad5659ceabf5254027036b6b792f3998809450aaf8ef93b666782d13b86"
             },
             {
               "source": "skills/develop/references/completion-release.md",
               "target": "references/completion-release.md",
-              "sha256": "sha256:c3ad4c146dd403bf8c1e43f461908ec76ef8a1970d7febf55bf2486d9620bfbd"
+              "sha256": "sha256:930268f5793ba4d4f3457390422a33e2ca4991c9e8db61b14065462d58b8e33f"
             },
             {
               "source": "skills/develop/SKILL.md",
               "target": "SKILL.md",
-              "sha256": "sha256:5adbbde7ccc04e7e6e9722cc6dbfc6477bf1ae3609a3be67ec7dfbc3540ba405"
+              "sha256": "sha256:c965d5bc475cdff4f5ffbe5a832300f465764995dc1fdaa5037d803934e2dc59"
             }
           ]
         },
@@ -273,6 +273,21 @@
               "source": "skills/summary/references/switch-mode.md",
               "target": "references/switch-mode.md",
               "sha256": "sha256:2a582e07423c05384ff2f85ad8dcf66f8d07b91229924d1ec12ce65df007c6b1"
+            }
+          ]
+        },
+        {
+          "name": "refactor-scan",
+          "files": [
+            {
+              "source": "skills/refactor-scan/SKILL.md",
+              "target": "SKILL.md",
+              "sha256": "sha256:fb1a948d719fbf3da5857d73b9c80343775a9b51c05af4d644f0441d84bc5069"
+            },
+            {
+              "source": "skills/refactor-scan/references/report-contract.md",
+              "target": "references/report-contract.md",
+              "sha256": "sha256:4e5740a0b8b50d2cc2bc19c2631b0806ceb55fb0f2b0b960ff4ab01bbe63ca3c"
             }
           ]
         },

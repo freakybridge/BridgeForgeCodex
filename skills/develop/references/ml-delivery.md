@@ -1,29 +1,37 @@
-# develop M/L 交付流程
+# develop M/L 交付
 
-> 仅在 M/L 需求已记录且实施已授权后读取。Agent 选择和独立 review 规则见
-> `agent-execution.md`；S 级禁止读取本文件。
+> 仅在 M/L 路径读取。验证规则以 SKILL.md 为准；
+> 本文件只维护需求记录、实施状态和试用闭环。
 
-## 1. 完善唯一需求包
+## 1. 维护唯一需求包
 
-1. 在同一需求卡记录实施、验证及授权依据，禁止重建需求或重复确认开工。
-2. 项目级长期约束更新 `doc/0_architecture/`；单 feature 保持在确认卡所属的
-   `doc/1_delivery/` topic；新 Bug 写入 `doc/2_bugs/`。禁止创建全局 plan 或 pending 文档。
-3. 需求包保留背景与目标、非目标、用户可见行为、约束与风险、验收、暂缓项和实施假设。
-4. 新增、删除或重命名 `doc/**.md` 时同步 `doc/README.md`。
+1. 复用同一需求卡，记录已有授权、预算、目标、非目标、
+   用户可见行为、约束、风险、验收、暂缓项和实施假设。
+   禁止重建第二份需求或因缺记录重复确认开工。
+2. 长期项目约束按项目规范进入 doc/0_architecture/；
+   feature 记录留在需求卡所属的 doc/1_delivery/ topic；
+   独立 Bug 进入 doc/2_bugs/。
+3. 新增、删除、移动或重命名文档时同步 doc/README.md。
+   不创建全局 plan、pending 或独立授权文档。
 
-## 2. 同步事实
+## 2. 实施与状态
 
-- 已确认范围内的实现细节、事实补全和验证状态直接更新需求包或设计文档；开始实施时把 `validation_status` 从 `not_started` 改为 `in_progress`。
-- 完成实现后按证据更新 `validation_status` 为 `awaiting_validation` 或 `awaiting_user_acceptance`，并更新变更记录、每项验收状态及相关设计或 rules；`lifecycle` 保持 `active`，只有 `$summary accept` 可以结算为 `completed`。
-- 实质变化按主入口重核受影响授权；用户新指令已明确决定则更新记录，否则暂停相关动作。
+1. 在已授权范围内实施，普通实现细节和事实补全直接更新原记录。
+   开始实施时将 validation_status 改为 in_progress。
+2. 按主入口选择并执行验证；需要 Agent 时读取 agent-execution.md，
+   项目声明特殊收口要求时读取 completion-release.md。
+3. 根据实际证据区分实现完成、验证待完成和等待用户验收，
+   更新验收项、变更记录及相关既有设计文档。
+   validation_status 使用 awaiting_validation 或 awaiting_user_acceptance；
+   lifecycle 保持 active，只有 $summary accept 可结算为 completed。
+4. 真实范围或风险变化时，按主入口处理受影响的授权与预算；
+   修复失败计数不因阶段切换而清零。
 
-## 3. 验证与试用
+## 3. 试用与反馈
 
-1. 运行与规模和风险匹配的 lint、类型检查、单测、集成测试或手工验证脚本；M 级禁止无
-   依据升级为全量测试。
-2. 规则和可执行测试优先于 LLM review。需要 Agent review 时再读取 `agent-execution.md`。
-3. 交付改动、需求卡、验证收据、用户试用主路径和剩余风险。
-   交付前完成主入口规定的开发收口与发布准备；不得把完整验证和目标版本构建留给 git-sync release。可核验的 prepared 记录是发布交接依据，不能只写“测试通过”。
-4. 当前需求内的小 Bug 直接修复并更新同一需求包；独立 Bug 建立
-   `doc/2_bugs/BUG-<id>-<topic>.md`；新范围进入新的 `confirm` / `develop`。
-5. 修复失败与恢复按公共 AGENTS 执行，禁止切换阶段清零计数。
+1. 交付实际改动、需求卡、验证证据、试用路径和剩余风险。
+   项目未要求 structured/prepared 记录时，不为交付新增该类记录。
+2. 当前需求内的小 Bug 修复后更新同一需求包，
+   仅重验受影响部分；独立 Bug 按项目文档规范另记。
+3. 新需求或超出原范围的改动进入新的确认与开发流程。
+   用户试用和验收不能由实现者自证。

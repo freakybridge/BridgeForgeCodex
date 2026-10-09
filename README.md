@@ -53,6 +53,15 @@ $autopilot
 可能超额。默认交付本地未提交改动。需要当前客户端的对话读取与 Goal 能力；详细流程见
 [autopilot Skill](skills/autopilot/SKILL.md)。
 
+重构已有项目时，使用 [refactor-scan Skill](skills/refactor-scan/SKILL.md)：
+
+```text
+$refactor-scan 扫描当前项目，允许现有定向测试和离线性能基准，先给重构清单。
+```
+
+清单按稳定编号给出职责调整、业务合并、代码质量和性能候选；你选择并授权条目后，
+由 confirm 记录范围与验收，再交给 develop 实施。扫描覆盖范围与未验证项会单独说明。
+
 需要了解当前架构、当前交付、开放 Bug 或历史资料时，从唯一完整导航
 [文档索引](doc/README.md)开始；根 README 不复制这些动态状态。
 

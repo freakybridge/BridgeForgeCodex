@@ -70,6 +70,7 @@ delivery_layout: flat
 
 | Topic | 主要记录 |
 |---|---|
+| `refactor-scan`（已验收） | [通用重构扫描 Skill 的需求、经验与验收](1_delivery/refactor-scan/requirements_2026-10-09_refactor-scan.md)：2026-10-09 用户验收；正式分发后的真实项目试用见 TODO-004 |
 | `summary-workflow` | [Summary 三模式与会话状态快照退役](1_delivery/summary-workflow/requirements_2026-10-08_summary-workflow.md)；[本轮经验教训](1_delivery/summary-workflow/lessons_2026-10-08.md) |
 | `git-sync-performance` | [普通同步与发布构建耗时优化](1_delivery/git-sync-performance/requirements_2026-10-08_git-sync-performance.md)；[开发收口与轻量发布](1_delivery/git-sync-performance/requirements_2026-10-08_prepared-release.md)：检查前移、发布准备记录和端到端验收 |
 | `git-sync-explicit-release` | [独立同步与用户可选升版](1_delivery/git-sync-explicit-release/requirements_2026-10-09_independent-git-sync.md)：当前需求；[旧项目接入诊断历史](1_delivery/git-sync-explicit-release/requirements_2026-10-09_release-onboarding.md)；[普通同步不升版](1_delivery/git-sync-explicit-release/requirements_2026-10-08_release-only.md)；[原显式发布交付](1_delivery/git-sync-explicit-release/requirements_2026-10-08_git-sync-explicit-release.md) |
@@ -119,7 +120,7 @@ delivery_layout: flat
 | `fixed-upgrade-baseline` | 固定 1.8.6 升级基线、低版本重建与基线内兼容更新；两条路径保留旧 Rule/Memory 逐文件确认，见[确认卡](1_delivery/fixed-upgrade-baseline/requirements_2026-09-02_fixed-baseline.md)（2026-09-02） |
 | `codex-agents-structure-reorganization` | Codex AGENTS 信息架构重组、历史标题安全迁移、项目必填区双状态硬闸与 `ctx-budget` 完整退役（2026-08-16） |
 | `shared-skill-model-inheritance` | 删除 shared skill 的 Claude 专用 `model:` 覆盖，双宿主统一继承当前会话模型，并合并精简 Codex 模板的模型选择与执行分工说明（2026-08-16） |
-| `confirm-workflow`、`develop-demand-discovery`、`explain-skill` | 需求确认与通用 skill 演进；后两者含 `research/` |
+| `confirm-workflow`、`develop-demand-discovery`、`explain-skill` | 需求确认与通用 skill 演进；[develop 验证与收口重构](1_delivery/develop-demand-discovery/requirements_2026-10-09_validation-refactor.md)处理 Q1–Q5，后两者含 `research/` |
 | `cross-project-write-guard`、`non-ascii-shell-guard` | 安全防护；后者新增 [memory writer stdin 编码旁路报告](1_delivery/non-ascii-shell-guard/research/2026-08-04_memory-writer-stdin-encoding-bypass-report.md) |
 | `ctx-management` | 上下文治理；Stall Warning 已裁定从双宿主骨架及下游更新中移除（2026-07-30） |
 | `doc-unification`、`document-lifecycle` | 文档体系演进 |
