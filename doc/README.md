@@ -70,7 +70,7 @@ delivery_layout: flat
 
 | Topic | 主要记录 |
 |---|---|
-| `refactor-scan`（已验收） | [通用重构扫描 Skill 的需求、经验与验收](1_delivery/refactor-scan/requirements_2026-10-09_refactor-scan.md)：2026-10-09 用户验收；正式分发后的真实项目试用见 TODO-004 |
+| `refactor-scan` | [Skill 开发验收](1_delivery/refactor-scan/requirements_2026-10-09_refactor-scan.md)已完成；[工厂重构候选与经验](1_delivery/refactor-scan/scan_2026-10-09_factory-refactor.md)为待选择方案，R01–R04 未授权实施；[换机交接](1_delivery/refactor-scan/handoff_2026-10-09_factory-refactor.md)；真实项目试用见 TODO-004 |
 | `summary-workflow` | [Summary 三模式与会话状态快照退役](1_delivery/summary-workflow/requirements_2026-10-08_summary-workflow.md)；[本轮经验教训](1_delivery/summary-workflow/lessons_2026-10-08.md) |
 | `git-sync-performance` | [普通同步与发布构建耗时优化](1_delivery/git-sync-performance/requirements_2026-10-08_git-sync-performance.md)；[开发收口与轻量发布](1_delivery/git-sync-performance/requirements_2026-10-08_prepared-release.md)：检查前移、发布准备记录和端到端验收 |
 | `git-sync-explicit-release` | [独立同步与用户可选升版](1_delivery/git-sync-explicit-release/requirements_2026-10-09_independent-git-sync.md)：当前需求；[旧项目接入诊断历史](1_delivery/git-sync-explicit-release/requirements_2026-10-09_release-onboarding.md)；[普通同步不升版](1_delivery/git-sync-explicit-release/requirements_2026-10-08_release-only.md)；[原显式发布交付](1_delivery/git-sync-explicit-release/requirements_2026-10-08_git-sync-explicit-release.md) |
