@@ -1,6 +1,46 @@
 use super::*;
 
 #[test]
+fn markdown_characterization_projection_boundaries_and_keys() {
+    assert_eq!(heading_section("前言\n## 索引\n正文\n# 尾部".as_bytes(), "## 索引").unwrap(),
+        "## 索引\n正文\n".as_bytes());
+    assert_eq!(heading_section(b"```md\n## Index\ninside\n```\n", "## Index").unwrap(),
+        b"## Index\ninside\n```\n");
+    let unicode_rows = table_rows("| K | V |\n|---|---|\n| [`标题`](文档/Ä.md) | 保留 |\n".as_bytes()).unwrap();
+    assert_eq!(unicode_rows["文档/ä.md"], "| [`标题`](文档/Ä.md) | 保留 |\n".as_bytes());
+    for ending in ["\n", "\r\n", "\r"] {
+        let text = "# Root\n## Index\nbody\n### Child\nnested\n# End\ntail".replace('\n', ending);
+        assert_eq!(heading_section(text.as_bytes(), "## Index").unwrap(),
+            b"## Index\nbody\n### Child\nnested\n");
+    }
+    assert_eq!(heading_section(b"## Index\nlast", "## Index").unwrap(), b"## Index\nlast");
+    assert_eq!(heading_section(b"## Index\nx\n  ## Next\ny", "## Index").unwrap(), b"## Index\nx\n");
+    assert_eq!(heading_section(b"## Index\n## Index", "## Index").unwrap_err(),
+        "Markdown heading is missing or duplicated: ## Index");
+    assert_eq!(heading_section(&[0xff], "## Index").unwrap_err(), "managed Markdown is not UTF-8");
+    let rows = table_rows(b"| Name | Value |\n|---|---|\n| [`Label`](Target) | x |\n| [Label](Other) | y |\n| `MiXeD` | z |\n| | empty |\n").unwrap();
+    assert_eq!(rows.keys().map(String::as_str).collect::<Vec<_>>(), vec!["", "[label](other)", "mixed", "target"]);
+    assert_eq!(rows["target"], b"| [`Label`](Target) | x |\n");
+    assert_eq!(table_rows(b"| K | V |\n|---|---|\n| A | x |\n| a | y |").unwrap_err(),
+        "managed Markdown table key is duplicated: a");
+}
+
+#[test]
+fn markdown_characterization_projection_multitable_and_hash() {
+    let payload = b"## Index\n| K | V |\n|---|---|\n| project | keep |\n<!-- example\n| K | V |\n|---|---|\n| managed | new |\n-->\n";
+    let blocks = serde_json::json!({"headings":[],"keyed_tables":[{"heading":"## Index","managed_keys":["MANAGED"]}]});
+    let expected = serde_json::json!({"headings":{},"keyed_tables":{"## Index":{"managed":sha(b"| managed | new |\n")}}});
+    assert_eq!(markdown_projection(payload, &blocks).unwrap(), expected);
+    let asset = serde_json::json!({"id":"fixture", "strategy":"merge", "managed_blocks":{
+        "headings":[], "keyed_tables":blocks["keyed_tables"],
+        "current_projection_sha256":canonical_sha(&expected).unwrap()
+    }});
+    verify_asset_payload(&asset, payload).unwrap();
+    let drifted = String::from_utf8(payload.to_vec()).unwrap().replace("managed | new", "managed | changed");
+    assert_eq!(verify_asset_payload(&asset, drifted.as_bytes()).unwrap_err(), "managed Markdown projection drifted: fixture");
+}
+
+#[test]
 fn project_hook_index_reads_package_only_from_index() {
     struct IndexFiles(std::collections::BTreeMap<String, Vec<u8>>);
     impl ProcessRunner for IndexFiles {

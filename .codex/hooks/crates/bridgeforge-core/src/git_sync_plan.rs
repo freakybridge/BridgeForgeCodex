@@ -199,7 +199,7 @@ impl WritePlan {
                         &temporary.0,
                         asset["source_root"].as_str().ok_or("missing source_root")?,
                     )?;
-                    let inputs = crate::project_sync::build_inputs::BuildInputs::capture(
+                    let inputs = crate::build_inputs::BuildInputs::capture(
                         &source,
                         context.0.join("source-0"),
                         asset,
@@ -231,7 +231,7 @@ impl WritePlan {
         if !pending_assets.is_empty() {
             let mut pending_contract = contract_after;
             pending_contract["generated_assets"] = serde_json::Value::Array(pending_assets);
-            let (generated, _) = crate::project_sync::generated_writes(
+            let (generated, _) = crate::generated_assets::generated_writes(
                 &temporary.0,
                 "source_root",
                 root,

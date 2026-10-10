@@ -11,6 +11,8 @@ mod memory_sync;
 #[cfg(test)]
 mod process_runtime;
 #[cfg(test)]
+mod project_map_performance;
+#[cfg(test)]
 mod runtime_flows;
 #[cfg(test)]
 mod security_guards;

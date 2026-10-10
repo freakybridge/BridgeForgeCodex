@@ -516,6 +516,33 @@ fn baseline_files(
     snapshot_files(&path).ok()
 }
 
+// Only the three local-only publication branches share this tail. Merge and
+// restore retain their own source snapshot and post-push recovery semantics.
+fn publish_local_snapshot(
+    git: &Git<'_>,
+    memories: &Path,
+    state_dir: &Path,
+    work: &Path,
+    remote: &str,
+    expected: Option<&str>,
+    revision: u64,
+    pending_before: Option<&[u8]>,
+) -> MemoryResult<String> {
+    let publish = work.join("publish-snapshot");
+    let published = build_snapshot(memories, &publish, revision)?;
+    let commit = push_snapshot(
+        git,
+        &publish,
+        work,
+        remote,
+        expected,
+        (memories, &published),
+    )?;
+    record_synced(state_dir, &publish, &published, Some(commit))?;
+    clear_pending_if_unchanged(state_dir, pending_before)?;
+    Ok("push".into())
+}
+
 fn reconcile_locked(
     memories: &Path,
     state_dir: &Path,
@@ -570,19 +597,16 @@ fn reconcile_locked(
                     "remote snapshot is corrupt and local memories are empty",
                 ));
             }
-            let publish = work.join("publish-snapshot");
-            let published = build_snapshot(memories, &publish, revision)?;
-            let commit = push_snapshot(
+            return publish_local_snapshot(
                 &git,
-                &publish,
+                memories,
+                state_dir,
                 &work,
                 remote,
                 remote_snapshot.commit.as_deref(),
-                (memories, &published),
-            )?;
-            record_synced(state_dir, &publish, &published, Some(commit))?;
-            clear_pending_if_unchanged(state_dir, pending_before)?;
-            return Ok("push".into());
+                revision,
+                pending_before,
+            );
         };
         let remote_path = remote_snapshot.path.as_ref().unwrap();
         if super::same_manifest_files(&local, remote_manifest) {
@@ -597,19 +621,16 @@ fn reconcile_locked(
         }
         let synced_digest = state.as_ref().map(|item| item.content_sha256.as_str());
         if synced_digest.is_none() && remote_manifest.files.is_empty() {
-            let publish = work.join("publish-snapshot");
-            let published = build_snapshot(memories, &publish, revision)?;
-            let commit = push_snapshot(
+            return publish_local_snapshot(
                 &git,
-                &publish,
+                memories,
+                state_dir,
                 &work,
                 remote,
                 remote_snapshot.commit.as_deref(),
-                (memories, &published),
-            )?;
-            record_synced(state_dir, &publish, &published, Some(commit))?;
-            clear_pending_if_unchanged(state_dir, pending_before)?;
-            return Ok("push".into());
+                revision,
+                pending_before,
+            );
         }
         if synced_digest.is_none() && local.files.is_empty() {
             restore_snapshot(remote_path, memories, Some(&local))?;
@@ -626,19 +647,16 @@ fn reconcile_locked(
         let remote_changed =
             synced_digest.is_none_or(|digest| remote_manifest.content_sha256 != digest);
         if local_changed && !remote_changed {
-            let publish = work.join("publish-snapshot");
-            let published = build_snapshot(memories, &publish, revision)?;
-            let commit = push_snapshot(
+            return publish_local_snapshot(
                 &git,
-                &publish,
+                memories,
+                state_dir,
                 &work,
                 remote,
                 remote_snapshot.commit.as_deref(),
-                (memories, &published),
-            )?;
-            record_synced(state_dir, &publish, &published, Some(commit))?;
-            clear_pending_if_unchanged(state_dir, pending_before)?;
-            return Ok("push".into());
+                revision,
+                pending_before,
+            );
         }
         if remote_changed && !local_changed {
             restore_snapshot(remote_path, memories, Some(&local))?;

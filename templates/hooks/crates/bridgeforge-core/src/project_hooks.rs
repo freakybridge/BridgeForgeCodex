@@ -369,7 +369,7 @@ fn build_legacy(
         .ok_or("project hooks require managed workspace")?;
     let snapshot = temporary.0.join("workspace");
     let captured =
-        crate::project_sync::build_inputs::BuildInputs::capture(workspace, snapshot.clone(), item)?;
+        crate::build_inputs::BuildInputs::capture(workspace, snapshot.clone(), item)?;
     let mut manifest = fs::read_to_string(snapshot.join("Cargo.toml"))
         .map_err(|e| e.to_string())?
         .parse::<toml_edit::DocumentMut>()

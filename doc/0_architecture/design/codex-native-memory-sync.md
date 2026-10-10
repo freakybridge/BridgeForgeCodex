@@ -36,6 +36,8 @@ Codex 官方生成/读取 ~/.codex/memories/
 
 ## Git 与合并合同
 
+`memory::remote::publish_local_snapshot` 是三条本地上传分支的唯一收尾实现：无有效远端快照、首次对接空远端、仅本地变化。分支条件与 revision 计算留在 reconcile，公共收尾严格保持“重新捕获发布快照 → 上传 → 记录同步状态 → 仅清除未变化的 pending”。恢复与合并分支不调用该函数，因为它们的快照来源和上传后恢复语义不同。R03 的隔离行为矩阵与工程证据见[交付卡](../../1_delivery/memory-publication-tail/requirements_2026-10-11_R03.md)。
+
 - 除根目录 `MEMORY.md`、`memory_summary.md`、`raw_memories.md` 外，Memory 文件按 opaque bytes 计算逐文件 hash 和整树 digest；禁止依赖内部 schema。嵌套目录中的同名文件仍属于普通同步内容。
 - 三个本机索引不进入新 manifest、Git push、三方基线或冲突选择。包含它们的旧快照必须先按原 manifest 完整验真，再投影为可同步文件；下一次发布快照自然从远端移除旧副本。
 - 校验已有快照时，整树 digest 按 manifest 声明的原始文件顺序计算；文件集合按路径与逐文件 hash 比较，不能把不同生产者或平台的排序差异当作内容损坏。重复路径、缺失、多余、篡改文件及错误 digest 仍须阻断。

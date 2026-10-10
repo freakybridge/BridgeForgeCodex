@@ -1,17 +1,17 @@
-use crate::{CommandOutcome, ProcessRequest, ProcessRunner};
+use crate::{generated_assets::generated_writes, managed_paths::safe_join};
+use crate::managed_markdown::{
+    merge_key as table_key, merge_section as markdown_section,
+    optional_merge_section as optional_markdown_section, table_header, table_ranges,
+};
+use crate::{CommandOutcome, ProcessRunner};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
-use std::ffi::OsString;
 use std::fs;
 use std::io::Read;
-use std::path::{Component, Path, PathBuf};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
-
-#[path = "build_inputs.rs"]
-pub(crate) mod build_inputs;
 
 pub(crate) struct ProjectLock {
     _guard: crate::file_lock::FileLock,
@@ -425,40 +425,6 @@ fn plan_fingerprint(
     Ok(sha_raw(material.as_bytes()))
 }
 
-fn safe_join(root: &Path, raw: &str, label: &str) -> Result<PathBuf, String> {
-    if raw.is_empty() || raw.contains('\\') || raw.contains(['*', '?', '[']) {
-        return Err(format!("{label} is unsafe: {raw}"));
-    }
-    let relative = Path::new(raw);
-    if relative.is_absolute()
-        || relative.components().any(|part| {
-            matches!(
-                part,
-                Component::ParentDir | Component::RootDir | Component::Prefix(_)
-            )
-        })
-    {
-        return Err(format!("{label} is unsafe: {raw}"));
-    }
-    let target = root.join(relative);
-    let mut cursor = target.parent();
-    while let Some(path) = cursor {
-        if path == root {
-            break;
-        }
-        if path.exists()
-            && fs::symlink_metadata(path)
-                .map_err(|error| error.to_string())?
-                .file_type()
-                .is_symlink()
-        {
-            return Err(format!("{label} traverses a linked path: {raw}"));
-        }
-        cursor = path.parent();
-    }
-    Ok(target)
-}
-
 fn atomic_write(path: &Path, payload: &[u8]) -> Result<(), String> {
     crate::persistence::atomic_write(path, payload).map_err(|error| error.to_string())
 }
@@ -574,41 +540,6 @@ fn merge_agents(
     Ok(merged)
 }
 
-fn markdown_section(text: &str, heading: &str) -> Result<(usize, usize), String> {
-    optional_markdown_section(text, heading)?
-        .ok_or_else(|| format!("managed Markdown heading is missing or duplicated: {heading}"))
-}
-
-fn optional_markdown_section(text: &str, heading: &str) -> Result<Option<(usize, usize)>, String> {
-    let mut found = Vec::new();
-    let mut offset = 0;
-    for line in text.split_inclusive('\n') {
-        if line.trim_end_matches(['\r', '\n']) == heading {
-            found.push(offset);
-        }
-        offset += line.len();
-    }
-    if found.is_empty() {
-        return Ok(None);
-    }
-    if found.len() > 1 {
-        return Err(format!(
-            "managed Markdown heading is missing or duplicated: {heading}"
-        ));
-    }
-    let start = found[0];
-    let mut end = text.len();
-    let mut cursor = start;
-    for line in text[start..].split_inclusive('\n') {
-        if cursor > start && line.starts_with("## ") {
-            end = cursor;
-            break;
-        }
-        cursor += line.len();
-    }
-    Ok(Some((start, end)))
-}
-
 fn ensure_markdown_section(
     merged: &mut String,
     source: &str,
@@ -636,79 +567,6 @@ fn ensure_markdown_section(
     };
     merged.insert_str(insertion, &format!("{prefix}{}", &source[start..end]));
     markdown_section(merged, heading)
-}
-
-fn table_header(section: &str) -> Result<(&str, &str, usize), String> {
-    let lines = section.split_inclusive('\n').collect::<Vec<_>>();
-    let separators = lines
-        .iter()
-        .enumerate()
-        .filter(|(_, line)| {
-            let cells = line.trim().trim_matches('|').split('|').collect::<Vec<_>>();
-            line.trim_start().starts_with('|')
-                && cells.iter().all(|cell| {
-                    let cell = cell.trim().trim_matches(':');
-                    cell.len() >= 3 && cell.bytes().all(|byte| byte == b'-')
-                })
-        })
-        .collect::<Vec<_>>();
-    if separators.len() != 1 || separators[0].0 == 0 {
-        return Err("managed Markdown table is missing or ambiguous".into());
-    }
-    let (index, separator) = separators[0];
-    let header = lines[index - 1];
-    let columns = separator.trim().trim_matches('|').split('|').count();
-    if !header.trim_start().starts_with('|')
-        || header.trim().trim_matches('|').split('|').count() != columns
-    {
-        return Err("managed Markdown table header column count changed".into());
-    }
-    Ok((header, separator, columns))
-}
-
-fn table_ranges(section: &str) -> Result<Vec<(usize, usize)>, String> {
-    let lines = section.split_inclusive('\n').collect::<Vec<_>>();
-    let mut offsets = Vec::with_capacity(lines.len() + 1);
-    offsets.push(0);
-    for line in &lines {
-        offsets.push(offsets.last().unwrap() + line.len());
-    }
-    let mut ranges = Vec::new();
-    for (index, line) in lines.iter().enumerate() {
-        let cells = line.trim().trim_matches('|').split('|').collect::<Vec<_>>();
-        let separator = line.trim_start().starts_with('|')
-            && cells.iter().all(|cell| {
-                let cell = cell.trim().trim_matches(':');
-                cell.len() >= 3 && cell.bytes().all(|byte| byte == b'-')
-            });
-        if !separator {
-            continue;
-        }
-        if index == 0 {
-            return Err("managed Markdown table is missing or ambiguous".into());
-        }
-        let mut end = index + 1;
-        while end < lines.len() && lines[end].trim_start().starts_with('|') {
-            end += 1;
-        }
-        ranges.push((offsets[index - 1], offsets[end]));
-    }
-    Ok(ranges)
-}
-
-fn table_key(line: &str) -> Option<String> {
-    if !line.trim_start().starts_with('|') {
-        return None;
-    }
-    let raw = line.split('|').nth(1)?.trim();
-    let key = if let Some((_, href)) = raw.split_once("](") {
-        href.split(')').next().unwrap_or(href).to_string()
-    } else if let Some(rest) = raw.strip_prefix("[`") {
-        rest.split("`]").next().unwrap_or(rest).to_string()
-    } else {
-        raw.trim_matches('`').to_string()
-    };
-    (!key.is_empty() && !key.chars().all(|value| value == '-' || value == ':')).then_some(key)
 }
 
 fn merge_keyed_table(
@@ -1149,24 +1007,6 @@ fn generated_asset_current(project_root: &Path, item: &Value) -> Result<bool, St
         && document["lockfile_sha256"] == item["lockfile_sha256"]
         && document["build_recipe_sha256"] == item["build_recipe_sha256"]
         && document["self_test_sha256"] == item["self_test_sha256"])
-}
-
-fn json_contains(actual: &Value, expected: &Value) -> bool {
-    match (actual, expected) {
-        (Value::Object(actual), Value::Object(expected)) => expected.iter().all(|(key, value)| {
-            actual
-                .get(key)
-                .is_some_and(|item| json_contains(item, value))
-        }),
-        (Value::Array(actual), Value::Array(expected)) => {
-            actual.len() == expected.len()
-                && actual
-                    .iter()
-                    .zip(expected)
-                    .all(|(left, right)| json_contains(left, right))
-        }
-        _ => actual == expected,
-    }
 }
 
 fn current_platform() -> &'static str {
@@ -2636,191 +2476,6 @@ pub fn outcome_receipt_with_format(
             format,
             2,
         ),
-    }
-}
-
-pub(crate) fn generated_writes(
-    source_base: &Path,
-    source_key: &str,
-    project_root: &Path,
-    contract: &Value,
-    runner: &dyn ProcessRunner,
-) -> Result<(BTreeMap<PathBuf, Vec<u8>>, Vec<Value>), String> {
-    let generated = contract["generated_assets"]
-        .as_array()
-        .ok_or("generated_assets is missing")?;
-    let token = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_err(|error| error.to_string())?
-        .as_nanos();
-    let target_dir = std::env::temp_dir().join(format!(
-        "bridgeforge-generated-{}-{token}",
-        std::process::id()
-    ));
-    fs::create_dir_all(&target_dir).map_err(|error| error.to_string())?;
-    let result = (|| {
-        let mut writes = BTreeMap::new();
-        let mut receipts = Vec::new();
-        let mut snapshots = BTreeMap::<PathBuf, build_inputs::BuildInputs>::new();
-        for item in generated {
-            let id = item["id"].as_str().ok_or("generated asset id is missing")?;
-            let source_root = safe_join(
-                source_base,
-                item[source_key]
-                    .as_str()
-                    .ok_or_else(|| format!("generated {source_key} is missing"))?,
-                "generated source root",
-            )?;
-            let snapshot = target_dir.join(format!("source-{}", snapshots.len()));
-            // Reuse a verified snapshot for the Hook/CLI sharing one workspace.
-            if !snapshots.contains_key(&source_root) {
-                let inputs = build_inputs::BuildInputs::capture(&source_root, snapshot, item)?;
-                snapshots.insert(source_root.clone(), inputs);
-            }
-            let inputs = snapshots
-                .get(&source_root)
-                .ok_or("generated snapshot is missing")?;
-            inputs.verify_unchanged()?;
-            // Validate each asset's recipe/self-test too, including shared workspaces.
-            let binary = item["build"]["binary_name"]
-                .as_str()
-                .ok_or("missing binary_name")?;
-            let recipe = crate::manifest::generated_build_recipe(binary);
-            let recipe_sha = crate::manifest::canonical_sha(&recipe)?;
-            let self_test_sha = crate::manifest::canonical_sha(&item["self_test"])?;
-            if item["build"] != recipe
-                || item["build_recipe_sha256"] != recipe_sha
-                || item["self_test_sha256"] != self_test_sha
-                || item["source_tree_sha256"] != inputs.hashes["source_tree_sha256"]
-                || item["lockfile_sha256"] != inputs.hashes["lockfile_sha256"]
-                || item["manifest"] != "Cargo.toml"
-                || item["lockfile"] != "Cargo.lock"
-                || !matches!(binary, "bridgeforge" | "bridgeforge-hook")
-                || !item["self_test"]["expected_json"].is_object()
-            {
-                return Err("generated build input contract mismatch".into());
-            }
-            let manifest = inputs.snapshot.join("Cargo.toml");
-            let binary_name = item["build"]["binary_name"]
-                .as_str()
-                .ok_or("generated binary_name is missing")?;
-            // One target per isolated workspace shares dependency compilation.
-            // Remove this asset's final executable first: a successful no-op
-            // runner must never be able to validate the previous asset's output.
-            let output_dir = inputs.snapshot.with_extension("target");
-            let built = output_dir.join("release").join(if cfg!(windows) {
-                format!("{binary_name}.exe")
-            } else {
-                binary_name.into()
-            });
-            match fs::remove_file(&built) {
-                Ok(()) => {}
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                Err(error) => {
-                    return Err(format!(
-                        "cannot clear generated binary before build: {error}"
-                    ));
-                }
-            }
-            let mut request = ProcessRequest::new("cargo", &inputs.snapshot);
-            request.args = vec![
-                OsString::from("build"),
-                OsString::from("--locked"),
-                OsString::from("--profile"),
-                OsString::from("release"),
-                OsString::from("--manifest-path"),
-                manifest.into_os_string(),
-                OsString::from("--target-dir"),
-                output_dir.clone().into_os_string(),
-                OsString::from("--bin"),
-                OsString::from(binary_name),
-            ];
-            request.timeout = Duration::from_secs(900);
-            let output = runner.run(&request).map_err(|error| error.to_string())?;
-            if output.timed_out || output.code != 0 {
-                return Err(format!(
-                    "generated asset build failed: {id}: {}",
-                    String::from_utf8_lossy(&output.stderr).trim()
-                ));
-            }
-            let platform = if cfg!(windows) {
-                "windows-x86_64"
-            } else if cfg!(target_os = "linux") {
-                "linux-x86_64"
-            } else {
-                "macos-x86_64"
-            };
-            let target = safe_join(
-                project_root,
-                item["binary_targets"][platform]
-                    .as_str()
-                    .ok_or("generated binary target is missing")?,
-                "generated binary target",
-            )?;
-            let payload =
-                fs::read(&built).map_err(|error| format!("cannot read built binary: {error}"))?;
-            let self_test_args = item["self_test"]["args"]
-                .as_array()
-                .ok_or("generated self_test args are missing")?
-                .iter()
-                .map(|argument| {
-                    argument
-                        .as_str()
-                        .map(OsString::from)
-                        .ok_or("generated self_test arg must be text")
-                })
-                .collect::<Result<Vec<_>, _>>()?;
-            let mut self_test =
-                ProcessRequest::new(built.clone().into_os_string(), &inputs.snapshot);
-            self_test.args = self_test_args;
-            self_test.timeout = Duration::from_secs(60);
-            let tested = runner.run(&self_test).map_err(|error| error.to_string())?;
-            if tested.timed_out || tested.code != 0 {
-                return Err(format!("generated asset self-test failed: {id}"));
-            }
-            let actual: Value = serde_json::from_slice(&tested.stdout)
-                .map_err(|error| format!("generated asset self-test is not JSON: {id}: {error}"))?;
-            if !json_contains(&actual, &item["self_test"]["expected_json"]) {
-                return Err(format!("generated asset self-test contract mismatch: {id}"));
-            }
-            inputs.verify_unchanged()?;
-            if fs::read(&built).map_err(|error| error.to_string())? != payload {
-                return Err(format!("generated binary changed during self-test: {id}"));
-            }
-            let receipt = json!({
-                "schema_version": 2,
-                "generated_asset_id": id,
-                "platform": platform,
-                "binary_sha256": sha_raw(&payload),
-                "source_tree_sha256": inputs.hashes["source_tree_sha256"],
-                "lockfile_sha256": inputs.hashes["lockfile_sha256"],
-                "build_recipe_sha256": recipe_sha,
-                "self_test_sha256": self_test_sha,
-            });
-            let receipt_target = safe_join(
-                project_root,
-                item["receipt_target"]
-                    .as_str()
-                    .ok_or("receipt target is missing")?,
-                "generated receipt target",
-            )?;
-            let mut encoded =
-                serde_json::to_vec_pretty(&receipt).map_err(|error| error.to_string())?;
-            encoded.push(b'\n');
-            writes.insert(target, payload);
-            writes.insert(receipt_target, encoded);
-            receipts.push(receipt);
-        }
-        for inputs in snapshots.values() {
-            inputs.verify_unchanged()?;
-        }
-        Ok((writes, receipts))
-    })();
-    let cleanup = fs::remove_dir_all(&target_dir);
-    match (result, cleanup) {
-        (Ok(value), Ok(())) => Ok(value),
-        (Ok(_), Err(error)) => Err(format!("cannot remove generated build directory: {error}")),
-        (Err(error), _) => Err(error),
     }
 }
 

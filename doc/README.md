@@ -67,7 +67,15 @@ delivery_layout: flat
 
 ## Delivery topic
 
+本轮 R04：[自动索引刷新性能核验](1_delivery/project-map-refresh/requirements_2026-10-11_R04.md)（2026-10-11 已验收；保持索引及时性，区别于历史独立产物缓存 R04；含本轮 R01–R04 累计验收记录）。
+
+本轮 R03：[Memory 上传收尾归一](1_delivery/memory-publication-tail/requirements_2026-10-11_R03.md)（2026-10-11 已验收；区别于历史 R03 Memory CLI）。
+
+本轮 R01：[受管 Markdown 基础解析收拢](1_delivery/managed-markdown-parser/requirements_2026-10-10_R01.md)（2026-10-11 已验收；区别于下表历史扫描中的 R01 清理）。
+
 用户级指令分发：[确认卡与验证记录](1_delivery/user-agents-distribution/requirements_2026-09-27_user-agents.md)。
+
+本轮 R02：[共享构建能力独立](1_delivery/shared-generated-build/requirements_2026-10-11_R02.md)（2026-10-11 已验收；区别于历史 R02 公共持久化）。
 
 | Topic | 主要记录 |
 |---|---|

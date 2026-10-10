@@ -196,6 +196,38 @@ fn instruction_source_uses_trusted_public_hash_without_fixed_editorial_headings(
     );
 }
 
+#[test]
+fn project_maps_reference_regex_preserves_suffix_drive_and_punctuation() {
+    let fixture = Fixture::new();
+    seed_project_map_inputs(&fixture);
+    let cases = [
+        ("src/domain/mod.rs:12", true),
+        ("src/domain/mod.rs:12:3", true),
+        (r"src\domain\mod.rs:12", true),
+        ("src/domain/mod.rs:１２", true),
+        ("src/domain/mod.rs。", true),
+        ("src/domain/mod.rs:12.", false),
+        (r"C:\src\domain\mod.rs", false),
+        ("z:src/domain/mod.rs", false),
+        ("https://example.invalid/src/domain/mod.rs", false),
+        ("../src/domain/mod.rs", false),
+        ("src/missing.rs:9", false),
+        ("src/domain/*.rs", true),
+    ];
+    for (index, (reference, _)) in cases.iter().enumerate() {
+        fs::write(
+            fixture.root.join(format!("doc/0_architecture/design/case_{index:02}.md")),
+            format!("# Reference\n`{reference}`\n"),
+        ).unwrap();
+    }
+    let result = project_map::ensure_current();
+    assert_eq!(result.code, 0, "{}", result.stderr);
+    let output = fs::read_to_string(fixture.root.join(".runtime/bridgeforge-codex/sync-docs.map.md")).unwrap();
+    for (index, (reference, expected)) in cases.iter().enumerate() {
+        assert_eq!(output.contains(&format!("doc/0_architecture/design/case_{index:02}.md")), *expected, "{reference}");
+    }
+}
+
 fn seed_project_map_inputs(fixture: &Fixture) {
     fs::create_dir_all(fixture.root.join("src/domain")).unwrap();
     fs::create_dir_all(fixture.root.join("doc/0_architecture/design")).unwrap();

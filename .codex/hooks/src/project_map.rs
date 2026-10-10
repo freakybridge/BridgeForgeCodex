@@ -4,6 +4,7 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
 use walkdir::{DirEntry, WalkDir};
 
 use crate::StepResult;
@@ -228,6 +229,12 @@ fn reference_source(
     code_paths: &BTreeSet<String>,
     referenceable_paths: &BTreeSet<String>,
 ) -> Option<String> {
+    // Reuse compiled patterns across all references in this Hook invocation.
+    // Keep normalization order and matching semantics unchanged.
+    static LINE_SUFFIX: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r":\d+(?::\d+)?$").unwrap());
+    static WINDOWS_DRIVE: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"^[A-Za-z]:").unwrap());
     let mut candidate = raw
         .trim()
         .trim_matches(['"', '\'', '(', ')', '[', ']'])
@@ -235,8 +242,7 @@ fn reference_source(
     if let Some((path, _)) = candidate.split_once('§') {
         candidate = path.trim().to_string();
     }
-    candidate = Regex::new(r":\d+(?::\d+)?$")
-        .unwrap()
+    candidate = LINE_SUFFIX
         .replace(&candidate, "")
         .trim_end_matches(['.', ',', ';', '。', '，', '；'])
         .to_string();
@@ -244,7 +250,7 @@ fn reference_source(
         || candidate.starts_with(['/', '~'])
         || candidate.contains("://")
         || candidate.contains("..")
-        || Regex::new(r"^[A-Za-z]:").unwrap().is_match(&candidate)
+        || WINDOWS_DRIVE.is_match(&candidate)
     {
         return None;
     }

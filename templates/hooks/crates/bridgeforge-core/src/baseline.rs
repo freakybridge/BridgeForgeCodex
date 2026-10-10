@@ -1,3 +1,4 @@
+use crate::managed_markdown::{projection_rows as table_rows, projection_section as heading_section};
 use crate::{BaselineReport, BaselineState, ProcessRequest, ProcessRunner, SystemProcessRunner};
 use regex::Regex;
 use serde::Deserialize;
@@ -524,78 +525,6 @@ fn deep_subset(expected: &Value, actual: &Value, path: &str) -> Result<(), Strin
         return Err(format!("managed JSON value drifted: {path}"));
     }
     Ok(())
-}
-
-fn heading_section(payload: &[u8], heading: &str) -> Result<Vec<u8>, String> {
-    let text = String::from_utf8(payload.to_vec())
-        .map_err(|_| "managed Markdown is not UTF-8".to_string())?
-        .replace("\r\n", "\n")
-        .replace('\r', "\n");
-    let lines = text.split_inclusive('\n').collect::<Vec<_>>();
-    let starts = lines
-        .iter()
-        .enumerate()
-        .filter(|(_, line)| line.trim_end_matches('\n') == heading)
-        .map(|(index, _)| index)
-        .collect::<Vec<_>>();
-    let level = heading
-        .chars()
-        .take_while(|character| *character == '#')
-        .count();
-    if starts.len() != 1 || level == 0 {
-        return Err(format!(
-            "Markdown heading is missing or duplicated: {heading}"
-        ));
-    }
-    let stop = lines
-        .iter()
-        .enumerate()
-        .skip(starts[0] + 1)
-        .find(|(_, line)| {
-            let trimmed = line.trim_start();
-            let candidate = trimmed
-                .chars()
-                .take_while(|character| *character == '#')
-                .count();
-            candidate > 0 && candidate <= level && trimmed.chars().nth(candidate) == Some(' ')
-        })
-        .map(|(index, _)| index)
-        .unwrap_or(lines.len());
-    Ok(lines[starts[0]..stop].concat().into_bytes())
-}
-
-fn table_rows(section: &[u8]) -> Result<BTreeMap<String, Vec<u8>>, String> {
-    let text = String::from_utf8_lossy(section);
-    let lines = text
-        .lines()
-        .filter(|line| line.trim_start().starts_with('|'))
-        .collect::<Vec<_>>();
-    if lines.len() < 2 {
-        return Err("managed Markdown table is missing".into());
-    }
-    let link = Regex::new(r"^\[`[^`]+`\]\(([^)]+)\)$").map_err(|error| error.to_string())?;
-    let mut result = BTreeMap::new();
-    for line in lines.into_iter().skip(2) {
-        let mut key = line
-            .trim()
-            .trim_matches('|')
-            .split('|')
-            .next()
-            .unwrap_or("")
-            .trim()
-            .to_string();
-        if let Some(captures) = link.captures(&key) {
-            key = captures[1].to_string();
-        }
-        key = key.trim_matches('`').to_lowercase();
-        if result
-            .insert(key.clone(), format!("{line}\n").into_bytes())
-            .is_some()
-        {
-            return Err(format!("managed Markdown table key is duplicated: {key}"));
-        }
-    }
-    Ok(result)
 }
 
 pub(crate) fn markdown_projection(payload: &[u8], managed: &Value) -> Result<Value, String> {

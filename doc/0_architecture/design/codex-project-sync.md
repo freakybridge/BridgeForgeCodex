@@ -41,7 +41,25 @@ latest rebuild 不读取旧 `.codex/managed-skeleton.json` 的语义，也不按
 保留或删除；临时 `PreservationManifest` 只存在于本次事务内，在写最终戳前清空，不生成持久
 before 包或迁移账本。
 
+## 共享构建边界
+
+core 内部 `build_inputs` 负责受管输入快照及漂移验证，`generated_assets` 负责隔离 Cargo 构建、每个产物的自测、来源收据和构建目录清理；后者返回目标路径对应的字节及收据，不安装到项目目标。项目同步与工厂 Git 同步直接调用这一能力，项目 Hook 的旧格式兼容构建直接调用输入快照。
+
+`project_sync` 继续拥有项目锁、产物挂接、安装、版本戳及回滚；`git_sync_plan` 保留缓存决策与工厂写入计划；`project_hooks` 保留项目自有 Hook 的配置和兼容编译。共享构建不得反向调用项目同步。`managed_paths::safe_join` 原样承接上述两侧共用的受管相对路径检查，其他模块的不同路径策略不在此统一。
+
+`source_root` 与 `target_source_root`、Cargo 参数/超时、输入验证、自测、清理错误和收据 schema 均保持原合同。开发证据见[R02 需求卡](../../1_delivery/shared-generated-build/requirements_2026-10-11_R02.md)。
+
+## 受管 Markdown 解析边界
+
+`bridgeforge-core::managed_markdown` 是 core 内部的标题、表格和行标识解析实现。`project_sync` 负责合并、章节插入与升级判断，`baseline` 负责投影、哈希和漂移校验；`manifest` 继续使用 baseline 的投影生成合同。
+
+解析模块显式保留历史兼容策略：合并按下一个精确 `## ` 行结束章节，保留 key 大小写并接受原有链接形式；投影先归一化换行，按同级或更高层标题结束章节，对 key 转小写并沿用较窄的反引号链接语法。多表唯一候选选择仍属于合并策略，投影仍收集原有范围的行。注释和代码围栏不新增过滤规则。
+
+两侧职责集中不代表统一历史语义。改变上述规则、错误文本或投影哈希必须作为行为变更单独评估；R01 的旧实现样本与跨链路回归见[需求与证据](../../1_delivery/managed-markdown-parser/requirements_2026-10-10_R01.md)。
+
 ## 项目 Map 自动索引
+
+引用路径解析中的行号后缀与 Windows 盘符正则按 Hook 进程首次使用时编译，并在该进程内复用；不缓存路径、文档正文或索引输入。源码事件仍触发原有严格刷新，以便同时发现外部 AGENTS/文档修改。显式离线性能入口为 `scripts/tests/src/project_map_performance.rs`，只测隔离项目的 Stop 索引路径及进程开销，不代表完整 Codex 回复耗时。R04 的基线、输出等价性与复测结果见[交付卡](../../1_delivery/project-map-refresh/requirements_2026-10-11_R04.md)。
 
 `.runtime/bridgeforge-codex/find-doc.map.md` 与 `.runtime/bridgeforge-codex/sync-docs.map.md` 是骨架内生的本地运行时索引，禁止手工维护或加入 Git。`find-doc` 索引只从实际生效的根/嵌套 `AGENTS.md` 标题、作用目录和明确代码词建立主题到指令源的关系；`sync-docs` 索引只接受设计文档中明确引用且磁盘真实存在的源码路径。目录同名不是语义证据，无法证明的关系不进入 Map，由 Skill 继续搜索 fallback。
 

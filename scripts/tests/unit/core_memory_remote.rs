@@ -341,6 +341,201 @@ fn write_memory(root: &Path, name: &str, bytes: &[u8]) {
     fs::write(target, bytes).unwrap();
 }
 
+#[derive(Clone, Copy, Debug)]
+enum LocalPushBranch {
+    NoSnapshot,
+    EmptyRemote,
+    LocalChanged,
+}
+
+fn local_push_case(branch: LocalPushBranch) -> (RestoreFixture, LocalGit, PathBuf, PathBuf) {
+    let fixture = RestoreFixture::new();
+    let runner = LocalGit::new(&fixture.0);
+    let memories = fixture.0.join("local/memories");
+    let state = fixture.0.join("local/state");
+    fs::create_dir_all(&state).unwrap();
+    match branch {
+        LocalPushBranch::NoSnapshot => {}
+        LocalPushBranch::EmptyRemote => {
+            let empty = fixture.0.join("seed/memories");
+            let seed_state = fixture.0.join("seed/state");
+            fs::create_dir_all(&empty).unwrap();
+            fs::create_dir_all(&seed_state).unwrap();
+            assert_eq!(
+                reconcile(&empty, &seed_state, TEST_REMOTE, &runner).unwrap(),
+                "push"
+            );
+        }
+        LocalPushBranch::LocalChanged => {
+            write_memory(&memories, "note.md", b"baseline");
+            assert_eq!(
+                reconcile(&memories, &state, TEST_REMOTE, &runner).unwrap(),
+                "push"
+            );
+        }
+    }
+    write_memory(&memories, "note.md", b"local update");
+    mark_pending(&state, "before-upload").unwrap();
+    (fixture, runner, memories, state)
+}
+
+#[derive(Clone, Copy, Debug)]
+enum PublicationProbeMode {
+    Success,
+    PushFailure,
+    ReceiptFailure,
+    NewPending,
+}
+
+struct PublicationProbe<'a> {
+    inner: &'a LocalGit,
+    state: &'a Path,
+    mode: PublicationProbeMode,
+    before_synced: Option<Vec<u8>>,
+    before_pending: Vec<u8>,
+    pushes: std::cell::Cell<usize>,
+}
+
+impl ProcessRunner for PublicationProbe<'_> {
+    fn run(&self, request: &ProcessRequest) -> std::io::Result<crate::ProcessOutput> {
+        let is_push = request.args.first().is_some_and(|arg| arg == "push");
+        if is_push {
+            self.pushes.set(self.pushes.get() + 1);
+            // Publication must precede local receipt updates and queue clearing.
+            assert_eq!(
+                fs::read(self.state.join("last-synced.json")).ok(),
+                self.before_synced
+            );
+            assert_eq!(
+                fs::read(self.state.join("pending.json"))?,
+                self.before_pending
+            );
+            if matches!(self.mode, PublicationProbeMode::PushFailure) {
+                return Ok(crate::ProcessOutput {
+                    code: 1,
+                    stdout: Vec::new(),
+                    stderr: b"fixture push failed".to_vec(),
+                    timed_out: false,
+                });
+            }
+        }
+        let result = self.inner.run(request)?;
+        if is_push && result.code == 0 {
+            match self.mode {
+                PublicationProbeMode::ReceiptFailure => {
+                    let receipt = self.state.join("last-synced.json");
+                    if receipt.is_file() {
+                        fs::remove_file(&receipt)?;
+                    }
+                    fs::create_dir(receipt)?;
+                }
+                PublicationProbeMode::NewPending => {
+                    mark_pending(self.state, "during-upload").unwrap();
+                }
+                _ => {}
+            }
+        }
+        Ok(result)
+    }
+}
+
+#[test]
+fn local_publication_three_branches_preserve_order_errors_and_pending() {
+    for branch in [
+        LocalPushBranch::NoSnapshot,
+        LocalPushBranch::EmptyRemote,
+        LocalPushBranch::LocalChanged,
+    ] {
+        for mode in [
+            PublicationProbeMode::Success,
+            PublicationProbeMode::PushFailure,
+            PublicationProbeMode::ReceiptFailure,
+            PublicationProbeMode::NewPending,
+        ] {
+            let (_fixture, runner, memories, state) = local_push_case(branch);
+            let head_before = Git { runner: &runner }
+                .required(&runner.bare, &["rev-parse", "--verify", "main"])
+                .ok();
+            let before_synced = fs::read(state.join("last-synced.json")).ok();
+            let before_pending = fs::read(state.join("pending.json")).unwrap();
+            let probe = PublicationProbe {
+                inner: &runner,
+                state: &state,
+                mode,
+                before_synced: before_synced.clone(),
+                before_pending: before_pending.clone(),
+                pushes: std::cell::Cell::new(0),
+            };
+            let result = reconcile(&memories, &state, TEST_REMOTE, &probe);
+            assert_eq!(probe.pushes.get(), 1, "{branch:?} / {mode:?}");
+            match mode {
+                PublicationProbeMode::PushFailure => {
+                    assert!(
+                        result
+                            .unwrap_err()
+                            .to_string()
+                            .contains("fixture push failed")
+                    );
+                    assert_eq!(
+                        Git { runner: &runner }
+                            .required(&runner.bare, &["rev-parse", "--verify", "main"])
+                            .ok(),
+                        head_before
+                    );
+                    assert_eq!(fs::read(state.join("last-synced.json")).ok(), before_synced);
+                    assert_eq!(
+                        fs::read(state.join("pending.json")).unwrap(),
+                        before_pending
+                    );
+                }
+                PublicationProbeMode::ReceiptFailure => {
+                    assert!(
+                        result.is_err(),
+                        "{branch:?}: receipt failure must not return success"
+                    );
+                    assert_ne!(Some(runner.head()), head_before);
+                    assert_eq!(
+                        fs::read(state.join("pending.json")).unwrap(),
+                        before_pending
+                    );
+                }
+                PublicationProbeMode::Success | PublicationProbeMode::NewPending => {
+                    assert_eq!(result.unwrap(), "push");
+                    let synced = load_synced(&state).unwrap();
+                    assert_eq!(synced.commit, Some(runner.head()));
+                    assert_eq!(
+                        synced.revision,
+                        if matches!(branch, LocalPushBranch::NoSnapshot) {
+                            1
+                        } else {
+                            2
+                        }
+                    );
+                    validate_synced_baseline(&state).unwrap();
+                    assert_eq!(
+                        snapshot_files(&baseline_path(&state)).unwrap(),
+                        BTreeMap::from([("note.md".into(), b"local update".to_vec())])
+                    );
+                    if matches!(mode, PublicationProbeMode::Success) {
+                        assert!(!state.join("pending.json").exists());
+                    } else {
+                        assert_ne!(
+                            fs::read(state.join("pending.json")).unwrap(),
+                            before_pending
+                        );
+                        assert!(
+                            super::super::worker::read_pending(&state)
+                                .unwrap()
+                                .is_some()
+                        );
+                    }
+                }
+            }
+            assert_eq!(fs::read(memories.join("note.md")).unwrap(), b"local update");
+        }
+    }
+}
+
 fn reverse_manifest_order(snapshot: &Path) -> SnapshotManifest {
     let mut manifest = super::super::read_manifest(snapshot).unwrap();
     manifest.files.reverse();
