@@ -41,6 +41,12 @@ latest rebuild 不读取旧 `.codex/managed-skeleton.json` 的语义，也不按
 保留或删除；临时 `PreservationManifest` 只存在于本次事务内，在写最终戳前清空，不生成持久
 before 包或迁移账本。
 
+## 内容合并边界
+
+`project_sync/content.rs` 负责 AGENTS 区域、受管 Markdown、Hook JSON、普通 JSON、区域替换和 seed/whole/merge 策略的内容转换，继续复用 `managed_markdown` 基础解析。输入是已经读取的字节、资产规则及项目路径信息，输出为新字节或原有错误；该模块不读写文件，也不调用计划或事务。
+
+`project_sync::render_asset` 保留路径校验和文件读取，优先将迁移提供的内容交给转换器，并单独返回磁盘原始字节用于计划与漂移判定。计划、确认、指纹、锁、落盘、回滚和版本戳顺序仍归 `project_sync`，公开入口与合同 schema 不变。
+
 ## 共享构建边界
 
 core 内部 `build_inputs` 负责受管输入快照及漂移验证，`generated_assets` 负责隔离 Cargo 构建、每个产物的自测、来源收据和构建目录清理；后者返回目标路径对应的字节及收据，不安装到项目目标。项目同步与工厂 Git 同步直接调用这一能力，项目 Hook 的旧格式兼容构建直接调用输入快照。

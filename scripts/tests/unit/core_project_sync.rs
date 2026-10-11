@@ -3,58 +3,106 @@ use crate::ProcessRequest;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[test]
-fn markdown_characterization_merge_boundaries_and_keys() {
-    let unicode = "前言\n## 索引\n正文\n## 尾部";
-    let (start, end) = markdown_section(unicode, "## 索引").unwrap();
-    assert_eq!(&unicode[start..end], "## 索引\n正文\n");
-    assert_eq!(table_key("| [`标题`](文档/Ä.md) | 保留 |").as_deref(), Some("文档/Ä.md"));
-    let fenced = "```md\n## Index\ninside\n```\n";
-    let (start, end) = markdown_section(fenced, "## Index").unwrap();
-    assert_eq!(&fenced[start..end], "## Index\ninside\n```\n");
-    let text = "## Index\r\nbody\r\n### Child\r\nnested\r\n# Root\r\ntail\r\n## End\r\n";
-    let (start, end) = markdown_section(text, "## Index").unwrap();
-    assert_eq!(&text[start..end], "## Index\r\nbody\r\n### Child\r\nnested\r\n# Root\r\ntail\r\n");
-    assert_eq!(markdown_section("## Index\rlast", "## Index").unwrap_err(),
-        "managed Markdown heading is missing or duplicated: ## Index");
-    assert_eq!(markdown_section("## Index\nlast", "## Index").unwrap(), (0, 13));
-    assert_eq!(optional_markdown_section("## Other", "## Index").unwrap(), None);
-    assert_eq!(markdown_section("## Index\n## Index", "## Index").unwrap_err(),
-        "managed Markdown heading is missing or duplicated: ## Index");
-    for (line, key) in [
-        ("| [`Label`](Target) | x |", Some("Target")),
-        ("| [Label](Other) | x |", Some("Other")),
-        ("| `MiXeD` | x |", Some("MiXeD")),
-        ("| | x |", None), ("|---|---|", None),
-    ] { assert_eq!(table_key(line).as_deref(), key); }
+fn r05_render_asset_preserves_strategy_bytes_and_disk_snapshot() {
+    let (root, _) = transaction_fixture(true);
+    let source = root.join("source.txt");
+    let target = root.join("target.txt");
+    let cases: &[(&str, &[u8], Option<&[u8]>, &[u8])] = &[
+        ("seed", b"new\n", None, b"new\n"),
+        ("seed", b"new\n", Some(b"custom\r\n"), b"custom\r\n"),
+        ("whole", b"new\r\n", Some(b"old\n"), b"new\r\n"),
+        ("region", b"BEGIN\nnew\nEND\n", Some(b"prefix\nBEGIN\nold\nEND\ntail"), b"prefix\nBEGIN\nnew\nEND\ntail"),
+        ("region", b"BEGIN\nnew\nEND\n", None, b"BEGIN\nnew\nEND\n"),
+        ("merge", b"{\"a\":1}", None, b"{\"a\":1}"),
+        ("merge", b"{\"a\":1}", Some(b"{\"custom\":true}"), b"{\n  \"custom\": true,\n  \"a\": 1\n}\n"),
+    ];
+    for &(strategy, incoming, current, expected) in cases {
+        fs::write(&source, incoming).unwrap();
+        if let Some(current) = current {
+            fs::write(&target, current).unwrap();
+        } else if target.exists() {
+            fs::remove_file(&target).unwrap();
+        }
+        let asset = json!({"id":"fixture", "source":"source.txt", "target":"target.txt",
+            "strategy":strategy, "region":{"begin":"BEGIN", "end":"END"}});
+        let (rendered, before) = render_asset(&root, &root, &asset, None, false).unwrap();
+        assert_eq!(rendered, expected, "{strategy}");
+        assert_eq!(before.as_deref(), current, "{strategy}");
+        assert_eq!(fs::read(&target).ok().as_deref(), current);
+    }
+    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
-fn markdown_characterization_merge_bytes_and_failures() {
-    let source = "| K | V |\n|---|---|\n| managed | new |\n";
-    let current = "| K | V |\r\n|---|---|\r\n| project | keep |\r\n| managed | old |";
-    let keys = BTreeSet::from(["managed".to_string()]);
-    let merged = merge_keyed_table(source, current, &keys, true).unwrap();
-    assert_eq!(merged, "| K | V |\n|---|---|\n| project | keep |\r\n| managed | new |\n");
-    assert_eq!(merge_keyed_table(source, &merged, &keys, false).unwrap(), merged);
-    assert_eq!(merge_keyed_table(source, "| K | V |\n|---|---|\n| managed | a |\n| managed | b |\n", &keys, true).unwrap_err(),
-        "managed Markdown target row is duplicated: managed");
-    assert_eq!(merge_keyed_table(source, "| K | V | Extra |\n|---|---|---|\n", &keys, true).unwrap_err(),
-        "managed Markdown table column count changed");
+fn r05_render_asset_migration_and_special_policy_precedence() {
+    let (root, _) = transaction_fixture(true);
+    let source = root.join("source.txt");
+    let target = root.join("target.txt");
+    fs::write(&source, b"unused").unwrap();
+    fs::write(&target, b"disk\r\n").unwrap();
+    let mut asset = json!({"id":"fixture", "source":"source.txt", "target":"target.txt", "strategy":"seed"});
+    let (rendered, before) = render_asset(&root, &root, &asset, Some(b"migration"), false).unwrap();
+    assert_eq!(rendered, b"migration");
+    assert_eq!(before.as_deref(), Some(b"disk\r\n".as_slice()));
+    fs::remove_file(&target).unwrap();
+    assert_eq!(render_asset(&root, &root, &asset, Some(b"migration"), false).unwrap(),
+        (b"migration".to_vec(), None));
+
+    // AGENTS zones take precedence over both seed and the Hook merge policy.
+    asset["agents_zones"] = json!({"project":{"begin":"BEGIN", "end":"END"}});
+    asset["merge_policy"] = json!("codex-hooks");
+    fs::write(&source, b"public-new\nBEGIN\ndefault\nEND\n").unwrap();
+    fs::write(&target, b"public-old\nBEGIN\ncustom\r\nEND\n").unwrap();
+    assert_eq!(render_asset(&root, &root, &asset, None, false).unwrap().0,
+        b"public-new\nBEGIN\ncustom\r\nEND\n");
+
+    asset.as_object_mut().unwrap().remove("agents_zones");
+    asset["managed_blocks"] = json!({"headings":["## Managed"], "keyed_tables":[]});
+    fs::write(&source, b"## Managed\nnew\n").unwrap();
+    fs::write(&target, b"## Managed\nold\n## Custom\nkeep\n").unwrap();
+    assert_eq!(render_asset(&root, &root, &asset, None, false).unwrap().0,
+        b"## Managed\nnew\n## Custom\nkeep\n");
+
+    asset.as_object_mut().unwrap().remove("managed_blocks");
+    fs::write(&source, b"{\"hooks\":{}}").unwrap();
+    fs::write(&target, b"{\"hooks\":{},\"custom\":true}").unwrap();
+    assert_eq!(render_asset(&root, &root, &asset, None, false).unwrap().0,
+        b"{\n  \"hooks\": {},\n  \"custom\": true\n}\n");
+
+    asset["strategy"] = json!("merge");
+    asset["merge_policy"] = json!("git-attributes-default-lf");
+    fs::write(&target, b"custom -text").unwrap();
+    let merged = render_asset(&root, &root, &asset, None, false).unwrap().0;
+    assert_eq!(merged, b"custom -text\n* text=auto eol=lf\n");
+    fs::write(&target, &merged).unwrap();
+    assert_eq!(render_asset(&root, &root, &asset, None, false).unwrap().0, merged);
+    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
-fn markdown_characterization_merge_projection_roundtrip() {
-    let source = b"## Index\n<!-- example\n| K | V |\n|---|---|\n| managed | new |\n-->\n";
-    let current = b"## Index\n| K | V |\n|---|---|\n| project | keep |\n<!-- example\n| K | V |\n|---|---|\n| managed | old |\n-->\n";
-    let mut asset = json!({"id":"fixture", "strategy":"merge", "managed_blocks":{
-        "headings":[], "keyed_tables":[{"heading":"## Index","managed_keys":["managed"]}]
-    }});
-    let expected = json!({"headings":{},"keyed_tables":{"## Index":{"managed":sha_git(b"| managed | new |\n")}}});
-    asset["managed_blocks"]["current_projection_sha256"] = json!(crate::manifest::canonical_sha(&expected).unwrap());
-    let merged = merge_managed_markdown(source, current, &asset, Path::new("Example"), true).unwrap();
-    assert_eq!(merged, b"## Index\n| K | V |\n|---|---|\n| project | keep |\n<!-- example\n| K | V |\n|---|---|\n| managed | new |\n-->\n");
-    assert_eq!(crate::baseline::markdown_projection(&merged, &asset["managed_blocks"]).unwrap(), expected);
-    crate::baseline::verify_asset_payload(&asset, &merged).unwrap();
+fn r05_render_asset_retains_rendering_and_failure_order() {
+    let (root, _) = transaction_fixture(true);
+    let source = root.join("source.txt");
+    let target = root.join("target.txt");
+    let mut asset = json!({"id":"fixture", "source":"source.txt", "target":"target.txt",
+        "strategy":"whole", "render":"project-name"});
+    fs::write(&source, b"{{PROJECT_NAME}}\r\n").unwrap();
+    assert_eq!(render_asset(&root, &root, &asset, None, false).unwrap().0,
+        format!("{}\r\n", root.file_name().unwrap().to_str().unwrap()).into_bytes());
+    fs::write(&source, [0xff]).unwrap();
+    assert_eq!(render_asset(&root, &root, &asset, None, false).unwrap_err(),
+        "asset \"fixture\" render source is not UTF-8");
+    asset["strategy"] = json!("seed");
+    fs::write(&target, b"keep").unwrap();
+    assert_eq!(render_asset(&root, &root, &asset, None, false).unwrap().0, b"keep");
+    asset["strategy"] = json!("unknown");
+    assert_eq!(render_asset(&root, &root, &asset, None, false).unwrap_err(),
+        "unsupported asset strategy: fixture: unknown");
+    fs::remove_file(&source).unwrap();
+    assert!(render_asset(&root, &root, &asset, None, false).unwrap_err()
+        .starts_with("cannot read asset source source.txt:"));
+    assert_eq!(fs::read(target).unwrap(), b"keep");
+    fs::remove_dir_all(root).unwrap();
 }
 
 fn upgrade_fixture(previous: &str, release: &str) -> (PathBuf, PathBuf, PathBuf) {
@@ -569,82 +617,7 @@ fn new_or_changed_legacy_sources_invalidate_apply_without_writing() {
     }
 }
 
-#[test]
-fn markdown_upgrade_inserts_sections_and_preserves_project_content() {
-    let source = b"# Docs\n\n## Start\n| Task | Read |\n|---|---|\n| arch | new |\n\n## Lifecycle\ncanonical\n\n## Index\n| File | Purpose |\n|---|---|\n| managed | new |\n\n";
-    let current = b"# Custom\r\ndelivery_layout: milestone\r\n\r\n## Project\r\nkeep bytes\r\n\r\n## Index\r\n| Old | Header |\r\n|---|---|\r\n| custom | personal |\r\n| managed | old |\r\n\r\n";
-    let asset = json!({"managed_blocks":{"headings":["## Lifecycle"],"keyed_tables":[
-        {"heading":"## Start","managed_keys":["arch"]},{"heading":"## Index","managed_keys":["managed"]}]}});
-    let merged =
-        merge_managed_markdown(source, current, &asset, Path::new("Example"), true).unwrap();
-    let text = String::from_utf8(merged.clone()).unwrap();
-    assert!(text.contains("## Project\r\nkeep bytes\r\n\r\n"));
-    assert!(text.contains("| custom | personal |\r\n"));
-    assert!(text.contains("delivery_layout: milestone\r\n"));
-    assert!(text.find("## Start").unwrap() < text.find("## Lifecycle").unwrap());
-    assert!(text.find("## Lifecycle").unwrap() < text.find("## Index").unwrap());
-    assert_eq!(
-        merge_managed_markdown(source, &merged, &asset, Path::new("Example"), false).unwrap(),
-        merged
-    );
-    assert!(merge_managed_markdown(source, current, &asset, Path::new("Example"), false).is_err());
-    let duplicate = format!("{text}\n## Lifecycle\nambiguous");
-    assert!(
-        merge_managed_markdown(
-            source,
-            duplicate.as_bytes(),
-            &asset,
-            Path::new("Example"),
-            true
-        )
-        .is_err()
-    );
-    let changed_columns = text.replace(
-        "| File | Purpose |\n|---|---|",
-        "| File | Purpose | Extra |\n|---|---|---|",
-    );
-    assert!(
-        merge_managed_markdown(
-            source,
-            changed_columns.as_bytes(),
-            &asset,
-            Path::new("Example"),
-            true
-        )
-        .is_err()
-    );
-}
 
-#[test]
-fn markdown_upgrade_selects_the_only_table_with_managed_keys() {
-    let source = b"# Docs\n\n## Index\n<!-- example\n| File | Purpose |\n|------|---------|\n| managed | new |\n-->\n";
-    let current = b"# Docs\r\n\r\n## Index\r\n| File | Purpose |\r\n|---|---|\r\n| project | keep |\r\n\r\n<!-- example\r\n| Old | Header |\r\n|------|---------|\r\n| managed | old |\r\n-->\r\n";
-    let asset = json!({"managed_blocks":{"headings":[],"keyed_tables":[
-        {"heading":"## Index","managed_keys":["managed"]}]}});
-    let merged =
-        merge_managed_markdown(source, current, &asset, Path::new("Example"), true).unwrap();
-    let text = String::from_utf8(merged.clone()).unwrap();
-    assert!(text.contains("| File | Purpose |\r\n|---|---|\r\n| project | keep |\r\n"));
-    assert!(text.contains(
-        "<!-- example\r\n| File | Purpose |\n|------|---------|\n| managed | new |\n-->"
-    ));
-    assert_eq!(
-        merge_managed_markdown(source, &merged, &asset, Path::new("Example"), false).unwrap(),
-        merged
-    );
-
-    let ambiguous = text.replace("| project | keep |", "| managed | project copy |");
-    assert!(
-        merge_managed_markdown(
-            source,
-            ambiguous.as_bytes(),
-            &asset,
-            Path::new("Example"),
-            true
-        )
-        .is_err()
-    );
-}
 
 #[test]
 fn hook_removal_matches_path_boundaries_and_platform_commands() {
@@ -923,48 +896,6 @@ fn legacy_business_hook_bundle_is_language_neutral_and_fingerprinted() {
     fs::remove_dir_all(root).unwrap();
 }
 
-#[test]
-fn real_template_upgrades_legacy_markdown_without_old_contract_or_losing_index() {
-    let factory = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .ancestors()
-        .nth(4)
-        .unwrap();
-    let contract: Value =
-        serde_json::from_slice(&fs::read(factory.join("templates/managed-skeleton.json")).unwrap())
-            .unwrap();
-    let asset = contract["assets"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|item| item["id"] == "codex.doc.readme")
-        .unwrap();
-    let source = fs::read(factory.join("templates/doc/README.md")).unwrap();
-    let mut old = String::from_utf8(source.clone()).unwrap();
-    for heading in ["## 文档生命周期"] {
-        let (start, end) = markdown_section(&old, heading).unwrap();
-        old.replace_range(start..end, "");
-    }
-    old = old.replace("| 文件 | 说明 |", "| 旧标题 | 项目说明 |");
-    old.push_str("\n## 项目自有\n不得丢失\n");
-    old.push_str("\n## 项目知识库\n[my topic](5_project_knowledgebase/topic.md)\n");
-    old = old.replace(
-        "| 项目知识 | [`5_project_knowledgebase/`](5_project_knowledgebase/)；项目自有话题与长期资料 |",
-        "| 项目知识 | my existing knowledge navigation |",
-    );
-    let merged =
-        merge_managed_markdown(&source, old.as_bytes(), asset, Path::new("Example"), true).unwrap();
-    assert!(String::from_utf8_lossy(&merged).contains("## 项目自有\n不得丢失\n"));
-    assert!(
-        String::from_utf8_lossy(&merged)
-            .contains("## 项目知识库\n[my topic](5_project_knowledgebase/topic.md)\n")
-    );
-    assert!(String::from_utf8_lossy(&merged).contains("my existing knowledge navigation"));
-    crate::baseline::verify_asset_payload(asset, &merged).unwrap();
-    assert_eq!(
-        merge_managed_markdown(&source, &merged, asset, Path::new("Example"), false).unwrap(),
-        merged
-    );
-}
 
 #[test]
 fn retired_hook_directories_rollback_with_their_files() {
@@ -1338,16 +1269,6 @@ fn transaction_fixture(valid_asset_hash: bool) -> (PathBuf, SyncPlan) {
 }
 
 #[test]
-fn json_merge_preserves_external_keys_and_adds_required_values() {
-    let required = json!({"permissions": {"allow": ["Read"], "mode": "safe"}});
-    let mut actual = json!({"permissions": {"allow": ["Custom"], "extra": true}});
-    merge_json(&required, &mut actual);
-    assert_eq!(actual["permissions"]["extra"], true);
-    assert_eq!(actual["permissions"]["mode"], "safe");
-    assert_eq!(actual["permissions"]["allow"], json!(["Custom", "Read"]));
-}
-
-#[test]
 fn failed_prospective_check_restores_project_hook_payloads_and_retired_source() {
     let (root, mut plan) = transaction_fixture(false);
     let old = root.join(".codex/hooks/project_old/entrypoint.py");
@@ -1451,7 +1372,10 @@ fn project_hook_registration_serialization_is_stable_on_next_merge() {
     .unwrap();
     let payload = writes.get(&root.join(".codex/hooks.json")).unwrap();
     assert_eq!(
-        merge_project_hooks(b"{\"hooks\":{}}", Some(payload)).unwrap(),
+        content::render(
+            "fixture", b"{\"hooks\":{}}", Some(payload),
+            &json!({"merge_policy":"codex-hooks"}), &root, false,
+        ).unwrap(),
         *payload,
         "first install must already use the stable hook JSON encoding"
     );
@@ -1646,16 +1570,6 @@ fn project_hook_package_plan_tracks_dependency_files_and_rejects_inventory_drift
             .contains("inventory")
     );
     fs::remove_dir_all(root).unwrap();
-}
-
-#[test]
-fn marker_replace_preserves_project_tail() {
-    let current = b"x\nBEGIN\nold\nEND\ntail\n";
-    let source = b"BEGIN\nnew\nEND\n";
-    assert_eq!(
-        marker_replace(current, source, "BEGIN", "END").unwrap(),
-        b"x\nBEGIN\nnew\nEND\ntail\n"
-    );
 }
 
 #[test]

@@ -1,5 +1,8 @@
 use super::*;
 
+#[path = "core_memory_performance.rs"]
+mod performance;
+
 struct RestoreFixture(PathBuf);
 impl RestoreFixture {
     fn new() -> Self {

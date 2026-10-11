@@ -67,6 +67,10 @@ delivery_layout: flat
 
 ## Delivery topic
 
+本轮 R06：[Memory 快照加载基线](1_delivery/memory-snapshot-baseline/requirements_2026-10-11_R06.md)（2026-10-11 已验收；基线与工程检查通过，采纳暂缓优化结论，生产实现未改）。
+
+本轮 R05：[项目同步内容合并职责拆分](1_delivery/project-sync-content/requirements_2026-10-11_R05.md)（2026-10-11 已验收；工程验证与独立审计通过，保持内容结果与安全事务行为）。
+
 本轮 R04：[自动索引刷新性能核验](1_delivery/project-map-refresh/requirements_2026-10-11_R04.md)（2026-10-11 已验收；保持索引及时性，区别于历史独立产物缓存 R04；含本轮 R01–R04 累计验收记录）。
 
 本轮 R03：[Memory 上传收尾归一](1_delivery/memory-publication-tail/requirements_2026-10-11_R03.md)（2026-10-11 已验收；区别于历史 R03 Memory CLI）。
