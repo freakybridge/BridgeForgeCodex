@@ -368,6 +368,52 @@ fn doc_structure_accepts_directory_instructions() {
 }
 
 #[test]
+fn structure_and_archive_agree_with_unfinished_independent_todos() {
+    let f = Fixture::new();
+    write(
+        &f.0.join("doc/README.md"),
+        "---\ndelivery_layout: flat\n---\nDemo\n",
+    );
+    write(
+        &f.0.join("doc/1_delivery/demo/requirements_test.md"),
+        "---\nlifecycle: completed\nvalidation_status: verified\n---\nUser accepted\n",
+    );
+    write(
+        &f.0.join("doc/1_delivery/demo/scan.md"),
+        "---\nlifecycle: active\n---\nHistorical scan\n",
+    );
+    let table = "| 编号 | 日期 | 内容 | 状态 | 归属 | 关联文档 |\n|---|---|---|---|---|---|\n| TODO-001 | 2026-10-11 | 后续验证 | 待验证 | 后续事项 | [来源](../1_delivery/demo/requirements_test.md) |\n";
+    write(&f.0.join("doc/0_architecture/TODO-INDEX.md"), table);
+    let report = bridgeforge_core::project_structure::inspect(&f.0);
+    assert!(report.errors.is_empty(), "{:?}", report.errors);
+    let candidates = bridgeforge_core::archive_scan::scan(&f.0).unwrap();
+    assert_eq!(candidates.len(), 1);
+    assert_eq!(
+        report
+            .advisories
+            .iter()
+            .filter(|item| item.code.ends_with("archive-candidate"))
+            .count(),
+        candidates.len()
+    );
+    write(
+        &f.0.join("doc/0_architecture/TODO-INDEX.md"),
+        table.replace("后续事项", "原需求"),
+    );
+    assert!(
+        bridgeforge_core::archive_scan::scan(&f.0)
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        !bridgeforge_core::project_structure::inspect(&f.0)
+            .advisories
+            .iter()
+            .any(|item| item.code.ends_with("archive-candidate"))
+    );
+}
+
+#[test]
 fn doc_structure_rejects_unexpected_entries() {
     for (name, directory) in [
         ("extra.md", false),

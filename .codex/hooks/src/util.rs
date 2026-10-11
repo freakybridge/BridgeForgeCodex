@@ -160,14 +160,6 @@ pub fn relative_display(root: &Path, path: &Path) -> String {
         .replace('\\', "/")
 }
 
-pub fn read_utf8(path: &Path) -> std::io::Result<String> {
-    let bytes = fs::read(path)?;
-    let bytes = bytes.strip_prefix(&[0xef, 0xbb, 0xbf]).unwrap_or(&bytes);
-    Ok(String::from_utf8_lossy(bytes)
-        .replace("\r\n", "\n")
-        .replace('\r', "\n"))
-}
-
 pub fn run_command<I, S>(
     program: &str,
     args: I,

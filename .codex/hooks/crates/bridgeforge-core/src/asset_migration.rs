@@ -298,7 +298,7 @@ pub fn validate_manifest(
                 .get(".codex/hooks.json")
                 .ok_or("hook migration requires its hooks.json registration")?;
             let document =
-                crate::baseline::parse_unique_json(&registration.payload, "hook registration")?;
+                crate::json::parse_unique_json(&registration.payload, "hook registration")?;
             let registry = targets.get(crate::project_hooks::REGISTRY_PATH);
             let document = crate::project_hooks::with_registry(
                 &document,

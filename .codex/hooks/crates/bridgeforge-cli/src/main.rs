@@ -126,6 +126,21 @@ fn check(command: &str, args: &[String]) -> CommandOutcome {
                 Err(error) => blocked("current-baseline", error),
             }
         }
+        "todo" => {
+            if has(args, "--contract") {
+                return CommandOutcome::with_receipt(bridgeforge_core::todo::contract());
+            }
+            let report = bridgeforge_core::todo::inspect(context.root());
+            CommandOutcome {
+                code: if report.errors.is_empty() {
+                    0
+                } else {
+                    EXIT_BLOCKED
+                },
+                receipt: Some(serde_json::to_value(report).unwrap()),
+                ..CommandOutcome::default()
+            }
+        }
         "project-structure" => {
             let report = bridgeforge_core::project_structure::inspect(context.root());
             CommandOutcome {
@@ -371,7 +386,10 @@ fn git_sync(args: &[String]) -> CommandOutcome {
         return bridgeforge_core::git_sync::release_status(context.root(), &SystemProcessRunner);
     }
     if has(args, "--development-status") {
-        return bridgeforge_core::git_sync::development_status(context.root(), &SystemProcessRunner);
+        return bridgeforge_core::git_sync::development_status(
+            context.root(),
+            &SystemProcessRunner,
+        );
     }
     if has(args, "--prepare-release") {
         let message = if let Some(path) = value(args, "--message-file") {

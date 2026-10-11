@@ -2,6 +2,57 @@ use super::*;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[test]
+fn todo_contract_query_is_read_only_and_invalid_table_blocks_archive() {
+    let root = std::env::temp_dir().join(format!(
+        "bf-cli-todo-{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    fs::create_dir_all(root.join("doc/0_architecture")).unwrap();
+    let args = vec![
+        "check".into(),
+        "todo".into(),
+        "--root".into(),
+        root.display().to_string(),
+        "--contract".into(),
+    ];
+    let result = run(&args);
+    assert_eq!(result.code, 0);
+    assert_eq!(
+        result.receipt.unwrap()["columns"].as_array().unwrap().len(),
+        6
+    );
+    let file = root.join("doc/0_architecture/TODO-INDEX.md");
+    assert!(!file.exists(), "contract query must not initialize a table");
+    fs::write(&file, "damaged table\n").unwrap();
+    let before = fs::read(&file).unwrap();
+    let result = run(&[
+        "check".into(),
+        "todo".into(),
+        "--root".into(),
+        root.display().to_string(),
+    ]);
+    assert_eq!(result.code, EXIT_BLOCKED);
+    assert!(
+        !result.receipt.unwrap()["errors"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    let result = run(&[
+        "archive-scan".into(),
+        "--root".into(),
+        root.display().to_string(),
+    ]);
+    assert_eq!(result.code, EXIT_BLOCKED);
+    assert_eq!(fs::read(&file).unwrap(), before);
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn user_instruction_staging_rejects_preview_flags_before_writing() {
     for flag in ["--check", "--dry-run"] {
         let args = vec!["user-agents-stage".into(), flag.into()];

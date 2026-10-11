@@ -26,7 +26,7 @@ pub(crate) use package::{Input, capture_input, verify_reads};
 pub(crate) fn with_registry(document: &Value, sidecar: Option<&[u8]>) -> Result<Value, String> {
     let mut combined = document.clone();
     if let Some(payload) = sidecar {
-        let registry = crate::baseline::parse_unique_json(payload, REGISTRY_PATH)?;
+        let registry = crate::json::parse_unique_json(payload, REGISTRY_PATH)?;
         if let Some(legacy) = document.get(REGISTRY) {
             if legacy != &registry {
                 return Err(
@@ -255,7 +255,7 @@ pub(crate) fn current(root: &Path, hook: &Hook, identity: &str) -> Result<bool, 
     let Some(receipt) = read(root, &hook.receipt())? else {
         return Ok(false);
     };
-    let Ok(document) = crate::baseline::parse_unique_json(&receipt, "project hook receipt") else {
+    let Ok(document) = crate::json::parse_unique_json(&receipt, "project hook receipt") else {
         return Ok(false);
     };
     Ok(document
@@ -267,7 +267,7 @@ pub(crate) fn owned(root: &Path, hook: &Hook) -> Result<bool, String> {
     let Some(payload) = read(root, &hook.receipt())? else {
         return Ok(false);
     };
-    let Ok(receipt) = crate::baseline::parse_unique_json(&payload, "project hook receipt") else {
+    let Ok(receipt) = crate::json::parse_unique_json(&payload, "project hook receipt") else {
         return Ok(false);
     };
     let Some(input) = receipt["input_sha256"].as_str() else {
@@ -287,7 +287,7 @@ pub(crate) fn verify(root: &Path, contract: &Value, runtime: bool) -> Result<Vec
         }
         return Ok(Vec::new());
     };
-    let document = crate::baseline::parse_unique_json(&payload, "hooks.json")?;
+    let document = crate::json::parse_unique_json(&payload, "hooks.json")?;
     let combined = with_registry(&document, sidecar.as_deref())?;
     if render(&combined)? != document {
         return Err("project Rust hook registrations drifted".into());
@@ -477,7 +477,7 @@ fn build_legacy(
         test.args = vec!["--bridgeforge-self-test".into()];
         test.timeout = Duration::from_secs(30);
         let tested = runner.run(&test).map_err(|e| e.to_string())?;
-        let actual = crate::baseline::parse_unique_json(&tested.stdout, "project hook self-test")?;
+        let actual = crate::json::parse_unique_json(&tested.stdout, "project hook self-test")?;
         if tested.timed_out
             || tested.code != 0
             || actual != json!({"id":hook.id,"input_sha256":fingerprint,"status":"ok"})

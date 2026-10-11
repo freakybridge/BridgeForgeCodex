@@ -64,6 +64,8 @@ delivery_layout: flat # flat | milestone；初始化时确认，已有项目不�
 
 ## 0_architecture/
 
+项目待办使用 `0_architecture/TODO-INDEX.md`；确有获准事项时按 todo 合同创建并登记入口。confirm 正式落盘记账，summary accept 更新状态/收口，查询只读，不支持删除条目。字段与状态合同随受管 Rust 源码分发，可用 `bridgeforge check todo --contract` 查看；初始化不创建空总表。
+
 <!-- TODO: 列入 PRD / Roadmap / 核心需求文档
 | 文件 | 说明 |
 |------|------|

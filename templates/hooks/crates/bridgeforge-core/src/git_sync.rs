@@ -82,7 +82,7 @@ fn check_release_commit_guard(git: &Git<'_>) -> Result<(), String> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
         Err(e) => return Err(e.to_string()),
     };
-    let guard = crate::baseline::parse_unique_json(&bytes, "release commit guard")?;
+    let guard = crate::json::parse_unique_json(&bytes, "release commit guard")?;
     let parent = guard["parent"]
         .as_str()
         .ok_or("invalid release commit guard")?;

@@ -138,7 +138,7 @@ fn legacy_receipt(root: &Path) -> Result<Option<(PathBuf, Vec<u8>)>, String> {
         );
     }
     let bytes = fs::read(&path).map_err(|error| error.to_string())?;
-    let value = crate::baseline::parse_unique_json(&bytes, "legacy build receipt")
+    let value = crate::json::parse_unique_json(&bytes, "legacy build receipt")
         .map_err(|_| "unknown legacy build receipt; refusing to delete")?;
     let valid_hash = |key: &str| {
         value[key].as_str().is_some_and(|hash| {
@@ -465,7 +465,7 @@ fn read_contract(template_root: &Path) -> Result<(Value, Vec<u8>), String> {
     let path = template_root.join("templates/managed-skeleton.json");
     let bytes =
         fs::read(&path).map_err(|error| format!("cannot read managed contract: {error}"))?;
-    let value = crate::baseline::parse_unique_json(&bytes, "managed contract")?;
+    let value = crate::json::parse_unique_json(&bytes, "managed contract")?;
     if value["schema_version"].as_u64() != Some(4)
         || value["baseline_model"].as_str() != Some("current-only")
     {
@@ -1455,7 +1455,7 @@ fn plan_project_hooks(
         }
         return Ok((inputs, reads));
     };
-    let document = crate::baseline::parse_unique_json(&payload, "hooks.json")?;
+    let document = crate::json::parse_unique_json(&payload, "hooks.json")?;
     let combined = crate::project_hooks::with_registry(&document, registry_payload.as_deref())?;
     let registered = crate::project_hooks::render(&combined)?;
     if let Some(registry) = crate::project_hooks::registry(&combined) {

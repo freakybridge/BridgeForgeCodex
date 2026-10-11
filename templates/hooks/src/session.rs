@@ -4,11 +4,10 @@ use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
-use walkdir::WalkDir;
 
 use crate::StepResult;
 use crate::post::source_tree_hash;
-use crate::util::{atomic_write, codex_root, read_utf8, repo_root, run_command};
+use crate::util::{atomic_write, codex_root, repo_root, run_command};
 
 fn git(args: &[String], timeout: Duration) -> Option<std::process::Output> {
     let root = repo_root();
@@ -269,105 +268,8 @@ fn git_state() -> GitState {
     parse_git_state(text.as_deref())
 }
 
-fn archive_count(root: &Path) -> usize {
-    let delivery = root.join("doc/1_delivery");
-    let bugs = root.join("doc/2_bugs");
-    let ready = Regex::new(r"(?im)^lifecycle:\s*(?:completed|superseded)\s*$").unwrap();
-    let lifecycle =
-        Regex::new(r"(?im)^lifecycle:\s*(?:active|completed|superseded|archived)\s*$").unwrap();
-    let done = Regex::new(
-        r"(?i)(?:状态|status)\s*[:：]\s*(?:已完成|已验收|已解决|done|accepted|resolved)",
-    )
-    .unwrap();
-
-    let mut delivery_topics = std::collections::BTreeMap::<PathBuf, Vec<PathBuf>>::new();
-    for entry in WalkDir::new(&delivery)
-        .follow_links(false)
-        .into_iter()
-        .filter_map(Result::ok)
-    {
-        if entry.file_type().is_file()
-            && entry
-                .file_name()
-                .to_str()
-                .is_some_and(|name| name.starts_with("requirements_") && name.ends_with(".md"))
-        {
-            if let Some(parent) = entry.path().parent() {
-                delivery_topics
-                    .entry(parent.to_path_buf())
-                    .or_default()
-                    .push(entry.path().to_path_buf());
-            }
-        }
-    }
-    let mut ready_topics = std::collections::BTreeSet::new();
-    for (topic, cards) in delivery_topics {
-        if cards.iter().all(|card| {
-            read_utf8(card).is_ok_and(|text| {
-                let frontmatter = text
-                    .strip_prefix("---\n")
-                    .and_then(|body| body.split_once("\n---\n"))
-                    .map(|(head, _)| head)
-                    .unwrap_or("");
-                lifecycle.is_match(frontmatter) && ready.is_match(frontmatter)
-            })
-        }) {
-            ready_topics.insert(topic);
-        }
-    }
-    let mut count = ready_topics.len();
-    for entry in WalkDir::new(&delivery)
-        .follow_links(false)
-        .into_iter()
-        .filter_map(Result::ok)
-    {
-        if entry.file_type().is_file() && entry.file_name() == "acceptance.md" {
-            let Some(topic) = entry.path().parent() else {
-                continue;
-            };
-            if ready_topics.contains(topic) {
-                continue;
-            }
-            if read_utf8(entry.path()).is_ok_and(|text| {
-                done.is_match(&text.lines().take(30).collect::<Vec<_>>().join("\n"))
-            }) {
-                count += 1;
-            }
-        }
-    }
-    if let Ok(entries) = fs::read_dir(&bugs) {
-        for entry in entries.filter_map(Result::ok) {
-            let path = entry.path();
-            let name = entry.file_name().to_string_lossy().to_string();
-            if !name.starts_with("BUG-") {
-                continue;
-            }
-            let evidence = if path.is_file()
-                && path.extension().and_then(|value| value.to_str()) == Some("md")
-            {
-                path
-            } else if path.is_dir() && path.join("README.md").is_file() {
-                path.join("README.md")
-            } else {
-                continue;
-            };
-            if read_utf8(&evidence).is_ok_and(|text| {
-                let frontmatter = text
-                    .strip_prefix("---\n")
-                    .and_then(|body| body.split_once("\n---\n"))
-                    .map(|(head, _)| head)
-                    .unwrap_or("");
-                if lifecycle.is_match(frontmatter) {
-                    ready.is_match(frontmatter)
-                } else {
-                    done.is_match(&text.lines().take(30).collect::<Vec<_>>().join("\n"))
-                }
-            }) {
-                count += 1;
-            }
-        }
-    }
-    count
+fn archive_count(root: &Path) -> Result<usize, String> {
+    bridgeforge_core::archive_scan::scan(root).map(|candidates| candidates.len())
 }
 
 pub fn show_state() -> StepResult {
@@ -384,11 +286,16 @@ pub fn show_state() -> StepResult {
         state.ahead,
         skeleton_version()
     )];
-    let count = archive_count(&root);
-    if count > 0 {
-        lines.push(format!(
-            "[archive] delivery / bugs 有 {count} 个候选可归档 — 输入 $archive-scan 查看"
-        ));
+    match archive_count(&root) {
+        Ok(count) if count > 0 => {
+            lines.push(format!(
+                "[archive] delivery / bugs 有 {count} 个候选可归档 — 输入 $archive-scan 查看"
+            ));
+        }
+        Err(error) => lines.push(format!(
+            "[archive] scan failed; candidates unknown: {error}"
+        )),
+        _ => {}
     }
     StepResult::output(lines.join("\n"))
 }

@@ -60,7 +60,7 @@ fn path(root: &Path, relative: &str) -> Result<PathBuf, String> {
 
 fn read_json<T: for<'a> Deserialize<'a>>(file: &Path) -> Result<T, String> {
     let bytes = fs::read(file).map_err(|e| format!("{}: {e}", file.display()))?;
-    let value = crate::baseline::parse_unique_json(&bytes, "release preparation")?;
+    let value = crate::json::parse_unique_json(&bytes, "release preparation")?;
     serde_json::from_value(value).map_err(|e| e.to_string())
 }
 

@@ -6,6 +6,21 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[test]
+fn archive_reminder_uses_the_same_candidates_and_propagates_invalid_todo() {
+    let fixture = Fixture::new();
+    let topic = fixture.root.join("doc/1_delivery/demo");
+    fs::create_dir_all(&topic).unwrap();
+    fs::write(topic.join("requirements_test.md"), "---\nlifecycle: completed\nvalidation_status: verified\n---\n").unwrap();
+    fs::write(topic.join("scan.md"), "---\nlifecycle: active\n---\n").unwrap();
+    let candidates = bridgeforge_core::archive_scan::scan(&fixture.root).unwrap();
+    assert_eq!(candidates.len(), 1);
+    assert!(session::show_state().stdout.contains("有 1 个候选可归档"));
+    fs::create_dir_all(fixture.root.join("doc/0_architecture")).unwrap();
+    fs::write(fixture.root.join("doc/0_architecture/TODO-INDEX.md"), "broken table\n").unwrap();
+    assert!(session::show_state().stdout.contains("candidates unknown"), "unknown candidates must not be reported as zero");
+}
+
+#[test]
 fn skill_sync_accepts_utf8_bom_without_hiding_invalid_ledgers_or_drift() {
     let fixture = Fixture::new();
     let platform = fixture.root.join("fake-home/.codex");

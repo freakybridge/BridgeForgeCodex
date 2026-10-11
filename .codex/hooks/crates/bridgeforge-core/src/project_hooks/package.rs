@@ -395,7 +395,7 @@ pub(super) fn build(
     let result = runner.run(&test).map_err(|e| e.to_string())?;
     if result.timed_out
         || result.code != 0
-        || crate::baseline::parse_unique_json(&result.stdout, "project hook self-test")? != response
+        || crate::json::parse_unique_json(&result.stdout, "project hook self-test")? != response
         || fs::read(binary).map_err(|e| e.to_string())? != bytes
     {
         return Err(format!("project Rust hook self-test failed: {}", hook.id));

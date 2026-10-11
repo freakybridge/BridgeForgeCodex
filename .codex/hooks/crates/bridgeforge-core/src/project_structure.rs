@@ -43,31 +43,21 @@ fn relative(root: &Path, path: &Path) -> String {
 }
 
 fn frontmatter(path: &Path) -> BTreeMap<String, String> {
-    let Ok(text) = fs::read_to_string(path) else {
-        return BTreeMap::new();
-    };
-    let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
-    let mut lines = normalized.lines();
-    if lines.next() != Some("---") {
-        return BTreeMap::new();
-    }
-    let mut fields = BTreeMap::new();
-    for line in lines {
-        if line.trim() == "---" {
-            break;
-        }
-        if let Some((key, value)) = line.split_once(':') {
-            fields.insert(
-                key.trim().to_string(),
-                value.trim().trim_matches(['\'', '"']).to_string(),
-            );
-        }
-    }
-    fields
+    crate::archive_scan::fields(path).unwrap_or_default()
 }
 
 fn lifecycle(path: &Path, root: &Path, report: &mut StructureReport) -> Option<String> {
-    let fields = frontmatter(path);
+    let fields = match crate::archive_scan::fields(path) {
+        Ok(fields) => fields,
+        Err(error) => {
+            report.errors.push(Finding {
+                code: "invalid-document-metadata".into(),
+                path: relative(root, path),
+                message: error,
+            });
+            return None;
+        }
+    };
     let value = fields.get("lifecycle")?.to_lowercase();
     let rel = relative(root, path);
     if !LIFECYCLES.contains(&value.as_str()) {
@@ -300,16 +290,31 @@ pub fn inspect(root: &Path) -> StructureReport {
                 });
             }
         }
-        if !states.is_empty()
-            && states
-                .iter()
-                .all(|state| matches!(state.as_str(), "completed" | "superseded"))
-        {
-            report.advisories.push(Finding {
-                code: "delivery-archive-candidate".into(),
-                path: relative(root, &topic),
-                message: "全部需求卡可经 $archive-scan 确认归档".into(),
-            });
+    }
+    report.errors.extend(crate::todo::inspect(root).errors);
+    if report.errors.is_empty() {
+        match crate::archive_scan::scan(root) {
+            Ok(candidates) => {
+                for candidate in candidates {
+                    report.advisories.push(Finding {
+                        code: if candidate.evidence == "legacy" {
+                            "legacy-archive-candidate".into()
+                        } else {
+                            format!("{}-archive-candidate", candidate.kind)
+                        },
+                        path: relative(root, &candidate.path),
+                        message: format!(
+                            "{}; review with $archive-scan",
+                            candidate.reasons.join("; ")
+                        ),
+                    });
+                }
+            }
+            Err(error) => report.errors.push(Finding {
+                code: "archive-scan-failed".into(),
+                path: "doc".into(),
+                message: error,
+            }),
         }
     }
     dead_references(&doc, root, &mut report);

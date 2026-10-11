@@ -67,6 +67,10 @@ delivery_layout: flat
 
 ## Delivery topic
 
+R08：[严格 JSON 解析器职责归位](1_delivery/shared-json/requirements_2026-10-11_R08.md)（2026-10-11 用户已验收，TODO-007 已完成；工程检查与独立增量审计通过；正式 release 因 fetch TLS 错误未完成，后续 TODO-008）。
+
+R07：[TODO 管理与归档收口一致性](1_delivery/todo-lifecycle/requirements_2026-10-11_R07.md)（实现、7 项工程检查与独立审计已通过；等待用户验收，TODO-006 未结算）。
+
 本轮 R06：[Memory 快照加载基线](1_delivery/memory-snapshot-baseline/requirements_2026-10-11_R06.md)（2026-10-11 已验收；基线与工程检查通过，采纳暂缓优化结论，生产实现未改）。
 
 本轮 R05：[项目同步内容合并职责拆分](1_delivery/project-sync-content/requirements_2026-10-11_R05.md)（2026-10-11 已验收；工程验证与独立审计通过，保持内容结果与安全事务行为）。

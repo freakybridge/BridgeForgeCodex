@@ -82,6 +82,7 @@ D. 其他：{用户补充真实需求}
 2. 已有完整需求决定及写入或实施授权时直接落盘。否则只确认尚缺的决定，并区分“确认并记录需求，暂不实施”“确认并开始实施”“仅讨论，不写盘”；不得用含糊的“继续”同时代表三者。
 3. 获准写入后按 `doc/README.md` 的 `delivery_layout` 保存：`flat` 为 `doc/1_delivery/<topic>/requirements_YYYY-MM-DD_<slug>.md`，`milestone` 为 `doc/1_delivery/<M>/<topic>/requirements_YYYY-MM-DD_<slug>.md`。无有效声明时只询问布局；同步索引。
 4. frontmatter 使用 `lifecycle: active`、`validation_status: not_started`；正文保留上述内容、原始需求、授权依据与边界、交接目标及实施 / 验证记录。禁止新写旧 `status` 字段或新增独立授权文件。
+5. 正式需求确认且获准落盘时，读取 [TODO 合同](../todo/references/contract.md)，在固定总表新增一条原需求，关联本卡；已有唯一匹配则引用，不改写旧条目。把新增/引用的完整 TODO 编号回链到需求卡，保留来源。尚未开始为待执行；同时授权并开始实施时如实记为进行中。讨论或未获准落盘时零写入。新增失败报告卡与 TODO 的实际保存状态，不声称两者均完成，也不覆盖已有卡。
 
 ### 4. 交接
 
@@ -90,7 +91,7 @@ D. 其他：{用户补充真实需求}
 ## 输出与收据
 
 - 事实核验阶段：已核实与未核实事实。
-- 落盘阶段：确认卡路径、`lifecycle`、`validation_status`、S/M/L 规模、预算及 `doc/README.md` 索引更新。
+- 落盘阶段：确认卡路径、关联 TODO 编号及新增/引用结果、`lifecycle`、`validation_status`、S/M/L 规模、预算及 `doc/README.md` 索引更新。
 - 交接阶段：目标高级 skill 和确认卡路径。
 
 ## 停止条件

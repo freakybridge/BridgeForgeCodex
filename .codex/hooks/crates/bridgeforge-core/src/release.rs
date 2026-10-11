@@ -860,7 +860,7 @@ fn classify_payloads(
     before: impl Fn(&str) -> Result<Option<Vec<u8>>, String>,
     after: impl Fn(&str) -> Result<Option<Vec<u8>>, String>,
 ) -> Result<ReleaseKind, String> {
-    let current = crate::baseline::parse_unique_json(&current_bytes, "current-only baseline")?;
+    let current = crate::json::parse_unique_json(&current_bytes, "current-only baseline")?;
     let (current_by_target, current_by_id) = contract_assets(&current, "current")?;
     let contract_target = current["contract_target"]
         .as_str()
@@ -872,7 +872,7 @@ fn classify_payloads(
         .is_none_or(|payload| git_bytes(payload) != git_bytes(&current_bytes));
     let (head, head_by_target, head_by_id, unverifiable_head) = match head_contract_bytes {
         Some(payload) if contract_transition => {
-            match crate::baseline::parse_unique_json(&payload, "HEAD current-only baseline")
+            match crate::json::parse_unique_json(&payload, "HEAD current-only baseline")
                 .and_then(|value| contract_assets(&value, "HEAD").map(|maps| (value, maps)))
             {
                 Ok((value, (by_target, by_id))) => (value, by_target, by_id, false),

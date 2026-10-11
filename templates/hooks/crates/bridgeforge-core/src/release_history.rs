@@ -4,7 +4,7 @@ pub fn explicit_release_policy(root: &Path) -> Result<bool, String> {
     let Some(payload) = release_input(&root.join(".codex/bridgeforge-version.json"))? else {
         return Ok(true);
     };
-    let value = crate::baseline::parse_unique_json(&payload, "version sync config")?;
+    let value = crate::json::parse_unique_json(&payload, "version sync config")?;
     if value["schema_version"].as_u64() != Some(1) {
         return Err("version sync config must use schema_version=1".into());
     }
@@ -77,7 +77,7 @@ fn verify_historical_manifests(
     let mut manifests = Vec::new();
     if let Some(payload) = config {
         let config =
-            crate::baseline::parse_unique_json(&payload, "release baseline version config")?;
+            crate::json::parse_unique_json(&payload, "release baseline version config")?;
         if config["schema_version"].as_u64() != Some(1) {
             return Err("invalid release baseline version config".into());
         }

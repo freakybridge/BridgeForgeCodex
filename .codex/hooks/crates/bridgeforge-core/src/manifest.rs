@@ -266,7 +266,7 @@ pub fn render_managed_contract(root: &Path) -> Result<Vec<u8>, String> {
             blocks["current_projection_sha256"] = Value::String(canonical_sha(&projection)?);
         }
         if asset["merge_policy"].as_str() == Some("codex-hooks") {
-            let document = crate::baseline::parse_unique_json(&payload, "hooks.json")?;
+            let document = crate::json::parse_unique_json(&payload, "hooks.json")?;
             let handlers = crate::baseline::hook_handlers(&document)?;
             let mut required = Vec::new();
             for (id, record) in handlers {

@@ -105,7 +105,7 @@ fn plain(path: &Path, limit: u64) -> Result<Vec<u8>, String> {
 }
 
 fn parse<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> Result<T, String> {
-    let value = crate::baseline::parse_unique_json(bytes, "artifact cache")?;
+    let value = crate::json::parse_unique_json(bytes, "artifact cache")?;
     serde_json::from_value(value).map_err(|e| e.to_string())
 }
 

@@ -9,7 +9,7 @@ argument: 无
 
 ## 定位与边界
 
-脚本只负责候选打分；用户决定是否移动。扫描优先使用 `doc/README.md` 生命周期合同：`doc/1_delivery/` 中全部需求卡均为 `completed` / `superseded` 的 topic，以及 `doc/2_bugs/` 中相同生命周期的 Bug 才是新合同候选。未迁移文档仅保留旧完成标记兼容扫描并明确标为 legacy evidence；系统架构和外部资料不是候选。
+Rust 扫描器统一判定候选，结构检查、CLI 与启动提醒共用入口；用户决定移动。正式需求卡/Bug 收口决定原交付状态，历史扫描报告不单独推翻验收。原需求未关闭的 TODO 阻止归档；独立后续事项继续由总表承接。读取 [TODO 合同](../todo/references/contract.md)核对来源与证据。旧完成标记仅是 legacy evidence，不当作已验收事实；系统架构和外部资料不是候选。
 
 ## 输入
 
@@ -23,7 +23,7 @@ argument: 无
    .codex/bin/bridgeforge archive-scan --json
    ```
 
-2. 解析 JSON 中的 `source / target / kind / score / reasons / last_modified_days`，输出候选表。
+2. 解析 JSON 的 `schema / count / candidates`；候选字段为 `source / target / kind / topic / path / lifecycle / evidence / reasons`。不猜 score、时间或未返回字段；区分正式收口和 legacy evidence。
 3. 复核候选信号。只有候选仍被哪些活跃文档引用、状态证据互相冲突或需要跨多个
    topic 判断时，才把该歧义复核显式分派给 `light-explorer`；零候选、单一明确候选和
    用户已明确验收/解决的候选都留在主对话：
@@ -32,6 +32,7 @@ argument: 无
 4. 使用当前平台的结构化多选提问，提供“全部归档”“选择归档”“都不移”“再看某个”的操作；列出候选后立即停止本轮。
 5. 用户要求“再看”时只读指定文件，说明判断后再次结构化询问；仍不得移动。
 6. 用户明确批准后先运行 `git status`：
+   移动前复核 TODO 与活动文档引用，方案包含引用迁移与授权。TODO 链接维护交 summary accept，未获对应授权不移动；只迁移相关路径，不结算状态。原需求未完成仍阻断，后续事项保留来源与承接记录。
    - 工作区不干净：列出已有改动并停止，等待用户决定。
    - 工作区干净：对批准文件逐个执行：
 

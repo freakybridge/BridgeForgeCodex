@@ -77,7 +77,7 @@
             {
               "source": "skills/archive-scan/SKILL.md",
               "target": "SKILL.md",
-              "sha256": "sha256:71c52b9c0def5df843b8182f8cdf1e426f32417d609dabc4a6d03cfa87712dd9"
+              "sha256": "sha256:fa8e7601f955a4e44fb1463db9b3bc655aecb2f55b44b937ea3a0e33961d1525"
             }
           ]
         },
@@ -112,7 +112,7 @@
             {
               "source": "skills/confirm/SKILL.md",
               "target": "SKILL.md",
-              "sha256": "sha256:daf7b6bffd6381f8690a1025a11f33fe8128f797d421e14f513a813b0b8cb6f9"
+              "sha256": "sha256:519a608bd9eb11298d7c2c14d84fa53408f67c1cd688662dd40cf38b3f5a83b2"
             },
             {
               "source": "skills/confirm/references/weekly-quota.md",
@@ -202,7 +202,7 @@
             {
               "source": "skills/find-doc/SKILL.md",
               "target": "SKILL.md",
-              "sha256": "sha256:a2065b87b0c8fdb34ab2f422a1be918db8b0f6731e144d6a5099a4dd024add92"
+              "sha256": "sha256:cf049858783fdcb14610de164ceb21e77c1a3a8fa7c074d9e0ce72c493223390"
             }
           ]
         },
@@ -252,7 +252,7 @@
             {
               "source": "skills/summary/references/acceptance-mode.md",
               "target": "references/acceptance-mode.md",
-              "sha256": "sha256:28fcee88004e6258f2407ec3a4622bb1a7993617006720154e312021ed055ef9"
+              "sha256": "sha256:201cd1b9fa596fb79115bd4ea9865183739b009e034a56dbdc89daa37fbe07b3"
             },
             {
               "source": "skills/summary/references/deep-steps.md",
@@ -307,7 +307,7 @@
             {
               "source": "skills/todo/SKILL.md",
               "target": "SKILL.md",
-              "sha256": "sha256:520c5546ca58c8ea7a0ad53d6a1b36623d8a8a03b695e23d153e5ed87c4eba8b"
+              "sha256": "sha256:43128595e71c8ffb3dbef80994a4cd945bd5f142b76ec1d76464773af9151dea"
             }
           ]
         }
