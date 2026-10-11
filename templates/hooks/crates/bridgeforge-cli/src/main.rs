@@ -53,7 +53,7 @@ fn self_test() -> CommandOutcome {
         "name": "bridgeforge",
         "status": "ok",
         "version": env!("CARGO_PKG_VERSION"),
-        "capabilities": ["git-sync-explicit-release-v1", "git-sync-prepared-release-v1", "git-sync-release-only-v1", "git-sync-release-readiness-v1", "git-sync-direct-release-v1"]
+        "capabilities": ["git-sync-explicit-release-v1", "git-sync-prepared-release-v1", "git-sync-release-only-v1", "git-sync-release-readiness-v1", "git-sync-direct-release-v1", "git-sync-timing-v1"]
     }))
 }
 

@@ -951,7 +951,9 @@ fn clean_parity_has_stable_receipt() {
         },
     );
     assert_eq!(result.code, 0);
-    assert_eq!(result.receipt.unwrap()["status"], "synced");
+    let receipt = result.receipt.unwrap();
+    assert_eq!(receipt["status"], "synced");
+    assert!(receipt["sync_elapsed_ms"].as_u64().is_some());
 }
 
 #[test]

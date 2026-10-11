@@ -76,13 +76,20 @@ fn real_cli_release_flow(policy: &str) {
         let mut request = ProcessRequest::new(cli.as_os_str(), &root);
         request.args = args.iter().map(Into::into).collect();
         request.timeout = Duration::from_secs(120);
+        let started = std::time::Instant::now();
         let output = SystemProcessRunner.run(&request).unwrap();
+        let elapsed_ms = started.elapsed().as_millis();
         assert!(
             !output.timed_out && output.code == 0,
             "{}",
             String::from_utf8_lossy(&output.stderr)
         );
-        serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap()
+        let receipt = serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap();
+        if receipt["status"] == "synced" {
+            let inner_ms = receipt["sync_elapsed_ms"].as_u64().expect("real sync reports its internal duration");
+            assert!(u128::from(inner_ms) <= elapsed_ms, "internal timing must not include the Agent or exceed the caller's process duration");
+        }
+        receipt
     };
     assert!(
         call(&["self-test", "--json"])["capabilities"]
@@ -432,6 +439,8 @@ fn factory_ordinary_sync_performance() {
     assert_eq!(receipt["working_tree"], "clean");
     assert_eq!(receipt["ahead"], 0);
     assert_eq!(receipt["behind"], 0);
+    let sync_elapsed_ms = receipt["sync_elapsed_ms"].as_u64().expect("sync timing");
+    assert!(u128::from(sync_elapsed_ms) <= elapsed_ms);
     if std::env::var_os("BRIDGEFORGE_PERF_EXPECT_REUSE").is_some() {
         assert_eq!(receipt["generated_assets_reused"], 2);
         assert_eq!(receipt["generated_assets_built"], 0);

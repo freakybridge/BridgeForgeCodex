@@ -67,6 +67,8 @@ delivery_layout: flat
 
 ## Delivery topic
 
+同步编排优化：[确认卡与计时基线](1_delivery/git-sync-performance/requirements_2026-10-12_orchestration.md)（减少重复读取、等待回读与答复开销，增加受管内部耗时；已授权实施，关联 TODO-009）。
+
 R08：[严格 JSON 解析器职责归位](1_delivery/shared-json/requirements_2026-10-11_R08.md)（2026-10-11 用户已验收，TODO-007 已完成；工程检查与独立增量审计通过；正式 release 因 fetch TLS 错误未完成，后续 TODO-008）。
 
 R07：[TODO 管理与归档收口一致性](1_delivery/todo-lifecycle/requirements_2026-10-11_R07.md)（实现、7 项工程检查与独立审计已通过；等待用户验收，TODO-006 未结算）。

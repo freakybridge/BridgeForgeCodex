@@ -5,7 +5,7 @@ use sha2::{Digest, Sha256};
 use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 #[path = "release_preparation.rs"]
 mod preparation;
@@ -418,7 +418,23 @@ fn receipt(
     }
 }
 
-pub fn sync(
+pub fn sync(root: &Path, runner: &dyn ProcessRunner, options: GitSyncOptions) -> CommandOutcome {
+    let started = Instant::now();
+    let mut outcome = sync_impl(root, runner, options);
+    if let Some(receipt) = outcome
+        .receipt
+        .as_mut()
+        .and_then(|value| value.as_object_mut())
+    {
+        receipt.insert(
+            "sync_elapsed_ms".into(),
+            json!(u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)),
+        );
+    }
+    outcome
+}
+
+fn sync_impl(
     root: &Path,
     runner: &dyn ProcessRunner,
     mut options: GitSyncOptions,
