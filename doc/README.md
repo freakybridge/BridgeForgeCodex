@@ -10,7 +10,7 @@ delivery_layout: flat
 
 当前实施：[通用发布核心与 Rust 独立包版本](1_delivery/git-sync-independent-packages/requirements_2026-10-16_rust-release.md)（schema 2 显式启用；旧项目保持原行为；TODO-010）。
 
-待实施：[git-sync 首次配置引导与 Cargo 隐式成员修复](1_delivery/git-sync-first-use/requirements_2026-10-16_first-use-and-rust-members.md)（选择随项目记住；修复合法 path 隐式成员漏发现；TODO-011、TODO-012）。
+当前跟进：[git-sync 首次配置引导与 Cargo 隐式成员修复](1_delivery/git-sync-first-use/requirements_2026-10-16_first-use-and-rust-members.md)（2.5.0 已发布；真实下游仍受历史锁迁移兼容问题阻断；TODO-011、TODO-012 未结算）。接续见[历史锁迁移换机交接](1_delivery/git-sync-first-use/handoff_2026-10-17_historical-lock-migration.md)。
 
 项目后续事项见 [待办总表](0_architecture/TODO-INDEX.md)。
 

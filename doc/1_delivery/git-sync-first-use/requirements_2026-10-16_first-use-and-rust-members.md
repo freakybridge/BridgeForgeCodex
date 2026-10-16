@@ -5,6 +5,8 @@ validation_status: awaiting_user_acceptance
 
 # git-sync 首次配置引导与 Cargo 隐式成员发现修复
 
+最新情况（2026-10-17）：2.5.0 已按用户授权发布；StratusAgent 已升级到该版本，原隐式成员阻断已越过，但历史锁文件迁移兼容仍阻止独立发布。原因与证据见文末“发布后真实下游复核”，换机从[交接文档](handoff_2026-10-17_historical-lock-migration.md)继续。本卡不因此记为用户已验收。
+
 ## 用户目标、决定和授权
 
 用户要求 git-sync 首次调用时提示选择配置，避免下游不知道如何使用已发布的新策略；已选择 A：升级到带引导的版本后，每个项目首次调用都提示，已有配置也展示并由用户确认。用户随后选择随项目保存，并明确“这个选择当然应该记住”。配置文件使用现有 `.codex/bridgeforge-version.json`，后续调用、换机、重新 clone 和普通版本升级不重复询问；只有用户主动更换策略才重新选择。配置缺失或损坏时不能假装已经记住，需报告真实状态。
@@ -160,4 +162,49 @@ workspace 命令为 `cargo test --locked --config scripts/tests/factory-cargo.to
 
 最终准备约从 22:44 到 23:27，耗时约 43 分钟；其中 workspace 检查收据约 22.1 分钟，factory 检查约 17.2 分钟，余下为基线、镜像、快照及目标构建。此处仅披露连续工程准备耗时，不冒充从用户开工到回复的端到端耗时。恢复前实施、审计及中断期间未取得完整计时，整体 token 未实测，不能宣称精确预算用量或周额度百分比。
 
-本轮没有提交、推送、发布、用户级安装或真实下游写入。工作区 `VERSION` 保持 `2.4.0`，HEAD 保持 `d9da2bb64c37030c9188477f31e43522ed6a6cc0`；`2.5.0` 仅为工程准备中的隔离目标。生命周期保持 active，TODO-011/TODO-012 不自动结算，用户验收与后续发布另行判断。
+在该工程准备结束时，尚未提交、推送、发布、安装用户级资产或写入真实下游，工作区 `VERSION` 为 `2.4.0`、HEAD 为 `d9da2bb64c37030c9188477f31e43522ed6a6cc0`，`2.5.0` 当时仅为隔离目标。随后发布记录见下节。生命周期保持 active，TODO-011/TODO-012 不自动结算，用户验收与后续发布另行判断。
+
+## 发布后真实下游复核（2026-10-17 整理）
+
+### 已发布部分与后续授权
+
+用户随后显式调用 `$git-sync release`，并在本工厂首次引导中选择 1：保留当前统一升版。受管 setup 仅向 `.codex/bridgeforge-version.json` 添加 `git_sync_setup` 确认，原三项 manifests 保留。受管 release 将 `2.4.0` 升至 `2.5.0`，提交 `0e649b1486a88f3beb75af10fecff25019cea2a3`，消息为 `feat: 增加 git-sync 首次配置引导并修复 Cargo 隐式成员发现`，已推送 `origin/main`。独立终态核验工作区干净、HEAD 与 origin/main 相同、ahead/behind=0/0；产物复用 2、重建 0，工具内部同步 43672 ms，端到端未精确计量。原有 1 条 stash 保留。
+
+用户后续询问下游仍认为未完全修复的原因，本轮获准只读调查并解释；没有因此实施新的修复或修改真实下游。当前 `$summary switch` 授权沉淀与交接，另有普通 `$git-sync` 授权保存这些文档，不代表新修复开工或用户验收，不升版、不结算 TODO。
+
+### 已核实剩余阻断
+
+来源仍为[确认 Cargo.toml 版本升级的编译影响](codex://threads/01a14421-0203-7633-9d00-2a5aa9e52c49)，最新复核回合 `01a1456a-57db-7440-86f1-60cfbe21a342`。对话证据显示下游骨架版本与受管工具 self-test 均为 `2.5.0`，具有 `git-sync-setup-v1` 与 Rust 独立包能力；不是版本未传播。下游已选独立包策略，确认记录尚未保存，不应要求重新选择。
+
+主对话在真实 StratusAgent 再次只读执行 `git-sync --release-status`，返回 `status=blocked`，原始原因：
+
+```text
+strategies/template/blackswan/Cargo.lock: local package stratus-clock has missing, ambiguous, or stale version
+```
+
+| 编号 | 现场读取 | 实际数据 |
+|---|---|---|
+| 1 | `HEAD:.codex/bridgeforge-version.json` | schema 1，只登记 `stratus/Cargo.toml`、`scripts/Cargo.toml` |
+| 2 | `HEAD:strategies/template/blackswan/Cargo.lock` | stratus-clock 锁记录 `1.50.0` |
+| 3 | `HEAD:stratus/clock/Cargo.toml` 与 `HEAD:stratus/Cargo.toml` | 包继承 workspace version；有效版本 `1.51.0` |
+| 4 | 当前 `strategies/template/blackswan/Cargo.lock` | stratus-clock 已修正为 `1.51.0` |
+
+原隐式成员错误已越过；当前阻断是旧历史锁滞后，并非当前锁仍未修好。旧锁确有不一致，但该策略 workspace/锁并未纳入旧 schema 1 的声明合同；不能直接把新增独立发布合同倒套所有旧提交，也不能用修改当前文件或改写 Git 历史解决。
+
+### 根因、独立复核与测试遗漏
+
+`templates/hooks/crates/bridgeforge-core/src/release/independent.rs` 的 `historical_workspace`（2.5.0 第 32–45 行）使用传入的当前 RustConfig 调 `rust::load`，不读取该历史提交自身配置；`rust.rs` 第 515–516 行无条件执行 `validate_locks`，第 827 行要求本地锁记录与当时有效包版本完全一致。`validate_current` 第 64–65 行及中间提交回放第 144 行都进入这条路径。因此发布 boundary 和累计中间提交均可能受影响。
+
+另一条历史发布合法性检查 `release_history.rs::verify_historical_manifests`（第 85–118 行）会读取历史配置，schema 1 只按当时 manifests 校验。两条历史路径使用了不一致的合同：旧规则认可的发布，在新策略回放时被新增锁校验拒绝。
+
+按项目要求，`review-auditor /root/historical_lock_audit` 对本轮源码和 fixture 独立只读复核，确认 1 项 P1。审计未运行测试或构建；其源码结论独立取得，下游精确版本数据采用主对话现场证据。既有 `core_release.rs` 迁移 fixture 只有一个工作区，manifest 与锁始终一致为 `1.0.0`；迁移测试仅修改业务源码与配置，没有覆盖“旧合同未管理的额外 workspace，其历史锁滞后，当前修好后首次纳入”的场景。上一轮 402 项通过不能证明该遗漏场景通过，更不能据此把真实下游标为可发布。
+
+修复方向尚待实施授权：仅对有证据的旧 schema 1、当时未纳入旧合同的 workspace/锁提供限定迁移兼容，同时保留包身份与有效版本守卫。当前锁、schema 2 历史锁仍应严格校验；不能全局关闭锁检查，不能静默丢包或退回统一升版。除 boundary 外还需覆盖累计中间提交。
+
+应补正例：旧 schema 1 只管理 A/B，额外 C 的旧 boundary 或中间提交锁滞后；当前修好 C 后切到 schema 2 纳入 C，可受管预检。应补反例：当前锁滞后、已纳入 schema 2 的历史锁滞后、身份/有效版本漂移仍必须阻断。随后才能在另行授权范围内验证真实下游只读 release-status/release-preview；不得把只读预检当实际发布验收。
+
+经验：共用成员发现算法，不等于所有历史时点共用当前校验合同；历史回放必须区分“事实归属”与“该时点已生效的规则”。测试不能只用全程一致的理想历史，应覆盖旧合同外的滞后数据及当前已修好的迁移状态。
+
+### 剩余范围与交接边界
+
+历史锁迁移尚未修复，未新增代码、fixture 或工程收据，也未对真实下游写入或执行发布。剩余修复与完整必要验证估计 90–120 分钟，仅为时间估计，不是已获实施授权或新的 token 预算。当前不新增 Rule/Hook/AGENTS 建议：问题有明确代码与测试落点，已有证据约束足够；原生 Memory 索引有界检索未命中该历史锁主题，未写入 Memory。当前关联 topic 仍有 blocker、未获用户验收，无归档候选。
