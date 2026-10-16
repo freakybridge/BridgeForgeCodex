@@ -1,9 +1,14 @@
 {
-  "schema_version": 1,
-  "release_policy": "explicit_release",
+  "git_sync_setup": {
+    "confirmed": true,
+    "schema": 1,
+    "selection": "current"
+  },
   "manifests": [
     "templates/hooks/Cargo.toml",
     ".codex/hooks/Cargo.toml",
     "scripts/tests/Cargo.toml"
-  ]
+  ],
+  "release_policy": "explicit_release",
+  "schema_version": 1
 }

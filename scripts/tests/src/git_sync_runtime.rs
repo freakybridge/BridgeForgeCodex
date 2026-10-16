@@ -45,6 +45,12 @@ fn git(root: &Path, args: &[&str]) -> String {
 
 fn fixture_development_checks(root: &Path) {
     fs::write(root.join(".codex/development-checks.json"), br#"{"schema":1,"checks":[{"id":"fixture-diff","program":"git","args":["diff","--check"],"timeout_seconds":30}]}"#).unwrap();
+    // Factory build/rollback fixtures start from an already confirmed policy;
+    // first-use interaction is tested through the real CLI below.
+    let path=root.join(".codex/bridgeforge-version.json");
+    let mut config:serde_json::Value=serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    config["git_sync_setup"]=serde_json::json!({"schema":1,"confirmed":true,"selection":"current"});
+    fs::write(path,serde_json::to_vec_pretty(&config).unwrap()).unwrap();
 }
 
 #[test]
@@ -177,6 +183,18 @@ fn real_cli_release_flow(policy: &str) {
     fs::write(root.join("VERSION"), b"1.0.0\n").unwrap();
     let version_files = ["VERSION", "Cargo.toml", "Cargo.lock", "CHANGELOG.md"];
     let version_bytes = version_files.map(|name| fs::read(root.join(name)).unwrap());
+    let mut first=ProcessRequest::new(cli.as_os_str(),&root);
+    first.args=["git-sync","--message","feat: wait for choice"].iter().map(Into::into).collect();
+    let initial=SystemProcessRunner.run(&first).unwrap();assert_eq!(initial.code,2);
+    let initial:serde_json::Value=serde_json::from_slice(&initial.stdout).unwrap();assert_eq!(initial["status"],"configuration-required");
+    assert_eq!(git(&root,&["rev-parse","HEAD"]),initial_head);
+    assert_eq!(fs::read(root.join(".git/index")).unwrap(),initial_index);
+    assert!(!root.join(".runtime").exists());
+    let proposal=call(&["git-sync","--setup-plan","--strategy","current"]);
+    let key=proposal["fingerprint"].as_str().unwrap();
+    let selected=call(&["git-sync","--setup-apply","--strategy","current","--setup-fingerprint",key,"--confirmed-choice"]);
+    assert_eq!(selected["sync_performed"],false);
+    assert_eq!(call(&["git-sync","--setup-status"])["status"],"configured");
     let policy_bytes = fs::read(&policy_path).ok();
     fs::write(root.join("business.txt"), b"feature\n").unwrap();
     let ordinary = call(&["git-sync", "--message", "feat: new capability"]);

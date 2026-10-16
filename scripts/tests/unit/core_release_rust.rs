@@ -273,7 +273,7 @@ fn rust_rejects_stale_lock_unregistered_dependency_and_escape() {
     assert!(
         fixture(&config(&["Cargo.toml"]), &files)
             .unwrap_err()
-            .contains("registered")
+            .contains("missing")
     );
     files[2].1 = "[package]\nname='b'\nversion='4.5.6'\n[dependencies]\nmissing={path='../../../../outside'}\n";
     assert!(
@@ -747,4 +747,45 @@ fn rust_configuration_rejects_ambiguous_maps_and_unsupported_patch() {
             .unwrap_err()
             .contains("patch/replace")
     );
+}
+
+fn implicit_graph() -> Vec<(&'static str,&'static str)> {
+    vec![("Cargo.toml","[workspace]\nmembers=['app']\n[workspace.package]\nversion='1.0.0'\n[workspace.dependencies]\nrenamed={package='research',path='research'}\n"),
+        ("app/Cargo.toml","[package]\nname='app'\nversion.workspace=true\n[target.'cfg(windows)'.build-dependencies]\nrenamed={workspace=true}\n"),
+        ("research/Cargo.toml","[package]\nname='research'\nversion.workspace=true\n[dev-dependencies]\nleaf={path='../leaf'}\n"),
+        ("leaf/Cargo.toml","[package]\nname='leaf'\nversion.workspace=true\n")]
+}
+
+#[test]
+fn rust_implicit_members_recurse_through_inherited_and_target_dependencies() {
+    let mut cfg=config(&["Cargo.toml"]);cfg.shared_inputs.push(SharedInput{path:"shared.txt".into(),packages:vec!["research/Cargo.toml".into()]});
+    let workspace=fixture(&cfg,&implicit_graph()).unwrap();assert_eq!(workspace.packages.len(),3);
+    let plan=workspace.plan(&[commit("feat",false,&["research/src/lib.rs"])]).unwrap();
+    assert_eq!(plan.packages.len(),2);assert!(plan.packages.iter().any(|p|p.name=="research"&&p.version_after=="1.1.0"));
+    assert!(plan.packages.iter().any(|p|p.name=="app"&&p.version_after=="1.0.1"));
+    workspace.validate_baseline(&fixture(&cfg,&implicit_graph()).unwrap()).unwrap();
+}
+
+#[test]
+fn rust_implicit_discovery_respects_excludes_and_independent_roots() {
+    let mut files=implicit_graph();files[0].1="[workspace]\nmembers=['app']\nexclude=['research']\n[workspace.package]\nversion='1.0.0'\n[workspace.dependencies]\nrenamed={package='research',path='research'}\n";
+    assert!(fixture(&config(&["Cargo.toml"]),&files).unwrap_err().contains("registered"));
+    files[2].1="[package]\nname='research'\nversion='1.0.0'\n[workspace]\n";
+    let workspace=fixture(&config(&["Cargo.toml","research/Cargo.toml"]),&files).unwrap();
+    assert_eq!(workspace.roots["Cargo.toml"].len(),1);assert_eq!(workspace.roots["research/Cargo.toml"].len(),1);
+}
+
+#[test]
+fn rust_implicit_members_match_offline_cargo_metadata() {
+    use std::fs;
+    let root=std::env::temp_dir().join(format!("bf-implicit-cargo-{}-{}",std::process::id(),std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+    struct Cleanup(std::path::PathBuf);impl Drop for Cleanup{fn drop(&mut self){let _=fs::remove_dir_all(&self.0);}}
+    let root=Cleanup(root);let mut files=implicit_graph();
+    files.extend([("app/src/lib.rs","pub fn x() {}"),("research/src/lib.rs","pub fn y() {}"),("leaf/src/lib.rs","pub fn z() {}")]);
+    for (path,body) in &files {let path=root.0.join(path);fs::create_dir_all(path.parent().unwrap()).unwrap();fs::write(path,body).unwrap();}
+    let output=std::process::Command::new(env!("CARGO")).args(["metadata","--offline","--format-version","1"]).current_dir(&root.0).output().unwrap();
+    assert!(output.status.success(),"{}",String::from_utf8_lossy(&output.stderr));
+    let metadata:serde_json::Value=serde_json::from_slice(&output.stdout).unwrap();
+    let workspace=fixture(&config(&["Cargo.toml"]),&files).unwrap();
+    let expected=metadata["workspace_members"].as_array().unwrap().len();assert_eq!(workspace.packages.len(),expected);assert_eq!(expected,3);
 }

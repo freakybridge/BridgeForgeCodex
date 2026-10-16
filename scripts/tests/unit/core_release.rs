@@ -493,7 +493,9 @@ fn independent_repository(name: &str, legacy: bool) -> ReleaseRepository {
         ("managed.txt", b"old\n"),
         ("VERSION", b"1.0.0\n"), ("CHANGELOG.md", b"# Changelog\n"),
         (".codex/bridgeforge-version.json", &serde_json::to_vec(&config).unwrap()),
-        ("Cargo.toml", b"[workspace]\nmembers = [\"core\", \"app\", \"idle\"]\nresolver = \"3\"\n[workspace.package]\nversion = \"1.0.0\"\n"),
+        // core is a legitimate implicit path member of app; history and disk
+        // must discover it identically rather than reporting a new package.
+        ("Cargo.toml", b"[workspace]\nmembers = [\"app\", \"idle\"]\nresolver = \"3\"\n[workspace.package]\nversion = \"1.0.0\"\n"),
         ("core/Cargo.toml", b"[package]\nname = \"core\"\nversion.workspace = true\nedition = \"2024\"\n"),
         ("app/Cargo.toml", b"[package]\nname = \"app\"\nversion.workspace = true\nedition = \"2024\"\n[dependencies]\ncore = { path = \"../core\", version = \"1.0.0\" }\n"),
         ("idle/Cargo.toml", b"[package]\nname = \"idle\"\nversion.workspace = true\nedition = \"2024\"\n"),

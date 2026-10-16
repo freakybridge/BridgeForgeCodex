@@ -17,7 +17,7 @@ argument: 可选：release
 
 任何同步前，先运行受管二进制 `self-test --json`，确认 `capabilities` 包含 `git-sync-release-only-v1`；显式发布还需 `git-sync-explicit-release-v1` 和 `git-sync-direct-release-v1`。旧二进制可能自动升版或要求开发收据，不能试跑未知参数探测能力；缺能力时明确提示升级工具，不归咎于项目缺开发 JSON。
 
-项目配置使用 schema 2、`strategy: rust_independent` 时，还必须确认 `git-sync-rust-independent-v1`。schema 1 和缺省项目保留原有同步／统一升版规则，不自动启用、迁移或改写配置。新策略首期仅支持 Rust；不能根据文件扩展名替其他语言猜测独立包发布方式。Rust 独立包策略以根 VERSION 为产品版本、各包 Cargo.toml 为包版本事实源。release 计算累计改动包的升级级别，并沿项目配置登记的本地反向依赖传播 patch 跟升，同次每包只升一次，无关包版本不变。首次从 workspace 继承版本拆分时保留有效版本值，机械迁移不等于包自身业务改动。预览及最终收据必须分别显示产品版本和 `package_changes` 的包路径、版本前后与升级原因；不得把版本写入成功说成兼容性验证通过。共享输入、锁文件改动归属、未支持的 Cargo 配置或身份迁移不能可靠判定时，保留原始阻断原因，不静默退回统一升版。Skill 不手改 manifest/lock、不追加业务测试作为同步前置。语言适配、依赖约束及锁文件精确更新全部由受管工具完成。
+同步前还须确认 `git-sync-setup-v1`，运行 `git-sync --setup-status`。返回 configuration-required 或用户主动换策略时读取[首次配置引导](references/first-use.md)，展示当前配置及适用选项，用户选择前不写配置、不执行同步；确认记录随项目保存，后续不重复问。能力缺失时提示升级受管工具，不试跑未知参数。schema 2 的 Rust 独立包策略另需 `git-sync-rust-independent-v1`；策略、兼容边界及收据语义见同一 reference。配置变更仅经受管入口，普通同步不升版。
 
 普通同步和显式发布均不依赖 develop、development-checks.json、prepared 或审计收据。无配置、非法配置、过期或失败开发记录都不是使用阻断。不得在本 Skill 运行 --development-status/--prepare-release，或要求先完成开发验收。显式 release 是用户选定的升版功能，不因缺开发记录静默退回普通同步。
 

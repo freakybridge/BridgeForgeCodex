@@ -5,6 +5,7 @@ pub fn explicit_release_policy(root: &Path) -> Result<bool, String> {
         return Ok(true);
     };
     let value = crate::json::parse_unique_json(&payload, "version sync config")?;
+    setup::confirmation(&value)?;
     if value["schema_version"].as_u64() == Some(2) {
         config::parse(&payload)?;
         return Ok(true);
@@ -94,19 +95,27 @@ fn verify_historical_manifests(
         if config["schema_version"].as_u64() != Some(1) {
             return Err("invalid release baseline version config".into());
         }
-        let entries = config["manifests"]
-            .as_array()
-            .ok_or("release baseline manifests are missing")?;
-        if entries.is_empty() {
-            return Err("release baseline manifests are empty".into());
-        }
-        for entry in entries {
-            manifests.push(
-                entry
-                    .as_str()
-                    .ok_or("invalid release baseline manifest path")?
-                    .to_string(),
-            );
+        if super::config::auto_manifests(&config)? {
+            for path in ["Cargo.toml", "package.json"] {
+                if revision_payload(root, revision, path, runner)?.is_some() {
+                    manifests.push(path.into());
+                }
+            }
+        } else {
+            let entries = config["manifests"]
+                .as_array()
+                .ok_or("release baseline manifests are missing")?;
+            if entries.is_empty() {
+                return Err("release baseline manifests are empty".into());
+            }
+            for entry in entries {
+                manifests.push(
+                    entry
+                        .as_str()
+                        .ok_or("invalid release baseline manifest path")?
+                        .to_string(),
+                );
+            }
         }
     } else {
         for path in ["Cargo.toml", "package.json"] {
@@ -215,6 +224,22 @@ pub fn validate_release_baseline(
     root: &Path,
     runner: &dyn ProcessRunner,
 ) -> Result<(String, String), String> {
+    validate_baseline(root, runner, None)
+}
+
+pub(super) fn validate_candidate_baseline(
+    root: &Path,
+    runner: &dyn ProcessRunner,
+    candidate: &rust::RustConfig,
+) -> Result<(String, String), String> {
+    validate_baseline(root, runner, Some(candidate))
+}
+
+fn validate_baseline(
+    root: &Path,
+    runner: &dyn ProcessRunner,
+    candidate: Option<&rust::RustConfig>,
+) -> Result<(String, String), String> {
     explicit_release_policy(root)?;
     if git(root, runner, &["rev-parse", "--is-shallow-repository"])?.trim() != "false" {
         return Err("explicit release requires complete Git history".into());
@@ -236,7 +261,9 @@ pub fn validate_release_baseline(
                 .into(),
         );
     }
-    if let Some(cfg) = config::load(root)? {
+    if let Some(cfg) = candidate {
+        independent::validate_current(root, boundary, cfg, runner)?;
+    } else if let Some(cfg) = config::load(root)? {
         independent::validate_current(root, boundary, &cfg, runner)?;
     } else {
         validate_native_versions(root, version.trim().parse::<SemVer>()?)?;

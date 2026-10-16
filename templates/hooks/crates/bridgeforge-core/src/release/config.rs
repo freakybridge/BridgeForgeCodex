@@ -8,12 +8,18 @@ struct IndependentConfig {
     release_policy: String,
     strategy: String,
     rust: super::rust::RustConfig,
+    #[serde(default)]
+    git_sync_setup: Option<super::setup::Confirmation>,
 }
 
 pub(super) fn parse(payload: &[u8]) -> Result<Option<super::rust::RustConfig>, String> {
     let value = crate::json::parse_unique_json(payload, "version sync config")?;
+    super::setup::confirmation(&value)?;
     match value["schema_version"].as_u64() {
-        Some(1) => Ok(None),
+        Some(1) => {
+            auto_manifests(&value)?;
+            Ok(None)
+        }
         Some(2) => {
             let config: IndependentConfig = serde_json::from_value(value)
                 .map_err(|e| format!("invalid independent release config: {e}"))?;
@@ -25,9 +31,21 @@ pub(super) fn parse(payload: &[u8]) -> Result<Option<super::rust::RustConfig>, S
                     "schema 2 requires explicit_release and strategy=rust_independent".into(),
                 );
             }
+            let _ = config.git_sync_setup;
+            config.rust.validate()?;
             Ok(Some(config.rust))
         }
         _ => Err("version sync config must use schema_version=1 or 2".into()),
+    }
+}
+
+pub(super) fn auto_manifests(value: &Value) -> Result<bool, String> {
+    match value.get("manifest_policy") {
+        None => Ok(false),
+        Some(Value::String(policy)) if policy == "auto" && value.get("manifests").is_none() => {
+            Ok(true)
+        }
+        _ => Err("manifest_policy must be auto without an explicit manifests list".into()),
     }
 }
 

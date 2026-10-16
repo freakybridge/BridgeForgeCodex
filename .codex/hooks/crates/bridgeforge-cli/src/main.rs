@@ -53,7 +53,7 @@ fn self_test() -> CommandOutcome {
         "name": "bridgeforge",
         "status": "ok",
         "version": env!("CARGO_PKG_VERSION"),
-        "capabilities": ["git-sync-explicit-release-v1", "git-sync-prepared-release-v1", "git-sync-release-only-v1", "git-sync-release-readiness-v1", "git-sync-direct-release-v1", "git-sync-timing-v1", "git-sync-rust-independent-v1"]
+        "capabilities": ["git-sync-explicit-release-v1", "git-sync-prepared-release-v1", "git-sync-release-only-v1", "git-sync-release-readiness-v1", "git-sync-direct-release-v1", "git-sync-timing-v1", "git-sync-rust-independent-v1", "git-sync-setup-v1"]
     }))
 }
 
@@ -370,6 +370,9 @@ fn git_sync(args: &[String]) -> CommandOutcome {
         Err(error) => return blocked("git-sync", error),
     };
     let modes = [
+        "--setup-status",
+        "--setup-plan",
+        "--setup-apply",
         "--release",
         "--release-preview",
         "--prepare-release",
@@ -381,6 +384,29 @@ fn git_sync(args: &[String]) -> CommandOutcome {
     .count();
     if modes > 1 {
         return blocked("git-sync", "release modes are mutually exclusive");
+    }
+    if has(args, "--setup-status") {
+        return bridgeforge_core::release::setup::status_with(
+            context.root(),
+            &SystemProcessRunner,
+            has(args, "--reconfigure"),
+        );
+    }
+    if has(args, "--setup-plan") {
+        return bridgeforge_core::release::setup::plan(
+            context.root(),
+            &SystemProcessRunner,
+            &value(args, "--strategy").unwrap_or_default(),
+        );
+    }
+    if has(args, "--setup-apply") {
+        return bridgeforge_core::release::setup::apply(
+            context.root(),
+            &SystemProcessRunner,
+            &value(args, "--strategy").unwrap_or_default(),
+            &value(args, "--setup-fingerprint").unwrap_or_default(),
+            has(args, "--confirmed-choice"),
+        );
     }
     if has(args, "--release-status") {
         return bridgeforge_core::git_sync::release_status(context.root(), &SystemProcessRunner);
@@ -422,6 +448,18 @@ fn git_sync(args: &[String]) -> CommandOutcome {
                 .unwrap_or_else(|| "chore: release accumulated changes".into())
         };
         return bridgeforge_core::release::preview(context.root(), &message, &SystemProcessRunner);
+    }
+    match bridgeforge_core::release::setup::is_confirmed(context.root()) {
+        Ok(true) => {}
+        Ok(false) => {
+            let mut outcome =
+                bridgeforge_core::release::setup::status(context.root(), &SystemProcessRunner);
+            if outcome.code == 0 {
+                outcome.code = EXIT_BLOCKED;
+            }
+            return outcome;
+        }
+        Err(error) => return blocked("git-sync-setup", error),
     }
     bridgeforge_core::git_sync::sync(
         context.root(),

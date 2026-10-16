@@ -6,6 +6,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::str::FromStr;
 use toml_edit::{DocumentMut, Item, value};
 
+#[path = "rust_discovery.rs"]
+mod discovery;
+
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct RustConfig {
@@ -16,6 +19,41 @@ pub(super) struct RustConfig {
     pub shared_inputs: Vec<SharedInput>,
     #[serde(default)]
     pub product_inputs: Vec<String>,
+}
+
+impl RustConfig {
+    pub(super) fn validate(&self) -> Result<(), String> {
+        if self.workspaces.is_empty() {
+            return Err("rust.workspaces must list at least one Cargo.toml".into());
+        }
+        if self.dependency_bump != "patch" {
+            return Err("rust.dependency_bump currently supports only patch".into());
+        }
+        let mut seen = BTreeSet::new();
+        for path in &self.workspaces {
+            if configured_path(path)? != *path
+                || path.rsplit('/').next() != Some("Cargo.toml")
+                || !seen.insert(path)
+            {
+                return Err(format!(
+                    "invalid or duplicate Rust workspace manifest: {path}"
+                ));
+            }
+        }
+        for mapping in &self.shared_inputs {
+            configured_path(&mapping.path)?;
+            if mapping.packages.is_empty() {
+                return Err("shared Rust input has no packages".into());
+            }
+            for path in &mapping.packages {
+                configured_path(path)?;
+            }
+        }
+        for path in &self.product_inputs {
+            configured_path(path)?;
+        }
+        Ok(())
+    }
 }
 
 fn patch() -> String {
@@ -279,6 +317,7 @@ pub(super) fn load(
     inventory: &[String],
     read: &mut impl FnMut(&str) -> Result<Option<Vec<u8>>, String>,
 ) -> Result<Workspace, String> {
+    config.validate()?;
     if config.workspaces.is_empty() {
         return Err("rust.workspaces must list at least one Cargo.toml".into());
     }
@@ -351,6 +390,7 @@ pub(super) fn load(
         if paths.is_empty() {
             return Err(format!("{root}: Rust workspace has no packages"));
         }
+        discovery::expand(&mut result, root, &mut paths, &excludes, inventory, read)?;
         result.roots.insert(root.clone(), paths.clone());
         for path in paths {
             if result.packages.contains_key(&path) {

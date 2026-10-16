@@ -18,6 +18,7 @@ mod config;
 mod history;
 mod independent;
 mod rust;
+pub mod setup;
 pub use history::{
     build_explicit_release_plan, explicit_release_policy, preview, validate_release_baseline,
 };
@@ -243,6 +244,13 @@ fn configured_manifests(root: &Path) -> Result<Vec<PathBuf>, String> {
         if document["schema_version"].as_u64() != Some(1) {
             return Err("version sync config must use schema_version=1".into());
         }
+        if config::auto_manifests(&document)? {
+            return Ok(["Cargo.toml", "package.json"]
+                .iter()
+                .map(|p| root.join(p))
+                .filter(|p| p.is_file())
+                .collect());
+        }
         let items = document["manifests"]
             .as_array()
             .ok_or("version sync config manifests are missing")?;
@@ -326,18 +334,19 @@ fn cargo_version(path: &Path) -> Result<Option<SemVer>, String> {
 }
 
 fn cargo_version_text(text: &str, label: &str) -> Result<Option<SemVer>, String> {
-    let value =
-        Regex::new(r#"(?m)^version\s*=\s*"([^"]+)"\s*$"#).map_err(|error| error.to_string())?;
+    let document = text
+        .parse::<toml_edit::DocumentMut>()
+        .map_err(|e| format!("{label}: invalid Cargo TOML: {e}"))?;
     let mut versions = Vec::new();
-    let mut package_section = false;
-    for line in text.lines() {
-        let trimmed = line.trim();
-        if trimmed.starts_with('[') && trimmed.ends_with(']') {
-            package_section = matches!(trimmed, "[package]" | "[workspace.package]");
-            continue;
-        }
-        if package_section && let Some(capture) = value.captures(line) {
-            versions.push(capture[1].parse::<SemVer>()?);
+    for item in [
+        document.get("package"),
+        document.get("workspace").and_then(|w| w.get("package")),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        if let Some(version) = item.get("version").and_then(toml_edit::Item::as_str) {
+            versions.push(version.parse::<SemVer>()?);
         }
     }
     match versions.as_slice() {

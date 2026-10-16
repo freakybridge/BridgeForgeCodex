@@ -14,3 +14,5 @@
 | TODO-008 | 2026-10-11 | 发布累计 R07+R08：受管 release 预览 2.2.2 → 2.3.0；实际 fetch origin 因 SSL_ERROR_SYSCALL 失败，尚无提交/推送，版本仍 2.2.2；具体网络根因未确认，网络恢复后使用同一受管入口继续 | 待执行 | 后续事项 | [来源：发布失败现场](../1_delivery/shared-json/requirements_2026-10-11_R08.md#正式发布结果) |
 | TODO-009 | 2026-10-12 | 减少 git-sync 前后编排、重复读取和回读等待，保留保护与核验；新增受管内部耗时并按相同口径复测 | 进行中 | 原需求 | [需求：同步编排优化](../1_delivery/git-sync-performance/requirements_2026-10-12_orchestration.md) |
 | TODO-010 | 2026-10-16 | 通用发布核心、语言适配器和项目配置：首期 Rust 独立包升版及依赖传播，保留旧项目行为 | 进行中 | 原需求 | [需求：Rust 独立包发布](../1_delivery/git-sync-independent-packages/requirements_2026-10-16_rust-release.md) |
+| TODO-011 | 2026-10-16 | git-sync 首次配置引导：已有配置也展示确认，按业务类型筛选策略，选择随项目配置保存并记住 | 待执行 | 原需求 | [需求：首次配置引导](../1_delivery/git-sync-first-use/requirements_2026-10-16_first-use-and-rust-members.md) |
+| TODO-012 | 2026-10-16 | 修复 Rust 适配器漏发现 Cargo 合法 path 隐式成员，保持 workspace 边界及历史基线一致，解除独立包发布预检阻断 | 待执行 | 原需求 | [需求：Cargo 隐式成员修复](../1_delivery/git-sync-first-use/requirements_2026-10-16_first-use-and-rust-members.md) |

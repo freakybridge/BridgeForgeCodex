@@ -222,7 +222,12 @@
             {
               "source": "skills/git-sync/SKILL.md",
               "target": "SKILL.md",
-              "sha256": "sha256:875872e0205a3679a5d90aad41ae846dbd97dbeb87ba6b38e81c9d54ec2521e4"
+              "sha256": "sha256:4777d8205af88c79fb0ae1daa556d29be249bfab8cc15a0c1ab9514e9746bb65"
+            },
+            {
+              "source": "skills/git-sync/references/first-use.md",
+              "target": "references/first-use.md",
+              "sha256": "sha256:b6ae1aebd64b7a8133a37f7551054866ed0fe4b850d7e53f02a15f6489bffc3d"
             }
           ]
         },
