@@ -435,7 +435,14 @@ fn ordinary_sync_never_bumps_even_with_missing_or_legacy_config() {
 
 #[test]
 fn explicit_release_rejected_hook_restores_native_versions_log_and_index() {
+    for independent in [false, true] {
     let (repo, remote) = versioned_repository("explicit-rollback", true);
+    if independent {
+        fs::write(repo.0.join(".codex/bridgeforge-version.json"), serde_json::to_vec(&json!({
+            "schema_version":2,"release_policy":"explicit_release","strategy":"rust_independent",
+            "rust":{"workspaces":["Cargo.toml"],"dependency_bump":"patch"}
+        })).unwrap()).unwrap();
+    }
     fs::write(repo.0.join("tracked.txt"), b"uncommitted feature\n").unwrap();
     fs::write(repo.0.join(".git/hooks/pre-commit"), b"#!/bin/sh\nexit 1\n").unwrap();
     git_ok(&repo.0, &["status", "--porcelain=v1"]);
@@ -466,6 +473,7 @@ fn explicit_release_rejected_hook_restores_native_versions_log_and_index() {
         b"uncommitted feature\n"
     );
     fs::remove_dir_all(remote).unwrap();
+    }
 }
 
 fn install_development_check(root: &Path) {

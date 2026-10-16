@@ -628,6 +628,11 @@ fn sync_impl(
         .ok()
         .map(|v| v.trim().to_string());
     let mut version_after = version_before.clone();
+    let mut package_changes = Vec::new();
+    let version_strategy = match crate::release::version_strategy(root) {
+        Ok(strategy) => strategy,
+        Err(error) => return blocked(error),
+    };
     let mut generated_reused = 0;
     let mut generated_built = 0;
     let factory_runtime_repair = if factory && !dirty {
@@ -686,6 +691,7 @@ fn sync_impl(
         };
         if let Some(plan) = &release {
             version_after = Some(plan.new_version.to_string());
+            package_changes = plan.package_changes.clone();
         }
         let _project_lock = if factory {
             match crate::project_sync::ProjectLock::acquire(root) {
@@ -711,6 +717,8 @@ fn sync_impl(
                 return blocked(error);
             }
         }
+        let release_inventory = release.as_ref().and_then(|p| p.release_inventory.clone());
+        let release_status = release.as_ref().and_then(|p| p.release_status.clone());
         let (mut release_inputs, release_writes) =
             release.map(|p| (p.inputs, p.writes)).unwrap_or_default();
         release_inputs.insert(policy_path, policy_before);
@@ -739,6 +747,16 @@ fn sync_impl(
         }
         if let Err(error) = plan.verify_unchanged(root) {
             return blocked(error);
+        }
+        if let Some(inventory) = &release_inventory {
+            if let Err(error) = crate::release::verify_release_inventory(root, runner, inventory) {
+                return blocked(error);
+            }
+        }
+        if let Some(status) = &release_status {
+            if let Err(error) = crate::release::verify_release_status(root, runner, status) {
+                return blocked(error);
+            }
         }
         let snapshots = plan
             .writes
@@ -1017,6 +1035,11 @@ fn sync_impl(
     final_receipt["version_bumped"] = json!(version_before != version_after);
     final_receipt["version_before"] = json!(version_before);
     final_receipt["version_after"] = json!(version_after);
+    final_receipt["version_strategy"] = json!(version_strategy);
+    final_receipt["package_changes"] = json!(package_changes);
+    if version_strategy == "rust_independent" {
+        final_receipt["compatibility_validation"] = json!("not_performed_by_git_sync");
+    }
     final_receipt["generated_assets_reused"] = json!(generated_reused);
     final_receipt["generated_assets_built"] = json!(generated_built);
     CommandOutcome {

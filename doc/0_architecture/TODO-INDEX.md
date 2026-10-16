@@ -13,3 +13,4 @@
 | TODO-007 | 2026-10-11 | R08：严格 JSON 解析器归位与消费者迁移已完成；工程检查和独立审计通过，2026-10-11 用户验收；真实下游、自然 Hook 和用户级安装未验证 | 已完成 | 原需求 | [需求：R08](../1_delivery/shared-json/requirements_2026-10-11_R08.md)、[验收：TODO-007](../1_delivery/shared-json/requirements_2026-10-11_R08.md#用户验收与发布授权) |
 | TODO-008 | 2026-10-11 | 发布累计 R07+R08：受管 release 预览 2.2.2 → 2.3.0；实际 fetch origin 因 SSL_ERROR_SYSCALL 失败，尚无提交/推送，版本仍 2.2.2；具体网络根因未确认，网络恢复后使用同一受管入口继续 | 待执行 | 后续事项 | [来源：发布失败现场](../1_delivery/shared-json/requirements_2026-10-11_R08.md#正式发布结果) |
 | TODO-009 | 2026-10-12 | 减少 git-sync 前后编排、重复读取和回读等待，保留保护与核验；新增受管内部耗时并按相同口径复测 | 进行中 | 原需求 | [需求：同步编排优化](../1_delivery/git-sync-performance/requirements_2026-10-12_orchestration.md) |
+| TODO-010 | 2026-10-16 | 通用发布核心、语言适配器和项目配置：首期 Rust 独立包升版及依赖传播，保留旧项目行为 | 进行中 | 原需求 | [需求：Rust 独立包发布](../1_delivery/git-sync-independent-packages/requirements_2026-10-16_rust-release.md) |

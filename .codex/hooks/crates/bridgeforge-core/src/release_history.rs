@@ -5,6 +5,10 @@ pub fn explicit_release_policy(root: &Path) -> Result<bool, String> {
         return Ok(true);
     };
     let value = crate::json::parse_unique_json(&payload, "version sync config")?;
+    if value["schema_version"].as_u64() == Some(2) {
+        config::parse(&payload)?;
+        return Ok(true);
+    }
     if value["schema_version"].as_u64() != Some(1) {
         return Err("version sync config must use schema_version=1".into());
     }
@@ -18,7 +22,11 @@ pub fn explicit_release_policy(root: &Path) -> Result<bool, String> {
     }
 }
 
-fn git(root: &Path, runner: &dyn ProcessRunner, args: &[&str]) -> Result<String, String> {
+pub(super) fn git(
+    root: &Path,
+    runner: &dyn ProcessRunner,
+    args: &[&str],
+) -> Result<String, String> {
     let mut request = ProcessRequest::new("git", root);
     request.args = args.iter().map(std::ffi::OsString::from).collect();
     request.timeout = Duration::from_secs(45);
@@ -33,7 +41,7 @@ fn git(root: &Path, runner: &dyn ProcessRunner, args: &[&str]) -> Result<String,
     String::from_utf8(output.stdout).map_err(|e| e.to_string())
 }
 
-fn paths(raw: &str) -> Vec<String> {
+pub(super) fn paths(raw: &str) -> Vec<String> {
     raw.split('\0')
         .filter(|s| !s.is_empty())
         .map(str::to_string)
@@ -74,10 +82,15 @@ fn verify_historical_manifests(
     runner: &dyn ProcessRunner,
 ) -> Result<(), String> {
     let config = revision_payload(root, revision, ".codex/bridgeforge-version.json", runner)?;
+    if let Some(payload) = &config {
+        if let Some(cfg) = super::config::parse(payload)? {
+            independent::historical_workspace(root, revision, &cfg, runner)?;
+            return Ok(());
+        }
+    }
     let mut manifests = Vec::new();
     if let Some(payload) = config {
-        let config =
-            crate::json::parse_unique_json(&payload, "release baseline version config")?;
+        let config = crate::json::parse_unique_json(&payload, "release baseline version config")?;
         if config["schema_version"].as_u64() != Some(1) {
             return Err("invalid release baseline version config".into());
         }
@@ -223,7 +236,11 @@ pub fn validate_release_baseline(
                 .into(),
         );
     }
-    validate_native_versions(root, version.trim().parse::<SemVer>()?)?;
+    if let Some(cfg) = config::load(root)? {
+        independent::validate_current(root, boundary, &cfg, runner)?;
+    } else {
+        validate_native_versions(root, version.trim().parse::<SemVer>()?)?;
+    }
     Ok((head.to_string(), boundary.to_string()))
 }
 
@@ -235,6 +252,9 @@ pub fn build_explicit_release_plan(
 ) -> Result<Option<FileReleasePlan>, String> {
     // Diagnostics and the write transaction validate the same release baseline.
     let (head, boundary) = validate_release_baseline(root, runner)?;
+    if let Some(cfg) = config::load(root)? {
+        return independent::build(root, message, changed, &head, &boundary, &cfg, runner);
+    }
     let head = head.as_str();
     let boundary = boundary.as_str();
     let factory = root.join("templates/managed-skeleton.json").is_file();
@@ -323,6 +343,14 @@ pub fn build_explicit_release_plan(
 }
 
 pub fn preview(root: &Path, message: &str, runner: &dyn ProcessRunner) -> crate::CommandOutcome {
+    let strategy = match version_strategy(root) {
+        Ok(strategy) => strategy,
+        Err(error) => {
+            return crate::CommandOutcome::blocked(format!(
+                "[git-sync] release preview blocked: {error}\n"
+            ));
+        }
+    };
     let result = (|| {
         let mut changed = BTreeSet::new();
         for args in [
@@ -338,11 +366,14 @@ pub fn preview(root: &Path, message: &str, runner: &dyn ProcessRunner) -> crate:
         Ok(Some(plan)) => crate::CommandOutcome::with_receipt(json!({
             "schema": 1, "status": "release-planned", "version_before": plan.old_version.to_string(),
             "version_after": plan.new_version.to_string(), "kind": plan.kind,
+            "package_changes": plan.package_changes,
+            "version_strategy": strategy,
+            "compatibility_validation": "not_performed_by_git_sync",
             "changelog": String::from_utf8_lossy(&plan.writes[&root.join("CHANGELOG.md")]),
             "writes": plan.writes.keys().map(|p| p.strip_prefix(root).unwrap_or(p).to_string_lossy()).collect::<Vec<_>>()
         })),
         Ok(None) => crate::CommandOutcome::with_receipt(
-            json!({"schema": 1, "status": "nothing-to-release"}),
+            json!({"schema": 1, "status": "nothing-to-release", "version_strategy": strategy, "package_changes": []}),
         ),
         Err(error) => {
             crate::CommandOutcome::blocked(format!("[git-sync] release preview blocked: {error}\n"))

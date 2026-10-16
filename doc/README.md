@@ -8,6 +8,8 @@ delivery_layout: flat
 
 ## 从这里开始
 
+当前实施：[通用发布核心与 Rust 独立包版本](1_delivery/git-sync-independent-packages/requirements_2026-10-16_rust-release.md)（schema 2 显式启用；旧项目保持原行为；TODO-010）。
+
 项目后续事项见 [待办总表](0_architecture/TODO-INDEX.md)。
 
 | 你要做什么 | 先读这里 |

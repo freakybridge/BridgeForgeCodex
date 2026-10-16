@@ -49,7 +49,7 @@ fn fixture_development_checks(root: &Path) {
 
 #[test]
 fn real_cli_explicit_release_preview_and_execution() {
-    for policy in ["missing-file", "missing-field", "per_commit", "explicit_release"] {
+    for policy in ["missing-file", "missing-field", "per_commit", "explicit_release", "rust-independent"] {
         real_cli_release_flow(policy);
     }
 }
@@ -111,7 +111,9 @@ fn real_cli_release_flow(policy: &str) {
     fs::write(root.join("VERSION"), b"1.0.0\n").unwrap();
     fs::write(
         root.join("Cargo.toml"),
-        b"[package]\nname = \"demo\"\nversion = \"1.0.0\"\n",
+        if policy == "rust-independent" {
+            b"[package]\nname = \"demo\"\nversion = \"0.4.0\"\n".as_slice()
+        } else { b"[package]\nname = \"demo\"\nversion = \"1.0.0\"\n".as_slice() },
     )
     .unwrap();
     fs::write(root.join("CHANGELOG.md"), b"# Changelog\n").unwrap();
@@ -119,13 +121,18 @@ fn real_cli_release_flow(policy: &str) {
     fs::write(root.join(".codex/.bridgeforge_codex_version"), b"1.0.0\n").unwrap();
     let policy_path = root.join(".codex/bridgeforge-version.json");
     if policy != "missing-file" {
-        let mut config = serde_json::json!({"schema_version": 1, "manifests": ["Cargo.toml"]});
-        if policy != "missing-field" {
+        let mut config = if policy == "rust-independent" {
+            serde_json::json!({"schema_version":2,"release_policy":"explicit_release","strategy":"rust_independent",
+                "rust":{"workspaces":["Cargo.toml"],"dependency_bump":"patch"}})
+        } else { serde_json::json!({"schema_version": 1, "manifests": ["Cargo.toml"]}) };
+        if policy != "missing-field" && policy != "rust-independent" {
             config["release_policy"] = serde_json::json!(policy);
         }
         fs::write(&policy_path, serde_json::to_vec(&config).unwrap()).unwrap();
     }
-    fs::write(root.join("Cargo.lock"), b"version = 4\n[[package]]\nname = \"demo\"\nversion = \"1.0.0\"\n").unwrap();
+    fs::write(root.join("Cargo.lock"), if policy == "rust-independent" {
+        b"version = 4\n[[package]]\nname = \"demo\"\nversion = \"0.4.0\"\n".as_slice()
+    } else { b"version = 4\n[[package]]\nname = \"demo\"\nversion = \"1.0.0\"\n".as_slice() }).unwrap();
     use sha2::{Digest, Sha256};
     fs::write(root.join("managed.txt"), b"managed\n").unwrap();
     let contract = serde_json::json!({
@@ -174,6 +181,7 @@ fn real_cli_release_flow(policy: &str) {
     fs::write(root.join("business.txt"), b"feature\n").unwrap();
     let ordinary = call(&["git-sync", "--message", "feat: new capability"]);
     assert_eq!(ordinary["version_bumped"], false);
+    assert_eq!(ordinary["version_strategy"],if policy == "rust-independent" {"rust_independent"} else {"synchronized"});
     assert_eq!(ordinary["release_requested"], false);
     assert_eq!(ordinary["release_policy"], "explicit_release");
     assert_eq!(ordinary["version_before"], "1.0.0");
@@ -198,6 +206,10 @@ fn real_cli_release_flow(policy: &str) {
     let fetch = fs::read(root.join(".git/FETCH_HEAD")).unwrap();
     let preview = call(&["git-sync", "--release-preview", "--message", "fix: release"]);
     assert_eq!(preview["version_after"], "1.1.0");
+    if policy == "rust-independent" {
+        assert_eq!(preview["version_strategy"],"rust_independent");
+        assert_eq!(preview["package_changes"][0]["version_after"],"0.5.0");
+    }
     assert_eq!(git(&root, &["rev-parse", "HEAD"]), before);
     assert_eq!(fs::read(root.join(".git/index")).unwrap(), index);
     assert_eq!(fs::read(root.join(".git/FETCH_HEAD")).unwrap(), fetch);
@@ -215,10 +227,15 @@ fn real_cli_release_flow(policy: &str) {
     assert_eq!(released["ahead"], 0);
     assert_eq!(released["behind"], 0);
     assert_eq!(released["generated_assets_built"], 0);
+    if policy == "rust-independent" {
+        assert_eq!(released["package_changes"][0]["version_after"],"0.5.0");
+        assert_eq!(released["compatibility_validation"],"not_performed_by_git_sync");
+    }
     assert_eq!(fs::read(&development).ok(), development_bytes);
     assert_eq!(fs::read(&record).ok(), record_bytes);
     let repeated = call(&["git-sync", "--release", "--message", "feat!: ignored"]);
     assert_eq!(repeated["version_bumped"], false);
+    assert_eq!(repeated["version_strategy"],if policy == "rust-independent" {"rust_independent"} else {"synchronized"});
     assert_eq!(repeated["commit"], released["commit"]);
 }
 

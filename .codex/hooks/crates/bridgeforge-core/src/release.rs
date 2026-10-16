@@ -13,9 +13,23 @@ use std::time::Duration;
 
 use crate::{ProcessRequest, ProcessRunner};
 
+mod config;
 #[path = "release_history.rs"]
 mod history;
-pub use history::{build_explicit_release_plan, explicit_release_policy, preview, validate_release_baseline};
+mod independent;
+mod rust;
+pub use history::{
+    build_explicit_release_plan, explicit_release_policy, preview, validate_release_baseline,
+};
+pub use rust::PackageChange;
+
+pub fn version_strategy(root: &Path) -> Result<&'static str, String> {
+    Ok(if config::load(root)?.is_some() {
+        "rust_independent"
+    } else {
+        "synchronized"
+    })
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct SemVer {
@@ -104,6 +118,9 @@ pub struct FileReleasePlan {
     pub new_version: SemVer,
     pub kind: ReleaseKind,
     pub writes: BTreeMap<PathBuf, Vec<u8>>,
+    pub package_changes: Vec<PackageChange>,
+    pub release_inventory: Option<Vec<String>>,
+    pub release_status: Option<String>,
 }
 
 pub fn parse_commit_message(message: &str) -> Result<CommitInfo, String> {
@@ -265,18 +282,34 @@ fn validate_native_versions(root: &Path, version: SemVer) -> Result<(), String> 
     for path in configured_manifests(root)? {
         release_input(&path)?;
         let cargo = path.file_name().and_then(|name| name.to_str()) == Some("Cargo.toml");
-        let current = if cargo { cargo_version(&path)? } else { json_version(&path)? }
-            .ok_or_else(|| format!("configured manifest has no static version: {}", path.display()))?;
+        let current = if cargo {
+            cargo_version(&path)?
+        } else {
+            json_version(&path)?
+        }
+        .ok_or_else(|| {
+            format!(
+                "configured manifest has no static version: {}",
+                path.display()
+            )
+        })?;
         if current != version {
-            return Err(format!("native manifest disagrees with VERSION: {}", path.display()));
+            return Err(format!(
+                "native manifest disagrees with VERSION: {}",
+                path.display()
+            ));
         }
         if cargo {
             render_cargo(&path, version, version)?;
             let lock = path.with_file_name("Cargo.lock");
-            if release_input(&lock)?.is_some() { render_cargo_lock(&lock, version, version)?; }
+            if release_input(&lock)?.is_some() {
+                render_cargo_lock(&lock, version, version)?;
+            }
         } else {
             let lock = path.with_file_name("package-lock.json");
-            if release_input(&lock)?.is_some() { render_package_lock(&lock, version, version)?; }
+            if release_input(&lock)?.is_some() {
+                render_package_lock(&lock, version, version)?;
+            }
             for unsupported in ["pnpm-lock.yaml", "yarn.lock"] {
                 if release_input(&path.with_file_name(unsupported))?.is_some() {
                     return Err(format!("unsupported JavaScript lock file: {unsupported}"));
@@ -1078,6 +1111,9 @@ pub fn build_file_release_plan(
     changed_paths: Vec<String>,
     runner: &dyn ProcessRunner,
 ) -> Result<Option<FileReleasePlan>, String> {
+    if config::load(root)?.is_some() {
+        return build_explicit_release_plan(root, message, changed_paths, runner);
+    }
     let mut changed = changed_paths
         .into_iter()
         .map(|path| path.replace('\\', "/"))
@@ -1169,13 +1205,50 @@ fn build_selected_release_plan(
         new_version,
         kind,
         writes,
+        package_changes: Vec::new(),
+        release_inventory: None,
+        release_status: None,
     }))
 }
 
 pub fn apply_file_release_plan(plan: &FileReleasePlan) -> Result<(), String> {
     verify_release_inputs(&plan.inputs)?;
+    if let Some(inventory) = &plan.release_inventory {
+        let root = plan
+            .writes
+            .keys()
+            .find(|p| p.file_name().is_some_and(|n| n == "VERSION"))
+            .and_then(|p| p.parent())
+            .ok_or("release root missing")?;
+        verify_release_inventory(root, &crate::SystemProcessRunner, inventory)?;
+        if let Some(status) = &plan.release_status {
+            verify_release_status(root, &crate::SystemProcessRunner, status)?;
+        }
+    }
     for (path, payload) in &plan.writes {
         crate::persistence::atomic_write(path, payload).map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
+pub(crate) fn verify_release_inventory(
+    root: &Path,
+    runner: &dyn ProcessRunner,
+    expected: &[String],
+) -> Result<(), String> {
+    if independent::inventory(root, runner)? != expected {
+        return Err("release package/file inventory changed concurrently; no apply".into());
+    }
+    Ok(())
+}
+
+pub(crate) fn verify_release_status(
+    root: &Path,
+    runner: &dyn ProcessRunner,
+    expected: &str,
+) -> Result<(), String> {
+    if independent::status(root, runner)? != expected {
+        return Err("release worktree status changed concurrently; no apply".into());
     }
     Ok(())
 }
