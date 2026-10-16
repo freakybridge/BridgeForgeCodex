@@ -1,11 +1,11 @@
 ---
-lifecycle: active
-validation_status: awaiting_user_acceptance
+lifecycle: completed
+validation_status: verified
 ---
 
 # git-sync 首次配置引导与 Cargo 隐式成员发现修复
 
-最新情况（2026-10-17）：2.5.0 已按用户授权发布；StratusAgent 已升级到该版本，原隐式成员阻断已越过，但历史锁文件迁移兼容仍阻止独立发布。原因与证据见文末“发布后真实下游复核”，换机从[交接文档](handoff_2026-10-17_historical-lock-migration.md)继续。本卡不因此记为用户已验收。
+最新情况（2026-10-17）：用户已通过 summary accept 验收本交付包，TODO-011、TODO-012 已完成；历史锁迁移源码修复、6 项定向回归、7 项工程检查及独立审计已通过。用户另行调用 git-sync release，授权本轮受管发布；发布终态以实际同步收据为准。真实下游及用户级自然运行仍未验证，也未获写入或用户级安装授权。先前预算与禁止发布的记录属于上一实施阶段，后续授权见文末。
 
 ## 用户目标、决定和授权
 
@@ -109,7 +109,7 @@ shared Rust input references unknown or duplicate package: stratus/research-inpu
 | 9 | 工厂工程收口 | 定向测试、受管构建、完整 workspace／factory fixture、manifest／结构／镜像检查及独立审计 |
 | 10 | 真实下游及 runtime | 仅在另行授权的测试 worktree 受管更新与验证；缺证据明确标未验证 |
 
-## 当前进度
+## 2.5.0 发布前工程进度（历史记录）
 
 实现、独立审计及工程检查已完成，等待用户验收，尚未发布。主对话实现和整合，review-auditor 独立审计；未委派实现 Agent。中断前的构建进程句柄在恢复后失效，已通过当前产物自检及受管 baseline 复核 CLI/Hook 关联，不以无法回收的进程输出冒充测试终态。最终完整工程准备在恢复后连续执行并取得正式收据。
 
@@ -208,3 +208,77 @@ strategies/template/blackswan/Cargo.lock: local package stratus-clock has missin
 ### 剩余范围与交接边界
 
 历史锁迁移尚未修复，未新增代码、fixture 或工程收据，也未对真实下游写入或执行发布。剩余修复与完整必要验证估计 90–120 分钟，仅为时间估计，不是已获实施授权或新的 token 预算。当前不新增 Rule/Hook/AGENTS 建议：问题有明确代码与测试落点，已有证据约束足够；原生 Memory 索引有界检索未命中该历史锁主题，未写入 Memory。当前关联 topic 仍有 blocker、未获用户验收，无归档候选。
+
+## 本轮历史锁迁移修复（2026-10-17）
+
+本节接续上述调查与交接，之前的“尚未修复／尚未授权”为调查结束时的历史状态。
+
+### 授权与传播
+
+用户明确授权：“开始吧，按120分钟、30k token预算修复历史锁迁移这个bug，完成必要验证和独立审计，先不要提交推送、发布或修改真实下游。”预算包含主对话、独立审计、必要返工与工程检查，不重用上一轮估算。未获用户级安装授权。本轮由主对话实现，review-auditor 独立只读审计。
+
+这是通用产品层兼容修复：产品源进入 templates，机械同步 .codex/hooks dogfood 和受管 manifest；不是工厂专属例外，不使用下游包名白名单。版本与 [product] CHANGELOG 留待另行授权的受管 release，本轮不预写 VERSION 或发布说明，不对工厂执行下游 project-sync。
+
+### 实现与边界
+
+1. historical_workspace 读取每个历史 revision 自身的版本配置，仅在明确为 schema 1 时提取当时的显式 manifests 或 auto 根 manifest 集合。
+2. Rust loader 使用同一套包发现、依赖图与身份／有效版本校验。历史锁的检查范围单独由旧 manifests 决定：root 或任一 member 已纳管时仍严格检查；两者均未纳管的额外 workspace 才不追溯实施新锁合同。
+3. 当前工作树、schema 2 历史、缺少配置的历史均保留严格检查；未知 schema、损坏配置仍报错。boundary 与累计中间提交共用此规则。
+4. 旧合同外的锁仍需 TOML 可解析，本修复不修补任意损坏文件。当前锁修好之后才能迁移；所有包集合、名称、workspace 归属与有效版本守卫不变。
+
+### 回归与工程状态
+
+先在未修代码上复现：新增首批 3 个测试中，合法迁移正例被 strategy/Cargo.lock 的旧 native 版本阻断，身份守卫反例也被该旧锁提前遮挡；严格锁反例通过。修复后首批 3 项及扩充后的 5 项定向测试均通过；最终 6 项定向集 6 passed、0 failed、0 ignored，执行耗时 43.42 秒。
+
+最终集覆盖旧 boundary／中间提交滞后、候选基线预检、release preview、当前锁／schema 2 boundary 与中间锁拒绝、旧已管理 root／member 仍严格、auto 合同、缺配置／未知 schema、包名／有效版本漂移。只读 runner 只允许 Git，拒绝 Cargo 和 Git 网络／写命令，并比对 index、配置、锁、VERSION 与 .runtime 缺失状态。
+
+定向命令：`cargo test --locked --config scripts/tests/factory-cargo.toml --manifest-path .codex/hooks/Cargo.toml -p bridgeforge-core independent_historical_lock_migration -- --test-threads=1`。
+
+最终 review-auditor 独立只读复审 passed、findings=[]，现场核对开发指纹 `sha256:7d1e0f5ea1d9e40afb299c6564222d65d7c0e81f1227cf75910c9a77bf9e7337` 一致。审计未独立运行完整测试，不代替工程收据。templates 与 dogfood 两份源码 hash 相同；受管 manifest 重建及 --check 通过。
+
+本仓库当前版本受管 CLI／Hook 构建应用成功，源码树指纹 `sha256:1414addcef73a9d9d6d9d2ac594485ff6a65ab5d54718a687de4f6e628d94209`，CLI hash `sha256:b27fb011a6998ddb06f607c419f57f4586a60e9e00a854a0416185ef644141f6`，Hook hash `sha256:96691969ac5241e5346db07f01d82a23e49b7277253e2e8805cb825324efd43b`。CLI self-test 为 2.5.0，能力包含 git-sync-direct-release-v1。
+
+直接从 .codex/bin CLI 执行 build-assets 时，Windows 拒绝覆盖正在执行的 CLI 文件，受管事务完整回滚。改用 hash 验证一致的临时 CLI 副本执行同一 build-assets，正式输出 status=built；未改 ACL、未绕过产物／锁／自检验证，未扩展产品修复范围。
+
+首轮完整工程准备中，baseline、metadata、manifest、structure、mirror-drift 通过；完整 workspace 318 passed、8 ignored、0 failed（CLI 16 passed，core 278 passed／6 ignored，Hook 24 passed／2 ignored）。workspace 日志 SHA-256 为 `ceb9bc526827d20e206a498019f828738ce7b0b555eca4852c005cc05da5d311`。准备期间主对话补写本卡，触发全文件输入漂移保护，工具返回 `development checks changed inputs; no preparation was certified`，未继续 factory 检查或认证 prepared。开发输入指纹保持不变，记录类文档虽然不改变开发指纹，仍属于准备事务的精确输入，不能在执行期间修改。
+
+修正执行顺序：固定全部输入后第二次运行同一受管准备，完成之前不再写任何输入文件；没有修改产品代码或放宽漂移保护。最终工程收据已取得，详见下节。真实下游与用户级自然 runtime 本轮未验证，TODO-011／TODO-012 不自动结算。
+
+### 最终工程证据
+
+受管命令 `.codex/bin/bridgeforge.exe git-sync --prepare-release --message-file .runtime/historical-lock-message.txt --audit-file .runtime/historical-lock-audit.json` 返回 exit 0、status=prepared、checks_passed=7，绑定开发指纹 `sha256:7d1e0f5ea1d9e40afb299c6564222d65d7c0e81f1227cf75910c9a77bf9e7337`。隔离快照目标为 2.5.1，不代表正式发布；工作区 VERSION 保持 2.5.0。
+
+收据为 `.runtime/bridgeforge-codex/release-preparation/current.json`，各日志保存于同目录 blobs/<hash>。收据、审计 JSON 和构建产物都是本机忽略资产，不随 Git 携带，也不是提交／发布授权。
+
+| 编号 | 检查 | 最终结果 | 日志 SHA-256 |
+|---|---|---|---|
+| 1 | baseline | 当前版本受管 CLI／Hook 与源码合同通过 | `5877f66d55872f9cbccd2ac589c39e1dcfbd795406a5930fc4211a7d6499ebd2` |
+| 2 | skill metadata | 通过 | `2f4914ad120aad474ada903be1a4a2b10cd859eab34c0ef951d8ad6c4ca2efdd` |
+| 3 | manifest --check | 通过 | `4f26cd005522df1df06e7e991cad2699681b25283e63142caef1b1d6c07e26e5` |
+| 4 | project structure | 通过 | `64d1f73a223dfb46f669cd6ff7282a62d6021a49a99d1869d0a66b5d87889497` |
+| 5 | mirror-drift | 源码全树逐字一致；1 passed | `5de6b43312aea1a7f8ae51e9d048f9c2a51b1622724b627e0a25273f1355979a` |
+| 6 | 完整 workspace | 318 passed、8 ignored、0 failed | `19e486418acb72d0c53183e6f1937bcd5b95a65f211ff5b9d84746f6d80dfcd0` |
+| 7 | 完整 factory fixture | 90 passed、6 ignored、0 failed | `5402a75fdd0c5c8a08397d377ffa59b53614884118af0fe4e8ee1c43aaaf0512` |
+
+完整命令沿用本卡原工程证据中的 workspace／factory 命令。两套完整集共 408 passed、14 ignored；定向 6 项与镜像 1 项均包含于完整集，不重复累加。忽略项为显式性能实验、子进程辅助入口、需外部配置的 live-log／高成本通知用例及需另行授权的 Assist fixture，不算通过或自然 runtime 验证。
+
+| 编号 | Bug 证据维度 | 本轮状态 |
+|---|---|---|
+| 1 | 源码 | 通用修复完成；独立 review-auditor passed、findings=[] |
+| 2 | 产品传播 | templates 与受管 manifest/hash 通过；未发布、未安装用户级资产 |
+| 3 | dogfood | 源码镜像、受管产物 baseline 与完整 workspace 通过 |
+| 4 | fixture | 迁移正反例与完整 factory 通过 |
+| 5 | 真实下游 | 未修改、未复验；不据隔离测试宣称 StratusAgent 已可发布 |
+| 6 | runtime | 本仓库 CLI／Hook 构建、自检及隔离 CLI/runtime 测试通过；用户级自然调用未验证 |
+
+本轮约从 00:31 到 01:10（Asia/Singapore），合计约 39 分钟，包含首轮因文档漂移未认证的准备。最终连续准备约 17 分钟，workspace 检查 555811 ms，factory 检查 399723 ms；前者不是端到端耗时。新增 token 没有可核验的精确计数，不虚构实测值或额度百分比。本轮未提交、推送、发布、安装用户级资产或写入真实下游；原需求保持 active／awaiting_user_acceptance。
+
+经验：历史回放可以共用当前的事实发现算法，但校验义务必须按该历史时点的合同确定；兼容应限定合同范围，并以“旧规则正例 + 当前／新规则反例”共同约束。现有 AGENTS 已要求真实证据和授权边界，本轮不新增 Rule／Hook／AGENTS 或 Memory 建议，无归档候选。
+
+### 用户验收与发布授权（2026-10-17）
+
+用户在获知本轮修复、408 passed／14 ignored、7 项工程检查和独立审计通过，以及真实下游／用户级自然运行未验证的边界后，明确调用 `$summary accept`。据此验收本交付包的工程交付：TODO-011（首次配置引导并随项目记住选择）和 TODO-012（Cargo 合法隐式成员及其历史锁迁移修复）均记为已完成。首次引导与隐式成员的原实现属于已发布的 2.5.0，本轮新增成果仅为历史锁迁移兼容修复及其验证，不把原成果重新归入本轮。
+
+验收依据复用本卡 2.5.0 原工程证据与本轮最终收据：开发指纹未变，记录类文档轻量检查通过；不为总结重跑测试、构建或审计。真实下游与用户级自然 runtime 仍未验证；本次验收不将其记为通过。TODO-010 等其他原需求或后续事项不在本次结算范围内。
+
+用户同时显式调用 `$git-sync release`，另行授权提交、推送与受管升版，提交消息为 `fix: 修复 Rust 独立发布的历史锁迁移校验范围`。该授权不包含用户级安装、真实下游更新或归档移动。发布版本、提交和推送结果以受管 release 最终收据为准，不提前写成发布成功。

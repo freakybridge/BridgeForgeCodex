@@ -317,6 +317,26 @@ pub(super) fn load(
     inventory: &[String],
     read: &mut impl FnMut(&str) -> Result<Option<Vec<u8>>, String>,
 ) -> Result<Workspace, String> {
+    load_with_lock_scope(config, inventory, None, read)
+}
+
+/// A schema 1 snapshot predates independent Rust lock ownership. Keep full
+/// discovery and identity checks; validate locks for its managed roots/members.
+pub(super) fn load_legacy_history(
+    config: &RustConfig,
+    inventory: &[String],
+    manifests: &BTreeSet<String>,
+    read: &mut impl FnMut(&str) -> Result<Option<Vec<u8>>, String>,
+) -> Result<Workspace, String> {
+    load_with_lock_scope(config, inventory, Some(manifests), read)
+}
+
+fn load_with_lock_scope(
+    config: &RustConfig,
+    inventory: &[String],
+    legacy_manifests: Option<&BTreeSet<String>>,
+    read: &mut impl FnMut(&str) -> Result<Option<Vec<u8>>, String>,
+) -> Result<Workspace, String> {
     config.validate()?;
     if config.workspaces.is_empty() {
         return Err("rust.workspaces must list at least one Cargo.toml".into());
@@ -513,7 +533,7 @@ pub(super) fn load(
         }
     }
     result.collect_dependencies()?;
-    result.validate_locks()?;
+    result.validate_locks(legacy_manifests)?;
     Ok(result)
 }
 
@@ -791,8 +811,13 @@ impl Workspace {
         Ok(())
     }
 
-    fn validate_locks(&self) -> Result<(), String> {
+    fn validate_locks(&self, legacy_manifests: Option<&BTreeSet<String>>) -> Result<(), String> {
         for (root, members) in &self.roots {
+            if legacy_manifests.is_some_and(|manifests| {
+                !manifests.contains(root) && members.is_disjoint(manifests)
+            }) {
+                continue;
+            }
             let lock = if directory(root).is_empty() {
                 "Cargo.lock".to_owned()
             } else {

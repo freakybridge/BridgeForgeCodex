@@ -557,6 +557,191 @@ fn independent_migration_keeps_versions_and_unreleased_business_history() {
     assert!(!idle.contains("version.workspace"));
 }
 
+fn historical_lock_config(legacy: bool) -> Value {
+    if legacy {
+        json!({"schema_version":1,"release_policy":"explicit_release","manifests":["native/Cargo.toml"]})
+    } else {
+        json!({"schema_version":2,"release_policy":"explicit_release","strategy":"rust_independent",
+            "rust":{"workspaces":["native/Cargo.toml","strategy/Cargo.toml"],
+            "product_inputs":["strategy/Cargo.lock"]}})
+    }
+}
+
+fn strategy_lock(stale: bool) -> &'static [u8] {
+    if stale {
+        b"version = 4\n[[package]]\nname = 'strategy'\nversion = '1.0.0'\ndependencies = ['native']\n[[package]]\nname = 'native'\nversion = '0.9.0'\n"
+    } else {
+        b"version = 4\n[[package]]\nname = 'strategy'\nversion = '1.0.0'\ndependencies = ['native']\n[[package]]\nname = 'native'\nversion = '1.0.0'\n"
+    }
+}
+
+fn historical_lock_repository(name: &str, config: Value, stale: bool) -> ReleaseRepository {
+    release_repository(name, &json!({"contract_target":".codex/managed-skeleton.json","assets":[]}), &[
+        ("VERSION", b"1.0.0\n"), ("CHANGELOG.md", b"# Changelog\n"),
+        (".codex/bridgeforge-version.json", &serde_json::to_vec(&config).unwrap()),
+        ("native/Cargo.toml", b"[package]\nname = 'native'\nversion = '1.0.0'\nedition = '2024'\n[workspace]\n"),
+        ("native/src/lib.rs", b"pub fn value() -> u32 { 1 }\n"),
+        ("native/Cargo.lock", b"version = 4\n[[package]]\nname = 'native'\nversion = '1.0.0'\n"),
+        ("strategy/Cargo.toml", b"[package]\nname = 'strategy'\nversion = '1.0.0'\nedition = '2024'\n[workspace]\n[dependencies]\nnative = { path = '../native', version = '1.0.0' }\n"),
+        ("strategy/src/lib.rs", b"pub fn value() -> u32 { native::value() }\n"),
+        ("strategy/Cargo.lock", strategy_lock(stale)),
+    ])
+}
+
+fn write_independent_lock_config(repo: &ReleaseRepository) {
+    fs::write(repo.0.join(".codex/bridgeforge-version.json"),
+        serde_json::to_vec(&historical_lock_config(false)).unwrap()).unwrap();
+}
+
+struct ReadOnlyReleaseRunner;
+
+impl ProcessRunner for ReadOnlyReleaseRunner {
+    fn run(&self, request: &ProcessRequest) -> std::io::Result<ProcessOutput> {
+        assert_eq!(request.program, "git", "release preview must not invoke Cargo or a resolver");
+        for forbidden in ["fetch", "pull", "push", "add", "commit", "reset", "checkout"] {
+            assert!(!request.args.iter().any(|arg| arg == forbidden), "unexpected mutation/network command: {request:?}");
+        }
+        SystemProcessRunner.run(request)
+    }
+}
+
+#[test]
+fn independent_historical_lock_migration_accepts_legacy_boundary_and_intermediate() {
+    for stale_boundary in [true, false] {
+        let repo = historical_lock_repository("legacy-lock", historical_lock_config(true), stale_boundary);
+        fs::write(repo.0.join("strategy/Cargo.lock"), strategy_lock(true)).unwrap();
+        fs::write(repo.0.join("strategy/src/lib.rs"), b"pub fn value() -> u32 { native::value() + 1 }\n").unwrap();
+        git_ok(&repo.0, &["add", "."]);
+        git_ok(&repo.0, &["commit", "-m", "feat: strategy improvement"]);
+        fs::write(repo.0.join("strategy/Cargo.lock"), strategy_lock(false)).unwrap();
+        let legacy_config = fs::read(repo.0.join(".codex/bridgeforge-version.json")).unwrap();
+        let candidate = config::parse(&serde_json::to_vec(&historical_lock_config(false)).unwrap()).unwrap().unwrap();
+        history::validate_candidate_baseline(&repo.0, &ReadOnlyReleaseRunner, &candidate).unwrap();
+        assert_eq!(fs::read(repo.0.join(".codex/bridgeforge-version.json")).unwrap(), legacy_config);
+        write_independent_lock_config(&repo);
+        let index = fs::read(repo.0.join(".git/index")).unwrap();
+        let lock = fs::read(repo.0.join("strategy/Cargo.lock")).unwrap();
+        let config = fs::read(repo.0.join(".codex/bridgeforge-version.json")).unwrap();
+        let plan = build_explicit_release_plan(&repo.0, "chore: migrate", vec![], &ReadOnlyReleaseRunner).unwrap().unwrap();
+        assert_eq!(plan.new_version.to_string(), "1.1.0");
+        assert_eq!(plan.package_changes.len(), 1);
+        assert_eq!(plan.package_changes[0].name, "strategy");
+        assert_eq!(plan.package_changes[0].version_after, "1.1.0");
+        let preview = preview(&repo.0, "chore: migrate", &ReadOnlyReleaseRunner);
+        assert_eq!(preview.code, 0, "{}", preview.stderr);
+        assert_eq!(preview.receipt.unwrap()["status"], "release-planned");
+        assert_eq!(fs::read(repo.0.join(".git/index")).unwrap(), index);
+        assert_eq!(fs::read(repo.0.join("strategy/Cargo.lock")).unwrap(), lock);
+        assert_eq!(fs::read(repo.0.join(".codex/bridgeforge-version.json")).unwrap(), config);
+        assert_eq!(fs::read(repo.0.join("VERSION")).unwrap(), b"1.0.0\n");
+        assert!(!repo.0.join(".runtime").exists());
+    }
+}
+
+#[test]
+fn independent_historical_lock_migration_keeps_current_and_schema2_locks_strict() {
+    for (legacy, stale_boundary) in [(true, false), (false, true), (false, false)] {
+        let repo = historical_lock_repository("strict-lock", historical_lock_config(legacy), stale_boundary);
+        if !stale_boundary {
+            fs::write(repo.0.join("strategy/Cargo.lock"), strategy_lock(true)).unwrap();
+            git_ok(&repo.0, &["add", "."]);
+            git_ok(&repo.0, &["commit", "-m", "fix: intermediate lock"]);
+        }
+        if !legacy {
+            fs::write(repo.0.join("strategy/Cargo.lock"), strategy_lock(false)).unwrap();
+        }
+        write_independent_lock_config(&repo);
+        let error = build_explicit_release_plan(&repo.0, "fix: migrate", vec![], &SystemProcessRunner).unwrap_err();
+        assert!(error.contains("strategy/Cargo.lock: local package native has missing, ambiguous, or stale version"), "{error}");
+    }
+}
+
+#[test]
+fn independent_historical_lock_migration_keeps_identity_and_effective_version_guards() {
+    for replacement in ["name = 'renamed'", "version = '0.9.0'"] {
+        let repo = historical_lock_repository("legacy-identity", historical_lock_config(true), true);
+        let original = fs::read_to_string(repo.0.join("strategy/Cargo.toml")).unwrap();
+        let changed = if replacement.starts_with("name") {
+            original.replace("name = 'strategy'", replacement)
+        } else {
+            original.replacen("version = '1.0.0'", replacement, 1)
+        };
+        fs::write(repo.0.join("strategy/Cargo.toml"), changed).unwrap();
+        git_ok(&repo.0, &["add", "."]);
+        git_ok(&repo.0, &["commit", "-m", "fix: untracked identity change"]);
+        fs::write(repo.0.join("strategy/Cargo.toml"), original).unwrap();
+        fs::write(repo.0.join("strategy/Cargo.lock"), strategy_lock(false)).unwrap();
+        write_independent_lock_config(&repo);
+        let error = build_explicit_release_plan(&repo.0, "chore: migrate", vec![], &SystemProcessRunner).unwrap_err();
+        assert!(error.contains("package identity or effective version changed"), "{error}");
+    }
+}
+
+#[test]
+fn independent_historical_lock_migration_does_not_exempt_legacy_managed_roots() {
+    let mut legacy = historical_lock_config(true);
+    legacy["manifests"] = json!(["native/Cargo.toml", "strategy/Cargo.toml"]);
+    let repo = historical_lock_repository("legacy-managed-lock", legacy, true);
+    fs::write(repo.0.join("strategy/Cargo.lock"), strategy_lock(false)).unwrap();
+    write_independent_lock_config(&repo);
+    let error = build_explicit_release_plan(&repo.0, "chore: migrate", vec![], &ReadOnlyReleaseRunner).unwrap_err();
+    assert!(error.contains("strategy/Cargo.lock: local package native has missing, ambiguous, or stale version"), "{error}");
+}
+
+#[test]
+fn independent_historical_lock_migration_requires_proven_legacy_contract() {
+    for missing in [true, false] {
+        let repo = historical_lock_repository("unproven-legacy-lock", historical_lock_config(true), false);
+        if missing {
+            fs::remove_file(repo.0.join(".codex/bridgeforge-version.json")).unwrap();
+        } else {
+            fs::write(repo.0.join(".codex/bridgeforge-version.json"), b"{\"schema_version\":99}").unwrap();
+        }
+        fs::write(repo.0.join("strategy/Cargo.lock"), strategy_lock(true)).unwrap();
+        git_ok(&repo.0, &["add", "."]);
+        git_ok(&repo.0, &["commit", "-m", "fix: unproven historical configuration"]);
+        fs::write(repo.0.join("strategy/Cargo.lock"), strategy_lock(false)).unwrap();
+        write_independent_lock_config(&repo);
+        let error = build_explicit_release_plan(&repo.0, "chore: migrate", vec![], &ReadOnlyReleaseRunner).unwrap_err();
+        if missing {
+            assert!(error.contains("strategy/Cargo.lock: local package native has missing, ambiguous, or stale version"), "{error}");
+        } else {
+            assert!(error.contains("schema_version=1 or 2"), "{error}");
+        }
+    }
+}
+
+#[test]
+fn independent_historical_lock_migration_respects_auto_and_member_manifest_scope() {
+    // The automatic legacy contract manages only root manifests, not every
+    // nested workspace that independent release later registers.
+    let repo = historical_lock_repository("auto-legacy-lock", json!({
+        "schema_version":1,"manifest_policy":"auto","release_policy":"explicit_release"
+    }), true);
+    fs::write(repo.0.join("strategy/Cargo.lock"), strategy_lock(false)).unwrap();
+    write_independent_lock_config(&repo);
+    assert!(build_explicit_release_plan(&repo.0, "chore: migrate", vec![], &ReadOnlyReleaseRunner).is_ok());
+
+    // Explicitly managing a member also keeps its containing root's lock
+    // strict, even when the root manifest itself was not in the legacy list.
+    let cfg = rust::RustConfig {
+        workspaces: vec!["Cargo.toml".into()], dependency_bump: "patch".into(),
+        shared_inputs: vec![], product_inputs: vec![],
+    };
+    let files = BTreeMap::from([
+        ("Cargo.toml", b"[workspace]\nmembers=['member']\n".as_slice()),
+        ("member/Cargo.toml", b"[package]\nname='member'\nversion='1.0.0'\n".as_slice()),
+        ("Cargo.lock", b"version=4\n[[package]]\nname='member'\nversion='0.9.0'\n".as_slice()),
+    ]);
+    let inventory = files.keys().map(|p| p.to_string()).collect::<Vec<_>>();
+    let mut read = |path: &str| Ok(files.get(path).map(|b| b.to_vec()));
+    let error = rust::load_legacy_history(&cfg, &inventory,
+        &BTreeSet::from(["member/Cargo.toml".into()]), &mut read).unwrap_err();
+    assert!(error.contains("Cargo.lock: local package member has missing, ambiguous, or stale version"), "{error}");
+    assert!(rust::load_legacy_history(&cfg, &inventory,
+        &BTreeSet::from(["unrelated/Cargo.toml".into()]), &mut read).is_ok());
+}
+
 #[test]
 fn independent_config_and_package_drift_fail_closed() {
     let repo = independent_repository("independent-drift",false);

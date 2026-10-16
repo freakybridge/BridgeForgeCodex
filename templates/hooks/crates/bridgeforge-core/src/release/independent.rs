@@ -40,6 +40,49 @@ pub(super) fn historical_workspace(
         runner,
         &["ls-tree", "-r", "--name-only", "-z", revision],
     )?);
+    // Attribution still uses today's package graph, but lock enforcement must
+    // respect the contract in force at this revision. Only proven schema 1
+    // history can exempt workspaces that it did not manage.
+    if let Some(payload) =
+        revision_payload(root, revision, ".codex/bridgeforge-version.json", runner)?
+    {
+        if config::parse(&payload)?.is_none() {
+            let value = crate::json::parse_unique_json(&payload, "historical version config")?;
+            let manifests = if config::auto_manifests(&value)? {
+                ["Cargo.toml", "package.json"]
+                    .into_iter()
+                    .filter(|path| paths.iter().any(|p| p == path))
+                    .map(str::to_string)
+                    .collect::<BTreeSet<_>>()
+            } else {
+                let entries = value["manifests"]
+                    .as_array()
+                    .filter(|entries| !entries.is_empty())
+                    .ok_or("release baseline manifests are missing or empty")?;
+                let mut manifests = BTreeSet::new();
+                for entry in entries {
+                    let path = entry
+                        .as_str()
+                        .ok_or("invalid release baseline manifest path")?;
+                    safe_relative(root, path)?;
+                    if !paths.iter().any(|p| p == path) {
+                        return Err(format!("historical native manifest missing: {path}"));
+                    }
+                    if !matches!(
+                        Path::new(path).file_name().and_then(|s| s.to_str()),
+                        Some("Cargo.toml" | "package.json")
+                    ) {
+                        return Err(format!("unsupported historical native manifest: {path}"));
+                    }
+                    manifests.insert(path.to_string());
+                }
+                manifests
+            };
+            return super::rust::load_legacy_history(cfg, &paths, &manifests, &mut |path| {
+                revision_payload(root, revision, path, runner)
+            });
+        }
+    }
     super::rust::load(cfg, &paths, &mut |path| {
         revision_payload(root, revision, path, runner)
     })
