@@ -10,9 +10,11 @@ delivery_layout: flat
 
 同步流程优化：[检查恢复与发布分析复用](1_delivery/git-sync-performance/requirements_2026-10-19_workflow-reuse.md)（2026-10-19 用户验收；428 通过、14 跳过；真实重复准备七项全复用约 13.7 秒；TODO-009 的端到端对照仍待验证；本次受管 release 已获授权，实际版本与同步状态以最终收据为准）。
 
-当前实施：[通用发布核心与 Rust 独立包版本](1_delivery/git-sync-independent-packages/requirements_2026-10-16_rust-release.md)（schema 2 显式启用；旧项目保持原行为；TODO-010）。
+首期交付：[通用发布核心与 Rust 独立包版本](1_delivery/git-sync-independent-packages/requirements_2026-10-16_rust-release.md)（schema 2 显式启用；旧项目保持原行为；已由扩展交付覆盖验收，TODO-010）。
 
-新增包发布修复：[Rust 新增包首次纳入规则与现场恢复](1_delivery/git-sync-independent-packages/requirements_2026-10-19_package-additions.md)（2026-10-19 工程检查与独立审计通过，目标 2.5.2 已准备但未发布；下游仅只读，仍需补归属配置；沿用 TODO-010）。
+扩展交付：[Rust / Python 包生命周期](1_delivery/git-sync-independent-packages/requirements_2026-10-19_polyglot-lifecycle.md)（通用核心、语言适配器、历史与 lock；2026-10-19 用户验收，TODO-010 已完成；本次受管 release 已获授权，实际发布以最终收据为准）；[协作记录](1_delivery/git-sync-independent-packages/collabs_2026-10-19_polyglot-lifecycle.md)。
+
+新增包发布修复：[Rust 新增包首次纳入规则与现场恢复](1_delivery/git-sync-independent-packages/requirements_2026-10-19_package-additions.md)（2.5.2 历史修复，已由扩展交付覆盖验收；真实下游补归属配置及实际发布仍未验证；沿用 TODO-010）。
 
 最近验收：[git-sync 首次配置引导与 Cargo 隐式成员修复](1_delivery/git-sync-first-use/requirements_2026-10-16_first-use-and-rust-members.md)（2026-10-17 工程验收通过，含历史锁迁移兼容修复；TODO-011、TODO-012 已完成；本次受管 release 已获授权，实际发布以同步收据为准，真实下游未复验）。此前调查记录见[历史锁迁移换机交接](1_delivery/git-sync-first-use/handoff_2026-10-17_historical-lock-migration.md)。
 

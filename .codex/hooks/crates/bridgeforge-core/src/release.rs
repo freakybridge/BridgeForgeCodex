@@ -24,14 +24,26 @@ pub(crate) fn planning_history_state(root: &Path, runner: &dyn ProcessRunner) ->
 }
 mod independent;
 mod rust;
+mod model;
+mod polyglot;
+mod lifecycle;
+mod python;
+mod python_lock;
+mod python_dependencies;
+mod python_metadata;
+#[cfg(all(test, bridgeforge_factory_tests))]
+#[path = "../../../../../scripts/tests/unit/core_release_python_native.rs"]
+mod python_native_tests;
 pub mod setup;
 pub use history::{
     build_explicit_release_plan, explicit_release_policy, preview, validate_release_baseline,
 };
-pub use rust::PackageChange;
+pub use model::{PackageChange, PackageEvent};
 
 pub fn version_strategy(root: &Path) -> Result<&'static str, String> {
-    Ok(if config::load(root)?.is_some() {
+    Ok(if polyglot::load_config(root)?.is_some() {
+        "independent"
+    } else if config::load(root)?.is_some() {
         "rust_independent"
     } else {
         "synchronized"
@@ -126,6 +138,8 @@ pub struct FileReleasePlan {
     pub kind: ReleaseKind,
     pub writes: BTreeMap<PathBuf, Vec<u8>>,
     pub package_changes: Vec<PackageChange>,
+    pub package_events: Vec<PackageEvent>,
+    pub lifecycle_events: Vec<Value>,
     pub release_inventory: Option<Vec<String>>,
     pub release_status: Option<String>,
 }
@@ -1261,6 +1275,8 @@ fn build_selected_release_plan(
         kind,
         writes,
         package_changes: Vec::new(),
+        package_events: Vec::new(),
+        lifecycle_events: Vec::new(),
         release_inventory: None,
         release_status: None,
     }))

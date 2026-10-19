@@ -846,3 +846,164 @@ fn rust_implicit_members_match_offline_cargo_metadata() {
     let workspace=fixture(&config(&["Cargo.toml"]),&files).unwrap();
     let expected=metadata["workspace_members"].as_array().unwrap().len();assert_eq!(workspace.packages.len(),expected);assert_eq!(expected,3);
 }
+
+fn adapter_files(files: &[(&str, &str)]) -> BTreeMap<String, Vec<u8>> {
+    files.iter().map(|(path, bytes)| (path.to_string(), bytes.as_bytes().to_vec())).collect()
+}
+
+#[test]
+fn rust_common_snapshot_preserves_kinds_aliases_and_current_identity() {
+    let files = adapter_files(&[
+        ("Cargo.toml", "[workspace]\nmembers=['foundation','consumer']\n"),
+        ("foundation/Cargo.toml", "[package]\nname='foundation'\nversion='1.2.3'\n"),
+        ("consumer/Cargo.toml", "[package]\nname='consumer'\nversion='2.0.0'\n[dependencies]\napi={package='foundation',path='../foundation'}\n[target.'cfg(windows)'.build-dependencies]\nbuild_api={package='foundation',path='../foundation'}\n[dev-dependencies]\ntest_api={package='foundation',path='../foundation'}\n"),
+    ]);
+    let snapshot = snapshot(&config(&["Cargo.toml"]), &files.keys().cloned().collect::<Vec<_>>(), &mut |path| Ok(files.get(path).cloned())).unwrap();
+    let package = &snapshot.packages["foundation/Cargo.toml"];
+    assert_eq!(package.language, Language::Rust);
+    assert_eq!(package.name, "foundation");
+    assert_eq!(package.version, "1.2.3");
+    assert_eq!(package.workspace, "Cargo.toml");
+    assert_eq!(package.source_roots, ["foundation/"]);
+    assert_eq!(snapshot.dependencies.iter().map(|d| d.kind.as_str()).collect::<BTreeSet<_>>(), BTreeSet::from(["normal", "build", "dev"]));
+    assert!(snapshot.dependencies.iter().all(|d| d.owner == "consumer/Cargo.toml" && d.target == "foundation/Cargo.toml"));
+    assert_eq!(snapshot.inputs["Cargo.lock"], None);
+}
+
+#[test]
+fn rust_common_historical_conversion_preserves_legacy_lock_scope() {
+    let files = adapter_files(&[
+        ("x/Cargo.toml", "[package]\nname='x'\nversion='1.0.0'\n[workspace]\n"),
+        ("x/Cargo.lock", "version=4\n[[package]]\nname='x'\nversion='1.0.0'\n"),
+        ("y/Cargo.toml", "[package]\nname='y'\nversion='2.0.0'\n[workspace]\n"),
+        ("y/Cargo.lock", "version=4\n[[package]]\nname='y'\nversion='1.0.0'\n"),
+    ]);
+    let inventory = files.keys().cloned().collect::<Vec<_>>();
+    let cfg = config(&["x/Cargo.toml", "y/Cargo.toml"]);
+    let historical = load_legacy_history(&cfg, &inventory, &BTreeSet::from(["x/Cargo.toml".into()]), &mut |path| Ok(files.get(path).cloned())).unwrap();
+    let historical = from_workspace(historical).unwrap();
+    assert_eq!(historical.packages["y/Cargo.toml"].version, "2.0.0");
+    assert_eq!(historical.inputs["y/Cargo.lock"], files.get("y/Cargo.lock").cloned());
+    assert!(snapshot(&cfg, &inventory, &mut |path| Ok(files.get(path).cloned())).unwrap_err().contains("stale version"));
+}
+
+#[test]
+fn rust_common_renderer_accepts_post_lifecycle_graphs_and_exact_versions() {
+    // Old paths/names deliberately do not exist. The core validates the old/new
+    // relation; the adapter only renders the complete post-refactor graph.
+    for (members, manifests, lock) in [
+        ("['renamed']", vec![("renamed/Cargo.toml", "[package]\nname='renamed'\nversion='1.2.3'\n")], "version=4\n[[package]]\nname='renamed'\nversion='1.2.3'\n"),
+        ("['new/location']", vec![("new/location/Cargo.toml", "[package]\nname='moved'\nversion='1.2.3'\n")], "version=4\n[[package]]\nname='moved'\nversion='1.2.3'\n"),
+        ("['survivor']", vec![("survivor/Cargo.toml", "[package]\nname='survivor'\nversion='1.2.3'\n")], "version=4\n[[package]]\nname='survivor'\nversion='1.2.3'\n"),
+        ("['part','new_part']", vec![("part/Cargo.toml", "[package]\nname='part'\nversion='1.2.3'\n"), ("new_part/Cargo.toml", "[package]\nname='new_part'\nversion='0.1.0'\n")], "version=4\n[[package]]\nname='part'\nversion='1.2.3'\n[[package]]\nname='new_part'\nversion='0.1.0'\n"),
+        ("['merged']", vec![("merged/Cargo.toml", "[package]\nname='merged'\nversion='1.2.3'\n")], "version=4\n[[package]]\nname='merged'\nversion='1.2.3'\n"),
+    ] {
+        let root = format!("[workspace]\nmembers={members}\n");
+        let mut files = adapter_files(&manifests);
+        files.insert("Cargo.toml".into(), root.into_bytes());
+        files.insert("Cargo.lock".into(), lock.as_bytes().to_vec());
+        let inventory = files.keys().cloned().collect::<Vec<_>>();
+        let target = manifests[0].0;
+        let versions = BTreeMap::from([(target.to_string(), "2.0.0".into())]);
+        let writes = render_versions(&config(&["Cargo.toml"]), &inventory, &mut |path| Ok(files.get(path).cloned()), &versions).unwrap();
+        assert_eq!(parse(target, &writes[target]).unwrap()["package"]["version"].as_str(), Some("2.0.0"));
+        assert!(String::from_utf8(writes["Cargo.lock"].clone()).unwrap().contains("2.0.0"));
+        assert!(!writes.contains_key("new_part/Cargo.toml"));
+    }
+}
+
+#[test]
+fn rust_common_renderer_rejects_stale_local_locks_and_unknown_final_targets() {
+    let mut files = adapter_files(&graph());
+    let inventory = files.keys().cloned().collect::<Vec<_>>();
+    let cfg = config(&["Cargo.toml"]);
+    files.insert("Cargo.lock".into(), b"version=4\n[[package]]\nname='a'\nversion='1.2.3'\n[[package]]\nname='b'\nversion='4.5.6'\ndependencies=['old_name']\n[[package]]\nname='c'\nversion='7.8.9'\n".to_vec());
+    assert!(snapshot(&cfg, &inventory, &mut |path| Ok(files.get(path).cloned())).unwrap_err().contains("missing or ambiguous target"));
+    files.insert("Cargo.lock".into(), b"version=4\n[[package]]\nname='a'\nversion='1.2.3'\n[[package]]\nname='b'\nversion='4.5.6'\n[[package]]\nname='c'\nversion='7.8.9'\n".to_vec());
+    assert!(snapshot(&cfg, &inventory, &mut |path| Ok(files.get(path).cloned())).unwrap_err().contains("missing local dependency edge b -> a"));
+    let files = adapter_files(&graph());
+    assert!(render_versions(&cfg, &inventory, &mut |path| Ok(files.get(path).cloned()), &BTreeMap::from([("retired/Cargo.toml".into(), "1.0.1".into())])).unwrap_err().contains("unknown package"));
+    assert!(render_versions(&cfg, &inventory, &mut |path| Ok(files.get(path).cloned()), &BTreeMap::from([("a/Cargo.toml".into(), "1.0.1-beta.1".into())])).unwrap_err().contains("invalid final Rust version"));
+    assert!(render_versions(&cfg, &inventory, &mut |path| Ok(files.get(path).cloned()), &BTreeMap::from([("a/Cargo.toml".into(), "1.2.3".into())])).unwrap().is_empty());
+}
+
+#[test]
+fn rust_common_snapshot_rejects_removed_edge_when_target_remains_locked_for_another_owner() {
+    let mut source = graph();
+    source[2].1 = "[package]\nname='b'\nversion='4.5.6'\n";
+    source[3].1 = "[package]\nname='c'\nversion='7.8.9'\n[target.'cfg(windows)'.build-dependencies]\na={path='../a',version='=1.2.3',optional=true}\n";
+    source[4].1 = "version=4\n[[package]]\nname='a'\nversion='1.2.3'\n[[package]]\nname='b'\nversion='4.5.6'\ndependencies=['a']\n[[package]]\nname='c'\nversion='7.8.9'\ndependencies=['a']\n";
+    let mut files = adapter_files(&source);
+    let inventory = files.keys().cloned().collect::<Vec<_>>();
+    let cfg = config(&["Cargo.toml"]);
+    // A remains a live workspace member and a legitimate target of C. The
+    // schema 2 contract deliberately remains unchanged, but the common path
+    // must reject B's deleted declaration instead of accepting its old lock edge.
+    assert!(load(&cfg,&inventory,&mut |path|Ok(files.get(path).cloned())).is_ok());
+    assert!(snapshot(&cfg,&inventory,&mut |path|Ok(files.get(path).cloned())).unwrap_err().contains("stale local dependency edge b -> a"));
+    assert!(render_versions(&cfg,&inventory,&mut |path|Ok(files.get(path).cloned()),&BTreeMap::new()).unwrap_err().contains("stale local dependency edge b -> a"));
+
+    // A declaration in another kind/target still makes the union edge valid;
+    // current-platform filtering must not incorrectly discard it.
+    files.insert("b/Cargo.toml".into(),b"[package]\nname='b'\nversion='4.5.6'\n[target.'cfg(unix)'.dev-dependencies]\na={path='../a'}\n".to_vec());
+    assert!(snapshot(&cfg,&inventory,&mut |path|Ok(files.get(path).cloned())).is_ok());
+
+    // Once the lock drops B's stale edge, retaining C's edge is valid.
+    files.insert("b/Cargo.toml".into(),source[2].1.as_bytes().to_vec());
+    files.insert("Cargo.lock".into(),b"version=4\n[[package]]\nname='a'\nversion='1.2.3'\n[[package]]\nname='b'\nversion='4.5.6'\n[[package]]\nname='c'\nversion='7.8.9'\ndependencies=['a']\n".to_vec());
+    assert!(snapshot(&cfg,&inventory,&mut |path|Ok(files.get(path).cloned())).is_ok());
+}
+
+#[test]
+fn rust_common_renderer_does_not_silently_widen_bounded_requirements() {
+    let mut files = graph();
+    files[2].1 = "[package]\nname='b'\nversion='4.5.6'\n[dependencies]\na={path='../a',version='>=1.0.0, <2.0.0'}\n";
+    let files = adapter_files(&files);
+    let inventory = files.keys().cloned().collect::<Vec<_>>();
+    assert!(render_versions(&config(&["Cargo.toml"]), &inventory, &mut |path| Ok(files.get(path).cloned()), &BTreeMap::from([("a/Cargo.toml".into(), "2.0.0".into())])).unwrap_err().contains("cannot safely widen"));
+}
+
+#[test]
+fn rust_common_renderer_preserves_registry_identity_and_unaffected_packages() {
+    let mut files = graph();
+    files[4].1 = "version=4\n[[package]]\nname='a'\nversion='1.2.3'\n[[package]]\nname='a'\nversion='1.2.3'\nsource='registry+https://example.invalid/index'\nchecksum='untouched'\n[[package]]\nname='b'\nversion='4.5.6'\ndependencies=['a 1.2.3', 'a 1.2.3 (registry+https://example.invalid/index)']\n[[package]]\nname='c'\nversion='7.8.9'\n";
+    let files = adapter_files(&files);
+    let inventory = files.keys().cloned().collect::<Vec<_>>();
+    let writes = render_versions(&config(&["Cargo.toml"]), &inventory, &mut |path| Ok(files.get(path).cloned()), &BTreeMap::from([("a/Cargo.toml".into(), "2.0.0".into())])).unwrap();
+    let lock = parse("Cargo.lock", &writes["Cargo.lock"]).unwrap();
+    let entries = lock["package"].as_array_of_tables().unwrap();
+    assert_eq!(entries.get(0).unwrap()["version"].as_str(), Some("2.0.0"));
+    assert_eq!(entries.get(1).unwrap()["version"].as_str(), Some("1.2.3"));
+    assert_eq!(entries.get(1).unwrap()["checksum"].as_str(), Some("untouched"));
+    assert!(!writes.contains_key("c/Cargo.toml"));
+    assert!(String::from_utf8(writes["b/Cargo.toml"].clone()).unwrap().contains("=2.0.0"));
+}
+
+#[test]
+fn rust_common_final_versions_match_locked_offline_cargo_metadata() {
+    use std::fs;
+    let path = std::env::temp_dir().join(format!("bf-release-cargo-{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+    struct Cleanup(std::path::PathBuf);
+    impl Drop for Cleanup { fn drop(&mut self) { let _ = fs::remove_dir_all(&self.0); } }
+    let root = Cleanup(path);
+    let mut files = adapter_files(&[
+        ("Cargo.toml", "[workspace]\nmembers=['foundation','consumer']\nresolver='3'\n[workspace.package]\nversion='1.2.3'\n[workspace.dependencies]\napi={package='foundation',path='foundation',version='=1.2.3'}\n"),
+        ("foundation/Cargo.toml", "[package]\nname='foundation'\nversion.workspace=true\nedition='2024'\n"),
+        ("consumer/Cargo.toml", "[package]\nname='consumer'\nversion.workspace=true\nedition='2024'\n[dependencies]\napi.workspace=true\n"),
+        ("foundation/src/lib.rs", "pub fn value() -> u8 { 1 }\n"),
+        ("consumer/src/lib.rs", "pub fn value() -> u8 { api::value() }\n"),
+    ]);
+    for (path, bytes) in &files { let path = root.0.join(path); fs::create_dir_all(path.parent().unwrap()).unwrap(); fs::write(path, bytes).unwrap(); }
+    let initial = std::process::Command::new(env!("CARGO")).args(["metadata", "--offline", "--format-version", "1"]).current_dir(&root.0).output().unwrap();
+    assert!(initial.status.success(), "{}", String::from_utf8_lossy(&initial.stderr));
+    files.insert("Cargo.lock".into(), fs::read(root.0.join("Cargo.lock")).unwrap());
+    let inventory = files.keys().cloned().collect::<Vec<_>>();
+    let writes = render_versions(&config(&["Cargo.toml"]), &inventory, &mut |path| Ok(files.get(path).cloned()), &BTreeMap::from([("foundation/Cargo.toml".into(), "2.0.0".into()), ("consumer/Cargo.toml".into(), "1.2.4".into())])).unwrap();
+    for (path, bytes) in &writes { fs::write(root.0.join(path), bytes).unwrap(); }
+    let final_metadata = std::process::Command::new(env!("CARGO")).args(["metadata", "--locked", "--offline", "--format-version", "1"]).current_dir(&root.0).output().unwrap();
+    assert!(final_metadata.status.success(), "{}", String::from_utf8_lossy(&final_metadata.stderr));
+    let metadata: serde_json::Value = serde_json::from_slice(&final_metadata.stdout).unwrap();
+    let versions = metadata["packages"].as_array().unwrap().iter().map(|p| (p["name"].as_str().unwrap(), p["version"].as_str().unwrap())).collect::<BTreeMap<_, _>>();
+    assert_eq!(versions, BTreeMap::from([("consumer", "1.2.4"), ("foundation", "2.0.0")]));
+    assert_eq!(fs::read(root.0.join("Cargo.lock")).unwrap(), writes["Cargo.lock"]);
+}

@@ -35,6 +35,10 @@ pub(super) fn parse(payload: &[u8]) -> Result<Option<super::rust::RustConfig>, S
             config.rust.validate()?;
             Ok(Some(config.rust))
         }
+        Some(3) => {
+            super::polyglot::parse(payload)?;
+            Ok(None)
+        }
         _ => Err("version sync config must use schema_version=1 or 2".into()),
     }
 }

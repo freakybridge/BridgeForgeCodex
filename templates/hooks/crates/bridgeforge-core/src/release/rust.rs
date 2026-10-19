@@ -1,7 +1,9 @@
 //! Pure Rust release adapter. All filesystem access is supplied by the caller.
 use super::{CommitInfo, SemVer, bump};
+use super::model::{Language, LanguageSnapshot, NativeDependency, NativePackage, Writes};
+pub use super::model::PackageChange;
 use regex::Regex;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::collections::{BTreeMap, BTreeSet};
 use std::str::FromStr;
 use toml_edit::{DocumentMut, Item, value};
@@ -65,16 +67,6 @@ fn patch() -> String {
 pub(super) struct SharedInput {
     pub path: String,
     pub packages: Vec<String>,
-}
-
-#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
-pub struct PackageChange {
-    pub manifest: String,
-    pub name: String,
-    pub version_before: String,
-    pub version_after: String,
-    pub reason: String,
-    pub dependencies: Vec<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -319,6 +311,78 @@ pub(super) fn load(
     read: &mut impl FnMut(&str) -> Result<Option<Vec<u8>>, String>,
 ) -> Result<Workspace, String> {
     load_with_lock_scope(config, inventory, None, read)
+}
+
+/// Describe the current Cargo graph without imposing schema 2's historical
+/// identity restrictions. The language-neutral core owns lifecycle validation;
+/// this adapter still requires a complete, internally consistent current graph.
+pub(super) fn snapshot(
+    config: &RustConfig,
+    inventory: &[String],
+    read: &mut impl FnMut(&str) -> Result<Option<Vec<u8>>, String>,
+) -> Result<LanguageSnapshot, String> {
+    let workspace = load(config, inventory, read)?;
+    workspace.validate_lock_edges()?;
+    from_workspace(workspace)
+}
+
+/// Convert an already validated workspace without strengthening its historical
+/// lock contract. In particular, schema 1 histories use the limited lock scope
+/// established by `load_legacy_history`, rather than today's ownership rules.
+pub(super) fn from_workspace(workspace: Workspace) -> Result<LanguageSnapshot, String> {
+    Ok(LanguageSnapshot {
+        packages: workspace.packages.iter().map(|(manifest, package)| {
+            let dir = directory(manifest);
+            (manifest.clone(), NativePackage {
+                manifest: manifest.clone(),
+                name: package.name.clone(),
+                version: package.version.to_string(),
+                language: Language::Rust,
+                workspace: package.workspace.clone(),
+                source_roots: vec![if dir.is_empty() { String::new() } else { format!("{dir}/") }],
+            })
+        }).collect(),
+        dependencies: workspace.dependencies.iter().map(|dependency| NativeDependency {
+            owner: dependency.owner.clone(),
+            target: dependency.target.clone(),
+            kind: match dependency.kind {
+                DependencyKind::Normal => "normal",
+                DependencyKind::Build => "build",
+                DependencyKind::Dev => "dev",
+            }.into(),
+        }).collect(),
+        inputs: workspace.inputs,
+        roots: workspace.roots.into_keys().collect(),
+    })
+}
+
+/// Render exact final versions chosen by the common release planner. No package
+/// rename, removal, split or merge is guessed here: manifests and locks must
+/// already describe the intended current package graph.
+pub(super) fn render_versions(
+    config: &RustConfig,
+    inventory: &[String],
+    read: &mut impl FnMut(&str) -> Result<Option<Vec<u8>>, String>,
+    versions: &BTreeMap<String, String>,
+) -> Result<Writes, String> {
+    let workspace = load(config, inventory, read)?;
+    workspace.validate_lock_edges()?;
+    let versions = versions.iter().map(|(manifest, raw)| {
+        if !workspace.packages.contains_key(manifest) {
+            return Err(format!("{manifest}: final Rust version references an unknown package"));
+        }
+        SemVer::from_str(raw)
+            .map(|version| (manifest.clone(), version))
+            .map_err(|error| format!("{manifest}: invalid final Rust version: {error}"))
+    }).collect::<Result<BTreeMap<_, _>, _>>()?;
+    let writes = workspace.render_versions(&versions)?;
+    // Re-parse the exact proposed bytes to prove that the rewritten constraints,
+    // inherited versions and local lock identities agree with the final graph.
+    let final_workspace = load(config, inventory, &mut |path| {
+        if let Some(bytes) = writes.get(path) { Ok(Some(bytes.clone())) } else { read(path) }
+    })?;
+    final_workspace.validate_lock_edges()?;
+    Ok(writes)
 }
 
 /// A schema 1 snapshot predates independent Rust lock ownership. Keep full
@@ -961,12 +1025,113 @@ impl Workspace {
         Ok(())
     }
 
+    /// The common lifecycle path starts from the post-refactor lock. Validate
+    /// its references as well as identities so a renamed/retired local package
+    /// cannot survive only in an old dependency identifier. Schema 1/2 retain
+    /// their original historical contract through `load` above.
+    fn validate_lock_edges(&self) -> Result<(), String> {
+        for (root, members) in &self.roots {
+            let lock = if directory(root).is_empty() {
+                "Cargo.lock".to_owned()
+            } else {
+                format!("{}/Cargo.lock", directory(root))
+            };
+            let Some(document) = self.documents.get(&lock) else { continue; };
+            let entries = document.get("package").and_then(Item::as_array_of_tables)
+                .ok_or_else(|| format!("{lock}: missing package entries"))?;
+            for entry in entries {
+                let local_owner = if entry.get("source").is_none() {
+                    self.packages.iter().find(|(_, package)| {
+                        entry.get("name").and_then(Item::as_str) == Some(package.name.as_str())
+                            && entry.get("version").and_then(Item::as_str) == Some(package.version.to_string().as_str())
+                    })
+                } else { None };
+                let dependencies = match entry.get("dependencies") {
+                    Some(item) => item.as_array()
+                        .ok_or_else(|| format!("{lock}: dependencies must be an array"))?,
+                    None => continue,
+                };
+                for dependency in dependencies {
+                    let raw = dependency.as_str()
+                        .ok_or_else(|| format!("{lock}: invalid dependency identifier"))?;
+                    let parts = raw.split_whitespace().collect::<Vec<_>>();
+                    if parts.is_empty() || parts.len() > 3
+                        || (parts.len() == 3 && !(parts[2].starts_with('(') && parts[2].ends_with(')')))
+                    {
+                        return Err(format!("{lock}: unsupported dependency identifier {raw}"));
+                    }
+                    let candidates = entries.iter().filter(|candidate| {
+                        candidate.get("name").and_then(Item::as_str) == Some(parts[0])
+                            && (parts.len() == 1 || candidate.get("version").and_then(Item::as_str) == Some(parts[1]))
+                            && (parts.len() < 3 || candidate.get("source").and_then(Item::as_str) == Some(&parts[2][1..parts[2].len() - 1]))
+                    }).collect::<Vec<_>>();
+                    // Cargo disambiguates registry/git identities with source
+                    // qualifiers while the source-less path identity remains
+                    // unqualified, even when both share a name and version.
+                    let locals = candidates.iter().filter(|candidate| candidate.get("source").is_none()).count();
+                    let matches = if parts.len() < 3 && locals == 1 { 1 } else { candidates.len() };
+                    if matches != 1 {
+                        return Err(format!("{lock}: dependency identifier {raw} has missing or ambiguous target"));
+                    }
+                    // A target can remain legitimately locked through another
+                    // owner after this owner removed its dependency. Merely
+                    // resolving the old identifier would miss that stale edge.
+                    // Compare with all declared kinds/conditions/optional edges;
+                    // platform and feature selection must not erase declarations.
+                    if let Some((owner_manifest, owner)) = local_owner {
+                        if parts.len() < 3 && locals == 1 {
+                            let target_entry = candidates.iter().find(|candidate| candidate.get("source").is_none()).unwrap();
+                            let (target_manifest, target) = self.packages.iter().find(|(_, package)| {
+                                target_entry.get("name").and_then(Item::as_str) == Some(package.name.as_str())
+                                    && target_entry.get("version").and_then(Item::as_str) == Some(package.version.to_string().as_str())
+                            }).ok_or_else(|| format!("{lock}: local dependency target has no registered identity"))?;
+                            if !self.dependencies.iter().any(|dependency| {
+                                dependency.owner == *owner_manifest && dependency.target == *target_manifest
+                            }) {
+                                return Err(format!("{lock}: stale local dependency edge {} -> {} is absent from current declarations", owner.name, target.name));
+                            }
+                        }
+                    }
+                }
+            }
+            let (_, required_edges) = self.required_lock_graph(members);
+            for (owner_manifest, target_manifest) in required_edges {
+                let owner = &self.packages[&owner_manifest];
+                let target = &self.packages[&target_manifest];
+                let entry = entries.iter().find(|entry| {
+                    entry.get("source").is_none()
+                        && entry.get("name").and_then(Item::as_str) == Some(owner.name.as_str())
+                        && entry.get("version").and_then(Item::as_str) == Some(owner.version.to_string().as_str())
+                }).ok_or_else(|| format!("{lock}: missing local owner {}", owner.name))?;
+                let present = entry.get("dependencies").and_then(Item::as_array).is_some_and(|items| {
+                    items.iter().filter_map(|item| item.as_str()).any(|raw| {
+                        let parts = raw.split_whitespace().collect::<Vec<_>>();
+                        !parts.is_empty() && parts[0] == target.name
+                            && (parts.len() == 1 || (parts.len() == 2 && parts[1] == target.version.to_string()))
+                    })
+                });
+                if !present {
+                    return Err(format!("{lock}: missing local dependency edge {} -> {}", owner.name, target.name));
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Resolve only the local feature implications needed to prove lock entries
     /// mandatory. Registry feature resolution remains Cargo's responsibility.
     /// Workspace members are locked with all features; external path packages
     /// receive only defaults and features enabled by their incoming dependencies.
     fn required_lock_closure(&self, members: &BTreeSet<String>) -> BTreeSet<String> {
+        self.required_lock_graph(members).0
+    }
+
+    fn required_lock_graph(
+        &self,
+        members: &BTreeSet<String>,
+    ) -> (BTreeSet<String>, BTreeSet<(String, String)>) {
         let mut closure = members.clone();
+        let mut edges = BTreeSet::new();
         let mut features = members
             .iter()
             .map(|manifest| {
@@ -996,6 +1161,7 @@ impl Workspace {
                     {
                         continue;
                     }
+                    edges.insert((dependency.owner.clone(), dependency.target.clone()));
                     changed |= closure.insert(dependency.target.clone());
                     let enabled = features.entry(dependency.target.clone()).or_default();
                     for feature in &dependency.features {
@@ -1015,7 +1181,7 @@ impl Workspace {
                 break;
             }
         }
-        closure
+        (closure, edges)
     }
 
     fn local_feature_requests(
@@ -1144,6 +1310,43 @@ impl Workspace {
                 break;
             }
         }
+        let writes = self.render_versions(&versions)?;
+        let packages = versions
+            .iter()
+            .map(|(manifest, next)| {
+                let package = &self.packages[manifest];
+                let dependencies = self
+                    .dependencies
+                    .iter()
+                    .filter(|d| d.owner == *manifest && versions.contains_key(&d.target))
+                    .map(|d| d.target.clone())
+                    .collect::<BTreeSet<_>>()
+                    .into_iter()
+                    .collect::<Vec<_>>();
+                PackageChange {
+                    manifest: manifest.clone(),
+                    name: package.name.clone(),
+                    version_before: package.version.to_string(),
+                    version_after: next.to_string(),
+                    reason: if additions.contains(manifest) {
+                        "first_release".into()
+                    } else if direct.contains(manifest) {
+                        "direct_change".into()
+                    } else {
+                        "dependency_change".into()
+                    },
+                    dependencies,
+                }
+            })
+            .collect();
+        Ok(AdapterPlan {
+            inputs: self.inputs.clone(),
+            writes,
+            packages,
+        })
+    }
+
+    fn render_versions(&self, versions: &BTreeMap<String, SemVer>) -> Result<Writes, String> {
         let mut documents = self.documents.clone();
         let mut touched = BTreeSet::new();
         // Literal versions split inherited workspace versions without bumping
@@ -1184,7 +1387,7 @@ impl Workspace {
                 }
             }
         }
-        self.render_locks(&versions, &mut documents, &mut touched)?;
+        self.render_locks(versions, &mut documents, &mut touched)?;
         let mut writes = BTreeMap::new();
         for path in touched {
             let bytes = documents[&path].to_string().into_bytes();
@@ -1192,39 +1395,7 @@ impl Workspace {
                 writes.insert(path, bytes);
             }
         }
-        let packages = versions
-            .iter()
-            .map(|(manifest, next)| {
-                let package = &self.packages[manifest];
-                let dependencies = self
-                    .dependencies
-                    .iter()
-                    .filter(|d| d.owner == *manifest && versions.contains_key(&d.target))
-                    .map(|d| d.target.clone())
-                    .collect::<BTreeSet<_>>()
-                    .into_iter()
-                    .collect::<Vec<_>>();
-                PackageChange {
-                    manifest: manifest.clone(),
-                    name: package.name.clone(),
-                    version_before: package.version.to_string(),
-                    version_after: next.to_string(),
-                    reason: if additions.contains(manifest) {
-                        "first_release".into()
-                    } else if direct.contains(manifest) {
-                        "direct_change".into()
-                    } else {
-                        "dependency_change".into()
-                    },
-                    dependencies,
-                }
-            })
-            .collect();
-        Ok(AdapterPlan {
-            inputs: self.inputs.clone(),
-            writes,
-            packages,
-        })
+        Ok(writes)
     }
 
     fn render_locks(

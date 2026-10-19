@@ -1,6 +1,6 @@
 ---
-lifecycle: active
-validation_status: awaiting_user_acceptance
+lifecycle: completed
+validation_status: verified
 ---
 
 # 通用发布核心与 Rust 独立包版本
@@ -112,3 +112,7 @@ workspace 日志：`sha256:ad4945655ac4359ae536d58d95652215c8ad20a8865ba530c4de4
 5. 新策略除了校验已有脏文件内容，也核对完整文件清单和工作区状态，防止计划后新增其他脏路径被提交而未计算包版本。预览的 status 使用 --no-optional-locks，避免刷新 Git index。
 
 以上是本次实现经验，未修改 AGENTS、Rule 或原生 Memory。真实下游、自然 runtime、用户级安装、正式发布及实际重编收益均未验证。
+
+## TODO-010 当前验收
+
+2026-10-19，用户通过 `$summary accept` 明确验收扩展后的 Rust / Python 通用发布交付；本卡首期需求由该交付及当前完整回归覆盖。TODO-010 的正式验收、最新工程证据和发布授权统一见[当前验收记录](requirements_2026-10-19_polyglot-lifecycle.md#用户验收与发布授权2026-10-19)。以上保留首期历史过程，不将其测试结果作为当前验证；真实下游、用户级安装与业务运行仍未验证。

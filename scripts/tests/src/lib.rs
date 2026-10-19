@@ -409,3 +409,5 @@ mod distribution_regressions;
 
 #[cfg(test)]
 mod git_sync_runtime;
+#[cfg(test)]
+mod git_sync_polyglot_runtime;

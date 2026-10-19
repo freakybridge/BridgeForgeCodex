@@ -53,7 +53,7 @@ fn self_test() -> CommandOutcome {
         "name": "bridgeforge",
         "status": "ok",
         "version": env!("CARGO_PKG_VERSION"),
-        "capabilities": ["git-sync-explicit-release-v1", "git-sync-prepared-release-v1", "git-sync-release-only-v1", "git-sync-release-readiness-v1", "git-sync-direct-release-v1", "git-sync-timing-v1", "git-sync-rust-independent-v1", "git-sync-setup-v1", "git-sync-rust-package-additions-v1", "git-sync-analysis-reuse-v1"]
+        "capabilities": ["git-sync-explicit-release-v1", "git-sync-prepared-release-v1", "git-sync-release-only-v1", "git-sync-release-readiness-v1", "git-sync-direct-release-v1", "git-sync-timing-v1", "git-sync-rust-independent-v1", "git-sync-setup-v1", "git-sync-rust-package-additions-v1", "git-sync-analysis-reuse-v1", "git-sync-polyglot-release-v1", "git-sync-python-independent-v1", "git-sync-package-lifecycle-v1"]
     }))
 }
 
@@ -393,6 +393,10 @@ fn git_sync(args: &[String]) -> CommandOutcome {
         );
     }
     if has(args, "--setup-plan") {
+        if let Some(path)=value(args,"--setup-config-file"){
+            if value(args,"--strategy").as_deref()!=Some("independent"){return blocked("git-sync","--setup-config-file requires --strategy independent");}
+            return bridgeforge_core::release::setup::plan_configuration(context.root(),&SystemProcessRunner,&path);
+        }
         return bridgeforge_core::release::setup::plan(
             context.root(),
             &SystemProcessRunner,
@@ -400,6 +404,10 @@ fn git_sync(args: &[String]) -> CommandOutcome {
         );
     }
     if has(args, "--setup-apply") {
+        if let Some(path)=value(args,"--setup-config-file"){
+            if value(args,"--strategy").as_deref()!=Some("independent"){return blocked("git-sync","--setup-config-file requires --strategy independent");}
+            return bridgeforge_core::release::setup::apply_configuration(context.root(),&SystemProcessRunner,&path,&value(args,"--setup-fingerprint").unwrap_or_default(),has(args,"--confirmed-choice"));
+        }
         return bridgeforge_core::release::setup::apply(
             context.root(),
             &SystemProcessRunner,

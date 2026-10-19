@@ -4,7 +4,7 @@ use crate::CommandOutcome;
 
 const CONFIG: &str = ".codex/bridgeforge-version.json";
 
-#[derive(Clone, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct Confirmation {
     schema: u32,
@@ -20,7 +20,7 @@ pub(super) fn confirmation(value: &Value) -> Result<bool, String> {
         .map_err(|e| format!("invalid git_sync_setup: {e}"))?;
     if record.schema != 1
         || !record.confirmed
-        || !matches!(record.selection.as_str(), "current" | "rust_independent")
+        || !matches!(record.selection.as_str(), "current" | "rust_independent" | "independent")
     {
         return Err(
             "git_sync_setup must contain schema=1, confirmed=true and a supported selection".into(),
@@ -222,6 +222,10 @@ fn report(plan: &Inspection) -> Result<Value, String> {
             "workspaces":plan.roots,"adaptation_review":plan.adaptation,"discovery_errors":plan.rust_errors}),
         );
     }
+    let python=plan.inventory.iter().filter(|p|!excluded(p)&&(p.ends_with("/pyproject.toml")||p.as_str()=="pyproject.toml"||p.ends_with("/setup.cfg")||p.as_str()=="setup.cfg")).cloned().collect::<Vec<_>>();
+    if !python.is_empty()||!plan.roots.is_empty()||plan.current_strategy=="independent"{
+        options.push(json!({"id":"independent","label":"Rust / Python 通用独立包发布","available":true,"configuration_proposal_required":true,"python_candidates":python,"note":"requires explicit package identities, input ownership and lock scope"}));
+    }
     Ok(
         json!({"schema":1,"status":if confirmation(&plan.value)? {"configured"} else {"configuration-required"},
         "configuration":CONFIG,"current_strategy":plan.current_strategy,"current_configuration":plan.value,
@@ -239,7 +243,7 @@ pub fn status_with(root: &Path, runner: &dyn ProcessRunner, reconfigure: bool) -
             Ok((true, value)) => {
                 return CommandOutcome::with_receipt(
                     json!({"schema":1,"status":"configured","configuration":CONFIG,
-            "current_strategy":if value["schema_version"]==2 {"rust_independent"} else {"synchronized"}}),
+            "current_strategy":match value["schema_version"].as_u64(){Some(3)=>"independent",Some(2)=>"rust_independent",_=>"synchronized"}}),
                 );
             }
             Ok((false, _)) => {}
@@ -261,6 +265,7 @@ fn selected(
     let mut value = plan.value.clone();
     match strategy {
         "current" => {}
+        "independent" if plan.current_strategy == "independent" => {}
         "rust_independent" if plan.current_strategy == "rust_independent" => {}
         "rust_independent" => {
             if !plan.rust_errors.is_empty() {
@@ -334,7 +339,8 @@ fn selected(
             value = json!({"schema_version":2,"release_policy":"explicit_release","strategy":"rust_independent",
                 "rust":{"workspaces":plan.roots,"dependency_bump":"patch","product_inputs":product_inputs}});
         }
-        _ => return Err("setup strategy must be current or rust_independent".into()),
+        "independent" => return Err("schema 3 setup requires --setup-config-file with an explicit package and ownership proposal".into()),
+        _ => return Err("setup strategy must be current, rust_independent or independent".into()),
     }
     if let Some(cfg) = config::parse(&serde_json::to_vec(&value).map_err(|e| e.to_string())?)? {
         if cfg.workspaces.iter().any(|p| excluded(p)) {
@@ -347,9 +353,57 @@ fn selected(
             plan.inputs.insert(root.join(path), bytes.clone());
         }
     }
+    if let Some(cfg)=polyglot::parse(&serde_json::to_vec(&value).map_err(|e|e.to_string())?)? {
+        let reader=history_cache::Reader::new(root,runner);
+        let release=history::validate_polyglot_candidate(root,&cfg,&reader)?;
+        for(path,bytes)in release{plan.inputs.insert(path,bytes);}
+    }
     value["git_sync_setup"] = json!({"schema":1,"confirmed":true,"selection":strategy});
     config::parse(&serde_json::to_vec(&value).map_err(|e| e.to_string())?)?;
     Ok(value)
+}
+
+fn proposal(root:&Path,inspection:&mut Inspection,path:&str,runner:&dyn ProcessRunner)->Result<Value,String>{
+    let candidate=safe_relative(root,path)?;
+    let bytes=config::read_current(root,path)?.ok_or("setup configuration proposal is missing")?;
+    let mut value=crate::json::parse_unique_json(&bytes,"setup configuration proposal")?;
+    value["git_sync_setup"]=json!({"schema":1,"confirmed":true,"selection":"independent"});
+    let cfg=polyglot::parse(&serde_json::to_vec(&value).map_err(|e|e.to_string())?)?.ok_or("configuration proposal must use schema 3")?;
+    if cfg.packages.iter().any(|p|excluded(&p.manifest)) {return Err("release package manifests must belong to business code".into());}
+    inspection.inputs.insert(candidate,Some(bytes));
+    let reader=history_cache::Reader::new(root,runner);
+    for(path,bytes)in history::validate_polyglot_candidate(root,&cfg,&reader)?{inspection.inputs.insert(path,bytes);}
+    reader.verify_unchanged()?;
+    Ok(value)
+}
+
+/// Explicit schema 3 configuration is planned against actual Git and adapter
+/// inputs. No business metadata, version, or lock is repaired by setup.
+pub fn plan_configuration(root:&Path,runner:&dyn ProcessRunner,path:&str)->CommandOutcome{
+    let result=(||{
+        let mut inspection=inspect(root,runner)?;
+        let value=proposal(root,&mut inspection,path,runner)?;
+        let key=fingerprint(root,&inspection,"independent",&value)?;
+        verify_release_inputs(&inspection.inputs)?;
+        verify_release_inventory(root,runner,&inspection.inventory)?;
+        Ok::<_,String>(json!({"schema":1,"status":"configuration-planned","fingerprint":key,"strategy":"independent","configuration":value,"writes":[CONFIG]}))
+    })();
+    match result{Ok(v)=>CommandOutcome::with_receipt(v),Err(e)=>CommandOutcome::blocked(format!("[git-sync-setup] {e}\n"))}
+}
+
+pub fn apply_configuration(root:&Path,runner:&dyn ProcessRunner,path:&str,expected:&str,confirmed:bool)->CommandOutcome{
+    let result=(||{
+        if !confirmed||expected.is_empty(){return Err("explicit choice confirmation and setup fingerprint are required".into());}
+        let _lock=crate::project_sync::ProjectLock::acquire(root)?;
+        let mut inspection=inspect(root,runner)?;
+        let value=proposal(root,&mut inspection,path,runner)?;
+        if fingerprint(root,&inspection,"independent",&value)?!=expected{return Err("setup proposal or project inputs changed; inspect again".into());}
+        verify_release_inputs(&inspection.inputs)?;verify_release_inventory(root,runner,&inspection.inventory)?;
+        if history::git(root,runner,&["rev-parse","HEAD"])?!=inspection.head{return Err("HEAD changed during configuration planning".into());}
+        crate::persistence::atomic_write_json(&root.join(CONFIG),&value).map_err(|e|e.to_string())?;
+        Ok::<_,String>(json!({"schema":1,"status":"configured","configuration":CONFIG,"strategy":"independent","sync_performed":false}))
+    })();
+    match result{Ok(v)=>CommandOutcome::with_receipt(v),Err(e)=>CommandOutcome::blocked(format!("[git-sync-setup] {e}\n"))}
 }
 
 pub fn plan(root: &Path, runner: &dyn ProcessRunner, strategy: &str) -> CommandOutcome {

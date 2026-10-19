@@ -377,6 +377,8 @@ pub(super) fn build(
         kind,
         writes,
         package_changes: adapter.packages,
+        package_events: Vec::new(),
+        lifecycle_events: Vec::new(),
         release_inventory: Some(initial_inventory),
         release_status: Some(initial_status),
     }))

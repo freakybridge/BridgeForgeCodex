@@ -6,7 +6,7 @@ pub fn explicit_release_policy(root: &Path) -> Result<bool, String> {
     };
     let value = crate::json::parse_unique_json(&payload, "version sync config")?;
     setup::confirmation(&value)?;
-    if value["schema_version"].as_u64() == Some(2) {
+    if matches!(value["schema_version"].as_u64(), Some(2 | 3)) {
         config::parse(&payload)?;
         return Ok(true);
     }
@@ -84,6 +84,9 @@ fn verify_historical_manifests(
 ) -> Result<(), String> {
     let config = revision_payload(root, revision, ".codex/bridgeforge-version.json", runner)?;
     if let Some(payload) = &config {
+        if let Some(cfg) = polyglot::parse(payload)? {
+            return polyglot::verify_historical(root, revision, &cfg, runner);
+        }
         if let Some(cfg) = super::config::parse(payload)? {
             independent::historical_workspace(root, revision, &cfg, runner)?;
             return Ok(());
@@ -235,6 +238,11 @@ pub(super) fn validate_candidate_baseline(
     validate_baseline(root, runner, Some(candidate), true)
 }
 
+pub(super) fn validate_polyglot_candidate(root:&Path,cfg:&polyglot::Config,runner:&history_cache::Reader<'_>)->Result<BTreeMap<PathBuf,Option<Vec<u8>>>,String>{
+    let(head,boundary)=validate_baseline(root,runner,None,false)?;
+    if let Some(plan)=polyglot::build(root,"chore: inspect release configuration",vec![],&head,&boundary,cfg,runner)?{Ok(plan.inputs)}else{polyglot::configuration_inputs(root,cfg,runner)}
+}
+
 fn validate_baseline(
     root: &Path,
     runner: &dyn ProcessRunner,
@@ -264,6 +272,8 @@ fn validate_baseline(
     }
     if let Some(cfg) = candidate {
         if validate_workspace { independent::validate_current(root, boundary, cfg, runner)?; }
+    } else if let Some(cfg) = polyglot::load_config(root)? {
+        if validate_workspace { polyglot::validate_current(root, boundary, &cfg, runner)?; }
     } else if let Some(cfg) = config::load(root)? {
         if validate_workspace { independent::validate_current(root, boundary, &cfg, runner)?; }
     } else {
@@ -289,6 +299,9 @@ fn build_with_reader(root: &Path, message: &str, changed: Vec<String>, runner: &
     // The Rust builder validates the same workspace/baseline pair while loading
     // it for planning. Diagnostics still perform that validation independently.
     let (head, boundary) = validate_baseline(root, runner, None, false)?;
+    if let Some(cfg) = polyglot::load_config(root)? {
+        return polyglot::build(root, message, changed, &head, &boundary, &cfg, runner);
+    }
     if let Some(cfg) = config::load(root)? {
         return independent::build(root, message, changed, &head, &boundary, &cfg, runner);
     }
@@ -407,6 +420,8 @@ pub fn preview(root: &Path, message: &str, runner: &dyn ProcessRunner) -> crate:
             "schema": 1, "status": "release-planned", "version_before": plan.old_version.to_string(),
             "version_after": plan.new_version.to_string(), "kind": plan.kind,
             "package_changes": plan.package_changes,
+            "package_events": plan.package_events,
+            "lifecycle_events": plan.lifecycle_events,
             "version_strategy": strategy,
             "compatibility_validation": "not_performed_by_git_sync",
             "changelog": String::from_utf8_lossy(&plan.writes[&root.join("CHANGELOG.md")]),

@@ -664,6 +664,8 @@ fn sync_impl(
         .map(|v| v.trim().to_string());
     let mut version_after = version_before.clone();
     let mut package_changes = Vec::new();
+    let mut package_events = Vec::new();
+    let mut lifecycle_events = Vec::new();
     let version_strategy = match crate::release::version_strategy(root) {
         Ok(strategy) => strategy,
         Err(error) => return blocked(error),
@@ -737,6 +739,8 @@ fn sync_impl(
         if let Some(plan) = &release {
             version_after = Some(plan.new_version.to_string());
             package_changes = plan.package_changes.clone();
+            package_events = plan.package_events.clone();
+            lifecycle_events = plan.lifecycle_events.clone();
         }
         let _project_lock = if factory {
             match crate::project_sync::ProjectLock::acquire(root) {
@@ -1082,8 +1086,10 @@ fn sync_impl(
     final_receipt["version_after"] = json!(version_after);
     final_receipt["version_strategy"] = json!(version_strategy);
     final_receipt["package_changes"] = json!(package_changes);
+    final_receipt["package_events"] = json!(package_events);
+    final_receipt["lifecycle_events"] = json!(lifecycle_events);
     final_receipt["release_plan_reused"] = json!(release_plan_reused);
-    if version_strategy == "rust_independent" {
+    if matches!(version_strategy, "rust_independent" | "independent") {
         final_receipt["compatibility_validation"] = json!("not_performed_by_git_sync");
     }
     final_receipt["generated_assets_reused"] = json!(generated_reused);

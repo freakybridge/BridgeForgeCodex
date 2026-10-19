@@ -1,6 +1,6 @@
 ---
-lifecycle: active
-validation_status: awaiting_user_acceptance
+lifecycle: completed
+validation_status: verified
 ---
 
 # Rust 新增包首次纳入发布
@@ -96,3 +96,7 @@ P1 针对性命令 `cargo test --locked --config scripts/tests/factory-cargo.tom
 最终构建 CLI 在 StratusAgent 再次只读核验：setup-status=configured、strategy=rust_independent；release-status=release-ready、version_before=1.52.0；release-preview 以 .gitignore 未归属退出 2。HEAD/index 不变，工作区干净。未安装到真实下游、未维护其配置、未执行实际 release、未验证业务 runtime，未提交/推送/发布上游。源码、模板、dogfood 与 fixture 的工程完成不代替这些验收。
 
 最终收据成功后才补写本节。此处仅为配置已声明的 record_documents 变化，使用轻量记录校验复用工程检查与产物，不再启动完整回归；开发输入指纹保持不变。
+
+## TODO-010 当前验收
+
+2026-10-19 用户通过 `$summary accept` 验收扩展后的 Rust / Python 通用发布交付，当前完整回归覆盖本卡的新增包规则。TODO-010 的正式验收、最新工程证据和发布授权统一见[当前验收记录](requirements_2026-10-19_polyglot-lifecycle.md#用户验收与发布授权2026-10-19)。以上内容保留当时现场与收据，不替代当前状态；真实下游补归属配置、实际发布与业务 runtime 仍未验证。
