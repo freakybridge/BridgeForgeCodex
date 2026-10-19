@@ -14,5 +14,7 @@
 - schema 1 和缺省项目保留原有规则；首次引导只在明确选择后保存配置，不静默切换策略。`manifest_policy: auto` 表示保持原无配置时对根 Cargo.toml/package.json 的自动识别，不代表新增 Python 包版本管理。
 - schema 2、strategy=rust_independent 以根 VERSION 为产品版本、各包 Cargo.toml 为包版本事实源。release 按累计相关提交计算改动包升级级别，并沿声明的本地反向依赖传播 patch；同次每包一次，无关包版本不变。
 - 首次继承版本物化保留有效版本，机械迁移不计为包自身业务改动。Cargo 隐式 path 成员按实际 workspace 归属递归发现；exclude、独立 workspace 和跨根边界仍须遵守。
-- 预览与最终收据分别显示产品版本及 package_changes 的包路径、前后版本、direct_change/dependency_change；写版本成功不代表兼容性已验证。
+- 新建包首次纳入 release 时保留当前有效 manifest 版本，收据 reason=first_release（前后版本相同）；其反向依赖仍跟升，后续发布再按普通业务改动计算。仅追加新成员的 workspace.members 登记不全升已有成员；其他共享输入仍按显式映射归属。
+- 已登记 workspace 内的新包按 Cargo 归属发现；新建独立 workspace 需在项目配置 rust.workspaces 显式追加实际根，并为有改动的 Cargo.lock 配置 shared_inputs 或 product_inputs。保留 git_sync_setup，复用已有策略确认；这属于项目发布归属维护，不重新 setup，也不手改包版本或锁条目。只登记自上次发布以来新建、且在当前 Git 清单中的 manifest（已跟踪或未忽略的待跟踪文件）；被忽略的磁盘根必须先纳入 Git。基线中已有的未受管包、删除、改名、workspace 边界变化仍阻断，当前不提供这些身份迁移功能。
+- 预览与最终收据分别显示产品版本及 package_changes 的包路径、前后版本、first_release/direct_change/dependency_change；普通 git-sync 不升版、不完成首次纳入。先运行 --release-status 与 --release-preview，确认新增清单和依赖传播，再按既有授权执行 release。写版本成功不代表兼容性已验证。
 - 共享输入、锁文件改动归属、未支持的 Cargo 配置或身份迁移不能可靠判定时，保留原始阻断原因。适配、约束和锁文件精确更新由受管工具负责，Skill 不手改 manifest/lock，不加业务测试为每次同步前置，不静默降级。

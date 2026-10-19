@@ -16,6 +16,12 @@ use crate::{ProcessRequest, ProcessRunner};
 mod config;
 #[path = "release_history.rs"]
 mod history;
+#[path = "release_history_cache.rs"]
+mod history_cache;
+
+pub(crate) fn planning_history_state(root: &Path, runner: &dyn ProcessRunner) -> Result<String, String> {
+    history_cache::state(root, runner).map(|(state, _)| state)
+}
 mod independent;
 mod rust;
 pub mod setup;
@@ -902,6 +908,38 @@ fn classify_payloads(
     before: impl Fn(&str) -> Result<Option<Vec<u8>>, String>,
     after: impl Fn(&str) -> Result<Option<Vec<u8>>, String>,
 ) -> Result<ReleaseKind, String> {
+    PayloadClassifier::new(current_bytes, &before)?.classify(changed, before, after)
+}
+
+struct PayloadClassifier {
+    current_by_target: BTreeMap<String, Value>,
+    current_by_id: BTreeMap<String, Value>,
+    head_by_target: BTreeMap<String, Value>,
+    head_by_id: BTreeMap<String, Value>,
+    transition_paths: BTreeSet<String>,
+    contract_transition: bool,
+    unverifiable_head: bool,
+}
+
+impl PayloadClassifier {
+fn payload_paths(&self, changed: &[String]) -> Vec<String> {
+    let mut paths = BTreeSet::new();
+    for path in changed {
+        let current = self.current_by_target.get(path);
+        let head = self.head_by_target.get(path);
+        for asset in current.into_iter().chain(head) {
+            paths.insert(asset["target"].as_str().unwrap().to_string());
+            if let Some(id) = asset["id"].as_str() {
+                for peer in [self.current_by_id.get(id), self.head_by_id.get(id)].into_iter().flatten() {
+                    paths.insert(peer["target"].as_str().unwrap().to_string());
+                }
+            }
+        }
+    }
+    paths.into_iter().collect()
+}
+
+fn new(current_bytes: &[u8], before: impl Fn(&str) -> Result<Option<Vec<u8>>, String>) -> Result<Self, String> {
     let current = crate::json::parse_unique_json(&current_bytes, "current-only baseline")?;
     let (current_by_target, current_by_id) = contract_assets(&current, "current")?;
     let contract_target = current["contract_target"]
@@ -938,6 +976,13 @@ fn classify_payloads(
             transition_paths.insert(value.replace('\\', "/"));
         }
     }
+    Ok(Self { current_by_target, current_by_id, head_by_target, head_by_id, transition_paths, contract_transition, unverifiable_head })
+}
+
+fn classify(&self, changed: &[String], before: impl Fn(&str) -> Result<Option<Vec<u8>>, String>, after: impl Fn(&str) -> Result<Option<Vec<u8>>, String>) -> Result<ReleaseKind, String> {
+    let Self { current_by_target, current_by_id, head_by_target, head_by_id, transition_paths, contract_transition, unverifiable_head } = self;
+    let contract_transition = *contract_transition;
+    let unverifiable_head = *unverifiable_head;
     let mut public_changed = unverifiable_head;
     let mut project_changed = unverifiable_head;
     let mut handled = BTreeSet::new();
@@ -1036,6 +1081,7 @@ fn classify_payloads(
     } else {
         ReleaseKind::SkeletonOnly
     })
+}
 }
 
 fn render_changelog(

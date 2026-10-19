@@ -435,7 +435,8 @@ fn ordinary_sync_never_bumps_even_with_missing_or_legacy_config() {
 
 #[test]
 fn explicit_release_rejected_hook_restores_native_versions_log_and_index() {
-    for independent in [false, true] {
+    for mode in ["synchronized", "independent", "addition"] {
+    let independent = mode != "synchronized";
     let (repo, remote) = versioned_repository("explicit-rollback", true);
     if independent {
         fs::write(repo.0.join(".codex/bridgeforge-version.json"), serde_json::to_vec(&json!({
@@ -443,12 +444,23 @@ fn explicit_release_rejected_hook_restores_native_versions_log_and_index() {
             "rust":{"workspaces":["Cargo.toml"],"dependency_bump":"patch"}
         })).unwrap()).unwrap();
     }
+    if mode == "addition" {
+        fs::create_dir_all(repo.0.join("new")).unwrap();
+        fs::write(repo.0.join("new/Cargo.toml"), b"[package]\nname='new'\nversion='0.2.7'\n[workspace]\n").unwrap();
+        fs::write(repo.0.join("new/Cargo.lock"), b"version=4\n[[package]]\nname='new'\nversion='0.2.7'\n").unwrap();
+        let cfg_path = repo.0.join(".codex/bridgeforge-version.json");
+        let mut cfg: serde_json::Value = serde_json::from_slice(&fs::read(&cfg_path).unwrap()).unwrap();
+        cfg["rust"]["workspaces"] = json!(["Cargo.toml", "new/Cargo.toml"]);
+        cfg["rust"]["product_inputs"] = json!(["new/Cargo.lock"]);
+        fs::write(cfg_path, serde_json::to_vec(&cfg).unwrap()).unwrap();
+    }
     fs::write(repo.0.join("tracked.txt"), b"uncommitted feature\n").unwrap();
     fs::write(repo.0.join(".git/hooks/pre-commit"), b"#!/bin/sh\nexit 1\n").unwrap();
     git_ok(&repo.0, &["status", "--porcelain=v1"]);
     let index = fs::read(repo.0.join(".git/index")).unwrap();
-    let names = ["VERSION", "Cargo.toml", "Cargo.lock", "CHANGELOG.md"];
-    let before = names.map(|name| fs::read(repo.0.join(name)).unwrap());
+    let mut names = vec!["VERSION", "Cargo.toml", "Cargo.lock", "CHANGELOG.md", ".codex/bridgeforge-version.json"];
+    if mode == "addition" { names.extend(["new/Cargo.toml", "new/Cargo.lock"]); }
+    let before = names.iter().map(|name| fs::read(repo.0.join(name)).unwrap()).collect::<Vec<_>>();
     let outcome = sync(
         &repo.0,
         &SystemProcessRunner,
@@ -478,6 +490,231 @@ fn explicit_release_rejected_hook_restores_native_versions_log_and_index() {
 
 fn install_development_check(root: &Path) {
     fs::write(root.join(".codex/development-checks.json"), br#"{"schema":1,"checks":[{"id":"diff","program":"git","args":["diff","--check"],"timeout_seconds":30}]}"#).unwrap();
+}
+
+struct ReusableCheckRunner {
+    calls: RefCell<Vec<String>>,
+    fail_second: bool,
+}
+
+impl ProcessRunner for ReusableCheckRunner {
+    fn run(&self, request: &ProcessRequest) -> std::io::Result<ProcessOutput> {
+        let args = request.args.iter().map(|arg| arg.to_string_lossy().into_owned()).collect::<Vec<_>>();
+        if request.program == "git" && (args == ["diff", "--check"] || args == ["diff", "--stat"]) {
+            self.calls.borrow_mut().push(args[1].clone());
+            return Ok(ProcessOutput { code:if self.fail_second && args[1] == "--stat" { 1 } else { 0 }, stdout:args.join(" ").into_bytes(), stderr:Vec::new(), timed_out:false });
+        }
+        SystemProcessRunner.run(request)
+    }
+}
+
+#[test]
+fn reusable_preparation_resumes_failed_checks_and_rechecks_corrupt_logs_and_inputs() {
+    let (repo, remote) = versioned_repository("check-resume", true);
+    install_record_documents(&repo.0);
+    let cfg = repo.0.join(".codex/development-checks.json");
+    let mut value: serde_json::Value = serde_json::from_slice(&fs::read(&cfg).unwrap()).unwrap();
+    value["checks"] = json!([
+        {"id":"first","program":"git","args":["diff","--check"],"timeout_seconds":30,"reusable":true},
+        {"id":"second","program":"git","args":["diff","--stat"],"timeout_seconds":30,"reusable":true}
+    ]);
+    fs::write(&cfg, serde_json::to_vec(&value).unwrap()).unwrap();
+    fs::write(repo.0.join("tracked.txt"), b"business change\n").unwrap();
+    let fail = ReusableCheckRunner { calls:RefCell::new(Vec::new()), fail_second:true };
+    let failed = prepare_release(&repo.0, &fail, "fix: checkpoint", None);
+    assert_eq!(failed.code, 2, "{}", failed.stderr);
+    assert!(failed.stderr.contains("second failed"), "{}", failed.stderr);
+    let runner = ReusableCheckRunner { calls:RefCell::new(Vec::new()), fail_second:false };
+    let resumed = prepare_release(&repo.0, &runner, "fix: checkpoint", None);
+    assert_eq!(resumed.code, 0, "{}", resumed.stderr);
+    assert_eq!(resumed.receipt.unwrap()["checks_reused"], 1);
+    assert_eq!(*runner.calls.borrow(), vec!["--stat"]);
+    runner.calls.borrow_mut().clear();
+    fs::write(repo.0.join("doc/3_reference/result.md"), b"# Result\nRecorded after checks.\n").unwrap();
+    let repeat = prepare_release(&repo.0, &runner, "feat: revised release message", None);
+    assert_eq!(repeat.code, 0, "{}", repeat.stderr);
+    assert_eq!(repeat.receipt.as_ref().unwrap()["checks_reused"], 2);
+    assert_eq!(repeat.receipt.unwrap()["target_version"], "1.1.0");
+    assert!(runner.calls.borrow().is_empty());
+    let progress: serde_json::Value = serde_json::from_slice(&fs::read(repo.0.join(".runtime/bridgeforge-codex/release-preparation/checks.json")).unwrap()).unwrap();
+    let hash = progress["checks"][0]["log_sha256"].as_str().unwrap().strip_prefix("sha256:").unwrap();
+    fs::write(repo.0.join(format!(".runtime/bridgeforge-codex/release-preparation/blobs/{hash}")), b"corrupt").unwrap();
+    let repaired = prepare_release(&repo.0, &runner, "fix: checkpoint", None);
+    assert_eq!(repaired.code, 0, "{}", repaired.stderr);
+    assert_eq!(repaired.receipt.unwrap()["checks_executed"], 1);
+    runner.calls.borrow_mut().clear();
+    git_ok(&repo.0, &["add", "tracked.txt"]);
+    let restaged = prepare_release(&repo.0, &runner, "fix: checkpoint", None);
+    assert_eq!(restaged.code, 0, "{}", restaged.stderr);
+    assert_eq!(restaged.receipt.unwrap()["checks_reused"], 0);
+    runner.calls.borrow_mut().clear();
+    fs::write(repo.0.join("tracked.txt"), b"different input\n").unwrap();
+    let changed = prepare_release(&repo.0, &runner, "fix: checkpoint", None);
+    assert_eq!(changed.code, 0, "{}", changed.stderr);
+    assert_eq!(changed.receipt.unwrap()["checks_reused"], 0);
+    assert_eq!(fs::read_to_string(repo.0.join("VERSION")).unwrap().trim(), "1.0.0");
+    fs::remove_dir_all(remote).unwrap();
+}
+
+#[test]
+fn development_checks_without_reuse_opt_in_always_execute() {
+    let (repo, remote) = versioned_repository("check-no-reuse", true);
+    fs::write(repo.0.join("tracked.txt"), b"change\n").unwrap();
+    let runner = ReusableCheckRunner { calls:RefCell::new(Vec::new()), fail_second:false };
+    for _ in 0..2 {
+        let outcome = prepare_release(&repo.0, &runner, "fix: prepare", None);
+        assert_eq!(outcome.code, 0, "{}", outcome.stderr);
+        assert_eq!(outcome.receipt.unwrap()["checks_reused"], 0);
+    }
+    assert_eq!(runner.calls.borrow().len(), 2);
+    fs::remove_dir_all(remote).unwrap();
+}
+
+#[test]
+fn reusable_preparation_invalidates_changed_tools_and_malformed_checkpoint() {
+    struct ToolRunner(RefCell<usize>);
+    impl ProcessRunner for ToolRunner {
+        fn run(&self, request: &ProcessRequest) -> std::io::Result<ProcessOutput> {
+            if request.args == [OsString::from("cache-test")] {
+                *self.0.borrow_mut() += 1;
+                return Ok(ProcessOutput { code:0, stdout:b"checked\n".to_vec(), stderr:Vec::new(), timed_out:false });
+            }
+            SystemProcessRunner.run(request)
+        }
+    }
+    let (repo, remote) = versioned_repository("check-tool-identity", true);
+    fs::create_dir_all(repo.0.join(".runtime")).unwrap();
+    let tool = repo.0.join(".runtime/check-tool.exe");
+    fs::write(&tool, b"tool-v1").unwrap();
+    fs::write(repo.0.join(".codex/development-checks.json"), serde_json::to_vec(&json!({"schema":1,"checks":[{"id":"tool","program":tool,"args":["cache-test"],"timeout_seconds":30,"reusable":true}]})).unwrap()).unwrap();
+    fs::write(repo.0.join("tracked.txt"), b"change\n").unwrap();
+    let runner = ToolRunner(RefCell::new(0));
+    for (change, expected) in [("initial", 0), ("repeat", 1), ("tool", 0), ("corrupt", 0), ("missing-tool", 0)] {
+        match change {
+            "tool" => fs::write(&tool, b"tool-v2").unwrap(),
+            "corrupt" => fs::write(repo.0.join(".runtime/bridgeforge-codex/release-preparation/checks.json"), b"{broken").unwrap(),
+            "missing-tool" => fs::remove_file(&tool).unwrap(),
+            _ => (),
+        }
+        let result = prepare_release(&repo.0, &runner, "fix: tool check", None);
+        assert_eq!(result.code, 0, "{change}: {}", result.stderr);
+        let receipt = result.receipt.unwrap();
+        assert_eq!(receipt["checks_reused"], expected, "{change}");
+        assert_eq!(receipt["checks_reuse_available"], change != "missing-tool", "{change}");
+    }
+    assert_eq!(*runner.0.borrow(), 4);
+    fs::remove_dir_all(remote).unwrap();
+}
+
+#[test]
+fn reusable_preparation_invalidates_git_attributes_outside_worktree_inputs() {
+    struct Counting(RefCell<usize>);
+    impl ProcessRunner for Counting {
+        fn run(&self, request: &ProcessRequest) -> std::io::Result<ProcessOutput> {
+            if request.args == [OsString::from("diff"), OsString::from("--check")] { *self.0.borrow_mut() += 1; }
+            SystemProcessRunner.run(request)
+        }
+    }
+    let (repo, remote) = versioned_repository("check-external-attributes", true);
+    let cfg = repo.0.join(".codex/development-checks.json");
+    let mut value: serde_json::Value = serde_json::from_slice(&fs::read(&cfg).unwrap()).unwrap();
+    value["checks"][0]["reusable"] = json!(true);
+    fs::write(&cfg, serde_json::to_vec(&value).unwrap()).unwrap();
+    fs::write(repo.0.join("tracked.txt"), b"change \n").unwrap();
+    fs::write(repo.0.join(".git/info/attributes"), b"tracked.txt -whitespace\n").unwrap();
+    let runner = Counting(RefCell::new(0));
+    let first = prepare_release(&repo.0, &runner, "fix: attributes", None);
+    assert_eq!(first.code, 0, "{}", first.stderr);
+    fs::write(repo.0.join(".git/info/attributes"), b"tracked.txt whitespace=blank-at-eol\n").unwrap();
+    let second = prepare_release(&repo.0, &runner, "fix: attributes", None);
+    assert_eq!(second.code, 2, "{}", second.stderr);
+    assert!(second.stderr.contains("development check diff failed"), "{}", second.stderr);
+    assert_eq!(*runner.0.borrow(), 2);
+    fs::remove_dir_all(remote).unwrap();
+}
+
+#[test]
+fn release_replans_when_fetch_changes_replacement_history_without_changing_head() {
+    struct ReplaceOnFetch { original:String, replacement:String, plans:RefCell<usize> }
+    impl ProcessRunner for ReplaceOnFetch {
+        fn run(&self, request: &ProcessRequest) -> std::io::Result<ProcessOutput> {
+            let args = request.args.iter().map(|arg| arg.to_string_lossy()).collect::<Vec<_>>();
+            if args.first().is_some_and(|arg| arg == "rev-list") && args.iter().any(|arg| arg == "--topo-order") { *self.plans.borrow_mut() += 1; }
+            let output = SystemProcessRunner.run(request)?;
+            if args.first().is_some_and(|arg| arg == "fetch") {
+                git_ok(&request.cwd, &["replace", "-f", &self.original, &self.replacement]);
+            }
+            Ok(output)
+        }
+    }
+    let (repo, remote) = versioned_repository("replacement-fetch", true);
+    fs::write(repo.0.join("tracked.txt"), b"feature\n").unwrap();
+    git_ok(&repo.0, &["add", "tracked.txt"]);
+    git_ok(&repo.0, &["commit", "-m", "feat: original feature"]);
+    let git = Git { root:&repo.0, runner:&SystemProcessRunner };
+    let original = git.required(&["rev-parse", "HEAD"], Duration::from_secs(30)).unwrap();
+    let tree = git.required(&["rev-parse", "HEAD^{tree}"], Duration::from_secs(30)).unwrap();
+    let parent = git.required(&["rev-parse", "HEAD^"], Duration::from_secs(30)).unwrap();
+    let replacement = git.required(&["commit-tree", &tree, "-p", &parent, "-m", "fix: replacement correction"], Duration::from_secs(30)).unwrap();
+    let runner = ReplaceOnFetch { original, replacement, plans:RefCell::new(0) };
+    let result = sync(&repo.0, &runner, GitSyncOptions { release:true, skip_push:true, message:Some("fix: release history".into()), ..Default::default() });
+    assert_eq!(result.code, 3, "{}", result.stderr);
+    let receipt = result.receipt.unwrap();
+    assert_eq!(receipt["status"], "local-ahead");
+    assert_eq!(receipt["release_plan_reused"], false);
+    assert_eq!(receipt["version_after"], "1.0.1");
+    assert_eq!(*runner.plans.borrow(), 2);
+    fs::remove_dir_all(remote).unwrap();
+}
+
+#[test]
+fn release_reuses_plan_only_when_fetch_preserves_all_planning_inputs() {
+    struct Runner { plans:RefCell<usize>, mutate:bool }
+    impl ProcessRunner for Runner {
+        fn run(&self, request: &ProcessRequest) -> std::io::Result<ProcessOutput> {
+            let args = request.args.iter().map(|arg| arg.to_string_lossy()).collect::<Vec<_>>();
+            if args.first().is_some_and(|arg| arg == "rev-list") && args.iter().any(|arg| arg == "--topo-order") { *self.plans.borrow_mut() += 1; }
+            let output = SystemProcessRunner.run(request)?;
+            if self.mutate && args.first().is_some_and(|arg| arg == "fetch") {
+                fs::write(request.cwd.join("tracked.txt"), b"changed during fetch\n")?;
+            }
+            Ok(output)
+        }
+    }
+    for mutate in [false, true] {
+        let (repo, remote) = versioned_repository("plan-reuse", true);
+        fs::write(repo.0.join("tracked.txt"), b"feature\n").unwrap();
+        let runner = Runner { plans:RefCell::new(0), mutate };
+        let result = sync(&repo.0, &runner, GitSyncOptions { release:true, message:Some("feat: release".into()), ..Default::default() });
+        assert_eq!(result.code, 0, "{}", result.stderr);
+        let receipt = result.receipt.unwrap();
+        assert_eq!(receipt["release_plan_reused"], !mutate);
+        assert_eq!(*runner.plans.borrow(), if mutate { 2 } else { 1 });
+        assert_eq!(receipt["version_after"], "1.1.0");
+        assert_eq!(receipt["working_tree"], "clean");
+        assert_eq!(receipt["ahead"], 0);
+        assert_eq!(receipt["behind"], 0);
+        let second = sync(&repo.0, &SystemProcessRunner, GitSyncOptions { release:true, message:Some("fix: repeated".into()), ..Default::default() });
+        assert_eq!(second.code, 0, "{}", second.stderr);
+        assert_eq!(second.receipt.unwrap()["version_bumped"], false);
+        fs::remove_dir_all(remote).unwrap();
+    }
+}
+
+#[test]
+fn release_snapshot_unavailable_disables_reuse_without_new_preparation_requirements() {
+    let (repo, remote) = versioned_repository("release-snapshot-fallback", true);
+    fs::create_dir_all(repo.0.join(".runtime")).unwrap();
+    fs::write(repo.0.join(".runtime/legacy.txt"), b"tracked legacy runtime\n").unwrap();
+    git_ok(&repo.0, &["add", "-f", ".runtime/legacy.txt"]);
+    git_ok(&repo.0, &["commit", "-m", "fix: legacy runtime input"]);
+    let outcome = sync(&repo.0, &SystemProcessRunner, GitSyncOptions { release:true, message:Some("fix: release".into()), ..Default::default() });
+    assert_eq!(outcome.code, 0, "{}", outcome.stderr);
+    let receipt = outcome.receipt.unwrap();
+    assert_eq!(receipt["release_plan_reused"], false);
+    assert_eq!(receipt["version_after"], "1.0.1");
+    assert_eq!(receipt["working_tree"], "clean");
+    fs::remove_dir_all(remote).unwrap();
 }
 
 fn install_record_documents(root: &Path) {

@@ -1,6 +1,9 @@
 use super::*;
 use std::collections::BTreeMap;
 
+#[path = "release_check_cache.rs"]
+mod check_cache;
+
 const CONFIG: &str = ".codex/development-checks.json";
 const CACHE: &str = ".runtime/bridgeforge-codex/release-preparation";
 type Inputs = BTreeMap<String, Option<String>>;
@@ -12,6 +15,10 @@ struct Check {
     program: String,
     args: Vec<String>,
     timeout_seconds: u64,
+    // Opt in only for checks whose dependencies are covered by the input and
+    // environment identity. Network/live checks must continue to run every time.
+    #[serde(default)]
+    reusable: bool,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -33,7 +40,7 @@ struct Audit {
     verdict: String,
     summary: String,
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 struct CheckResult {
     check: Check,
     exit_code: i32,
@@ -52,6 +59,8 @@ pub(super) struct Prepared {
     checks: Vec<CheckResult>,
     audit: Option<Audit>,
     artifacts: BTreeMap<String, String>,
+    #[serde(default)]
+    check_environment: Option<String>,
 }
 
 fn path(root: &Path, relative: &str) -> Result<PathBuf, String> {
@@ -200,7 +209,7 @@ fn inputs(root: &Path, git: &Git<'_>) -> Result<Inputs, String> {
     collect_inputs(root, git, true)
 }
 
-fn raw_inputs(root: &Path, git: &Git<'_>) -> Result<Inputs, String> {
+pub(super) fn raw_inputs(root: &Path, git: &Git<'_>) -> Result<Inputs, String> {
     collect_inputs(root, git, false)
 }
 
@@ -367,6 +376,11 @@ impl Prepared {
             );
         }
         let cfg = config(root)?;
+        if let Some(expected) = &self.check_environment {
+            if check_cache::environment(root, &cfg, git.runner).as_ref() != Some(expected) {
+                return Err("development check environment changed".into());
+            }
+        }
         let exact = raw_inputs(root, git)?;
         let current = inputs(root, git)?;
         if development_inputs(&current, &cfg) != development_inputs(&self.inputs, &cfg) {
@@ -461,6 +475,8 @@ pub(super) fn prepare(
     let key = fingerprint(&development_inputs(&source, &cfg))?;
     let audit: Option<Audit> = audit_file.map(read_json).transpose()?;
     validate_audit(&cfg, audit.as_ref(), &key)?;
+    let environment = check_cache::environment(root, &cfg, runner);
+    let mut progress = check_cache::Progress::load(root, &key, &identity, &index_state, environment.as_deref())?;
     let Some(release) =
         crate::release::build_explicit_release_plan(root, message, git.changed_paths()?, runner)?
     else {
@@ -471,7 +487,15 @@ pub(super) fn prepare(
     crate::persistence::atomic_write_json(&current, &json!({"schema":1,"status":"preparing"}))
         .map_err(|e| e.to_string())?;
     let mut checks = Vec::new();
-    for check in cfg.checks {
+    let mut checks_reused = 0;
+    for check in &cfg.checks {
+        if check.reusable {
+            if let Some(result) = progress.reuse(root, check) {
+                checks.push(result);
+                checks_reused += 1;
+                continue;
+            }
+        }
         let program = if check.program == "{bridgeforge}" {
             root.join(if cfg!(windows) {
                 ".codex/bin/bridgeforge.exe"
@@ -498,13 +522,16 @@ pub(super) fn prepare(
             ));
         }
         checks.push(CheckResult {
-            check,
+            check: check.clone(),
             exit_code: output.code,
             elapsed_ms: started.elapsed().as_millis(),
             log_sha256: hash,
         });
         if inputs(root, &git)? != source {
             return Err("development checks changed inputs; no preparation was certified".into());
+        }
+        if check_cache::environment(root, &cfg, runner) != environment {
+            return Err("development check environment changed; no preparation was certified".into());
         }
         if RepositoryIdentity::capture(&git)? != identity
             || git.required(
@@ -514,6 +541,9 @@ pub(super) fn prepare(
         {
             return Err("development check changed Git state; no preparation was certified".into());
         }
+        // Persist only after both the input and Git guards passed. An interrupted
+        // later check cannot erase earlier successful, hash-verified evidence.
+        progress.save(root, &checks)?;
     }
     let factory = root.join("templates/managed-skeleton.json").is_file();
     let plan =
@@ -558,6 +588,9 @@ pub(super) fn prepare(
     {
         return Err("repository changed during preparation; not certified".into());
     }
+    if check_cache::environment(root, &cfg, runner) != environment {
+        return Err("development check environment changed during preparation; not certified".into());
+    }
     let record = Prepared {
         schema: 1,
         status: "prepared".into(),
@@ -573,14 +606,16 @@ pub(super) fn prepare(
         checks,
         audit,
         artifacts,
+        check_environment: environment,
     };
     let check_count = record.checks.len();
+    let reuse_available = record.check_environment.is_some();
     crate::persistence::atomic_write_json(
         &current,
         &serde_json::to_value(record).map_err(|e| e.to_string())?,
     )
     .map_err(|e| e.to_string())?;
     Ok(
-        json!({"schema":1,"status":"prepared","target_version":target_version,"validation_fingerprint":key,"checks_passed":check_count,"record":current}),
+        json!({"schema":1,"status":"prepared","target_version":target_version,"validation_fingerprint":key,"checks_passed":check_count,"checks_reuse_available":reuse_available,"checks_reused":checks_reused,"checks_executed":check_count-checks_reused,"record":current}),
     )
 }

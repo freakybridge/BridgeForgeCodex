@@ -2,6 +2,7 @@ use crate::{CommandOutcome, ProcessRequest, ProcessRunner};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha2::{Digest, Sha256};
+use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -222,6 +223,30 @@ struct RepositoryIdentity {
     symbolic_head: String,
     head_oid: String,
     common_config_sha256: String,
+}
+
+// Ephemeral: preview remains read-only and no stale plan can cross processes.
+#[derive(PartialEq, Eq)]
+struct ReleasePlanningInputs {
+    identity: RepositoryIdentity,
+    index: String,
+    files: BTreeMap<String, Option<String>>,
+    git_config: String,
+    status: String,
+    history: String,
+}
+
+impl ReleasePlanningInputs {
+    fn capture(git: &Git<'_>) -> Result<Self, String> {
+        Ok(Self {
+            identity: RepositoryIdentity::capture(git)?,
+            index: git.required(&["ls-files", "--stage", "-v", "-z"], Duration::from_secs(30))?,
+            files: preparation::raw_inputs(git.root, git)?,
+            git_config: payload_sha(git.required(&["config", "--null", "--list", "--show-origin"], Duration::from_secs(30))?.as_bytes()),
+            status: git.status()?,
+            history: crate::release::planning_history_state(git.root, git.runner)?,
+        })
+    }
 }
 
 fn payload_sha(payload: &[u8]) -> String {
@@ -461,15 +486,25 @@ fn sync_impl(
     }
     // Check only version planning before network changes. Development checks
     // and preparation receipts are independent of Git synchronization.
+    let mut preflight_plan = None;
     if options.release {
         let preflight = (|| {
             let message = requested_message(&options)?;
-            crate::release::build_explicit_release_plan(
+            // An optional optimization must not introduce preparation-only
+            // inventory restrictions into the release workflow.
+            let inputs = ReleasePlanningInputs::capture(&git).ok();
+            let plan = crate::release::build_explicit_release_plan(
                 root,
                 &message,
                 git.changed_paths()?,
                 runner,
             )?;
+            if let Some(inputs) = inputs {
+                if ReleasePlanningInputs::capture(&git)? != inputs {
+                    return Err("repository changed during release preflight; no apply".into());
+                }
+                preflight_plan = Some((message, inputs, plan));
+            }
             Ok::<(), String>(())
         })();
         if let Err(error) = preflight {
@@ -635,6 +670,7 @@ fn sync_impl(
     };
     let mut generated_reused = 0;
     let mut generated_built = 0;
+    let mut release_plan_reused = false;
     let factory_runtime_repair = if factory && !dirty {
         if let Err(error) = crate::baseline::verify(root, None, false) {
             return blocked(format!("current baseline blocked git-sync: {error}"));
@@ -675,7 +711,16 @@ fn sync_impl(
                 return blocked(error);
             }
             let planning = if options.release {
-                crate::release::build_explicit_release_plan(root, &message, changed_paths, runner)
+                match preflight_plan.take() {
+                    Some((previous_message, previous_inputs, plan))
+                        if previous_message == message
+                            && ReleasePlanningInputs::capture(&git).ok().as_ref() == Some(&previous_inputs)
+                            && plan.as_ref().is_none_or(|plan| crate::release::verify_release_inputs(&plan.inputs).is_ok()) => {
+                            release_plan_reused = true;
+                            Ok(plan)
+                        },
+                    _ => crate::release::build_explicit_release_plan(root, &message, changed_paths, runner),
+                }
             } else {
                 Ok(None)
             };
@@ -1037,6 +1082,7 @@ fn sync_impl(
     final_receipt["version_after"] = json!(version_after);
     final_receipt["version_strategy"] = json!(version_strategy);
     final_receipt["package_changes"] = json!(package_changes);
+    final_receipt["release_plan_reused"] = json!(release_plan_reused);
     if version_strategy == "rust_independent" {
         final_receipt["compatibility_validation"] = json!("not_performed_by_git_sync");
     }

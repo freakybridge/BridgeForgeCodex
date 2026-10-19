@@ -119,7 +119,7 @@ fn platform() -> &'static str {
     }
 }
 
-fn environment(root: &Path, runner: &dyn ProcessRunner) -> Option<String> {
+pub(crate) fn environment(root: &Path, runner: &dyn ProcessRunner) -> Option<String> {
     // Unmodelled compiler/native overrides make the optional cache unavailable.
     for (key, _) in std::env::vars_os() {
         let key = key.to_string_lossy();

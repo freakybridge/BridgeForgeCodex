@@ -224,7 +224,7 @@ pub fn validate_release_baseline(
     root: &Path,
     runner: &dyn ProcessRunner,
 ) -> Result<(String, String), String> {
-    validate_baseline(root, runner, None)
+    validate_baseline(root, runner, None, true)
 }
 
 pub(super) fn validate_candidate_baseline(
@@ -232,13 +232,14 @@ pub(super) fn validate_candidate_baseline(
     runner: &dyn ProcessRunner,
     candidate: &rust::RustConfig,
 ) -> Result<(String, String), String> {
-    validate_baseline(root, runner, Some(candidate))
+    validate_baseline(root, runner, Some(candidate), true)
 }
 
 fn validate_baseline(
     root: &Path,
     runner: &dyn ProcessRunner,
     candidate: Option<&rust::RustConfig>,
+    validate_workspace: bool,
 ) -> Result<(String, String), String> {
     explicit_release_policy(root)?;
     if git(root, runner, &["rev-parse", "--is-shallow-repository"])?.trim() != "false" {
@@ -262,9 +263,9 @@ fn validate_baseline(
         );
     }
     if let Some(cfg) = candidate {
-        independent::validate_current(root, boundary, cfg, runner)?;
+        if validate_workspace { independent::validate_current(root, boundary, cfg, runner)?; }
     } else if let Some(cfg) = config::load(root)? {
-        independent::validate_current(root, boundary, &cfg, runner)?;
+        if validate_workspace { independent::validate_current(root, boundary, &cfg, runner)?; }
     } else {
         validate_native_versions(root, version.trim().parse::<SemVer>()?)?;
     }
@@ -277,8 +278,17 @@ pub fn build_explicit_release_plan(
     changed: Vec<String>,
     runner: &dyn ProcessRunner,
 ) -> Result<Option<FileReleasePlan>, String> {
+    let reader = history_cache::Reader::new(root, runner);
+    let plan = build_with_reader(root, message, changed, &reader)?;
+    reader.verify_unchanged()?;
+    Ok(plan)
+}
+
+fn build_with_reader(root: &Path, message: &str, changed: Vec<String>, runner: &history_cache::Reader<'_>) -> Result<Option<FileReleasePlan>, String> {
     // Diagnostics and the write transaction validate the same release baseline.
-    let (head, boundary) = validate_release_baseline(root, runner)?;
+    // The Rust builder validates the same workspace/baseline pair while loading
+    // it for planning. Diagnostics still perform that validation independently.
+    let (head, boundary) = validate_baseline(root, runner, None, false)?;
     if let Some(cfg) = config::load(root)? {
         return independent::build(root, message, changed, &head, &boundary, &cfg, runner);
     }
@@ -328,9 +338,12 @@ pub fn build_explicit_release_plan(
                 .ok_or_else(|| {
                 format!("release history has no ownership contract at {commit}")
             })?;
-            classify_payloads(
+            let classifier = PayloadClassifier::new(&current, |path| revision_payload(root, before, path, runner))?;
+            let payloads = classifier.payload_paths(&touched);
+            runner.prefetch(before, &payloads)?;
+            runner.prefetch(commit, &payloads)?;
+            classifier.classify(
                 &touched,
-                &current,
                 |path| revision_payload(root, before, path, runner),
                 |path| revision_payload(root, commit, path, runner),
             )?

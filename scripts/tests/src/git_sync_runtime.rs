@@ -54,13 +54,53 @@ fn fixture_development_checks(root: &Path) {
 }
 
 #[test]
+fn real_cli_check_reuse_ignores_invocation_trace_but_binds_business_environment() {
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).ancestors().nth(2).unwrap();
+    let cli = source.join(if cfg!(windows) { ".codex/bin/bridgeforge.exe" } else { ".codex/bin/bridgeforge" });
+    let token = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+    let fixture = Fixture(std::env::temp_dir().join(format!("bridgeforge-cross-process-checks-{token}")));
+    let root = &fixture.0;
+    fs::create_dir_all(root.join(".codex")).unwrap();
+    fs::write(root.join("VERSION"), b"1.0.0\n").unwrap();
+    fs::write(root.join("CHANGELOG.md"), b"# Changelog\n").unwrap();
+    fs::write(root.join("Cargo.toml"), b"[package]\nname = \"demo\"\nversion = \"1.0.0\"\n").unwrap();
+    fs::write(root.join("Cargo.lock"), b"version = 4\n[[package]]\nname = \"demo\"\nversion = \"1.0.0\"\n").unwrap();
+    fs::write(root.join(".gitignore"), b".runtime/\n").unwrap();
+    fs::write(root.join(".codex/managed-skeleton.json"), br#"{"assets":[]}"#).unwrap();
+    fs::write(root.join(".codex/bridgeforge-version.json"), br#"{"schema_version":1,"release_policy":"explicit_release","manifests":["Cargo.toml"]}"#).unwrap();
+    fs::write(root.join(".codex/development-checks.json"), br#"{"schema":1,"checks":[{"id":"diff","program":"git","args":["diff","--check"],"timeout_seconds":30,"reusable":true}]}"#).unwrap();
+    git(root, &["init"]);
+    git(root, &["config", "user.name", "BridgeForge Test"]);
+    git(root, &["config", "user.email", "bridgeforge@example.invalid"]);
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "chore: baseline"]);
+    fs::write(root.join("business.txt"), b"change\n").unwrap();
+    for (trace, business, reused) in [("call-a", "a", 0), ("call-b", "a", 1), ("call-c", "b", 0), ("call-d", "b", 1)] {
+        let mut request = ProcessRequest::new(cli.as_os_str(), root);
+        request.args = ["git-sync", "--prepare-release", "--message", "fix: repeat"].iter().map(Into::into).collect();
+        request.env.insert("CODEX_TOOL_CALL_ID".into(), trace.into());
+        request.env.insert("BRIDGEFORGE_TEST_BUSINESS_INPUT".into(), business.into());
+        request.timeout = Duration::from_secs(120);
+        let output = SystemProcessRunner.run(&request).unwrap();
+        assert!(!output.timed_out && output.code == 0, "{}", String::from_utf8_lossy(&output.stderr));
+        let receipt: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(receipt["checks_reused"], reused, "{trace}");
+        assert_eq!(receipt["checks_executed"], 1-reused, "{trace}");
+        assert_eq!(receipt["target_version"], "1.0.1");
+    }
+    assert_eq!(fs::read(root.join("VERSION")).unwrap(), b"1.0.0\n");
+}
+
+#[test]
 fn real_cli_explicit_release_preview_and_execution() {
-    for policy in ["missing-file", "missing-field", "per_commit", "explicit_release", "rust-independent"] {
+    for policy in ["missing-file", "missing-field", "per_commit", "explicit_release", "rust-independent", "rust-additions"] {
         real_cli_release_flow(policy);
     }
 }
 
 fn real_cli_release_flow(policy: &str) {
+    let additions = policy == "rust-additions";
+    let policy = if additions { "rust-independent" } else { policy };
     let source = Path::new(env!("CARGO_MANIFEST_DIR"))
         .ancestors()
         .nth(2)
@@ -104,6 +144,8 @@ fn real_cli_release_flow(policy: &str) {
             .iter()
             .any(|v| v == "git-sync-direct-release-v1")
     );
+    assert!(call(&["self-test", "--json"])["capabilities"].as_array().unwrap().iter().any(|v| v == "git-sync-rust-package-additions-v1"));
+    assert!(call(&["self-test", "--json"])["capabilities"].as_array().unwrap().iter().any(|v| v == "git-sync-analysis-reuse-v1"));
     for flag in ["--dry-run", "--check"] {
         let mut probe = ProcessRequest::new(cli.as_os_str(), &root);
         probe.args = ["git-sync", "--prepare-release", flag]
@@ -182,7 +224,6 @@ fn real_cli_release_flow(policy: &str) {
     assert!(!root.join(".codex/development-checks.json").exists());
     fs::write(root.join("VERSION"), b"1.0.0\n").unwrap();
     let version_files = ["VERSION", "Cargo.toml", "Cargo.lock", "CHANGELOG.md"];
-    let version_bytes = version_files.map(|name| fs::read(root.join(name)).unwrap());
     let mut first=ProcessRequest::new(cli.as_os_str(),&root);
     first.args=["git-sync","--message","feat: wait for choice"].iter().map(Into::into).collect();
     let initial=SystemProcessRunner.run(&first).unwrap();assert_eq!(initial.code,2);
@@ -195,6 +236,20 @@ fn real_cli_release_flow(policy: &str) {
     let selected=call(&["git-sync","--setup-apply","--strategy","current","--setup-fingerprint",key,"--confirmed-choice"]);
     assert_eq!(selected["sync_performed"],false);
     assert_eq!(call(&["git-sync","--setup-status"])["status"],"configured");
+    if additions {
+        fs::create_dir_all(root.join("new/src")).unwrap();
+        fs::write(root.join("new/Cargo.toml"), b"[package]\nname='new'\nversion='0.1.7'\nedition='2024'\n[workspace]\n").unwrap();
+        fs::write(root.join("new/src/lib.rs"), b"pub fn value() -> u32 { 7 }\n").unwrap();
+        fs::write(root.join("new/Cargo.lock"), b"version=4\n[[package]]\nname='new'\nversion='0.1.7'\n").unwrap();
+        fs::write(root.join("Cargo.toml"), b"[package]\nname='demo'\nversion='0.4.0'\nedition='2024'\n[dependencies]\nnew={path='new',version='=0.1.7'}\n").unwrap();
+        fs::write(root.join("Cargo.lock"), b"version=4\n[[package]]\nname='demo'\nversion='0.4.0'\ndependencies=['new']\n[[package]]\nname='new'\nversion='0.1.7'\n").unwrap();
+        let mut cfg: serde_json::Value = serde_json::from_slice(&fs::read(&policy_path).unwrap()).unwrap();
+        cfg["rust"]["workspaces"] = serde_json::json!(["Cargo.toml", "new/Cargo.toml"]);
+        cfg["rust"]["product_inputs"] = serde_json::json!(["new/Cargo.lock"]);
+        cfg["rust"]["shared_inputs"] = serde_json::json!([{"path":"Cargo.lock","packages":["Cargo.toml"]}]);
+        fs::write(&policy_path, serde_json::to_vec(&cfg).unwrap()).unwrap();
+    }
+    let version_bytes = version_files.map(|name| fs::read(root.join(name)).unwrap());
     let policy_bytes = fs::read(&policy_path).ok();
     fs::write(root.join("business.txt"), b"feature\n").unwrap();
     let ordinary = call(&["git-sync", "--message", "feat: new capability"]);
@@ -227,6 +282,10 @@ fn real_cli_release_flow(policy: &str) {
     if policy == "rust-independent" {
         assert_eq!(preview["version_strategy"],"rust_independent");
         assert_eq!(preview["package_changes"][0]["version_after"],"0.5.0");
+        if additions {
+            assert_eq!(preview["package_changes"][1]["reason"], "first_release");
+            assert_eq!(preview["package_changes"][1]["version_after"], "0.1.7");
+        }
     }
     assert_eq!(git(&root, &["rev-parse", "HEAD"]), before);
     assert_eq!(fs::read(root.join(".git/index")).unwrap(), index);
@@ -248,6 +307,10 @@ fn real_cli_release_flow(policy: &str) {
     if policy == "rust-independent" {
         assert_eq!(released["package_changes"][0]["version_after"],"0.5.0");
         assert_eq!(released["compatibility_validation"],"not_performed_by_git_sync");
+        if additions {
+            assert_eq!(released["package_changes"], preview["package_changes"]);
+            assert_eq!(fs::read(root.join("new/Cargo.toml")).unwrap(), b"[package]\nname='new'\nversion='0.1.7'\nedition='2024'\n[workspace]\n");
+        }
     }
     assert_eq!(fs::read(&development).ok(), development_bytes);
     assert_eq!(fs::read(&record).ok(), record_bytes);
@@ -255,6 +318,15 @@ fn real_cli_release_flow(policy: &str) {
     assert_eq!(repeated["version_bumped"], false);
     assert_eq!(repeated["version_strategy"],if policy == "rust-independent" {"rust_independent"} else {"synchronized"});
     assert_eq!(repeated["commit"], released["commit"]);
+    if additions {
+        fs::write(root.join("new/src/lib.rs"), b"pub fn value() -> u32 { 8 }\n").unwrap();
+        let next = call(&["git-sync", "--release-preview", "--message", "fix: improve existing new package"]);
+        assert_eq!(next["version_after"], "1.1.1");
+        assert_eq!(next["package_changes"][0]["version_after"], "0.5.1");
+        assert_eq!(next["package_changes"][0]["reason"], "dependency_change");
+        assert_eq!(next["package_changes"][1]["version_after"], "0.1.8");
+        assert_eq!(next["package_changes"][1]["reason"], "direct_change");
+    }
 }
 
 #[test]

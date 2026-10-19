@@ -29,6 +29,16 @@ pub(super) fn inventory(root: &Path, runner: &dyn ProcessRunner) -> Result<Vec<S
     Ok(paths.into_iter().collect())
 }
 
+fn existing_config(cfg: &RustConfig, paths: &[String]) -> RustConfig {
+    let mut existing = cfg.clone();
+    existing.workspaces.retain(|path| paths.contains(path));
+    for mapping in &mut existing.shared_inputs {
+        mapping.packages.retain(|path| paths.contains(path));
+    }
+    existing.shared_inputs.retain(|mapping| !mapping.packages.is_empty());
+    existing
+}
+
 pub(super) fn historical_workspace(
     root: &Path,
     revision: &str,
@@ -40,13 +50,17 @@ pub(super) fn historical_workspace(
         runner,
         &["ls-tree", "-r", "--name-only", "-z", revision],
     )?);
-    // Attribution still uses today's package graph, but lock enforcement must
-    // respect the contract in force at this revision. Only proven schema 1
-    // history can exempt workspaces that it did not manage.
+    // Schema 2 uses the roots and mappings actually registered at this revision.
+    // This permits explicit registration of a genuinely new standalone workspace
+    // without trying to read its manifest before it existed.
     if let Some(payload) =
         revision_payload(root, revision, ".codex/bridgeforge-version.json", runner)?
     {
-        if config::parse(&payload)?.is_none() {
+        if let Some(historical) = config::parse(&payload)? {
+            return super::rust::load(&historical, &paths, &mut |path| {
+                revision_payload(root, revision, path, runner)
+            });
+        } else {
             let value = crate::json::parse_unique_json(&payload, "historical version config")?;
             let manifests = if config::auto_manifests(&value)? {
                 ["Cargo.toml", "package.json"]
@@ -78,12 +92,15 @@ pub(super) fn historical_workspace(
                 }
                 manifests
             };
-            return super::rust::load_legacy_history(cfg, &paths, &manifests, &mut |path| {
+            let legacy = existing_config(cfg, &paths);
+            return super::rust::load_legacy_history(&legacy, &paths, &manifests, &mut |path| {
                 revision_payload(root, revision, path, runner)
             });
         }
     }
-    super::rust::load(cfg, &paths, &mut |path| {
+    // No config is the legacy automatic policy, but is not proof of a schema 1
+    // lock exemption. Omit nonexistent new roots while keeping every lock strict.
+    super::rust::load(&existing_config(cfg, &paths), &paths, &mut |path| {
         revision_payload(root, revision, path, runner)
     })
 }
@@ -116,13 +133,16 @@ pub(super) fn build(
     head: &str,
     boundary: &str,
     cfg: &RustConfig,
-    runner: &dyn ProcessRunner,
+    runner: &history_cache::Reader<'_>,
 ) -> Result<Option<FileReleasePlan>, String> {
     let initial_status = status(root, runner)?;
     let initial_inventory = inventory(root, runner)?;
     let workspace = super::rust::load(cfg, &initial_inventory, &mut |p| {
         config::read_current(root, p)
     })?;
+    let baseline = historical_workspace(root, boundary, cfg, runner)?;
+    workspace.validate_baseline(&baseline)?;
+    let mut previous = baseline.clone();
     let mut inputs = BTreeMap::new();
     for (path, bytes) in workspace.inputs() {
         inputs.insert(root.join(path), bytes.clone());
@@ -168,14 +188,23 @@ pub(super) fn build(
         if touched.is_empty() {
             continue;
         }
+        runner.prefetch(before, &touched)?;
+        runner.prefetch(commit, &touched)?;
+        // Validate forward transitions, even for skeleton-only commits. Comparing
+        // only the final graph to older graphs would miss delete/reintroduce.
+        let next = historical_workspace(root, commit, cfg, runner)?;
+        next.validate_transition(&previous, &baseline)?;
+        previous = next;
+        let classifier = if factory { None } else {
+            let contract = revision_payload(root, commit, ".codex/managed-skeleton.json", runner)?
+                .ok_or_else(|| format!("release history has no ownership contract at {commit}"))?;
+            Some(PayloadClassifier::new(&contract, |p| revision_payload(root, before, p, runner))?)
+        };
         let kind = if factory {
             ReleaseKind::Factory
         } else {
-            let contract = revision_payload(root, commit, ".codex/managed-skeleton.json", runner)?
-                .ok_or_else(|| format!("release history has no ownership contract at {commit}"))?;
-            classify_payloads(
+            classifier.as_ref().unwrap().classify(
                 &touched,
-                &contract,
                 |p| revision_payload(root, before, p, runner),
                 |p| revision_payload(root, commit, p, runner),
             )?
@@ -183,8 +212,6 @@ pub(super) fn build(
         if kind == ReleaseKind::SkeletonOnly {
             continue;
         }
-        // Validate identities and versions at every intermediate revision as well.
-        workspace.validate_baseline(&historical_workspace(root, commit, cfg, runner)?)?;
         let info = parse_commit_message(&history::git(
             root,
             runner,
@@ -194,12 +221,8 @@ pub(super) fn build(
         let mut own = Vec::new();
         for path in &touched {
             if !factory {
-                let contract =
-                    revision_payload(root, commit, ".codex/managed-skeleton.json", runner)?
-                        .ok_or("release history ownership contract missing")?;
-                if classify_payloads(
+                if classifier.as_ref().unwrap().classify(
                     std::slice::from_ref(path),
-                    &contract,
                     |p| revision_payload(root, before, p, runner),
                     |p| revision_payload(root, commit, p, runner),
                 )? == ReleaseKind::SkeletonOnly
@@ -215,13 +238,15 @@ pub(super) fn build(
             }
             let old = revision_payload(root, before, path, runner)?;
             let new = revision_payload(root, commit, path, runner)?;
-            if !workspace.is_mechanical_change(path, old.as_deref(), new.as_deref())? {
+            if !workspace.is_mechanical_change(path, old.as_deref(), new.as_deref())?
+                && !workspace.is_registration_change(path, old.as_deref(), new.as_deref(), &baseline)? {
                 own.push(path.clone());
             }
         }
         all_paths.extend(touched);
         events.push((info, own));
     }
+    workspace.validate_transition(&previous, &baseline)?;
     let mut actual_changed = changed.into_iter().collect::<BTreeSet<_>>();
     actual_changed.extend(history::paths(&history::git(
         root,
@@ -238,6 +263,8 @@ pub(super) fn build(
         .into_iter()
         .filter(|p| p != "VERSION")
         .collect::<Vec<_>>();
+    // Only immutable historical contracts are shared across classifications.
+    // Keep the live worktree reader and its existing drift semantics unchanged.
     if !changed.is_empty() && classify(root, &changed, runner)? != ReleaseKind::SkeletonOnly {
         let mut own = Vec::new();
         for path in &changed {
@@ -255,7 +282,8 @@ pub(super) fn build(
                 continue;
             }
             let old = revision_payload(root, head, path, runner)?;
-            if !workspace.is_mechanical_change(path, old.as_deref(), now.as_deref())? {
+            if !workspace.is_mechanical_change(path, old.as_deref(), now.as_deref())?
+                && !workspace.is_registration_change(path, old.as_deref(), now.as_deref(), &baseline)? {
                 own.push(path.clone());
             }
         }
@@ -265,7 +293,7 @@ pub(super) fn build(
     if events.is_empty() {
         return Ok(None);
     }
-    let adapter = workspace.plan(&events)?;
+    let adapter = workspace.plan_from_baseline(&events, &baseline)?;
     for (path, bytes) in adapter.inputs {
         inputs.insert(root.join(path), bytes);
     }

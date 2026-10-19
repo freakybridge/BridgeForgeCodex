@@ -259,6 +259,63 @@ fn rust_baseline_rejects_identity_and_unmanaged_version_changes() {
 }
 
 #[test]
+fn rust_first_release_preserves_version_and_propagates_to_existing_dependents() {
+    let cfg = config(&["Cargo.toml"]);
+    let baseline = fixture(&cfg, &graph()).unwrap();
+    let mut files = graph();
+    files[0].1 = "[workspace]\nmembers=['a','b','c','new']\n";
+    files[2].1 = "[package]\nname='b'\nversion='4.5.6'\n[dependencies]\nnew={path='../new',version='=0.7.9'}\n";
+    files[4].1 = "version=4\n[[package]]\nname='a'\nversion='1.2.3'\n[[package]]\nname='b'\nversion='4.5.6'\ndependencies=['new']\n[[package]]\nname='c'\nversion='7.8.9'\n[[package]]\nname='new'\nversion='0.7.9'\ndependencies=['a']\n";
+    files.push(("new/Cargo.toml", "[package]\nname='new'\nversion='0.7.9'\n[dependencies]\na={path='../a',version='=1.2.3'}\n"));
+    let workspace = fixture(&cfg, &files).unwrap();
+    assert!(workspace.is_registration_change("Cargo.toml", Some(graph()[0].1.as_bytes()), Some(files[0].1.as_bytes()), &baseline).unwrap());
+    assert!(!workspace.is_registration_change("Cargo.toml", Some(graph()[0].1.as_bytes()), Some(b"[workspace]\nmembers=['a','b','c','new']\nresolver='3'\n"), &baseline).unwrap());
+    let plan = workspace.plan_from_baseline(&[
+        commit("feat", true, &["new/src/lib.rs"]),
+        commit("feat", false, &["a/src/lib.rs"]),
+    ], &baseline).unwrap();
+    assert_eq!(plan.packages.len(), 3);
+    let find = |name: &str| plan.packages.iter().find(|p| p.name == name).unwrap();
+    assert_eq!(find("new").version_before, "0.7.9");
+    assert_eq!(find("new").version_after, "0.7.9");
+    assert_eq!(find("new").reason, "first_release");
+    assert_eq!(find("a").version_after, "1.3.0");
+    assert_eq!(find("b").version_after, "4.5.7");
+    assert_eq!(find("b").reason, "dependency_change");
+    assert_eq!(find("b").dependencies, ["new/Cargo.toml"]);
+    assert!(!plan.writes.contains_key("c/Cargo.toml"));
+    assert!(String::from_utf8_lossy(&plan.writes["new/Cargo.toml"]).contains("=1.3.0"));
+    assert!(String::from_utf8_lossy(&plan.writes["Cargo.lock"]).contains("0.7.9"));
+    let new_only = workspace.plan_from_baseline(&[commit("feat", false, &["new/src/lib.rs"])], &baseline).unwrap();
+    assert_eq!(new_only.packages.len(), 2);
+    assert_eq!(new_only.packages[0].version_after, "4.5.7");
+    assert!(!new_only.writes.contains_key("new/Cargo.toml"));
+}
+
+#[test]
+fn rust_addition_guards_reject_removal_rename_boundary_and_conflicts() {
+    let cfg = config(&["Cargo.toml"]);
+    let old_files = [
+        ("Cargo.toml", "[workspace]\nmembers=['a']\n"),
+        ("a/Cargo.toml", "[package]\nname='a'\nversion='1.0.0'\n"),
+        ("unmanaged/Cargo.toml", "[package]\nname='unmanaged'\nversion='0.1.0'\n"),
+    ];
+    let old = fixture(&cfg, &old_files).unwrap();
+    let cases = [
+        (vec![("Cargo.toml", "[workspace]\nmembers=['new']\n"), ("new/Cargo.toml", "[package]\nname='a'\nversion='1.0.0'\n")], "removal/rename"),
+        (vec![("Cargo.toml", "[workspace]\nmembers=['a']\n"), ("a/Cargo.toml", "[package]\nname='renamed'\nversion='1.0.0'\n")], "identity"),
+        (vec![("Cargo.toml", "[workspace]\nmembers=['a','unmanaged']\n"), old_files[1], old_files[2]], "existing manifest"),
+        (vec![("Cargo.toml", "[workspace]\nmembers=['a','new']\n"), old_files[1], ("new/Cargo.toml", "[package]\nname='a'\nversion='0.1.0'\n")], "conflicts"),
+    ];
+    for (files, expected) in cases {
+        let error = fixture(&cfg, &files).unwrap().validate_baseline(&old).unwrap_err();
+        assert!(error.contains(expected), "{expected}: {error}");
+    }
+    let files = [("Cargo.toml", "[workspace]\nmembers=['b']\n"), ("b/Cargo.toml", "[package]\nname='b'\nversion='1.0.0'\n[workspace]\nmembers=['../a']\n"), old_files[1]];
+    assert!(fixture(&config(&["b/Cargo.toml"]), &files).unwrap().validate_baseline(&old).unwrap_err().contains("boundary"));
+}
+
+#[test]
 fn rust_rejects_stale_lock_unregistered_dependency_and_escape() {
     let mut files = graph();
     files[4].1 = "version=4\n[[package]]\nname='a'\nversion='9.0.0'\n";

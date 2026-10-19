@@ -314,17 +314,19 @@ fn selected(
             // fix business Hooks, version display or manually edited versions.
             let (head, boundary) = history::validate_candidate_baseline(root, runner, &cfg)
                 .map_err(|e| format!("project adaptation required: {e}"))?;
-            if let Some(release) = independent::build(
+            let reader = super::history_cache::Reader::new(root, runner);
+            let release = independent::build(
                 root,
                 "chore: validate release configuration",
                 Vec::new(),
                 &head,
                 &boundary,
                 &cfg,
-                runner,
+                &reader,
             )
-            .map_err(|e| format!("project adaptation required: {e}"))?
-            {
+            .map_err(|e| format!("project adaptation required: {e}"))?;
+            reader.verify_unchanged().map_err(|e| format!("project adaptation required: {e}"))?;
+            if let Some(release) = release {
                 for (path, bytes) in release.inputs {
                     plan.inputs.insert(path, bytes);
                 }

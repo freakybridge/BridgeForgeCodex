@@ -116,6 +116,7 @@ enum DependencyKind {
 #[derive(Clone, Debug)]
 pub(super) struct Workspace {
     config: RustConfig,
+    inventory: BTreeSet<String>,
     inputs: BTreeMap<String, Option<Vec<u8>>>,
     documents: BTreeMap<String, DocumentMut>,
     packages: BTreeMap<String, Package>,
@@ -346,6 +347,7 @@ fn load_with_lock_scope(
     }
     let mut result = Workspace {
         config: config.clone(),
+        inventory: inventory.iter().cloned().collect(),
         inputs: BTreeMap::new(),
         documents: BTreeMap::new(),
         packages: BTreeMap::new(),
@@ -543,11 +545,33 @@ impl Workspace {
     }
 
     pub(super) fn validate_baseline(&self, old: &Workspace) -> Result<(), String> {
-        if self.packages.keys().ne(old.packages.keys()) {
-            return Err("Rust package addition/removal/rename requires an explicit migration; package manifest identities changed".into());
+        self.validate_transition(old, old)
+    }
+
+    /// Only genuinely new manifests may join a release. The origin remains the
+    /// release boundary even when registration follows the file's first commit.
+    pub(super) fn validate_transition(
+        &self,
+        old: &Workspace,
+        origin: &Workspace,
+    ) -> Result<(), String> {
+        for root in old.roots.keys() {
+            if !self.roots.contains_key(root) {
+                return Err(format!("{root}: Rust workspace removal or boundary change is unsupported; restore the registered workspace"));
+            }
         }
-        for (path, package) in &self.packages {
-            let before = &old.packages[path];
+        for root in self.roots.keys().filter(|p| !old.roots.contains_key(*p)) {
+            if !self.inventory.contains(root) {
+                return Err(format!("{root}: new Rust workspace is outside the current Git inventory; track the manifest before release"));
+            }
+            if origin.inventory.contains(root) {
+                return Err(format!("{root}: existing workspace cannot be enrolled as a new workspace; explicit migration is not supported"));
+            }
+        }
+        for (path, before) in &old.packages {
+            let package = self.packages.get(path).ok_or_else(|| format!(
+                "{path}: Rust package removal/rename is unsupported; restore the package identity"
+            ))?;
             if package.name != before.name
                 || package.version != before.version
                 || package.workspace != before.workspace
@@ -555,6 +579,17 @@ impl Workspace {
                 return Err(format!(
                     "{path}: package identity or effective version changed outside the managed Rust release"
                 ));
+            }
+        }
+        for path in self.packages.keys().filter(|p| !old.packages.contains_key(*p)) {
+            if !self.inventory.contains(path) {
+                return Err(format!("{path}: new Rust package is outside the current Git inventory; track the manifest before release"));
+            }
+            if origin.inventory.contains(path) {
+                return Err(format!("{path}: existing manifest cannot be enrolled as a new package; workspace boundary migration is not supported"));
+            }
+            if self.packages.values().filter(|p| p.name == self.packages[path].name).count() != 1 {
+                return Err(format!("{path}: new Rust package name conflicts with another registered identity"));
             }
         }
         Ok(())
@@ -669,6 +704,46 @@ impl Workspace {
             }
         }
         Ok(old_value == new_value)
+    }
+
+    /// Merely appending members which are new since the release boundary does
+    /// not constitute a business change to every existing member of the root.
+    pub(super) fn is_registration_change(
+        &self,
+        path: &str,
+        before: Option<&[u8]>,
+        after: Option<&[u8]>,
+        baseline: &Workspace,
+    ) -> Result<bool, String> {
+        let (Some(before), Some(after), Some(members)) = (before, after, self.roots.get(path)) else {
+            return Ok(false);
+        };
+        let old = parse(path, before)?;
+        let new = parse(path, after)?;
+        let entries = |doc: &DocumentMut| strings(doc.get("workspace").and_then(|w| w.get("members")), "workspace.members");
+        let old_entries = entries(&old)?;
+        let new_entries = entries(&new)?;
+        if old_entries.iter().any(|entry| !new_entries.contains(entry)) {
+            return Ok(false);
+        }
+        let mut added = false;
+        for entry in new_entries.iter().filter(|e| !old_entries.contains(e)) {
+            let pattern = member_pattern(&normalize(directory(path), entry)?)?;
+            let matched = members.iter().filter(|p| pattern.is_match(directory(p))).collect::<Vec<_>>();
+            if matched.is_empty() || matched.iter().any(|p| baseline.packages.contains_key(*p)) {
+                return Ok(false);
+            }
+            added = true;
+        }
+        if !added { return Ok(false); }
+        let mut old = toml_to_json(old.as_item())?;
+        let mut new = toml_to_json(new.as_item())?;
+        for doc in [&mut old, &mut new] {
+            if let Some(table) = doc.get_mut("workspace").and_then(serde_json::Value::as_object_mut) {
+                table.remove("members");
+            }
+        }
+        Ok(old == new)
     }
 
     fn collect_dependencies(&mut self) -> Result<(), String> {
@@ -995,12 +1070,38 @@ impl Workspace {
         (optional, dependency_features)
     }
 
+    #[cfg(all(test, bridgeforge_factory_tests))]
     pub(super) fn plan(&self, events: &[(CommitInfo, Vec<String>)]) -> Result<AdapterPlan, String> {
-        let mut versions = BTreeMap::<String, SemVer>::new();
+        self.plan_additions(events, &BTreeSet::new())
+    }
+
+    pub(super) fn plan_from_baseline(
+        &self,
+        events: &[(CommitInfo, Vec<String>)],
+        baseline: &Workspace,
+    ) -> Result<AdapterPlan, String> {
+        self.validate_baseline(baseline)?;
+        let additions = self.packages.keys()
+            .filter(|p| !baseline.packages.contains_key(*p)).cloned().collect();
+        self.plan_additions(events, &additions)
+    }
+
+    fn plan_additions(
+        &self,
+        events: &[(CommitInfo, Vec<String>)],
+        additions: &BTreeSet<String>,
+    ) -> Result<AdapterPlan, String> {
+        // First inclusion is a release at the valid, existing manifest version,
+        // including when a new package depends on another changed package.
+        let mut versions = additions.iter().map(|p| (p.clone(), self.packages[p].version))
+            .collect::<BTreeMap<_, _>>();
         let mut direct = BTreeSet::<String>::new();
         for (commit, paths) in events {
             for path in paths {
                 for manifest in self.affected(path)? {
+                    if additions.contains(&manifest) {
+                        continue;
+                    }
                     let old = self.packages[&manifest].version;
                     let component = if commit.breaking {
                         old.major
@@ -1048,7 +1149,7 @@ impl Workspace {
         // Literal versions split inherited workspace versions without bumping
         // unaffected packages. Future releases cannot silently reunify them.
         for (manifest, package) in &self.packages {
-            if package.inherited || versions.contains_key(manifest) {
+            if package.inherited || versions.get(manifest).is_some_and(|next| *next != package.version) {
                 documents.get_mut(manifest).unwrap()["package"]["version"] = value(
                     versions
                         .get(manifest)
@@ -1108,7 +1209,9 @@ impl Workspace {
                     name: package.name.clone(),
                     version_before: package.version.to_string(),
                     version_after: next.to_string(),
-                    reason: if direct.contains(manifest) {
+                    reason: if additions.contains(manifest) {
+                        "first_release".into()
+                    } else if direct.contains(manifest) {
                         "direct_change".into()
                     } else {
                         "dependency_change".into()
@@ -1161,6 +1264,9 @@ impl Workspace {
                     .find(|(_, p)| p.name == name && p.version.to_string() == old)
                     .map(|(m, _)| m);
                 if let Some(next) = manifest.and_then(|m| versions.get(m)) {
+                    if next.to_string() == old {
+                        continue;
+                    }
                     replacements.insert((name, old), next.to_string());
                     entry.insert("version", value(next.to_string()));
                     touched.insert(lock.clone());

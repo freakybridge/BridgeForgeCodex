@@ -54,7 +54,7 @@ validation_status: awaiting_user_acceptance
 
 支持多个 workspace、本地路径依赖、重命名、workspace 依赖继承、普通／构建／开发／可选／目标条件依赖；传播采用声明依赖集合，不等同于某次构建启用集合。锁文件按本地包身份更新，第三方包不跟着批量改版。Cargo.lock 自身改动需显式归属；复杂且不能可靠解析的配置（如 patch/replace）阻断，禁止猜测。
 
-首次迁移保留版本值，新增／删除／改名包或无法识别的身份变化需要明确迁移，首期阻断；不自动 cargo publish。预览保留新旧版本和 direct_change／dependency_change 原因。实际执行 fetch／快进后重新计算，并核对输入内容、包／文件清单和 HEAD。
+首次迁移保留版本值；新增包的受管首次纳入规则见[新增包修复](requirements_2026-10-19_package-additions.md)。删除／改名及无法识别的身份变化仍阻断，当前无通用身份迁移命令；不自动 cargo publish。预览保留新旧版本和 first_release／direct_change／dependency_change 原因。实际执行 fetch／快进后重新计算，并核对输入内容、包／文件清单和 HEAD。
 
 ## 实施顺序与验收
 
