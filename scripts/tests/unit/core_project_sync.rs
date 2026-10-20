@@ -1239,6 +1239,7 @@ fn transaction_fixture(valid_asset_hash: bool) -> (PathBuf, SyncPlan) {
     )
     .unwrap();
     let plan = SyncPlan {
+        build_metrics: Default::default(),
         schema: 1,
         status: "planned".into(),
         readiness: "ready".into(),

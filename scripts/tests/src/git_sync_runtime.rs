@@ -5,6 +5,63 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
+#[test]
+#[ignore = "explicit R10 offline CLI pipeline comparison; not chat end-to-end timing"]
+fn git_sync_preflight_pipeline_performance() {
+    use sha2::Digest;
+    let source=Path::new(env!("CARGO_MANIFEST_DIR")).ancestors().nth(2).unwrap();
+    let baseline=PathBuf::from(std::env::var_os("BRIDGEFORGE_SYNC_BASELINE_CLI").expect("explicit baseline CLI required"));
+    let current=source.join(if cfg!(windows){".codex/bin/bridgeforge.exe"}else{".codex/bin/bridgeforge"});
+    let token=SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+    let fixture=Fixture(std::env::temp_dir().join(format!("bf-sync-pipeline-{token}")));
+    let root=fixture.0.join("project");let remote=fixture.0.join("remote.git");
+    fs::create_dir_all(root.join(".codex")).unwrap();fs::create_dir_all(root.join("templates")).unwrap();
+    fs::write(root.join("tracked.txt"),b"seed\n").unwrap();fs::write(root.join("templates/tracked.txt"),b"seed\n").unwrap();
+    fs::write(root.join("VERSION"),b"1.0.0\n").unwrap();fs::write(root.join("CHANGELOG.md"),b"# Changelog\n").unwrap();
+    fs::write(root.join(".gitignore"),b".runtime/\n").unwrap();
+    fs::write(root.join(".codex/.bridgeforge_codex_version"),b"1.0.0\n").unwrap();
+    let asset_hash=format!("sha256:{:x}",sha2::Sha256::digest(b"seed\n"));
+    fs::write(root.join(".codex/managed-skeleton.json"),serde_json::to_vec(&serde_json::json!({
+        "schema_version":4,"release_version":"1.0.0","host":"codex","stamp":".codex/.bridgeforge_codex_version",
+        "contract_target":".codex/managed-skeleton.json","baseline_model":"current-only","compatibility_baseline":"1.0.0",
+        "assets":[{"id":"fixture.asset","source":"templates/tracked.txt","target":"tracked.txt","strategy":"whole","current_sha256":asset_hash}],"generated_assets":[]
+    })).unwrap()).unwrap();
+    fs::write(root.join(".codex/bridgeforge-version.json"),br#"{"schema_version":1,"release_policy":"explicit_release","manifest_policy":"auto","git_sync_setup":{"schema":1,"confirmed":true,"selection":"current"}}"#).unwrap();
+    for args in [vec!["init"],vec!["config","user.name","Fixture"],vec!["config","user.email","fixture@example.invalid"],vec!["config","core.hooksPath",".git/hooks"],vec!["add","."],vec!["commit","-m","chore: fixture baseline"]]{git(&root,&args);}
+    git(&root,&["init","--bare",remote.to_str().unwrap()]);git(&root,&["remote","add","origin",remote.to_str().unwrap()]);git(&root,&["push","-u","origin","HEAD"]);
+    let head=git(&root,&["rev-parse","HEAD"]);
+    fn call(root:&Path, program:&Path, args:&[&str])->(bridgeforge_core::ProcessOutput,u128){
+        let mut request=ProcessRequest::new(program.as_os_str(),root);request.args=args.iter().map(Into::into).collect();request.timeout=Duration::from_secs(120);
+        let started=std::time::Instant::now();let result=SystemProcessRunner.run(&request).unwrap();let elapsed=started.elapsed().as_millis();
+        assert!(!result.timed_out && result.code==0,"{}",String::from_utf8_lossy(&result.stderr));(result,elapsed)
+    }
+    let mut measurements=Vec::new();
+    for sample in 0..5 {
+        let order=if sample%2==0 {[false,true]}else{[true,false]};
+        for modern in order {
+            let cli=if modern{&current}else{&baseline};let total=std::time::Instant::now();let precheck=std::time::Instant::now();
+            let (identity,_)=call(&root,cli,&["self-test","--json"]);let identity:serde_json::Value=serde_json::from_slice(&identity.stdout).unwrap();
+            assert_eq!(identity["capabilities"].as_array().unwrap().iter().any(|v|v=="git-sync-preflight-v1"),modern);
+            if modern {
+                let (result,_)=call(&root,cli,&["git-sync","--preflight"]);let value:serde_json::Value=serde_json::from_slice(&result.stdout).unwrap();
+                assert_eq!(value["status"],"ready");assert_eq!(value["head"],head);assert_eq!(value["working_tree"],"clean");assert_eq!(value["diff_review_required"],false);
+            } else {
+                let (result,_)=call(&root,cli,&["git-sync","--setup-status"]);let value:serde_json::Value=serde_json::from_slice(&result.stdout).unwrap();assert_eq!(value["status"],"configured");
+                for args in [vec!["symbolic-ref","--quiet","--short","HEAD"],vec!["rev-parse","HEAD"],vec!["rev-parse","--abbrev-ref","--symbolic-full-name","@{u}"],vec!["rev-parse","--abbrev-ref","--symbolic-full-name","@{push}"],vec!["status","--porcelain=v1","-uall"],vec!["diff","--stat"],vec!["diff","--cached","--stat"]]{call(&root,Path::new("git"),&args);}
+            }
+            let precheck_ms=precheck.elapsed().as_millis();
+            let (output,sync_ms)=call(&root,cli,&["git-sync","--message","chore: no-op fixture"]);let receipt:serde_json::Value=serde_json::from_slice(&output.stdout).unwrap();
+            assert_eq!(receipt["status"],"synced");assert_eq!(receipt["working_tree"],"clean");assert_eq!(receipt["ahead"],0);assert_eq!(receipt["behind"],0);
+            assert_eq!(receipt["push_performed"],false);assert_eq!(receipt["generated_assets_built"],0);assert_eq!(receipt["version_bumped"],false);
+            let verify=std::time::Instant::now();
+            assert_eq!(git(&root,&["rev-parse","HEAD"]),head);assert!(git(&root,&["status","--porcelain=v1","-uall"]).is_empty());assert_eq!(git(&root,&["rev-list","--left-right","--count","HEAD...@{push}"]),"0\t0");
+            measurements.push(serde_json::json!({"sample":sample,"variant":if modern{"new"}else{"baseline"},"precheck_ms":precheck_ms,"sync_process_ms":sync_ms,"sync_elapsed_ms":receipt["sync_elapsed_ms"],"verify_ms":verify.elapsed().as_millis(),"pipeline_ms":total.elapsed().as_millis()}));
+        }
+    }
+    let result=serde_json::json!({"scope":"isolated_cli_pipeline_not_chat_end_to_end","samples_per_variant":5,"generated_assets":0,"remote":"local_bare_only","baseline_sha256":format!("{:x}",sha2::Sha256::digest(fs::read(&baseline).unwrap())),"new_sha256":format!("{:x}",sha2::Sha256::digest(fs::read(&current).unwrap())),"measurements":measurements});
+    let output=source.join(".runtime/git-sync-performance/cli-comparison.json");fs::create_dir_all(output.parent().unwrap()).unwrap();fs::write(output,serde_json::to_vec_pretty(&result).unwrap()).unwrap();println!("{result}");
+}
+
 struct Fixture(PathBuf);
 impl Drop for Fixture {
     fn drop(&mut self) {

@@ -275,6 +275,7 @@ fn project_sync_real_init_builds_and_applies_generated_assets() {
         b"existing project program"
     );
     let confirmed_source_fingerprint = plan.aggregate_fingerprint.clone();
+    let mut repeated_plan = plan.clone();
     let receipts = attach_generated_assets(
         &mut plan,
         &factory,
@@ -284,6 +285,11 @@ fn project_sync_real_init_builds_and_applies_generated_assets() {
     )
     .unwrap();
     assert!(!receipts.is_empty());
+    attach_generated_assets(&mut repeated_plan,&factory,&project,&contract,&SystemProcessRunner).unwrap();
+    assert_eq!(repeated_plan.aggregate_fingerprint,confirmed_source_fingerprint);
+    // This fixture uses a closed, legacy project Hook and the real toolchain.
+    assert_eq!(repeated_plan.build_metrics.cargo_build_invocations,0);
+    assert!(repeated_plan.build_metrics.cache_hits >= 1);
     assert_eq!(plan.aggregate_fingerprint, confirmed_source_fingerprint);
     let input_path = project.join(".codex/hooks/project_demo/entrypoint.rs");
     let original_input = fs::read(&input_path).unwrap();

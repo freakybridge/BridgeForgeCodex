@@ -44,12 +44,22 @@ pub struct ProcessOutput {
 
 pub trait ProcessRunner {
     fn run(&self, request: &ProcessRequest) -> std::io::Result<ProcessOutput>;
+    /// A verified cache load, after byte, receipt, self-test and environment checks.
+    fn cache_hit(&self) {}
+    fn cache_miss(&self, _reason: &'static str) {}
+    /// Runners must explicitly support compiler probes and executing cached bytes.
+    fn artifact_cache_enabled(&self) -> bool {
+        false
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct SystemProcessRunner;
 
 impl ProcessRunner for SystemProcessRunner {
+    fn artifact_cache_enabled(&self) -> bool {
+        true
+    }
     fn run(&self, request: &ProcessRequest) -> std::io::Result<ProcessOutput> {
         // The deadline includes setup, stdin delivery and draining both output pipes.
         let started = Instant::now();

@@ -104,6 +104,82 @@ fn plain(path: &Path, limit: u64) -> Result<Vec<u8>, String> {
     Ok(bytes)
 }
 
+// Windows can read long cache paths yet reject them as process image names.
+// Execute a verified byte copy at a short, uniquely owned temporary path.
+struct Probe {
+    directory: PathBuf,
+    binary: PathBuf,
+    created: bool,
+    expected_sha256: String,
+    directory_birth: Option<SystemTime>,
+    file_birth: Option<SystemTime>,
+}
+impl Probe {
+    fn create(name: &str, payload: &[u8]) -> Result<Self, String> {
+        let directory =
+            std::env::temp_dir().join(format!("bf-probe-{}-{}", std::process::id(), now()));
+        safe(&directory)?;
+        fs::create_dir(&directory).map_err(|e| e.to_string())?;
+        let mut probe = Self {
+            binary: directory.join(name),
+            directory_birth: fs::metadata(&directory).ok().and_then(|m| m.created().ok()),
+            directory,
+            created: false,
+            expected_sha256: hash(payload),
+            file_birth: None,
+        };
+        let mut file = OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&probe.binary)
+            .map_err(|e| e.to_string())?;
+        probe.created = true;
+        probe.file_birth = file.metadata().ok().and_then(|m| m.created().ok());
+        file.write_all(payload)
+            .and_then(|_| file.sync_all())
+            .map_err(|e| e.to_string())?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            file.set_permissions(fs::Permissions::from_mode(0o700))
+                .map_err(|e| e.to_string())?;
+        }
+        drop(file);
+        if plain(&probe.binary, MAX_BYTES)? != payload {
+            return Err("cache probe bytes changed".into());
+        }
+        Ok(probe)
+    }
+}
+impl Drop for Probe {
+    fn drop(&mut self) {
+        if safe(&self.directory).is_err() || safe(&self.binary).is_err() {
+            return;
+        }
+        let Ok(directory) = fs::metadata(&self.directory) else {
+            return;
+        };
+        if directory.created().ok() != self.directory_birth {
+            return;
+        }
+        if self.created {
+            let Ok(metadata) = fs::metadata(&self.binary) else {
+                return;
+            };
+            if metadata.created().ok() != self.file_birth
+                || !plain(&self.binary, MAX_BYTES).is_ok_and(|b| hash(&b) == self.expected_sha256)
+            {
+                return;
+            }
+            if fs::remove_file(&self.binary).is_err() {
+                return;
+            }
+        }
+        // Preserve any unknown occupants; never recursively delete this directory.
+        let _ = fs::remove_dir(&self.directory);
+    }
+}
+
 fn parse<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> Result<T, String> {
     let value = crate::json::parse_unique_json(bytes, "artifact cache")?;
     serde_json::from_value(value).map_err(|e| e.to_string())
@@ -121,8 +197,18 @@ fn platform() -> &'static str {
 
 pub(crate) fn environment(root: &Path, runner: &dyn ProcessRunner) -> Option<String> {
     // Unmodelled compiler/native overrides make the optional cache unavailable.
-    for (key, _) in std::env::vars_os() {
+    for (key, value) in std::env::vars_os() {
         let key = key.to_string_lossy();
+        // All managed builds pass --target-dir explicitly.
+        if key == "CARGO_TARGET_DIR" {
+            continue;
+        }
+        // Scheduling does not alter compiler output. Retain conservative handling
+        // for all other build overrides.
+        if key == "CARGO_BUILD_JOBS" && value.to_string_lossy().parse::<u32>().is_ok_and(|v| v > 0)
+        {
+            continue;
+        }
         if matches!(
             key.as_ref(),
             "RUSTFLAGS"
@@ -216,11 +302,41 @@ pub(crate) fn environment(root: &Path, runner: &dyn ProcessRunner) -> Option<Str
     crate::manifest::canonical_sha(&json!({"versions":versions,"configs":configs})).ok()
 }
 
+fn supported_binary(name: &str) -> bool {
+    matches!(name, "bridgeforge" | "bridgeforge-hook")
+        || name.strip_prefix("project_").is_some_and(|id| {
+            !id.is_empty()
+                && id.len() <= 64
+                && id
+                    .bytes()
+                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
+                && id.as_bytes()[0].is_ascii_lowercase()
+        })
+}
+
+fn verify_payload(asset: &Value, payload: &[u8], receipt: &[u8]) -> Result<(), String> {
+    if asset["cache_kind"] == "project-hook-v1" {
+        let actual = crate::json::parse_unique_json(receipt, "cached project hook receipt")?;
+        let expected = json!({"schema_version":1,"id":asset["hook_id"],
+            "input_sha256":asset["source_tree_sha256"],"platform":std::env::consts::OS,
+            "binary_sha256":hash(payload)});
+        if actual != expected {
+            return Err("cached project hook receipt mismatch".into());
+        }
+        if cfg!(windows) {
+            crate::project_hooks::verify_windows_gui(payload)?;
+        }
+        Ok(())
+    } else {
+        crate::baseline::verify_generated_payload(asset, payload, receipt).map(|_| ())
+    }
+}
+
 fn binary_name(identity: &Value) -> Result<String, String> {
     let name = identity["binary_name"]
         .as_str()
         .ok_or("cache binary_name missing")?;
-    if !matches!(name, "bridgeforge" | "bridgeforge-hook") {
+    if !supported_binary(name) {
         return Err("cache binary_name unsupported".into());
     }
     Ok(if cfg!(windows) {
@@ -252,6 +368,28 @@ fn footprint(path: &Path) -> Result<u64, String> {
 }
 
 impl Cache {
+    /// Plans may cache derived bytes outside the project, never installed files.
+    pub(crate) fn open_temporary(
+        root: &Path,
+        context: &Path,
+        runner: &dyn ProcessRunner,
+    ) -> Option<Self> {
+        let project = root.canonicalize().ok()?.to_string_lossy().into_owned();
+        let key = hash(project.as_bytes());
+        let directory = std::env::temp_dir().join(format!("bridgeforge-artifacts-{}", &key[7..]));
+        match Self::open_directory(root, context, directory, runner) {
+            Ok(Some(cache)) => Some(cache),
+            Ok(None) => {
+                runner.cache_miss("environment_unsupported");
+                None
+            }
+            Err(_) => {
+                runner.cache_miss("cache_unavailable");
+                None
+            }
+        }
+    }
+
     pub(crate) fn open(
         root: &Path,
         build_context: &Path,
@@ -275,6 +413,15 @@ impl Cache {
         if output.timed_out || output.code != 0 {
             return Ok(None);
         }
+        Self::open_directory(root, build_context, root.join(DIRECTORY), runner)
+    }
+
+    fn open_directory(
+        root: &Path,
+        build_context: &Path,
+        directory: PathBuf,
+        runner: &dyn ProcessRunner,
+    ) -> Result<Option<Self>, String> {
         let Some(environment) = environment(build_context, runner) else {
             return Ok(None);
         };
@@ -283,7 +430,6 @@ impl Cache {
             .map_err(|e| e.to_string())?
             .to_string_lossy()
             .into_owned();
-        let directory = root.join(DIRECTORY);
         safe(&directory)?;
         let owner = Owner {
             schema: 1,
@@ -319,7 +465,8 @@ impl Cache {
         json!({"id":asset["id"],"platform":platform(),"binary_name":asset["build"]["binary_name"],
             "source_tree_sha256":asset["source_tree_sha256"],"lockfile_sha256":asset["lockfile_sha256"],
             "build_recipe_sha256":asset["build_recipe_sha256"],"self_test_sha256":asset["self_test_sha256"],
-            "build":asset["build"],"self_test":asset["self_test"],"environment":self.environment})
+            "build":asset["build"],"self_test":asset["self_test"],"environment":self.environment,
+            "cache_kind":asset["cache_kind"],"hook_id":asset["hook_id"],"hook_environment":asset["hook_environment"]})
     }
 
     fn key(identity: &Value) -> Result<String, String> {
@@ -372,7 +519,13 @@ impl Cache {
         asset: &Value,
         runner: &dyn ProcessRunner,
     ) -> Option<(Vec<u8>, Vec<u8>)> {
-        self.try_load(asset, runner).ok()
+        match self.try_load(asset, runner) {
+            Ok(value) => Some(value),
+            Err(_) => {
+                runner.cache_miss("entry_unavailable_or_invalid");
+                None
+            }
+        }
     }
 
     fn try_load(
@@ -393,8 +546,9 @@ impl Cache {
         if hash(&payload) != entry.binary_sha256 || hash(&receipt) != entry.receipt_sha256 {
             return Err("cache payload hash mismatch".into());
         }
-        crate::baseline::verify_generated_payload(asset, &payload, &receipt)?;
-        let mut request = ProcessRequest::new(binary.as_os_str(), &self.root);
+        verify_payload(asset, &payload, &receipt)?;
+        let probe = Probe::create(&binary_name(&identity)?, &payload)?;
+        let mut request = ProcessRequest::new(probe.binary.as_os_str(), &self.root);
         request.args = asset["self_test"]["args"]
             .as_array()
             .ok_or("cache self-test missing")?
@@ -414,6 +568,7 @@ impl Cache {
         if output.timed_out
             || output.code != 0
             || !expected.iter().all(|(k, v)| actual.get(k) == Some(v))
+            || plain(&probe.binary, MAX_BYTES)? != payload
             || plain(&binary, MAX_BYTES)? != payload
             || plain(&directory.join("receipt.json"), 64 * 1024)? != receipt
             || plain(&directory.join("entry.json"), 64 * 1024)? != meta
@@ -442,6 +597,7 @@ impl Cache {
         }
         self.finish_operation(&op)?;
         self.protected.insert(key);
+        runner.cache_hit();
         Ok((payload, receipt))
     }
 
@@ -452,10 +608,7 @@ impl Cache {
             || op.key.len() != 64
             || !op.key.bytes().all(|b| b.is_ascii_hexdigit())
             || !matches!(op.kind.as_str(), "stage" | "retired" | "touch")
-            || !matches!(
-                op.binary.as_str(),
-                "bridgeforge.exe" | "bridgeforge-hook.exe" | "bridgeforge" | "bridgeforge-hook"
-            )
+            || !supported_binary(op.binary.strip_suffix(".exe").unwrap_or(&op.binary))
         {
             return Err("cache operation ownership invalid".into());
         }
@@ -706,7 +859,7 @@ impl Cache {
         receipt: &[u8],
         runner: &dyn ProcessRunner,
     ) -> Result<(), String> {
-        crate::baseline::verify_generated_payload(asset, payload, receipt)?;
+        verify_payload(asset, payload, receipt)?;
         if environment(&self.build_context, runner).as_deref() != Some(self.environment.as_str()) {
             return Err("cache compiler inputs changed".into());
         }

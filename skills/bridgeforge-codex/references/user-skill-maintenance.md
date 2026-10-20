@@ -1,5 +1,7 @@
 # 用户级受管 skill 维护
 
+updater 仅构建用户级 CLI；重复维护可复用 `~/.codex/bin/bridgeforge-cli-provenance.json` 绑定的已安装产物。该文件是可选本机派生缓存，只有来源源码、Cargo.lock、实际编译环境、二进制字节和自检全部匹配才复用；旧入口或证据不足正常构建。编译与环境探测使用同一 workspace 工作目录，未知 provenance 保留。收据 `build_counts` 区分构建与复用；`component_preparation` 包含 `rust_cli_*` 子阶段，分项不能与父阶段相加。
+
 用户级 `~/.codex/AGENTS.md` 由 `templates/user/AGENTS.md` 单向分发，独立合同为产品根 `user-agents-manifest.json`。相同文本（忽略换行差异）不写；不同则以原始字节备份到 `~/.codex/.AGENTS.bridgeforge-backup-<operation_id>.md` 后覆盖。成功备份长期保留，失败按同一分发日志回滚。该覆盖策略仅适用于用户指令，不改变 Skill 的归属冲突检查。
 
 本功能仅管理默认 `USERPROFILE/.codex`，不管理自定义 `CODEX_HOME`。用户模板不进入项目骨架清单，不参与项目专区合并；不合并本地个人编辑、不删除 override 文件。源哈希、固定路径或原始文件校验失败时停止，禁止手工覆盖绕过事务。

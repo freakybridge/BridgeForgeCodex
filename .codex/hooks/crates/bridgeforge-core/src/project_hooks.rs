@@ -21,6 +21,35 @@ pub(crate) fn reserved_package_component(name: &str) -> bool {
 mod package;
 pub(crate) use package::{Input, capture_input, verify_reads};
 
+fn cache_asset(hook: &Hook, input: &Input, contract: &Value) -> Result<Value, String> {
+    let fingerprint = input.identity(hook, contract)?;
+    let build = crate::manifest::generated_build_recipe(&format!("project_{}", hook.id));
+    let test = json!({"args":["--bridgeforge-self-test"],"expected_json":{"id":hook.id,"input_sha256":fingerprint,"status":"ok"}});
+    // User Hook sources can use env!; retain the complete environment identity.
+    // A Hook that can reference environment macros must also bind the changing
+    // tracking value. Runtime-only `std::env` conservatively takes this path too.
+    let references_env = input.package.as_ref().map_or_else(
+        || String::from_utf8_lossy(&input.source).contains("env"),
+        |files| files.values().any(|b| String::from_utf8_lossy(b).contains("env")),
+    );
+    let vars = std::env::vars_os()
+        .filter(|(k, _)| references_env || k != "CODEX_TOOL_CALL_ID")
+        .map(|(k, v)| {
+            (
+                k.to_string_lossy().into_owned(),
+                v.to_string_lossy().into_owned(),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    Ok(
+        json!({"id":format!("project-hook:{}",hook.id),"hook_id":hook.id,"cache_kind":"project-hook-v1",
+        "hook_environment":crate::manifest::canonical_sha(&json!(vars))?,
+        "source_tree_sha256":fingerprint,"lockfile_sha256":fingerprint,"build":build,
+        "build_recipe_sha256":crate::manifest::canonical_sha(&build)?,"self_test":test,
+        "self_test_sha256":crate::manifest::canonical_sha(&test)?}),
+    )
+}
+
 /// Merge registry inputs in memory only. The legacy root key is never serialized
 /// back into Codex's native configuration.
 pub(crate) fn with_registry(document: &Value, sidecar: Option<&[u8]>) -> Result<Value, String> {
@@ -335,7 +364,9 @@ pub(crate) fn build(
     let mut legacy = Vec::new();
     for (hook, input) in inputs {
         if let Some(files) = &input.package {
-            writes.extend(package::build(root, hook, input, files, contract, runner)?);
+            writes.extend(package::build(
+                workspace, root, hook, input, files, contract, runner,
+            )?);
         } else {
             legacy.push((hook.clone(), input.source.clone()));
         }
@@ -368,8 +399,7 @@ fn build_legacy(
         .and_then(|items| items.first())
         .ok_or("project hooks require managed workspace")?;
     let snapshot = temporary.0.join("workspace");
-    let captured =
-        crate::build_inputs::BuildInputs::capture(workspace, snapshot.clone(), item)?;
+    let captured = crate::build_inputs::BuildInputs::capture(workspace, snapshot.clone(), item)?;
     let mut manifest = fs::read_to_string(snapshot.join("Cargo.toml"))
         .map_err(|e| e.to_string())?
         .parse::<toml_edit::DocumentMut>()
@@ -423,6 +453,34 @@ fn build_legacy(
         Ok(())
     };
     let output_dir = temporary.0.join("output");
+    let mut cache = if runner.artifact_cache_enabled() {
+        crate::artifact_cache::Cache::open_temporary(root, &snapshot, runner)
+    } else {
+        None
+    };
+    let mut writes = BTreeMap::new();
+    let mut pending = Vec::new();
+    for (hook, source) in inputs {
+        let asset = cache_asset(
+            hook,
+            &Input {
+                source: source.clone(),
+                package: None,
+            },
+            contract,
+        )?;
+        if let Some((payload, receipt)) = cache.as_mut().and_then(|c| c.load(&asset, runner)) {
+            writes.insert(root.join(hook.binary()), payload);
+            writes.insert(root.join(hook.receipt()), receipt);
+        } else {
+            pending.push((hook.clone(), source.clone()));
+        }
+    }
+    check_snapshot()?;
+    if pending.is_empty() {
+        return Ok(writes);
+    }
+    let inputs = pending.as_slice();
     let mut request = ProcessRequest::new("cargo", &snapshot);
     request.args = vec![
         "build".into(),
@@ -448,7 +506,6 @@ fn build_legacy(
         ));
     }
     check_snapshot()?;
-    let mut writes = BTreeMap::new();
     for (hook, source) in inputs {
         let prefix = format!("project_{}/", hook.id);
         let allowed = expected
@@ -487,6 +544,19 @@ fn build_legacy(
         }
         let receipt = json!({"schema_version":1,"id":hook.id,"input_sha256":fingerprint,
             "platform":std::env::consts::OS,"binary_sha256":sha(&payload)});
+        let encoded = serde_json::to_vec_pretty(&receipt).map_err(|e| e.to_string())?;
+        check_snapshot()?;
+        let asset = cache_asset(
+            hook,
+            &Input {
+                source: source.clone(),
+                package: None,
+            },
+            contract,
+        )?;
+        if let Some(c) = cache.as_mut() {
+            let _ = c.store(&asset, &payload, &encoded, runner);
+        }
         writes.insert(root.join(hook.binary()), payload);
         writes.insert(
             root.join(hook.receipt()),
@@ -575,7 +645,7 @@ fn dependency_paths(depfile: &Path, snapshot: &Path) -> Result<Vec<PathBuf>, Str
         .collect())
 }
 
-fn verify_windows_gui(bytes: &[u8]) -> Result<(), String> {
+pub(crate) fn verify_windows_gui(bytes: &[u8]) -> Result<(), String> {
     let offset = bytes
         .get(0x3c..0x40)
         .and_then(|b| b.try_into().ok())

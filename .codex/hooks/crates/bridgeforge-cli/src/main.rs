@@ -53,7 +53,7 @@ fn self_test() -> CommandOutcome {
         "name": "bridgeforge",
         "status": "ok",
         "version": env!("CARGO_PKG_VERSION"),
-        "capabilities": ["git-sync-explicit-release-v1", "git-sync-prepared-release-v1", "git-sync-release-only-v1", "git-sync-release-readiness-v1", "git-sync-direct-release-v1", "git-sync-timing-v1", "git-sync-rust-independent-v1", "git-sync-setup-v1", "git-sync-rust-package-additions-v1", "git-sync-analysis-reuse-v1", "git-sync-polyglot-release-v1", "git-sync-python-independent-v1", "git-sync-package-lifecycle-v1"]
+        "capabilities": ["git-sync-explicit-release-v1", "git-sync-prepared-release-v1", "git-sync-release-only-v1", "git-sync-release-readiness-v1", "git-sync-direct-release-v1", "git-sync-timing-v1", "git-sync-rust-independent-v1", "git-sync-setup-v1", "git-sync-rust-package-additions-v1", "git-sync-analysis-reuse-v1", "git-sync-polyglot-release-v1", "git-sync-python-independent-v1", "git-sync-package-lifecycle-v1", "user-cli-reuse-v1", "project-sync-build-reuse-v1", "git-sync-preflight-v1", "git-sync-phase-timing-v1"]
     }))
 }
 
@@ -207,7 +207,39 @@ fn check(command: &str, args: &[String]) -> CommandOutcome {
     }
 }
 
+fn with_build_metrics(
+    mut out: CommandOutcome,
+    metrics: bridgeforge_core::build_metrics::BuildMetrics,
+    format: &str,
+) -> CommandOutcome {
+    if format != "human" {
+        let receipt = out
+            .receipt
+            .get_or_insert_with(|| json!({"status":"blocked"}));
+        let machine = if format == "combined" {
+            &mut receipt["machine"]
+        } else {
+            receipt
+        };
+        machine["build_metrics"] = serde_json::to_value(metrics).unwrap();
+    }
+    out
+}
+
 fn project_sync(args: &[String]) -> CommandOutcome {
+    let started = std::time::Instant::now();
+    let mut out = project_sync_inner(args);
+    let format = value(args,"--output-format").unwrap_or_else(||"machine".into());
+    if format != "human" {
+        if let Some(receipt)=out.receipt.as_mut() {
+            let machine=if format=="combined" { &mut receipt["machine"] } else { receipt };
+            machine["elapsed_ms"]=json!(started.elapsed().as_millis());
+        }
+    }
+    out
+}
+
+fn project_sync_inner(args: &[String]) -> CommandOutcome {
     let output_format = value(args, "--output-format").unwrap_or_else(|| "machine".into());
     if !matches!(output_format.as_str(), "machine" | "human" | "combined") {
         return blocked(
@@ -259,6 +291,7 @@ fn project_sync(args: &[String]) -> CommandOutcome {
     let deleted = values(args, "--delete-project-asset");
     let preservation = (!preserved.is_empty() || !deleted.is_empty())
         .then(|| json!({"preserve": preserved, "delete": deleted}));
+    let planning_started = std::time::Instant::now();
     let plan_result = bridgeforge_core::project_sync::build_plan_with_inputs(
         &project_root,
         &template_root,
@@ -275,6 +308,7 @@ fn project_sync(args: &[String]) -> CommandOutcome {
             );
         }
     };
+    let planning_ms = planning_started.elapsed().as_millis();
     let applying = has(args, "--apply");
     let fingerprint = if applying {
         let Some(value) = value(args, "--plan-fingerprint") else {
@@ -337,24 +371,49 @@ fn project_sync(args: &[String]) -> CommandOutcome {
         &contract,
         &SystemProcessRunner,
     ) {
-        return bridgeforge_core::project_sync::outcome_receipt_with_format(
-            Err(error),
+        plan.build_metrics.timings_ms.insert("planning".into(),planning_ms);
+        return with_build_metrics(
+            bridgeforge_core::project_sync::outcome_receipt_with_format(Err(error), &output_format),
+            plan.build_metrics.clone(),
             &output_format,
         );
     }
     if !applying {
+        plan.build_metrics
+            .timings_ms
+            .insert("planning".into(), planning_ms);
         return bridgeforge_core::project_sync::outcome_plan_with_format(Ok(plan), &output_format);
     }
-    bridgeforge_core::project_sync::outcome_receipt_with_format(
-        bridgeforge_core::project_sync::apply_plan(
-            plan,
-            fingerprint
-                .as_deref()
-                .expect("apply fingerprint was validated"),
-            has(args, "--confirmed-risk"),
-        ),
-        &output_format,
+    plan.build_metrics
+        .timings_ms
+        .insert("planning".into(), planning_ms);
+    let mut failed_metrics = plan.build_metrics.clone();
+    let applying_started = std::time::Instant::now();
+    let result = bridgeforge_core::project_sync::apply_plan(
+        plan,
+        fingerprint
+            .as_deref()
+            .expect("apply fingerprint was validated"),
+        has(args, "--confirmed-risk"),
     )
+    .map(|mut receipt| {
+        receipt
+            .build_metrics
+            .timings_ms
+            .insert("apply".into(), applying_started.elapsed().as_millis());
+        receipt
+    });
+    failed_metrics
+        .timings_ms
+        .insert("apply".into(), applying_started.elapsed().as_millis());
+    if result.is_err() {
+        return with_build_metrics(
+            bridgeforge_core::project_sync::outcome_receipt_with_format(result, &output_format),
+            failed_metrics,
+            &output_format,
+        );
+    }
+    bridgeforge_core::project_sync::outcome_receipt_with_format(result, &output_format)
 }
 
 fn git_sync(args: &[String]) -> CommandOutcome {
@@ -370,6 +429,7 @@ fn git_sync(args: &[String]) -> CommandOutcome {
         Err(error) => return blocked("git-sync", error),
     };
     let modes = [
+        "--preflight",
         "--setup-status",
         "--setup-plan",
         "--setup-apply",
@@ -385,6 +445,13 @@ fn git_sync(args: &[String]) -> CommandOutcome {
     if modes > 1 {
         return blocked("git-sync", "release modes are mutually exclusive");
     }
+    if has(args, "--preflight") {
+        let mut outcome = bridgeforge_core::git_sync::preflight(context.root(), &SystemProcessRunner);
+        if let Some(receipt) = outcome.receipt.as_mut().and_then(|r| r.as_object_mut()) {
+            receipt.insert("tool".into(), self_test().receipt.expect("self-test receipt"));
+        }
+        return outcome;
+    }
     if has(args, "--setup-status") {
         return bridgeforge_core::release::setup::status_with(
             context.root(),
@@ -393,9 +460,18 @@ fn git_sync(args: &[String]) -> CommandOutcome {
         );
     }
     if has(args, "--setup-plan") {
-        if let Some(path)=value(args,"--setup-config-file"){
-            if value(args,"--strategy").as_deref()!=Some("independent"){return blocked("git-sync","--setup-config-file requires --strategy independent");}
-            return bridgeforge_core::release::setup::plan_configuration(context.root(),&SystemProcessRunner,&path);
+        if let Some(path) = value(args, "--setup-config-file") {
+            if value(args, "--strategy").as_deref() != Some("independent") {
+                return blocked(
+                    "git-sync",
+                    "--setup-config-file requires --strategy independent",
+                );
+            }
+            return bridgeforge_core::release::setup::plan_configuration(
+                context.root(),
+                &SystemProcessRunner,
+                &path,
+            );
         }
         return bridgeforge_core::release::setup::plan(
             context.root(),
@@ -404,9 +480,20 @@ fn git_sync(args: &[String]) -> CommandOutcome {
         );
     }
     if has(args, "--setup-apply") {
-        if let Some(path)=value(args,"--setup-config-file"){
-            if value(args,"--strategy").as_deref()!=Some("independent"){return blocked("git-sync","--setup-config-file requires --strategy independent");}
-            return bridgeforge_core::release::setup::apply_configuration(context.root(),&SystemProcessRunner,&path,&value(args,"--setup-fingerprint").unwrap_or_default(),has(args,"--confirmed-choice"));
+        if let Some(path) = value(args, "--setup-config-file") {
+            if value(args, "--strategy").as_deref() != Some("independent") {
+                return blocked(
+                    "git-sync",
+                    "--setup-config-file requires --strategy independent",
+                );
+            }
+            return bridgeforge_core::release::setup::apply_configuration(
+                context.root(),
+                &SystemProcessRunner,
+                &path,
+                &value(args, "--setup-fingerprint").unwrap_or_default(),
+                has(args, "--confirmed-choice"),
+            );
         }
         return bridgeforge_core::release::setup::apply(
             context.root(),
@@ -587,6 +674,10 @@ fn run(args: &[String]) -> CommandOutcome {
     };
     match command {
         "self-test" if has(args, "--json") => self_test(),
+        "build-environment" => match path_value(args, "--source-root") {
+            Ok(root) => bridgeforge_core::runtime::build_environment(&root, &SystemProcessRunner),
+            Err(e) => blocked("build-environment", e),
+        },
         "doctor" => match value(args, "--product-root") {
             Some(root) => match std::env::current_exe().map_err(|e| e.to_string()).and_then(|binary|
                 bridgeforge_core::runtime::validate_product(Path::new(&root), &binary, &SystemProcessRunner)) {

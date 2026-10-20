@@ -37,6 +37,41 @@ pub(crate) fn generated_writes(
     contract: &Value,
     runner: &dyn ProcessRunner,
 ) -> Result<(BTreeMap<PathBuf, Vec<u8>>, Vec<Value>), String> {
+    generated_writes_internal(
+        source_base,
+        source_key,
+        project_root,
+        contract,
+        runner,
+        false,
+    )
+}
+
+pub(crate) fn generated_writes_reusing(
+    source_base: &Path,
+    source_key: &str,
+    project_root: &Path,
+    contract: &Value,
+    runner: &dyn ProcessRunner,
+) -> Result<(BTreeMap<PathBuf, Vec<u8>>, Vec<Value>), String> {
+    generated_writes_internal(
+        source_base,
+        source_key,
+        project_root,
+        contract,
+        runner,
+        true,
+    )
+}
+
+fn generated_writes_internal(
+    source_base: &Path,
+    source_key: &str,
+    project_root: &Path,
+    contract: &Value,
+    runner: &dyn ProcessRunner,
+    reuse: bool,
+) -> Result<(BTreeMap<PathBuf, Vec<u8>>, Vec<Value>), String> {
     let generated = contract["generated_assets"]
         .as_array()
         .ok_or("generated_assets is missing")?;
@@ -53,6 +88,8 @@ pub(crate) fn generated_writes(
         let mut writes = BTreeMap::new();
         let mut receipts = Vec::new();
         let mut snapshots = BTreeMap::<PathBuf, build_inputs::BuildInputs>::new();
+        let mut cache = None;
+        let mut cache_attempted = false;
         for item in generated {
             let id = item["id"].as_str().ok_or("generated asset id is missing")?;
             let source_root = safe_join(
@@ -90,6 +127,46 @@ pub(crate) fn generated_writes(
                 || !item["self_test"]["expected_json"].is_object()
             {
                 return Err("generated build input contract mismatch".into());
+            }
+            if reuse && runner.artifact_cache_enabled() && !cache_attempted {
+                cache = crate::artifact_cache::Cache::open_temporary(
+                    project_root,
+                    &inputs.snapshot,
+                    runner,
+                );
+                cache_attempted = true;
+            }
+            if let Some((payload, receipt)) = cache.as_mut().and_then(|c| c.load(item, runner)) {
+                inputs.verify_unchanged()?;
+                let platform = if cfg!(windows) {
+                    "windows-x86_64"
+                } else if cfg!(target_os = "linux") {
+                    "linux-x86_64"
+                } else {
+                    "macos-x86_64"
+                };
+                writes.insert(
+                    safe_join(
+                        project_root,
+                        item["binary_targets"][platform]
+                            .as_str()
+                            .ok_or("missing binary target")?,
+                        "cached binary",
+                    )?,
+                    payload,
+                );
+                receipts.push(serde_json::from_slice(&receipt).map_err(|e| e.to_string())?);
+                writes.insert(
+                    safe_join(
+                        project_root,
+                        item["receipt_target"]
+                            .as_str()
+                            .ok_or("missing receipt target")?,
+                        "cached receipt",
+                    )?,
+                    receipt,
+                );
+                continue;
             }
             let manifest = inputs.snapshot.join("Cargo.toml");
             let binary_name = item["build"]["binary_name"]
@@ -198,6 +275,9 @@ pub(crate) fn generated_writes(
             let mut encoded =
                 serde_json::to_vec_pretty(&receipt).map_err(|error| error.to_string())?;
             encoded.push(b'\n');
+            if let Some(cache) = cache.as_mut() {
+                let _ = cache.store(item, &payload, &encoded, runner);
+            }
             writes.insert(target, payload);
             writes.insert(receipt_target, encoded);
             receipts.push(receipt);

@@ -13,6 +13,16 @@ mod preparation;
 #[path = "git_sync_plan.rs"]
 mod write_plan;
 
+#[path = "git_sync_preflight.rs"]
+mod inspection;
+
+#[path = "git_sync_timing.rs"]
+mod timing;
+
+pub fn preflight(root: &Path, runner: &dyn ProcessRunner) -> CommandOutcome {
+    inspection::inspect(root, runner)
+}
+
 pub fn release_status(root: &Path, runner: &dyn ProcessRunner) -> CommandOutcome {
     if !root.join("VERSION").exists() {
         return CommandOutcome::with_receipt(json!({"schema":1,"status":"not-applicable","development_checks_required":false}));
@@ -445,17 +455,10 @@ fn receipt(
 
 pub fn sync(root: &Path, runner: &dyn ProcessRunner, options: GitSyncOptions) -> CommandOutcome {
     let started = Instant::now();
-    let mut outcome = sync_impl(root, runner, options);
-    if let Some(receipt) = outcome
-        .receipt
-        .as_mut()
-        .and_then(|value| value.as_object_mut())
-    {
-        receipt.insert(
-            "sync_elapsed_ms".into(),
-            json!(u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)),
-        );
-    }
+    let timings = timing::Timings::new();
+    let observed = timing::Observed { runner, timings: &timings };
+    let mut outcome = sync_impl(root, &observed, options, &timings);
+    timings.attach(&mut outcome, started.elapsed().as_millis());
     outcome
 }
 
@@ -463,6 +466,7 @@ fn sync_impl(
     root: &Path,
     runner: &dyn ProcessRunner,
     mut options: GitSyncOptions,
+    timings: &timing::Timings,
 ) -> CommandOutcome {
     if options.remote.is_empty() {
         options.remote = "origin".into();
@@ -492,15 +496,15 @@ fn sync_impl(
             let message = requested_message(&options)?;
             // An optional optimization must not introduce preparation-only
             // inventory restrictions into the release workflow.
-            let inputs = ReleasePlanningInputs::capture(&git).ok();
-            let plan = crate::release::build_explicit_release_plan(
+            let inputs = timings.measure("input_validation", || ReleasePlanningInputs::capture(&git)).ok();
+            let plan = timings.measure("release_analysis", || crate::release::build_explicit_release_plan(
                 root,
                 &message,
                 git.changed_paths()?,
                 runner,
-            )?;
+            ))?;
             if let Some(inputs) = inputs {
-                if ReleasePlanningInputs::capture(&git)? != inputs {
+                if timings.measure("input_validation", || ReleasePlanningInputs::capture(&git))? != inputs {
                     return Err("repository changed during release preflight; no apply".into());
                 }
                 preflight_plan = Some((message, inputs, plan));
@@ -674,10 +678,10 @@ fn sync_impl(
     let mut generated_built = 0;
     let mut release_plan_reused = false;
     let factory_runtime_repair = if factory && !dirty {
-        if let Err(error) = crate::baseline::verify(root, None, false) {
+        if let Err(error) = timings.measure("baseline_checks", || crate::baseline::verify(root, None, false)) {
             return blocked(format!("current baseline blocked git-sync: {error}"));
         }
-        crate::baseline::verify(root, None, true).is_err()
+        timings.measure("baseline_checks", || crate::baseline::verify(root, None, true)).is_err()
     } else {
         false
     };
@@ -716,12 +720,12 @@ fn sync_impl(
                 match preflight_plan.take() {
                     Some((previous_message, previous_inputs, plan))
                         if previous_message == message
-                            && ReleasePlanningInputs::capture(&git).ok().as_ref() == Some(&previous_inputs)
+                            && timings.measure("input_validation", || ReleasePlanningInputs::capture(&git)).ok().as_ref() == Some(&previous_inputs)
                             && plan.as_ref().is_none_or(|plan| crate::release::verify_release_inputs(&plan.inputs).is_ok()) => {
                             release_plan_reused = true;
                             Ok(plan)
                         },
-                    _ => crate::release::build_explicit_release_plan(root, &message, changed_paths, runner),
+                    _ => timings.measure("release_analysis", || crate::release::build_explicit_release_plan(root, &message, changed_paths, runner)),
                 }
             } else {
                 Ok(None)
@@ -771,13 +775,13 @@ fn sync_impl(
         let (mut release_inputs, release_writes) =
             release.map(|p| (p.inputs, p.writes)).unwrap_or_default();
         release_inputs.insert(policy_path, policy_before);
-        let plan = match write_plan::WritePlan::prepare(
+        let plan = match timings.measure("artifact_preparation", || write_plan::WritePlan::prepare(
             root,
             release_writes,
             release_inputs,
             factory,
             runner,
-        ) {
+        )) {
             Ok(plan) => plan,
             Err(error) => {
                 return blocked(format!(
@@ -818,24 +822,24 @@ fn sync_impl(
             })
             .collect::<Vec<_>>();
         let fail = |message: String, expected_index: &[u8], snapshots: Vec<FileSnapshot>| {
-            let detail = match restore_snapshots_guarded(
+            let detail = match timings.measure("rollback", || restore_snapshots_guarded(
                 &git,
                 &identity,
                 expected_index,
                 original_index.clone(),
                 snapshots,
-            ) {
+            )) {
                 Ok(()) => format!("{message}; automatic release and Git index were rolled back"),
                 Err(error) => format!("{message}; rollback also failed: {error}"),
             };
             blocked(detail)
         };
         for (path, payload) in &plan.writes {
-            let result = if plan.binaries.contains(path) {
+            let result = timings.measure("automatic_apply", || if plan.binaries.contains(path) {
                 crate::runtime::write_binary(root, path, payload)
             } else {
                 crate::persistence::atomic_write(path, payload).map_err(|e| e.to_string())
-            };
+            });
             if let Err(error) = result {
                 return fail(
                     format!("automatic write apply failed: {error}"),
@@ -844,7 +848,7 @@ fn sync_impl(
                 );
             }
         }
-        if let Err(error) = crate::baseline::verify(root, None, true) {
+        if let Err(error) = timings.measure("baseline_checks", || crate::baseline::verify(root, None, true)) {
             return fail(
                 format!("current baseline blocked git-sync: {error}"),
                 &original_index,
@@ -992,7 +996,7 @@ fn sync_impl(
             );
         }
     }
-    if factory && let Err(error) = crate::baseline::verify(root, None, true) {
+    if factory && let Err(error) = timings.measure("baseline_checks", || crate::baseline::verify(root, None, true)) {
         return blocked(format!("current baseline blocked git-sync: {error}"));
     }
     (ahead, behind) = match git.ahead_behind_target(push_comparison) {

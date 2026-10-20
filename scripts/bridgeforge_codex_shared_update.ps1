@@ -30,6 +30,7 @@ $script:PhaseTimings = [ordered]@{}
 $script:CleanupPending = $false
 $script:UserAgentsReceipt = $null
 $script:UpdateTimer = [Diagnostics.Stopwatch]::StartNew()
+$script:BuildCounts = [ordered]@{ cargo_build_invocations = 0; installed_cli_reused = 0 }
 
 function Complete-PhaseTiming {
     param(
@@ -58,6 +59,8 @@ function Write-UpdateReceipt {
         mode = if ([string]::IsNullOrWhiteSpace($Mode)) { $null } else { $Mode }
         action_count = $ActionCount
         timings_ms = $script:PhaseTimings
+        timing_semantics = 'component_preparation includes rust_cli_*; total includes all phases'
+        build_counts = $script:BuildCounts
         cleanup_pending = $script:CleanupPending
         user_agents = $script:UserAgentsReceipt
     }
@@ -1287,6 +1290,7 @@ function Invoke-UpdateTransaction {
             (Get-Sha256 -Path ([string]$UserAgentsPlan.target)) -ne [string]$UserAgentsPlan.desired_hash) {
             throw "User instructions changed before shared commit."
         }
+        Assert-RustCliState -Plan $RustCliPlan -RepositoryRoot $RepositoryRoot -Installed
         $log.committed = $true
         Write-JsonAtomic -Path $LogPath -Value $log
     }
@@ -1519,6 +1523,51 @@ function Restore-CommandHomeOperation {
     Remove-Item -LiteralPath $logPath -Force
 }
 
+function Get-RustCliReuseIdentity {
+    param([string]$Binary, [string]$RepositoryRoot)
+    try {
+        if (-not (Test-Path -LiteralPath $Binary -PathType Leaf) -or (Test-ReparsePoint -Path $Binary)) { return $null }
+        $test = & $Binary self-test --json 2>$null
+        if ($LASTEXITCODE -ne 0) { return $null }
+        $self = ($test -join "`n") | ConvertFrom-Json
+        $expectedVersion = (Get-Content -LiteralPath (Join-Path $RepositoryRoot 'VERSION') -Raw).Trim()
+        if ([int]$self.schema -ne 1 -or [string]$self.name -ne 'bridgeforge' -or
+            [string]$self.status -ne 'ok' -or [string]$self.version -ne $expectedVersion -or
+            @($self.capabilities) -notcontains 'user-cli-reuse-v1') { return $null }
+        $result = & $Binary build-environment --source-root (Join-Path $RepositoryRoot 'templates/hooks') 2>$null
+        if ($LASTEXITCODE -ne 0) { return $null }
+        $identity = ($result -join "`n") | ConvertFrom-Json
+        if ([int]$identity.schema -ne 1 -or [string]$identity.status -ne 'cacheable' -or
+            [string]$identity.identity -notmatch '^sha256:[0-9a-f]{64}$') { return $null }
+        return [string]$identity.identity
+    } catch { return $null }
+}
+
+function Assert-RustCliState {
+    param($Plan, [string]$RepositoryRoot, [switch]$Installed)
+    if ($null -eq $Plan -or -not $Plan.Contains('binary_sha256')) { return }
+    $binary = if ($Installed -or -not [bool]$Plan.needs_swap) { [string]$Plan.target } else { [string]$Plan.stage }
+    if ((Get-Sha256 -Path $binary) -ne [string]$Plan.binary_sha256) { throw 'Managed CLI bytes changed after preparation.' }
+    if ($Plan.cache_identity -and (Get-RustCliReuseIdentity -Binary $binary -RepositoryRoot $RepositoryRoot) -ne [string]$Plan.cache_identity) { throw 'Managed CLI build inputs changed after preparation.' }
+    if ((Get-Sha256 -Path $binary) -ne [string]$Plan.binary_sha256) { throw 'Managed CLI changed during validation.' }
+}
+
+function Save-RustCliProvenance {
+    param($Plan, [string]$RepositoryRoot, [string]$UserProfile)
+    if (-not $Plan.Contains('cache_identity') -or [string]::IsNullOrWhiteSpace([string]$Plan.cache_identity)) { return }
+    try {
+        $path = Join-Path $UserProfile '.codex/bin/bridgeforge-cli-provenance.json'
+        Assert-NoReparseUnderProfile -Path $path -UserProfile $UserProfile
+        if (Test-Path -LiteralPath $path) {
+            $old = Read-JsonFile -Path $path
+            if ([int]$old.schema -ne 1 -or [string]$old.owner -ne 'bridgeforge-user-cli-v1') { return }
+        }
+        if ((Get-RustCliReuseIdentity -Binary $Plan.target -RepositoryRoot $RepositoryRoot) -ne $Plan.cache_identity -or
+            (Get-Sha256 -Path $Plan.target) -ne $Plan.binary_sha256) { return }
+        Write-JsonAtomic -Path $path -Value ([ordered]@{ schema=1; owner='bridgeforge-user-cli-v1'; identity=$Plan.cache_identity; binary_sha256=$Plan.binary_sha256 })
+    } catch { Write-Verbose "Optional CLI reuse provenance not saved: $($_.Exception.Message)" }
+}
+
 function New-RustCliPlan {
     param(
         [Parameter(Mandatory = $true)][string]$RepositoryRoot,
@@ -1531,18 +1580,46 @@ function New-RustCliPlan {
         -not (Test-Path -LiteralPath $lockfile -PathType Leaf)) {
         throw "Managed Rust workspace is incomplete."
     }
+    $binRoot = Join-Path $UserProfile '.codex/bin'
+    $target = Join-Path $binRoot 'bridgeforge.exe'
+    $provenance = Join-Path $binRoot 'bridgeforge-cli-provenance.json'
+    $stage = Join-Path $binRoot ".bridgeforge-stage-$OperationId.exe"
+    $backup = Join-Path $binRoot ".bridgeforge-backup-$OperationId.exe"
+    $phase = [Diagnostics.Stopwatch]::StartNew()
+    try {
+        Assert-NoReparseUnderProfile -Path $provenance -UserProfile $UserProfile
+        if (Test-Path -LiteralPath $provenance -PathType Leaf) {
+            $saved = Read-JsonFile -Path $provenance
+            if ([int]$saved.schema -eq 1 -and [string]$saved.owner -eq 'bridgeforge-user-cli-v1' -and
+                (Test-Path -LiteralPath $target -PathType Leaf) -and
+                (Get-Sha256 -Path $target) -eq [string]$saved.binary_sha256) {
+                $identity = Get-RustCliReuseIdentity -Binary $target -RepositoryRoot $RepositoryRoot
+                if ($identity -and $identity -eq [string]$saved.identity -and
+                    (Get-Sha256 -Path $target) -eq [string]$saved.binary_sha256) {
+                    $script:BuildCounts.installed_cli_reused += 1
+                    return [ordered]@{ target=$target; stage=$stage; backup=$backup; had_original=$true; needs_swap=$false; status='current'; cache_identity=$identity; binary_sha256=[string]$saved.binary_sha256 }
+                }
+            }
+        }
+    } catch { Write-Verbose "CLI reuse unavailable: $($_.Exception.Message)" }
+    finally { Complete-PhaseTiming -Name 'rust_cli_reuse_probe' -Stopwatch $phase }
     $targetDirectory = Join-Path ([IO.Path]::GetTempPath()) "bridgeforge-cli-build-$OperationId"
     if (Test-Path -LiteralPath $targetDirectory) {
         Remove-SafeTree -Path $targetDirectory
     }
     $previousPreference = $ErrorActionPreference
     $ErrorActionPreference = "Continue"
+    $phase = [Diagnostics.Stopwatch]::StartNew()
+    Push-Location -LiteralPath (Split-Path -Parent $manifest)
     try {
-        $output = & cargo build --locked --release --manifest-path $manifest --target-dir $targetDirectory 2>&1
+        $script:BuildCounts.cargo_build_invocations += 1
+        $output = & cargo build --locked --release --manifest-path $manifest --target-dir $targetDirectory --bin bridgeforge 2>&1
         $exitCode = $LASTEXITCODE
     }
     finally {
         $ErrorActionPreference = $previousPreference
+        Complete-PhaseTiming -Name 'rust_cli_build' -Stopwatch $phase
+        Pop-Location
     }
     if ($exitCode -ne 0) {
         if (Test-Path -LiteralPath $targetDirectory) {
@@ -1555,7 +1632,9 @@ function New-RustCliPlan {
         Remove-SafeTree -Path $targetDirectory
         throw "Managed Rust CLI build produced no bridgeforge.exe."
     }
+    $phase = [Diagnostics.Stopwatch]::StartNew()
     $selfTest = & $built self-test --json 2>&1
+    Complete-PhaseTiming -Name 'rust_cli_self_test' -Stopwatch $phase
     if ($LASTEXITCODE -ne 0) {
         Remove-SafeTree -Path $targetDirectory
         throw "Managed Rust CLI self-test failed: $($selfTest -join [Environment]::NewLine)"
@@ -1568,7 +1647,7 @@ function New-RustCliPlan {
         throw "Managed Rust CLI self-test did not return JSON."
     }
     if ([int]$receipt.schema -ne 1 -or [string]$receipt.name -ne "bridgeforge" -or
-        [string]$receipt.status -ne "ok") {
+        [string]$receipt.status -ne "ok" -or [string]$receipt.version -ne (Get-Content -LiteralPath (Join-Path $RepositoryRoot 'VERSION') -Raw).Trim()) {
         Remove-SafeTree -Path $targetDirectory
         throw "Managed Rust CLI self-test identity is invalid."
     }
@@ -1580,6 +1659,10 @@ function New-RustCliPlan {
     $stage = Join-Path $binRoot ".bridgeforge-stage-$OperationId.exe"
     $backup = Join-Path $binRoot ".bridgeforge-backup-$OperationId.exe"
     Copy-Item -LiteralPath $built -Destination $stage
+    $phase = [Diagnostics.Stopwatch]::StartNew()
+    $cacheIdentity = Get-RustCliReuseIdentity -Binary $built -RepositoryRoot $RepositoryRoot
+    $binaryHash = Get-Sha256 -Path $built
+    Complete-PhaseTiming -Name 'rust_cli_identity' -Stopwatch $phase
     Remove-SafeTree -Path $targetDirectory
     $current = Test-Path -LiteralPath $target -PathType Leaf
     $needsSwap = -not $current -or (Get-Sha256 -Path $target) -ne (Get-Sha256 -Path $stage)
@@ -1593,6 +1676,8 @@ function New-RustCliPlan {
         had_original = [bool]$current
         needs_swap = [bool]$needsSwap
         status = if ($needsSwap) { "staged" } else { "current" }
+        cache_identity = $cacheIdentity
+        binary_sha256 = $binaryHash
     }
 }
 
@@ -1691,6 +1776,7 @@ function Invoke-Main {
         $actionCount = 0
         try {
             $phase = [Diagnostics.Stopwatch]::StartNew()
+            try {
             if ([string]::IsNullOrWhiteSpace($SourceRepositoryRoot)) {
                 $cloneRoot = New-CanonicalClone
                 $repositoryRoot = $cloneRoot
@@ -1708,9 +1794,11 @@ function Invoke-Main {
                 -RepositoryRoot $repositoryRoot `
                 -UserProfile $userProfile `
                 -ValidateSources
-            Complete-PhaseTiming -Name "source_probe" -Stopwatch $phase
+            } finally { Complete-PhaseTiming -Name "source_probe" -Stopwatch $phase }
 
             $operationId = [Guid]::NewGuid().ToString("N")
+            $preparationPhase = [Diagnostics.Stopwatch]::StartNew()
+            try {
             $commandHomePlan = New-CommandHomePlan `
                 -SourceRoot $repositoryRoot `
                 -UserProfile $userProfile `
@@ -1721,7 +1809,9 @@ function Invoke-Main {
                 -UserProfile $userProfile `
                 -OperationId $operationId
             $userAgentsPlan = New-UserAgentsPlan -RepositoryRoot $repositoryRoot -UserProfile $userProfile -OperationId $operationId -RustCliPlan $rustCliPlan
+            } finally { Complete-PhaseTiming -Name 'component_preparation' -Stopwatch $preparationPhase }
             $phase = [Diagnostics.Stopwatch]::StartNew()
+            try {
             $platformPlans = @(
                 New-UpdatePlan `
                     -Manifest $manifestResult.value `
@@ -1742,19 +1832,23 @@ function Invoke-Main {
             $needsTransaction = [bool]($actionCount -gt 0 -or @(
                 $platformPlans | Where-Object { [bool]$_.ledger_needs_update }
             ).Count -gt 0)
-            Complete-PhaseTiming -Name "target_plan" -Stopwatch $phase
+            } finally { Complete-PhaseTiming -Name "target_plan" -Stopwatch $phase }
 
             $needsTransaction = [bool](
                 $needsTransaction -or
                 [bool]$commandHomePlan.needs_swap -or
                 [bool]$rustCliPlan.needs_swap
             )
+            $phase = [Diagnostics.Stopwatch]::StartNew()
+            try { Assert-RustCliState -Plan $rustCliPlan -RepositoryRoot $repositoryRoot }
+            finally { Complete-PhaseTiming -Name 'component_validation' -Stopwatch $phase }
             if (-not $needsTransaction) {
                 Write-Host "bridgeforge-codex shared skills already current at commit $commit."
                 $resultMode = "noop"
             }
             else {
                 $phase = [Diagnostics.Stopwatch]::StartNew()
+                try {
                     Invoke-UpdateTransaction `
                         -RepositoryRoot $repositoryRoot `
                         -Manifest $manifestResult.value `
@@ -1764,10 +1858,13 @@ function Invoke-Main {
                         -LogPath $logPath `
                         -OperationId $operationId `
                         -PlatformPlans $platformPlans -CommandHomePlan $commandHomePlan -RustCliPlan $rustCliPlan -UserAgentsPlan $userAgentsPlan
-                Complete-PhaseTiming -Name "transaction" -Stopwatch $phase
+                } finally { Complete-PhaseTiming -Name "transaction" -Stopwatch $phase }
                 Write-Host "bridgeforge-codex shared skills updated to commit $commit."
                 $resultMode = "updated"
             }
+            $phase = [Diagnostics.Stopwatch]::StartNew()
+            try { Save-RustCliProvenance -Plan $rustCliPlan -RepositoryRoot $repositoryRoot -UserProfile $userProfile }
+            finally { Complete-PhaseTiming -Name 'reuse_provenance' -Stopwatch $phase }
             $script:UserAgentsReceipt = [ordered]@{
                 status = if ([bool]$userAgentsPlan.needs_swap) { "updated" } else { "noop" }
                 target = [string]$userAgentsPlan.target

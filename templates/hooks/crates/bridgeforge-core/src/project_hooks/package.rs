@@ -40,7 +40,9 @@ fn inventory(root: &Path, prefix: &str) -> Result<BTreeMap<String, Vec<u8>>, Str
         directory: &str,
         files: &mut BTreeMap<String, Vec<u8>>,
     ) -> Result<(), String> {
-        if crate::persistence::is_link_or_reparse(&root.join(directory)).map_err(|e| e.to_string())? {
+        if crate::persistence::is_link_or_reparse(&root.join(directory))
+            .map_err(|e| e.to_string())?
+        {
             return Err(format!(
                 "project hook package traverses a link: {directory}"
             ));
@@ -299,7 +301,36 @@ pub(super) fn verify_generated_sources(
     Ok(())
 }
 
+pub(super) fn cacheable_sources(files: &BTreeMap<String, Vec<u8>>) -> bool {
+    files.iter().all(|(path, bytes)| {
+        if path.ends_with("build.rs") {
+            return false;
+        }
+        if !path.ends_with("Cargo.toml") {
+            return true;
+        }
+        let Ok(text) = std::str::from_utf8(bytes) else {
+            return false;
+        };
+        let Ok(doc) = text.parse::<toml_edit::DocumentMut>() else {
+            return false;
+        };
+        doc.get("package").and_then(|p| p.get("build")).is_none()
+            && doc
+                .get("lib")
+                .and_then(|p| p.get("proc-macro"))
+                .and_then(|p| p.as_bool())
+                != Some(true)
+            && !doc
+                .get("lib")
+                .and_then(|p| p.get("crate-type"))
+                .and_then(|p| p.as_array())
+                .is_some_and(|a| a.iter().any(|v| v.as_str() == Some("proc-macro")))
+    })
+}
+
 pub(super) fn build(
+    workspace: &Path,
     root: &Path,
     hook: &Hook,
     input: &Input,
@@ -352,6 +383,58 @@ pub(super) fn build(
         Ok(())
     };
     let output = temporary.0.join("output");
+    // Build scripts and external packages can read inputs beyond this snapshot.
+    // Cache only closed packages with local source and no dependency scripts.
+    let closed_sources = cacheable_sources(files);
+    // Registry packages must be from the same reviewed, locked dependency set
+    // as the managed workspace. Unknown/git/native extensions keep cold builds.
+    let managed_lock = fs::read(workspace.join("Cargo.lock")).unwrap_or_default();
+    let package_keys = |bytes: &[u8]| -> Option<BTreeSet<String>> {
+        let doc = std::str::from_utf8(bytes)
+            .ok()?
+            .parse::<toml_edit::DocumentMut>()
+            .ok()?;
+        doc.get("package")?
+            .as_array_of_tables()?
+            .iter()
+            .filter(|p| p.get("source").is_some())
+            .map(|p| {
+                let source = p.get("source")?.as_str()?;
+                if source != "registry+https://github.com/rust-lang/crates.io-index" {
+                    return None;
+                }
+                Some(format!(
+                    "{}:{}:{}:{}",
+                    p.get("name")?.as_str()?,
+                    p.get("version")?.as_str()?,
+                    source,
+                    p.get("checksum")?.as_str()?
+                ))
+            })
+            .collect()
+    };
+    let cacheable = closed_sources
+        && package_keys(&managed_lock)
+            .zip(package_keys(&files["Cargo.lock"]))
+            .is_some_and(|(managed, required)| required.is_subset(&managed));
+    if !cacheable {
+        runner.cache_miss("project_hook_external_inputs");
+    }
+    let mut asset = super::cache_asset(hook, input, contract)?;
+    asset["hook_environment"] =
+        json!({"environment":asset["hook_environment"],"managed_lock":sha(&managed_lock)});
+    let mut cache = if cacheable && runner.artifact_cache_enabled() {
+        crate::artifact_cache::Cache::open_temporary(root, &snapshot, runner)
+    } else {
+        None
+    };
+    if let Some((payload, receipt)) = cache.as_mut().and_then(|c| c.load(&asset, runner)) {
+        verify_snapshot()?;
+        return Ok(BTreeMap::from([
+            (root.join(hook.binary()), payload),
+            (root.join(hook.receipt()), receipt),
+        ]));
+    }
     let mut request = ProcessRequest::new("cargo", &snapshot);
     request.args = vec![
         "build".into(),
@@ -407,6 +490,10 @@ pub(super) fn build(
     }
     let receipt = json!({"schema_version":1,"id":hook.id,"input_sha256":fingerprint,
         "platform":std::env::consts::OS,"binary_sha256":sha(&bytes)});
+    let encoded = serde_json::to_vec_pretty(&receipt).map_err(|e| e.to_string())?;
+    if let Some(c) = cache.as_mut() {
+        let _ = c.store(&asset, &bytes, &encoded, runner);
+    }
     Ok(BTreeMap::from([
         (root.join(hook.binary()), bytes),
         (

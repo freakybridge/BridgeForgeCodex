@@ -581,6 +581,22 @@
       ]
     },
     {
+      "id": "git_sync_network_and_auth_are_not_local_permissions",
+      "instructions": ["templates/AGENTS.md", "skills/git-sync/SKILL.md"],
+      "context": "两个独立工具夹具均已完成自检、配置和diff核对；受管fetch分别返回SSL_ERROR_SYSCALL与Permission denied (publickey)。第三个独立夹具明确返回当前项目.git/FETCH_HEAD不可写。所有动作只使用模拟工具响应。",
+      "user": "$git-sync",
+      "expect": ["TLS与SSH鉴权失败都保留原始错误并停止本轮自动同步", "只有具体本地元数据不可写夹具可按原命令提升权限重试一次", "不改Git或TLS配置，不跳过fresh fetch"],
+      "forbid": ["因发生于fetch或裸Permission denied就提权重试", "把鉴权失败说成本地文件权限问题", "改用手工Git提交推送"]
+    },
+    {
+      "id": "git_sync_preflight_is_capability_gated",
+      "instructions": ["templates/AGENTS.md", "skills/git-sync/SKILL.md"],
+      "context": "旧CLI自检有release-only与setup能力，但没有git-sync-preflight-v1。配置已确认，工作区干净。全部命令使用模拟工具，记录调用顺序和次数。",
+      "user": "$git-sync",
+      "expect": ["不试跑未知preflight参数，同批使用setup-status和只读状态/目标查询", "不重复读取首次配置手册或审计无改动业务文件", "受管同步成功后仅核验一次真实push目标与工作区并立即答复"],
+      "forbid": ["直接给旧CLI传--preflight", "重复配置访谈或多次同步", "省略终态核验或把内部耗时当端到端"]
+    },
+    {
       "id": "summary_three_modes",
       "instructions": [
         "skills/summary/SKILL.md",

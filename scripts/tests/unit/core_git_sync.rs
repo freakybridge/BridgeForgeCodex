@@ -1232,7 +1232,10 @@ fn push_failure_is_blocking_and_never_claims_synced() {
     );
     assert_eq!(result.code, 2);
     assert!(result.stderr.contains("git push failed"));
-    assert!(result.receipt.is_none());
+    let receipt = result.receipt.unwrap();
+    assert_eq!(receipt["status"], "blocked");
+    assert!(receipt["timings_ms"]["push"].is_number());
+    assert!(receipt.get("push_performed").is_none());
     fs::remove_dir_all(remote).unwrap();
 }
 
@@ -1271,7 +1274,10 @@ fn clean_ahead_push_identity_drift_never_claims_synced() {
     );
     assert_eq!(result.code, 2);
     assert!(result.stderr.contains("after successful push"));
-    assert!(result.receipt.is_none());
+    let receipt = result.receipt.unwrap();
+    assert_eq!(receipt["status"], "blocked");
+    assert!(receipt["sync_elapsed_ms"].is_number());
+    assert!(receipt.get("push_performed").is_none());
     fs::remove_dir_all(remote).unwrap();
 }
 
@@ -1537,7 +1543,10 @@ fn dirty_commit_push_identity_drift_never_claims_synced() {
     );
     assert_eq!(outcome.code, 2, "{}", outcome.stderr);
     assert!(outcome.stderr.contains("after successful push"));
-    assert!(outcome.receipt.is_none());
+    let receipt = outcome.receipt.unwrap();
+    assert_eq!(receipt["status"], "blocked");
+    assert!(receipt["sync_elapsed_ms"].is_number());
+    assert!(receipt.get("push_performed").is_none());
     assert!(!adaptation.exists());
     fs::remove_dir_all(remote).unwrap();
 }
@@ -1590,6 +1599,16 @@ struct GeneratedRunner {
     root: PathBuf,
     mode: &'static str,
 }
+
+fn is_short_cache_probe(program: &Path) -> bool {
+    program.parent().is_some_and(|parent| {
+        parent.parent() == Some(std::env::temp_dir().as_path())
+            && parent.file_name().is_some_and(|name| {
+                name.to_string_lossy().starts_with("bf-probe-")
+            })
+    })
+}
+
 impl ProcessRunner for GeneratedRunner {
     fn run(&self, request: &ProcessRequest) -> std::io::Result<ProcessOutput> {
         if request.args.first().is_some_and(|arg|arg=="--version") &&
@@ -1920,7 +1939,8 @@ fn factory_reuse_self_test_failure_rebuilds_and_drift_blocks_apply() {
     impl ProcessRunner for ReuseRunner {
         fn run(&self, request: &ProcessRequest) -> std::io::Result<ProcessOutput> {
             if Path::new(&request.program).starts_with(self.inner.root.join(".codex/bin")) ||
-                Path::new(&request.program).starts_with(self.inner.root.join(crate::artifact_cache::DIRECTORY)) {
+                Path::new(&request.program).starts_with(self.inner.root.join(crate::artifact_cache::DIRECTORY)) ||
+                is_short_cache_probe(Path::new(&request.program)) {
                 if self.drift {
                     fs::write(&request.program, b"external change")?;
                     return self.inner.run(request);
@@ -2070,7 +2090,8 @@ fn mixed_cache_hit_and_build_rejected_commit_restore_all_targets() {
     impl ProcessRunner for MixedRunner {
         fn run(&self,r:&ProcessRequest)->std::io::Result<ProcessOutput> {
             if r.program=="cargo" && r.args.first().is_some_and(|a|a=="build") {self.builds.set(self.builds.get()+1);}
-            if Path::new(&r.program).starts_with(self.inner.root.join(crate::artifact_cache::DIRECTORY)) &&
+            if (Path::new(&r.program).starts_with(self.inner.root.join(crate::artifact_cache::DIRECTORY)) ||
+                is_short_cache_probe(Path::new(&r.program))) &&
                 r.args.first().is_some_and(|a|a=="self-test") {self.hits.set(self.hits.get()+1);}
             self.inner.run(r)
         }
@@ -2103,5 +2124,196 @@ fn factory_read_only_status_queries_do_not_initialize_artifact_cache() {
     let _=release_status(&repo.0,&runner);let _=development_status(&repo.0,&runner);
     assert!(!repo.0.join(crate::artifact_cache::DIRECTORY).exists());
     assert_eq!(fs::read(repo.0.join("VERSION")).unwrap(),b"1.0.0\n");
+    fs::remove_dir_all(remote).unwrap();
+}
+
+#[test]
+fn preflight_clean_and_dirty_context_never_writes_or_fetches() {
+    struct ReadQueries;
+    impl ProcessRunner for ReadQueries {
+        fn run(&self, request: &ProcessRequest) -> std::io::Result<ProcessOutput> {
+            assert_eq!(request.program, "git");
+            assert_eq!(request.env.get(std::ffi::OsStr::new("GIT_OPTIONAL_LOCKS")), Some(&OsString::from("0")));
+            assert_eq!(&request.args[..2],&[OsString::from("-c"),OsString::from("core.fsmonitor=false")]);
+            assert!(matches!(request.args.get(2).and_then(|v|v.to_str()), Some("config"|"ls-files"|"check-attr"|"symbolic-ref"|"rev-parse"|"status"|"diff")));
+            SystemProcessRunner.run(request)
+        }
+    }
+    for dirty in [false,true] {
+        let (repo,remote)=managed_repository("preflight-read-only");
+        let config=repo.0.join(".codex/bridgeforge-version.json");
+        fs::write(&config, br#"{"schema_version":1,"release_policy":"explicit_release","manifest_policy":"auto","git_sync_setup":{"schema":1,"confirmed":true,"selection":"current"}}"#).unwrap();
+        git_ok(&repo.0,&["add","."]);git_ok(&repo.0,&["commit","-m","chore: confirm policy"]);git_ok(&repo.0,&["push"]);
+        if dirty {
+            fs::write(repo.0.join("tracked.txt"),b"staged\n").unwrap();git_ok(&repo.0,&["add","tracked.txt"]);
+            fs::write(repo.0.join("tracked.txt"),b"unstaged\n").unwrap();
+            fs::write(repo.0.join("untracked.txt"),b"new\n").unwrap();
+        }
+        fs::write(repo.0.join(".git/hooks/preflight-monitor"),b"#!/bin/sh\nprintf invoked > monitor-marker\nprintf 'token\\0'\n").unwrap();
+        git_ok(&repo.0,&["config","core.fsmonitor",".git/hooks/preflight-monitor"]);
+        git_ok(&repo.0,&["status","--porcelain=v1"]);
+        assert!(repo.0.join("monitor-marker").exists(),"fixture must execute the configured monitor without the read-only override");
+        fs::remove_file(repo.0.join("monitor-marker")).unwrap();
+        let paths=[repo.0.join(".git/index"),repo.0.join(".git/HEAD"),config];
+        let before=paths.iter().map(|p|(fs::read(p).unwrap(),fs::metadata(p).unwrap().modified().unwrap())).collect::<Vec<_>>();
+        let result=preflight(&repo.0,&ReadQueries);assert_eq!(result.code,0,"{}",result.stderr);
+        let receipt=result.receipt.unwrap();assert_eq!(receipt["status"],"ready");
+        assert_eq!(receipt["working_tree"],if dirty{"dirty"}else{"clean"});
+        assert_eq!(receipt["diff_review_required"],dirty);assert_eq!(receipt["remote_state"],"not_fetched");
+        assert_eq!(receipt["upstream"],receipt["push_target"]);
+        if dirty {assert!(receipt["status_porcelain"].as_str().unwrap().contains("untracked.txt"));}
+        for (path,(bytes,time)) in paths.iter().zip(before) {assert_eq!(fs::read(path).unwrap(),bytes);assert_eq!(fs::metadata(path).unwrap().modified().unwrap(),time);}
+        assert!(!repo.0.join(".runtime").exists());
+        assert!(!repo.0.join(".git/bridgeforge-git-sync.lock").exists());
+        assert!(!repo.0.join("monitor-marker").exists(),"preflight must not execute the configured monitor");
+        fs::remove_dir_all(remote).unwrap();
+    }
+}
+
+#[test]
+fn preflight_unconfirmed_and_invalid_configuration_remain_zero_write() {
+    let repo=real_repository("preflight-choice");
+    let index=fs::read(repo.0.join(".git/index")).unwrap();
+    let first=preflight(&repo.0,&SystemProcessRunner);
+    assert_eq!(first.code,crate::EXIT_BLOCKED);
+    assert_eq!(first.receipt.unwrap()["status"],"configuration-required");
+    assert!(!repo.0.join(".codex/bridgeforge-version.json").exists());
+    fs::create_dir_all(repo.0.join(".codex")).unwrap();
+    let config=repo.0.join(".codex/bridgeforge-version.json");fs::write(&config,b"{invalid").unwrap();
+    let second=preflight(&repo.0,&SystemProcessRunner);
+    assert_eq!(second.code,crate::EXIT_BLOCKED);assert_eq!(second.receipt.unwrap()["status"],"blocked");
+    assert_eq!(fs::read(&config).unwrap(),b"{invalid");assert_eq!(fs::read(repo.0.join(".git/index")).unwrap(),index);
+    assert!(!repo.0.join(".runtime").exists());
+}
+
+#[test]
+fn preflight_blocks_clean_filters_before_running_project_helpers() {
+    let (repo,remote)=managed_repository("preflight-clean-filter");
+    fs::write(repo.0.join(".codex/bridgeforge-version.json"),br#"{"schema_version":1,"manifest_policy":"auto","git_sync_setup":{"schema":1,"confirmed":true,"selection":"current"}}"#).unwrap();
+    fs::write(repo.0.join(".git/hooks/preflight-clean"),b"#!/bin/sh\nprintf invoked > clean-marker\ncat\n").unwrap();
+    fs::write(repo.0.join(".gitattributes"),b"tracked.txt filter=fixture\n").unwrap();
+    git_ok(&repo.0,&["config","filter.fixture.clean",".git/hooks/preflight-clean"]);
+    fs::write(repo.0.join("tracked.txt"),b"modified by fixture\n").unwrap();
+    git_ok(&repo.0,&["status","--porcelain=v1"]);
+    git_ok(&repo.0,&["diff","--no-ext-diff","--no-textconv","--stat"]);
+    assert!(repo.0.join("clean-marker").exists(),"fixture must demonstrate ordinary Git inspection can execute the clean helper");
+    fs::remove_file(repo.0.join("clean-marker")).unwrap();
+    let before=fs::read(repo.0.join(".git/index")).unwrap();
+    let result=preflight(&repo.0,&SystemProcessRunner);assert_eq!(result.code,crate::EXIT_BLOCKED);
+    assert!(result.receipt.unwrap()["reason"].as_str().unwrap().contains("clean/process"));
+    assert!(!repo.0.join("clean-marker").exists());assert_eq!(fs::read(repo.0.join(".git/index")).unwrap(),before);
+    fs::remove_dir_all(remote).unwrap();
+}
+
+#[test]
+fn preflight_rejects_truncated_attributes_and_submodule_helper_scope() {
+    struct MissingAttributes;
+    impl ProcessRunner for MissingAttributes {
+        fn run(&self,r:&ProcessRequest)->std::io::Result<ProcessOutput>{
+            if r.args.iter().any(|v|v=="check-attr"){return Ok(out(0,""));}
+            SystemProcessRunner.run(r)
+        }
+    }
+    let (repo,remote)=managed_repository("preflight-attribute-guard");
+    fs::write(repo.0.join(".codex/bridgeforge-version.json"),br#"{"schema_version":1,"manifest_policy":"auto","git_sync_setup":{"schema":1,"confirmed":true,"selection":"current"}}"#).unwrap();
+    git_ok(&repo.0,&["config","filter.fixture.clean","cat"]);
+    let result=preflight(&repo.0,&MissingAttributes);assert_eq!(result.code,crate::EXIT_BLOCKED);
+    assert!(result.receipt.unwrap()["reason"].as_str().unwrap().contains("attribute framing"));
+    let git=Git{root:&repo.0,runner:&SystemProcessRunner};let head=git.required(&["rev-parse","HEAD"],Duration::from_secs(30)).unwrap();
+    git_ok(&repo.0,&["update-index","--add","--cacheinfo","160000",&head,"nested"]);
+    let before=fs::read(repo.0.join(".git/index")).unwrap();
+    let result=preflight(&repo.0,&SystemProcessRunner);assert_eq!(result.code,crate::EXIT_BLOCKED);
+    assert!(result.receipt.unwrap()["reason"].as_str().unwrap().contains("submodule"));
+    assert_eq!(fs::read(repo.0.join(".git/index")).unwrap(),before);
+    fs::remove_dir_all(remote).unwrap();
+}
+
+#[test]
+fn preflight_missing_push_target_blocks_without_fabricating_parity() {
+    let repo=real_repository("preflight-no-remote");fs::create_dir_all(repo.0.join(".codex")).unwrap();
+    fs::write(repo.0.join(".codex/bridgeforge-version.json"),br#"{"schema_version":1,"manifest_policy":"auto","git_sync_setup":{"schema":1,"confirmed":true,"selection":"current"}}"#).unwrap();
+    let result=preflight(&repo.0,&SystemProcessRunner);assert_eq!(result.code,crate::EXIT_BLOCKED);
+    let receipt=result.receipt.unwrap();assert_eq!(receipt["status"],"blocked");
+    assert!(receipt["reason"].as_str().unwrap().contains("rev-parse"));
+    assert!(receipt.get("ahead").is_none());assert!(receipt.get("working_tree").is_none());
+}
+
+#[test]
+fn preflight_distinguishes_push_target_and_blocks_detached_head() {
+    let (repo,remote)=managed_repository("preflight-push-target");
+    fs::write(repo.0.join(".codex/bridgeforge-version.json"),br#"{"schema_version":1,"manifest_policy":"auto","git_sync_setup":{"schema":1,"confirmed":true,"selection":"current"}}"#).unwrap();
+    git_ok(&repo.0,&["add","."]);git_ok(&repo.0,&["commit","-m","chore: confirm policy"]);git_ok(&repo.0,&["push"]);
+    let fork=repo.0.with_extension("fork.git");
+    git_ok(&repo.0,&["clone","--bare",remote.to_str().unwrap(),fork.to_str().unwrap()]);
+    git_ok(&repo.0,&["remote","add","fork",fork.to_str().unwrap()]);
+    git_ok(&repo.0,&["config","remote.pushDefault","fork"]);git_ok(&repo.0,&["config","push.default","current"]);git_ok(&repo.0,&["fetch","fork"]);
+    let result=preflight(&repo.0,&SystemProcessRunner);assert_eq!(result.code,0,"{}",result.stderr);
+    let receipt=result.receipt.unwrap();assert!(receipt["upstream"].as_str().unwrap().starts_with("origin/"));
+    assert!(receipt["push_target"].as_str().unwrap().starts_with("fork/"));
+    git_ok(&repo.0,&["checkout","--detach"]);let index=fs::read(repo.0.join(".git/index")).unwrap();
+    let result=preflight(&repo.0,&SystemProcessRunner);assert_eq!(result.code,crate::EXIT_BLOCKED);
+    assert!(result.receipt.unwrap()["reason"].as_str().unwrap().contains("symbolic-ref"));
+    assert_eq!(fs::read(repo.0.join(".git/index")).unwrap(),index);
+    fs::remove_dir_all(remote).unwrap();fs::remove_dir_all(fork).unwrap();
+}
+
+#[test]
+fn phase_timing_observer_preserves_artifact_cache_runner_contract() {
+    struct CacheAware {hits:std::cell::Cell<usize>,misses:RefCell<Vec<&'static str>>}
+    impl ProcessRunner for CacheAware {
+        fn run(&self,_:&ProcessRequest)->std::io::Result<ProcessOutput>{Ok(out(0,"ok"))}
+        fn artifact_cache_enabled(&self)->bool{true}
+        fn cache_hit(&self){self.hits.set(self.hits.get()+1)}
+        fn cache_miss(&self,reason:&'static str){self.misses.borrow_mut().push(reason)}
+    }
+    let runner=CacheAware{hits:Default::default(),misses:Default::default()};
+    let timings=timing::Timings::new();let observed=timing::Observed{runner:&runner,timings:&timings};
+    assert!(observed.artifact_cache_enabled());observed.cache_hit();observed.cache_miss("entry_unavailable_or_invalid");
+    assert_eq!(runner.hits.get(),1);assert_eq!(*runner.misses.borrow(),vec!["entry_unavailable_or_invalid"]);
+}
+
+#[test]
+fn phase_timing_retains_tls_timeout_and_launch_failures_without_retry() {
+    struct FailingFetch { kind: &'static str, fetches: std::cell::Cell<usize> }
+    impl ProcessRunner for FailingFetch {
+        fn run(&self,r:&ProcessRequest)->std::io::Result<ProcessOutput> {
+            if r.program=="git" && r.args.first().is_some_and(|v|v=="fetch") {
+                self.fetches.set(self.fetches.get()+1);std::thread::sleep(Duration::from_millis(12));
+                if self.kind=="launch" {return Err(std::io::Error::other("fixture launch failure"));}
+                return Ok(ProcessOutput {code:128,stdout:Vec::new(),stderr:b"SSL_ERROR_SYSCALL".to_vec(),timed_out:self.kind=="timeout"});
+            }
+            SystemProcessRunner.run(r)
+        }
+    }
+    for kind in ["tls","timeout","launch"] {
+        let (repo,remote)=managed_repository("timed-fetch-error");
+        let before=fs::read(repo.0.join(".git/index")).unwrap();
+        let runner=FailingFetch {kind,fetches:Default::default()};
+        let result=sync(&repo.0,&runner,GitSyncOptions::default());assert_eq!(result.code,crate::EXIT_BLOCKED);
+        assert_eq!(runner.fetches.get(),1);
+        assert!(result.stderr.contains(match kind {"tls"=>"SSL_ERROR_SYSCALL","timeout"=>"timed out",_=>"fixture launch failure"}));
+        let receipt=result.receipt.unwrap();assert_eq!(receipt["status"],"blocked");
+        let fetch=receipt["timings_ms"]["fetch"].as_u64().unwrap();assert!(fetch>=10);
+        assert!(receipt["sync_elapsed_ms"].as_u64().unwrap()>=fetch);
+        assert_eq!(receipt["timings_ms"]["commit_and_hooks"],0);assert_eq!(receipt["timings_ms"]["push"],0);
+        assert!(receipt.get("push_performed").is_none());assert!(receipt.get("working_tree").is_none());
+        assert_eq!(fs::read(repo.0.join(".git/index")).unwrap(),before);
+        fs::remove_dir_all(remote).unwrap();
+    }
+}
+
+#[test]
+fn phase_timing_success_preserves_commit_hook_and_remote_receipt() {
+    let (repo,remote)=managed_repository("timed-commit");
+    fs::write(repo.0.join("tracked.txt"),b"business change\n").unwrap();
+    fs::write(repo.0.join(".git/hooks/pre-commit"),b"#!/bin/sh\nexit 0\n").unwrap();
+    let result=sync(&repo.0,&SystemProcessRunner,GitSyncOptions{message:Some("chore: timing fixture".into()),..Default::default()});
+    assert_eq!(result.code,0,"{}",result.stderr);let receipt=result.receipt.unwrap();
+    assert_eq!(receipt["status"],"synced");assert_eq!(receipt["working_tree"],"clean");
+    assert_eq!(receipt["ahead"],0);assert_eq!(receipt["behind"],0);assert_eq!(receipt["push_performed"],true);
+    let total=receipt["sync_elapsed_ms"].as_u64().unwrap();
+    for value in receipt["timings_ms"].as_object().unwrap().values(){assert!(value.as_u64().unwrap()<=total);}
+    assert!(receipt["timings_ms"]["commit_and_hooks"].as_u64().unwrap()>0);
+    assert!(receipt["timing_semantics"].as_str().unwrap().contains("must not be summed"));
     fs::remove_dir_all(remote).unwrap();
 }

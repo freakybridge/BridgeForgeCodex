@@ -49,6 +49,10 @@ before 包或迁移账本。
 
 ## 共享构建边界
 
+project-sync 的计划、重规划、Apply 共用受管产物缓存，派生内容位于系统临时目录中按规范化项目身份绑定的 `bridgeforge-artifacts-<hash>`，不写项目目标或用户源文件。沿用 artifact_cache 的 ownership、锁、字节/收据/自检/环境复核及单项目容量限制；损坏、占用和未知环境正常构建。计划 fingerprint 与安装收据语义保持不变。
+
+项目 Hook 同样复用：旧式 Hook 绑定受管 workspace；独立 package 额外绑定完整环境摘要与受管 lock，只允许受管 registry 依赖子集，不复用自定义 build script、本地过程宏或未建模外部依赖。`build_metrics` 展示 Cargo 实际调用、验证命中及阶段耗时；`build_preparation`、`cargo_build` 与内置/项目 Hook 阶段有包含关系，不可相加。失败保留已经取得的计时，用户级 CLI 的复用由 updater 自己负责。
+
 core 内部 `build_inputs` 负责受管输入快照及漂移验证，`generated_assets` 负责隔离 Cargo 构建、每个产物的自测、来源收据和构建目录清理；后者返回目标路径对应的字节及收据，不安装到项目目标。项目同步与工厂 Git 同步直接调用这一能力，项目 Hook 的旧格式兼容构建直接调用输入快照。
 
 `project_sync` 继续拥有项目锁、产物挂接、安装、版本戳及回滚；`git_sync_plan` 保留缓存决策与工厂写入计划；`project_hooks` 保留项目自有 Hook 的配置和兼容编译。共享构建不得反向调用项目同步。`managed_paths::safe_join` 原样承接上述两侧共用的受管相对路径检查，其他模块的不同路径策略不在此统一。

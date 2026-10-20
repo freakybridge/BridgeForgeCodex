@@ -17,7 +17,7 @@ argument: 可选：release
 
 任何同步前，先运行受管二进制 `self-test --json`，确认 `capabilities` 包含 `git-sync-release-only-v1`；显式发布还需 `git-sync-explicit-release-v1` 和 `git-sync-direct-release-v1`。旧二进制可能自动升版或要求开发收据，不能试跑未知参数探测能力；缺能力时明确提示升级工具，不归咎于项目缺开发 JSON。
 
-同步前还须确认 `git-sync-setup-v1`，运行 `git-sync --setup-status`。返回 configuration-required 或用户主动换策略时读取[首次配置引导](references/first-use.md)，展示当前配置及适用选项，用户选择前不写配置、不执行同步；确认记录随项目保存，后续不重复问。能力缺失时提示升级受管工具，不试跑未知参数。schema 2 的 Rust 独立包策略另需 `git-sync-rust-independent-v1`；策略、兼容边界及收据语义见同一 reference。配置变更仅经受管入口，普通同步不升版。
+同步前还须确认 `git-sync-setup-v1`，按第 0 节选择聚合预检或 `--setup-status` 取得配置状态，不重复运行两者。返回 configuration-required 或用户主动换策略时读取[首次配置引导](references/first-use.md)，展示当前配置及适用选项，用户选择前不写配置、不执行同步；确认记录随项目保存，后续不重复问。能力缺失时提示升级受管工具，不试跑未知参数。schema 2 的 Rust 独立包策略另需 `git-sync-rust-independent-v1`；策略、兼容边界及收据语义见同一 reference。配置变更仅经受管入口，普通同步不升版。
 
 普通同步和显式发布均不依赖 develop、development-checks.json、prepared 或审计收据。无配置、非法配置、过期或失败开发记录都不是使用阻断。不得在本 Skill 运行 --development-status/--prepare-release，或要求先完成开发验收。显式 release 是用户选定的升版功能，不因缺开发记录静默退回普通同步。
 
@@ -32,24 +32,16 @@ argument: 可选：release
 
 工作区干净但存在未发布业务提交仍可发布；没有未发布业务改动不升版、不创建空提交。浅历史、合并历史边界、非规范业务提交或手工版本变化导致计划不可可靠判定时停止并展示原始原因，不擅自降为 patch。
 
-## 输入
-
-- 当前仓库、分支、upstream、工作区与暂存区状态。
-- `git diff` / `git diff --cached` 的真实变更。
-- 当前宿主目录内受管 `.codex/bin/bridgeforge[.exe]`。
-
 ## 核心流程
 
 ### 0. 最短执行路径与计时
 
-正常路径只组织四阶段：一批只读核对 → release 一次精简预览（普通同步跳过）→ 一次受管同步及连续等待 → 一批终态核验后立即答复。只有新证据、失败、漂移或分叉才增加调查；不把成功同步变成仓库审计。
+按下列决策直接执行，不为成功路径增加仓库审计或重新访谈：
 
-- 当前会话已读且未变化的 Skill、项目约束与相关证据直接复用，不重读全文、不重复查 Memory、源码、历史文档和所有 TODO。已有变更证据仍须核对当前状态；文件清单或行数相同不能证明内容没变，变化时定向补读真实 diff。
-- 将工具能力、自检、状态、差异、分支/目标等独立读取合并一次完成，只输出判断所需摘要。确定提交消息和效果后直接执行，不再展开构建原理或其他交付的验收。
-- release 预览只取 status、版本前后、kind 与必要写入范围；完整 changelog 是数据，不整段注入对话上下文。先保存完整返回值，再做显示裁剪，不丢弃失败或待判定字段。
-- 命令仍运行时，下一次动作就是等待同一进程；可用时采用约 20–30 秒的工具回读间隔，单次不超过 60 秒。保持必要进度更新，不在两次回读之间展开无关读取、长分析或改文件。收到终态后不再等待旧进程。
-- 成功收据后只做一次独立核验：工作区是否干净、HEAD 与实际 push 目标关系、ahead/behind；与收据矛盾才追查。工具内已经完成的产物自检、版本/索引等轻量保护不再在外层逐项重跑。不为答复再读完整 CHANGELOG、所有文档或 TODO。
-- 核验完成立即发简短最终结果，保留版本、commit、目标、干净状态/0/0、产物复用/重建及代码效果。不添加成功无关的流程讨论或待办结算；后者遵守已有独立授权和 Skill 职责。
+1. **一次前置读取。** 在同一工具编排中先运行 `self-test --json` 并检查上述能力；若包含 `git-sync-preflight-v1`，接续运行 `.codex/bin/bridgeforge git-sync --preflight`。它聚合配置确认、分支/HEAD、upstream/实际 push 目标、状态与差异摘要。旧工具没有该能力时不试跑未知参数，改为同一批中的 `--setup-status` 和只读 Git 状态/差异/目标查询。不要把自检、配置、状态拆成多轮对话。
+2. **只补必要决策。** configured 直接继续，不读首次配置手册；configuration-required 才读取 first-use reference 并等待选择。预检是本地建议快照，`remote_state=not_fetched` 不代表远端一致。clean 不展开业务文件；dirty 按清单审阅真实 diff，不能拿 diff_stat 代替内容。聚合预检遇活动 clean/process filter 或子模块时保守阻断，不运行未隔离的项目 helper；仅全局注册而未使用的 filter 不阻断。交回主对话核对项目专用 Git 流程，不自动绕过或禁用全局 filter。已有 Skill/约束和未变化的证据直接复用，不重读 Memory、历史、全量 TODO 或无关源码。
+3. **确定消息后同步。** 普通同步跳过发布预览；release 只预览一次，保留完整返回值但仅展示 status、版本、kind 和必要写入范围。能连续编排时，在同一次工具调用内执行受管同步，并仅在成功后接续一次只读终态核验；不在两者之间新增分析回合。进程未结束时只等待同一进程，回读约 20–30 秒、单次不超过 60 秒；失败按下节分类，不能执行成功后的核验分支。
+4. **核验后立即答复。** 独立确认工作区、HEAD、实际 push 目标与 ahead/behind；与收据矛盾才追查。保留版本、commit、目标、干净状态/0/0、产物复用/重建及已固化效果。工具内部完成的自检和轻量保护不在外层重跑，不再读取完整 CHANGELOG 或追加待办结算。
 
 计时区分用户指令到最终回复的端到端时间与收据 `sync_elapsed_ms`：后者只覆盖受管 sync 函数内部（含锁/检查/Git/必要构建），不含进程启动、参数发现、输出发送及 Agent 前后处理。旧版本不提供该字段时注明未提供，不能猜值或当作 0。计时不新增日志文件、轮询服务或依赖，不减弱 Git 保护。下次真实对话使用同一时间戳口径复测；步骤减少和本地夹具不能宣称真实端到端已达标。
 
@@ -82,9 +74,15 @@ release 更新版本、CHANGELOG 和原生 manifest/lock；受管 CLI/Hook 需�
 
 需要审批时只为该项目脚本申请合理前缀，不分别为 fetch、add、commit 和 push 申请持久规则。脚本执行 fetch、ahead / behind 判断、安全 stash、`pull --ff-only`、版本事务、必要构建、add、commit、push 和最终检查。版本、manifest、产物和真实构建收据纳入同一回滚事务；pre-commit 只读验证。普通同步不自动升版，纯骨架更新不升级项目版本。
 
-若首次运行在 `git fetch`、`.git/FETCH_HEAD`、`Permission denied` 或 `Access is denied` 阶段失败，主 agent 必须立即以**完全相同的 repo-local 脚本命令**、`require_escalated` 重试。审批说明仅限：允许 Git 更新当前项目的 `.git/FETCH_HEAD` 等元数据，以完成用户已授权的同步。不得改走手工 Git 命令、修改 `.git` ACL 或扩大到无关目录。重试仍失败时保留原始错误与现场并停止；不得把网络、分叉或凭据错误伪报为权限恢复成功。
+**仅明确本地文件权限错误可提升权限重试。** 首次受管命令必须有当前项目具体文件/目录不可写的证据，例如 `.git/FETCH_HEAD` 写入被拒绝，才以**完全相同的 repo-local 命令**、`require_escalated` 重试一次。裸 `Permission denied` 或发生于 `fetch` 阶段本身均不够；`Permission denied (publickey)`、password、keyboard-interactive 等远端鉴权失败不属于本地权限恢复。审批仅涵盖当前项目 Git 元数据；不得改 ACL、扩大目录或换成手工 Git。
 
-除上述确定性的权限恢复外，任何分叉、冲突或失败必须返回主对话处理。
+| 错误证据 | 本轮动作 |
+|---|---|
+| 明确文件/元数据写权限错误 | 按上述条件原命令提升权限重试一次；仍失败则停止 |
+| TLS/SSL、超时、连接失败 | 报告网络阶段与原始错误，停止本轮自动同步；不套用权限重试、不改 TLS/Git 配置 |
+| 凭据/鉴权、分叉/冲突、Hook/版本/产物失败 | 保留现场并返回主对话；不因错误发生于 fetch/commit 而重试完整同步 |
+
+用户明确再次要求重试时复用有效授权和未变化的审查证据，核对当前状态后重试；不能把本轮自动重试失败伪报为恢复成功。CLI 已有的 push 失败后远端复核属于原事务保护，不在 Skill 外额外组织一次完整同步。
 
 受管二进制不存在、自检失败或当前项目 baseline 不健康时必须停止并报告；禁止回退 Python、PATH 脚本或手工 Git。即使用户要求逐条执行，也不得退化为手工 fetch、add、commit 或 push。
 
@@ -97,6 +95,7 @@ release 更新版本、CHANGELOG 和原生 manifest/lock；受管 CLI/Hook 需�
 - 同步成功后输出此前固化的“代码变动效果”，最多 3 条；显式发布概括累计改动。若既无本地变更也无累计发布，则说明本轮没有新提交，并按收据说明远端同步结果。
 - 工作区最终状态；只有状态干净且实际 push 目标的 ahead / behind 为 `0 0` 才报告同步完成。upstream 与 push 目标不同时，禁止以上游一致代替推送完成。
 - 收据提供 sync_elapsed_ms 时可报内部耗时，但不把它标为端到端耗时。缺少用户起止时间戳时如实说明端到端未计量，不为普通同步新增一次会话日志扫描。
+- 新工具的 timings_ms 可显示异常或主要阶段；commit_and_hooks 包含 Git commit 与其 Hook，release_analysis/artifact_preparation 包含其中子过程，父子时间不能相加。失败计时不代表同步成功，不把缺失的远端状态解释为 clean 或 0/0。
 - 失败时给出原始错误阶段和保留的现场状态。
 
 ## 停止条件

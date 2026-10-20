@@ -102,6 +102,21 @@ fn self_test_has_stable_identity() {
 }
 
 #[test]
+fn git_sync_preflight_is_capability_gated_and_mutually_exclusive() {
+    let capabilities=self_test().receipt.unwrap()["capabilities"].as_array().unwrap().clone();
+    assert!(capabilities.iter().any(|v|v=="git-sync-preflight-v1"));
+    assert!(capabilities.iter().any(|v|v=="git-sync-phase-timing-v1"));
+    let root=std::env::temp_dir().join(format!("bf-cli-preflight-{}-{}",std::process::id(),SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()));
+    fs::create_dir_all(root.join(".codex")).unwrap();
+    for mode in ["--release","--setup-apply","--prepare-release"] {
+        let result=run(&["git-sync".into(),"--root".into(),root.display().to_string(),"--preflight".into(),mode.into()]);
+        assert_eq!(result.code,EXIT_BLOCKED);assert!(result.stderr.contains("mutually exclusive"));
+        assert!(!root.join(".git").exists());assert!(!root.join(".runtime").exists());
+    }
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn parser_collects_repeated_batch_roots_in_order() {
     let args = vec![
         "--project-root".into(),

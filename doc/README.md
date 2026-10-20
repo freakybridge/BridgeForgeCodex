@@ -8,6 +8,8 @@ delivery_layout: flat
 
 ## 从这里开始
 
+下游维护优化：[R04、R02、R01 耗时与构建复用](1_delivery/project-sync-performance/requirements_2026-10-20_build-reuse.md#用户验收与发布授权2026-10-20)（2026-10-20 工程验收，TODO-013 已完成；真实下游提速未验证；R05/R03 暂缓；本次受管 release 已获授权，实际发布以最终收据为准）。
+
 同步流程优化：[检查恢复与发布分析复用](1_delivery/git-sync-performance/requirements_2026-10-19_workflow-reuse.md)（2026-10-19 用户验收；428 通过、14 跳过；真实重复准备七项全复用约 13.7 秒；TODO-009 的端到端对照仍待验证；本次受管 release 已获授权，实际版本与同步状态以最终收据为准）。
 
 首期交付：[通用发布核心与 Rust 独立包版本](1_delivery/git-sync-independent-packages/requirements_2026-10-16_rust-release.md)（schema 2 显式启用；旧项目保持原行为；已由扩展交付覆盖验收，TODO-010）。
@@ -77,7 +79,7 @@ delivery_layout: flat
 
 ## Delivery topic
 
-同步编排优化：[确认卡与计时基线](1_delivery/git-sync-performance/requirements_2026-10-12_orchestration.md)（减少重复读取、等待回读与答复开销，增加受管内部耗时；已授权实施，关联 TODO-009）。
+同步编排优化：[确认卡与计时基线](1_delivery/git-sync-performance/requirements_2026-10-12_orchestration.md#用户验收与发布授权2026-10-20)（R10/R11/R08 工程已验收：七项检查、workspace 435 项及 fixture 93 项通过；本地 CLI 中位数减少 3.8%，波动较大，不代表真实端到端；TODO-009 保持待验证。已授权本次受管 release，尚未分发到用户级或真实下游）。
 
 R08：[严格 JSON 解析器职责归位](1_delivery/shared-json/requirements_2026-10-11_R08.md)（2026-10-11 用户已验收，TODO-007 已完成；工程检查与独立增量审计通过；正式 release 因 fetch TLS 错误未完成，后续 TODO-008）。
 

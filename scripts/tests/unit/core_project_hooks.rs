@@ -1,5 +1,48 @@
 use super::*;
 
+#[test]
+#[ignore = "child process helper for cache environment isolation"]
+fn hook_cache_environment_child() {
+    let source=if std::env::var("BRIDGEFORGE_CACHE_TEST_MODE").unwrap()=="env" {
+        b"pub fn run(_:Vec<String>)->i32 { let _=env!(\"CODEX_TOOL_CALL_ID\"); 0 }".to_vec()
+    } else { b"pub fn run(_:Vec<String>)->i32 { 0 }".to_vec() };
+    let hook=hooks(&config()).unwrap().remove(0);
+    let asset=cache_asset(&hook,&Input{source,package:None},&json!({"generated_assets":[{"source_tree_sha256":"managed","lockfile_sha256":"locked"}]})).unwrap();
+    println!("HOOK_CACHE_ID={}",asset["hook_environment"].as_str().unwrap());
+}
+
+#[test]
+fn hook_cache_tracking_id_is_ignored_only_without_environment_references() {
+    let identity=|mode:&str,tracking:&str| {
+        let mut r=ProcessRequest::new(std::env::current_exe().unwrap().into_os_string(),std::env::current_dir().unwrap());
+        r.args=["--ignored","--exact","project_hooks::tests::hook_cache_environment_child","--nocapture"].iter().map(Into::into).collect();
+        r.env.insert("BRIDGEFORGE_CACHE_TEST_MODE".into(),mode.into());
+        r.env.insert("CODEX_TOOL_CALL_ID".into(),tracking.into());
+        let out=crate::SystemProcessRunner.run(&r).unwrap();
+        assert_eq!(out.code,0,"{}",String::from_utf8_lossy(&out.stderr));
+        String::from_utf8(out.stdout).unwrap().lines().find_map(|line|line.split_once("HOOK_CACHE_ID=").map(|(_,id)|id.trim().to_string())).unwrap()
+    };
+    assert_eq!(identity("plain","first"),identity("plain","second"));
+    assert_ne!(identity("env","first"),identity("env","second"));
+}
+
+#[test]
+fn project_cache_rejects_local_build_scripts_and_proc_macros() {
+    let mut files=BTreeMap::from([("Cargo.toml".into(),b"[package]\nname='demo'\nversion='0.1.0'\n".to_vec())]);
+    assert!(package::cacheable_sources(&files));
+    files.insert("build.rs".into(),b"fn main() {}".to_vec());
+    assert!(!package::cacheable_sources(&files));
+    files.remove("build.rs");
+    files.insert("macro/Cargo.toml".into(),b"[package]\nname='mac'\nversion='0.1.0'\n[lib]\nproc-macro=true\n".to_vec());
+    assert!(!package::cacheable_sources(&files));
+    files.remove("macro/Cargo.toml");
+    files.insert("macro/Cargo.toml".into(),b"[lib]\ncrate-type=['proc-macro']\n".to_vec());
+    assert!(!package::cacheable_sources(&files));
+    files.remove("macro/Cargo.toml");
+    files.insert("Cargo.toml".into(),b"[package]\nname='demo'\nversion='0.1.0'\nbuild='generator.rs'\n".to_vec());
+    assert!(!package::cacheable_sources(&files));
+}
+
 fn config() -> Value {
     json!({"hooks":{"SessionStart":[{"matcher":"","hooks":[{"type":"command","command":"keep-custom"}]}]},
         "bridgeforgeProjectHooks":{"schema_version":1,"hooks":[{"id":"demo","events":[{"event":"SessionStart","args":["check"]},{"event":"Stop","args":["snapshot"]}]}]}})
@@ -16,6 +59,37 @@ fn temporary() -> Temporary {
     ));
     fs::create_dir(&root).unwrap();
     Temporary(root)
+}
+
+#[test]
+fn closed_package_hook_reuses_verified_bytes_and_rebuilds_corruption() {
+    let temp=temporary();
+    let workspace=temp.0.join("managed");
+    fs::create_dir(&workspace).unwrap();
+    let lock=b"version = 4\n[[package]]\nname='demo'\nversion='0.1.0'\n";
+    fs::write(workspace.join("Cargo.lock"),lock).unwrap();
+    let source=b"pub fn run(_:Vec<String>)->i32 { 0 }\n".to_vec();
+    let files=BTreeMap::from([("Cargo.toml".into(),b"[package]\nname='demo'\nversion='0.1.0'\nedition='2024'\n".to_vec()),("Cargo.lock".into(),lock.to_vec()),("entrypoint.rs".into(),source.clone())]);
+    let input=Input::from_files(source,files.clone()).unwrap();
+    let hook=hooks(&config()).unwrap().remove(0);
+    let observed=crate::build_metrics::Observed{runner:&crate::SystemProcessRunner,metrics:Default::default()};
+    let first=package::build(&workspace,&temp.0,&hook,&input,&files,&json!({}),&observed).unwrap();
+    assert_eq!(observed.metrics.borrow().cargo_build_invocations,1);
+    let second=package::build(&workspace,&temp.0,&hook,&input,&files,&json!({}),&observed).unwrap();
+    assert_eq!(first,second);
+    assert_eq!(observed.metrics.borrow().cargo_build_invocations,1);
+    assert_eq!(observed.metrics.borrow().cache_hits,1);
+    let project=temp.0.canonicalize().unwrap().to_string_lossy().into_owned();
+    let cache=std::env::temp_dir().join(format!("bridgeforge-artifacts-{}",&sha(project.as_bytes())[7..]));
+    let mut corrupted=false;
+    for entry in fs::read_dir(cache).unwrap() {
+        let path=entry.unwrap().path().join(format!("project_demo{}",std::env::consts::EXE_SUFFIX));
+        if path.is_file(){fs::write(path,b"corrupt cached image").unwrap();corrupted=true;}
+    }
+    assert!(corrupted);
+    package::build(&workspace,&temp.0,&hook,&input,&files,&json!({}),&observed).unwrap();
+    assert_eq!(observed.metrics.borrow().cargo_build_invocations,2);
+    assert!(!temp.0.join(".codex").exists());
 }
 
 #[test]

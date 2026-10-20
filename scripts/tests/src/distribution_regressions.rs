@@ -233,6 +233,20 @@ fn project_maps_are_not_fixed_managed_payloads() {
 
 #[cfg(windows)]
 #[test]
+fn shared_cli_reuse_is_verified_in_isolated_profile() {
+    let fixture=Fixture::new();
+    let root=Path::new(env!("CARGO_MANIFEST_DIR")).ancestors().nth(2).unwrap();
+    let mut request=ProcessRequest::new("powershell.exe",root);
+    request.args=vec!["-NoProfile".into(),"-NonInteractive".into(),"-ExecutionPolicy".into(),"Bypass".into(),"-File".into(),
+        root.join("scripts/tests/shared_cli_reuse.ps1").into_os_string(),"-RepositoryRoot".into(),root.as_os_str().to_owned(),"-Base".into(),fixture.0.as_os_str().to_owned()];
+    request.timeout=std::time::Duration::from_secs(60);
+    let output=bridgeforge_core::SystemProcessRunner.run(&request).unwrap();
+    assert!(!output.timed_out);
+    assert_eq!(output.code,0,"{}\n{}",String::from_utf8_lossy(&output.stdout),String::from_utf8_lossy(&output.stderr));
+}
+
+#[cfg(windows)]
+#[test]
 fn shared_bundle_commit_keeps_components_consistent_when_old_image_is_running() {
     let fixture = Fixture::new();
     let root = Path::new(env!("CARGO_MANIFEST_DIR"))

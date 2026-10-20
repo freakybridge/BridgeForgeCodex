@@ -50,6 +50,8 @@ pub struct SyncAction {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SyncPlan {
+    #[serde(default)]
+    pub build_metrics: crate::build_metrics::BuildMetrics,
     pub schema: u32,
     pub status: String,
     pub readiness: String,
@@ -82,6 +84,8 @@ pub struct SyncPlan {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SyncReceipt {
+    #[serde(default)]
+    pub build_metrics: crate::build_metrics::BuildMetrics,
     pub schema: u32,
     pub status: String,
     pub execution_status: String,
@@ -767,8 +771,8 @@ fn destructive_inventory(
                 continue;
             }
             let relative = relative_posix(project_root, &child)?;
-            let linked =
-                crate::persistence::is_link_or_reparse(&child).map_err(|error| error.to_string())?;
+            let linked = crate::persistence::is_link_or_reparse(&child)
+                .map_err(|error| error.to_string())?;
             if child.is_file() && !linked {
                 // Plain project_* files are handled by the exact-file inventory below.
                 continue;
@@ -1385,6 +1389,7 @@ pub fn build_plan_with_inputs(
     )?;
     let confirmation_required = !risk.is_empty();
     Ok(SyncPlan {
+        build_metrics: Default::default(),
         schema: 1,
         status: if safe.is_empty() && risk.is_empty() {
             "current"
@@ -1569,7 +1574,9 @@ fn validate_transaction_path(path: &Path) -> Result<(), String> {
     for ancestor in path.ancestors() {
         match fs::symlink_metadata(ancestor) {
             Ok(_) => {
-                if crate::persistence::is_link_or_reparse(ancestor).map_err(|error| error.to_string())? {
+                if crate::persistence::is_link_or_reparse(ancestor)
+                    .map_err(|error| error.to_string())?
+                {
                     return Err(format!(
                         "transaction path traverses a link: {}",
                         ancestor.display()
@@ -1902,6 +1909,7 @@ fn apply_plan_internal(
     let mut applied = plan.safe.clone();
     applied.extend(plan.risk.clone());
     Ok(SyncReceipt {
+        build_metrics: plan.build_metrics,
         schema: 1,
         status: "applied".into(),
         execution_status: "succeeded".into(),
@@ -2048,56 +2056,91 @@ pub fn attach_generated_assets(
     contract: &Value,
     runner: &dyn ProcessRunner,
 ) -> Result<Vec<Value>, String> {
-    let mut receipts = Vec::new();
-    if plan
-        .safe
-        .iter()
-        .any(|action| action.id.starts_with("generated:"))
-    {
-        let (writes, generated_receipts) =
-            generated_writes(template_root, "source_root", project_root, contract, runner)?;
-        plan.writes.extend(writes);
-        receipts.extend(generated_receipts);
-    }
-    verify_project_hook_reads(plan)?;
-    let project_writes = crate::project_hooks::build(
-        &template_root.join("templates/hooks"),
-        project_root,
-        contract,
-        &plan.project_hook_inputs,
+    let observed = crate::build_metrics::Observed {
         runner,
-    )?;
-    verify_project_hook_reads(plan)?;
-    for (hook, _) in &plan.project_hook_inputs {
-        if let Some(payload) = project_writes.get(&project_root.join(hook.receipt())) {
-            receipts.push(serde_json::from_slice(payload).map_err(|e| e.to_string())?);
+        metrics: Default::default(),
+    };
+    let runner = &observed as &dyn ProcessRunner;
+    let preparation_started = std::time::Instant::now();
+    let result = (|| -> Result<Vec<Value>, String> {
+        let started = std::time::Instant::now();
+        let mut receipts = Vec::new();
+        if plan
+            .safe
+            .iter()
+            .any(|action| action.id.starts_with("generated:"))
+        {
+            let generated = crate::generated_assets::generated_writes_reusing(
+                template_root,
+                "source_root",
+                project_root,
+                contract,
+                runner,
+            );
+            observed.metrics.borrow_mut().timings_ms.insert("managed_assets".into(), started.elapsed().as_millis());
+            let (writes, generated_receipts) = generated?;
+            plan.writes.extend(writes);
+            receipts.extend(generated_receipts);
         }
-    }
-    plan.writes.extend(project_writes);
-    for action in plan
-        .safe
-        .iter_mut()
-        .chain(plan.risk.iter_mut())
-        .filter(|action| {
-            action.id.starts_with("generated:") || action.id.starts_with("project-hook:generated:")
-        })
-    {
-        let target = safe_join(project_root, &action.target, "generated action target")?;
-        let payload = plan
-            .writes
-            .get(&target)
-            .ok_or_else(|| format!("generated build did not attach payload: {}", action.target))?;
-        action.after_sha256 = sha_git(payload);
-    }
-    plan.aggregate_fingerprint = plan_fingerprint(
-        &plan.mode,
-        &plan.current_version,
-        &plan.safe,
-        &plan.risk,
-        &plan.preservation_manifest,
-        &plan.generated_source_fingerprints,
-    )?;
-    Ok(receipts)
+        observed
+            .metrics
+            .borrow_mut()
+            .timings_ms
+            .insert("managed_assets".into(), started.elapsed().as_millis());
+        let started = std::time::Instant::now();
+        verify_project_hook_reads(plan)?;
+        let project_result = crate::project_hooks::build(
+            &template_root.join("templates/hooks"),
+            project_root,
+            contract,
+            &plan.project_hook_inputs,
+            runner,
+        );
+        observed.metrics.borrow_mut().timings_ms.insert("project_hooks".into(), started.elapsed().as_millis());
+        let project_writes = project_result?;
+        verify_project_hook_reads(plan)?;
+        for (hook, _) in &plan.project_hook_inputs {
+            if let Some(payload) = project_writes.get(&project_root.join(hook.receipt())) {
+                receipts.push(serde_json::from_slice(payload).map_err(|e| e.to_string())?);
+            }
+        }
+        plan.writes.extend(project_writes);
+        observed
+            .metrics
+            .borrow_mut()
+            .timings_ms
+            .insert("project_hooks".into(), started.elapsed().as_millis());
+        for action in plan
+            .safe
+            .iter_mut()
+            .chain(plan.risk.iter_mut())
+            .filter(|action| {
+                action.id.starts_with("generated:")
+                    || action.id.starts_with("project-hook:generated:")
+            })
+        {
+            let target = safe_join(project_root, &action.target, "generated action target")?;
+            let payload = plan.writes.get(&target).ok_or_else(|| {
+                format!("generated build did not attach payload: {}", action.target)
+            })?;
+            action.after_sha256 = sha_git(payload);
+        }
+        plan.aggregate_fingerprint = plan_fingerprint(
+            &plan.mode,
+            &plan.current_version,
+            &plan.safe,
+            &plan.risk,
+            &plan.preservation_manifest,
+            &plan.generated_source_fingerprints,
+        )?;
+        Ok(receipts)
+    })();
+    observed.metrics.borrow_mut().timings_ms.insert(
+        "build_preparation".into(),
+        preparation_started.elapsed().as_millis(),
+    );
+    plan.build_metrics = observed.metrics.into_inner();
+    result
 }
 
 pub fn build_generated_assets(

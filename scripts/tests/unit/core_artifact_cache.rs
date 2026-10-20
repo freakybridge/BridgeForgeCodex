@@ -79,6 +79,109 @@ fn runner() -> Runner {
 }
 
 #[test]
+fn probe_cleanup_preserves_replaced_bytes_and_directory() {
+    for replace_directory in [false,true] {
+        let f=Fixture::new();
+        let probe=Probe::create("bridgeforge.exe",b"owned probe").unwrap();
+        let binary=probe.binary.clone();
+        let directory=probe.directory.clone();
+        if replace_directory {
+            fs::rename(&directory,f.0.join("original-probe")).unwrap();
+            fs::create_dir(&directory).unwrap();
+        }
+        fs::write(&binary,b"unknown replacement").unwrap();
+        drop(probe);
+        assert_eq!(fs::read(&binary).unwrap(),b"unknown replacement");
+        fs::remove_file(binary).unwrap();
+        fs::remove_dir(directory).unwrap();
+    }
+}
+
+#[test]
+fn cached_original_change_during_probe_is_rejected_and_preserved() {
+    struct MutateOriginal(PathBuf);
+    impl ProcessRunner for MutateOriginal {
+        fn run(&self,r:&ProcessRequest)->std::io::Result<ProcessOutput> {
+            if r.args.first().is_some_and(|a|a=="self-test") { fs::write(&self.0,b"external cache edit")?; }
+            runner().run(r)
+        }
+    }
+    let f=Fixture::new();
+    let (asset,payload,receipt)=artifact("original-change");
+    let mut cache=Cache::open(&f.0,&f.0,&runner()).unwrap();
+    cache.store(&asset,&payload,&receipt,&runner()).unwrap();
+    let key=Cache::key(&cache.identity(&asset)).unwrap();
+    let original=cache.directory.join(key).join(binary_name(&cache.identity(&asset)).unwrap());
+    assert!(cache.load(&asset,&MutateOriginal(original.clone())).is_none());
+    assert_eq!(fs::read(original).unwrap(),b"external cache edit");
+}
+
+#[cfg(windows)]
+#[test]
+fn long_cache_image_path_executes_only_verified_short_probe() {
+    let f=Fixture::new();
+    let repo=Path::new(env!("CARGO_MANIFEST_DIR")).ancestors().nth(4).unwrap();
+    let contract:Value=serde_json::from_slice(&fs::read(repo.join(".codex/managed-skeleton.json")).unwrap()).unwrap();
+    let asset=contract["generated_assets"].as_array().unwrap().iter().find(|a|a["id"]=="codex.bridgeforge-cli").unwrap();
+    let payload=fs::read(repo.join(".codex/bin/bridgeforge.exe")).unwrap();
+    let receipt=fs::read(repo.join(".codex/bin/build-receipt-cli.json")).unwrap();
+    let directory=f.0.join(format!("long-{}","a".repeat(180)));
+    let mut cache=Cache::open_directory(&f.0,&f.0,directory,&SystemProcessRunner).unwrap().unwrap();
+    cache.store(asset,&payload,&receipt,&SystemProcessRunner).unwrap();
+    let key=Cache::key(&cache.identity(asset)).unwrap();
+    let original=cache.directory.join(key).join("bridgeforge.exe");
+    assert!(original.to_string_lossy().len()>260);
+    assert_eq!(cache.load(asset,&SystemProcessRunner).unwrap(),(payload.clone(),receipt));
+    assert_eq!(fs::read(original).unwrap(),payload);
+}
+
+#[test]
+fn project_plan_builds_are_reused_without_writing_project_targets() {
+    use std::cell::Cell;
+    struct Builds { builds: Cell<usize>, hits: Cell<usize> }
+    impl ProcessRunner for Builds {
+        fn artifact_cache_enabled(&self)->bool { true }
+        fn cache_hit(&self) { self.hits.set(self.hits.get()+1); }
+        fn run(&self,r:&ProcessRequest)->std::io::Result<ProcessOutput> {
+            if (r.program=="cargo" || r.program=="rustc") && r.args.first().is_some_and(|a|a=="--version") {
+                return Ok(ProcessOutput{code:0,stdout:format!("{} 1.94.1\n",r.program.to_string_lossy()).into_bytes(),stderr:vec![],timed_out:false});
+            }
+            if r.program=="cargo" {
+                self.builds.set(self.builds.get()+1);
+                let output=PathBuf::from(&r.args[7]).join("release");
+                fs::create_dir_all(&output)?;
+                let name=r.args[9].to_string_lossy();
+                fs::write(output.join(format!("{name}{}",std::env::consts::EXE_SUFFIX)),name.as_bytes())?;
+            }
+            let name=if r.program.to_string_lossy().contains("bridgeforge-hook") {"bridgeforge-hook"}else{"bridgeforge"};
+            Ok(ProcessOutput{code:0,stdout:serde_json::to_vec(&json!({"schema":1,"name":name,"status":"ok"})).unwrap(),stderr:vec![],timed_out:false})
+        }
+    }
+    let f=Fixture::new();
+    let workspace=f.0.join("templates/hooks");
+    fs::create_dir_all(workspace.join("src")).unwrap();
+    fs::write(workspace.join("Cargo.toml"),b"[workspace]\n").unwrap();
+    fs::write(workspace.join("Cargo.lock"),b"version = 4\n").unwrap();
+    fs::write(workspace.join("src/main.rs"),b"fn main() {}\n").unwrap();
+    fs::write(f.0.join("VERSION"),b"2.6.0\n").unwrap();
+    fs::create_dir_all(f.0.join("templates")).unwrap();
+    fs::write(f.0.join("templates/managed-skeleton.json"),br#"{"schema_version":4,"baseline_model":"current-only","compatibility_baseline":"1.0.0","assets":[],"generated_assets":[]}"#).unwrap();
+    let contract:Value=serde_json::from_slice(&crate::manifest::render_managed_contract(&f.0).unwrap()).unwrap();
+    let r=Builds{builds:Cell::new(0),hits:Cell::new(0)};
+    let first=crate::generated_assets::generated_writes_reusing(&f.0,"source_root",&f.0,&contract,&r).unwrap();
+    assert_eq!(r.builds.get(),2);
+    let second=crate::generated_assets::generated_writes_reusing(&f.0,"source_root",&f.0,&contract,&r).unwrap();
+    assert_eq!(r.builds.get(),2);
+    assert_eq!(r.hits.get(),2);
+    assert_eq!(first,second);
+    assert!(!f.0.join(".codex").exists());
+    assert!(!f.0.join(".runtime").exists());
+    fs::write(workspace.join("src/main.rs"),b"fn main() {println!(\"changed\");}\n").unwrap();
+    assert!(crate::generated_assets::generated_writes_reusing(&f.0,"source_root",&f.0,&contract,&r).is_err());
+    assert_eq!(r.builds.get(),2);
+}
+
+#[test]
 fn cache_hit_validates_bytes_self_test_and_exclusive_lease() {
     let f = Fixture::new();
     let (asset, payload, receipt) = artifact("one");

@@ -185,6 +185,28 @@ pub fn health_contract() -> serde_json::Value {
     json!({"schema": 1, "runtime": "rust-cargo", "pythonRequired": false})
 }
 
+/// Optional compilation identity for updater reuse. No installation or writes.
+pub fn build_environment(root: &Path, runner: &dyn ProcessRunner) -> CommandOutcome {
+    let result = (|| -> Result<serde_json::Value, String> {
+        let root = root.canonicalize().map_err(|e| e.to_string())?;
+        let Some(environment) = crate::artifact_cache::environment(&root, runner) else {
+            return Ok(json!({"schema":1,"status":"uncacheable"}));
+        };
+        let sources = crate::manifest::generated_sources(&root)?;
+        let source = crate::manifest::generated_source_sha(&root, &sources)?;
+        use sha2::Digest;
+        let lock = std::fs::read(root.join("Cargo.lock")).map_err(|e|e.to_string())?;
+        let lock = format!("sha256:{:x}",sha2::Sha256::digest(&lock));
+        let identity = crate::manifest::canonical_sha(&json!({"schema":1,"source":source,"lock":lock,
+            "environment":environment,"recipe":["build","--locked","--release","--bin","bridgeforge"]}))?;
+        Ok(json!({"schema":1,"status":"cacheable","identity":identity}))
+    })();
+    match result {
+        Ok(value) => CommandOutcome::with_receipt(value),
+        Err(e) => CommandOutcome::blocked(format!("[build-environment] {e}\n")),
+    }
+}
+
 // Running Windows images can be renamed, but cannot be overwritten or unlinked.
 // Keep that image in the ignored runtime directory until a later maintenance run.
 pub(crate) fn write_binary(root: &Path, path: &Path, payload: &[u8]) -> Result<(), String> {

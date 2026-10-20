@@ -1,7 +1,7 @@
 # 工厂独立构建产物缓存
 
-本能力初始接入工厂 `WritePlan::prepare`，覆盖开发准备与实际 release；不接下游
-project-sync，不读取 prepared/audit 来决定是否发布。产品实现事实源为
+工厂持久缓存接入 `WritePlan::prepare`，覆盖开发准备与实际 release；不读取
+prepared/audit 来决定是否发布。下游 project-sync 复用同一 ownership/验证实现，但使用项目外的临时缓存，边界见 [项目同步事务](codex-project-sync.md#共享构建边界)。产品实现事实源为
 `templates/hooks/crates/bridgeforge-core/src/artifact_cache.rs` 与 `git_sync_plan.rs`；
 用户选择、预算、测试和性能证据在 [R04 确认卡](../../1_delivery/refactor-scan/requirements_2026-10-10_r04-artifact-cache.md)。
 
