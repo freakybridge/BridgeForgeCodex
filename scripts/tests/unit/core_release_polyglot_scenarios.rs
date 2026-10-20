@@ -201,6 +201,123 @@ fn assert_versions(p: &FileReleasePlan, expected: &[(&str, &str)]) {
     assert_eq!(actual, expected.iter().copied().collect());
 }
 
+#[test]
+fn historical_product_file_recovery_is_read_only_and_does_not_bump_components() {
+    let root = fixture("rust");
+    write(&root.0, "tools/startup.ps1", b"# startup cache\n");
+    git(&root.0, &["add", "."]);
+    git(&root.0, &["commit", "-m", "feat: improve startup"]);
+    assert!(
+        plan(&root.0)
+            .unwrap_err()
+            .contains("unattributed historical")
+    );
+    let mut cfg = graph_config("rust", &nodes(), vec![]);
+    cfg["product_inputs"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!("tools/startup.ps1"));
+    write(&root.0, CONFIG, &serde_json::to_vec(&cfg).unwrap());
+    let index = fs::read(root.0.join(".git/index")).unwrap();
+    let p = plan(&root.0).unwrap().unwrap();
+    assert_versions(&p, &[]);
+    assert_eq!(p.new_version.to_string(), "1.1.0");
+    assert_eq!(p.writes.len(), 2);
+    assert_eq!(fs::read(root.0.join("VERSION")).unwrap(), b"1.0.0\n");
+    assert_eq!(fs::read(root.0.join(".git/index")).unwrap(), index);
+    finish_and_repeat(&root.0, &p);
+}
+
+#[test]
+fn historical_product_file_recovery_requires_an_exact_declaration() {
+    for declared in [None, Some("tools/")] {
+        let root = fixture("rust");
+        write(&root.0, "tools/startup.ps1", b"# startup cache\n");
+        git(&root.0, &["add", "."]);
+        git(&root.0, &["commit", "-m", "fix: improve startup"]);
+        let mut cfg = graph_config("rust", &nodes(), vec![]);
+        if let Some(declared) = declared {
+            cfg["product_inputs"]
+                .as_array_mut()
+                .unwrap()
+                .push(json!(declared));
+        }
+        write(&root.0, CONFIG, &serde_json::to_vec(&cfg).unwrap());
+        assert!(
+            plan(&root.0)
+                .unwrap_err()
+                .contains("unattributed historical")
+        );
+    }
+}
+
+#[test]
+fn historical_product_file_recovery_preserves_existing_component_impacts() {
+    let root = fixture("rust");
+    write(&root.0, "a/src/lib.rs", b"pub fn value() -> u8 { 2 }\n");
+    git(&root.0, &["add", "."]);
+    git(&root.0, &["commit", "-m", "feat: improve a"]);
+    let mut cfg = graph_config("rust", &nodes(), vec![]);
+    cfg["product_inputs"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!("a/src/lib.rs"));
+    write(&root.0, CONFIG, &serde_json::to_vec(&cfg).unwrap());
+    let p = plan(&root.0).unwrap().unwrap();
+    assert_versions(&p, &[("a", "1.3.0"), ("b", "2.0.1")]);
+}
+
+#[test]
+fn historical_product_file_recovery_cannot_mask_native_lock_inputs() {
+    let root = fixture("rust");
+    let mut cfg = graph_config("rust", &nodes(), vec![]);
+    cfg["product_inputs"]
+        .as_array_mut()
+        .unwrap()
+        .retain(|p| p != "Cargo.lock");
+    write(&root.0, CONFIG, &serde_json::to_vec(&cfg).unwrap());
+    git(&root.0, &["add", "."]);
+    git(&root.0, &["commit", "--amend", "--no-edit"]);
+    let lock = fs::read_to_string(root.0.join("Cargo.lock")).unwrap();
+    write(
+        &root.0,
+        "Cargo.lock",
+        format!("{lock}\n# native lock input\n").as_bytes(),
+    );
+    git(&root.0, &["add", "."]);
+    git(&root.0, &["commit", "-m", "fix: touch native lock"]);
+    cfg["product_inputs"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!("Cargo.lock"));
+    write(&root.0, CONFIG, &serde_json::to_vec(&cfg).unwrap());
+    assert!(
+        plan(&root.0)
+            .unwrap_err()
+            .contains("unattributed historical release input: Cargo.lock")
+    );
+}
+
+#[test]
+fn historical_product_file_recovery_does_not_implicitly_attribute_other_files() {
+    let root = fixture("rust");
+    write(&root.0, "tools/startup.ps1", b"# startup cache\n");
+    write(&root.0, "tools/unregistered.ps1", b"# another tool\n");
+    git(&root.0, &["add", "."]);
+    git(&root.0, &["commit", "-m", "fix: improve startup"]);
+    let mut cfg = graph_config("rust", &nodes(), vec![]);
+    cfg["product_inputs"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!("tools/startup.ps1"));
+    write(&root.0, CONFIG, &serde_json::to_vec(&cfg).unwrap());
+    assert!(
+        plan(&root.0)
+            .unwrap_err()
+            .contains("unattributed historical release input: tools/unregistered.ps1")
+    );
+}
+
 fn finish_and_repeat(root: &Path, p: &FileReleasePlan) {
     for (path, bytes) in &p.writes {
         fs::write(path, bytes).unwrap();

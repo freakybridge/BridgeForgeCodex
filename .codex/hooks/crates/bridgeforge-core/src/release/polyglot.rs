@@ -1148,6 +1148,26 @@ fn record_identities(
     Ok(())
 }
 
+// An exact current product-file declaration can fill a missing historical
+// attribution. It never replaces a historical owner, broadens a directory
+// declaration into a retroactive rule, or masks native adapter/package inputs.
+fn recover_product_file(before: &Snapshot, after: &Snapshot, path: &str, cfg: &Config) -> bool {
+    cfg.product_inputs
+        .iter()
+        .any(|p| p == path && !p.ends_with('/'))
+        && [before, after].iter().all(|snapshot| {
+            !snapshot.inputs.contains_key(path)
+                && !snapshot.packages.values().any(|package| {
+                    package.manifest == path
+                        || package.source_roots.iter().any(|root| {
+                            root.is_empty()
+                                || path == root
+                                || path.starts_with(&format!("{}/", root.trim_end_matches('/')))
+                        })
+                })
+        })
+}
+
 fn attribute(
     before: &Snapshot,
     after: &Snapshot,
@@ -1172,7 +1192,7 @@ fn attribute(
         if let Ok(value) = &new {
             ids.extend(value.iter().cloned());
         }
-        if old.is_err() && new.is_err() {
+        if old.is_err() && new.is_err() && !recover_product_file(before, after, path, cfg) {
             return Err(format!("unattributed historical release input: {path}"));
         }
         for id in ids {

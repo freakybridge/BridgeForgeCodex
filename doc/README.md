@@ -64,7 +64,7 @@ delivery_layout: flat
 |---|---|---|
 | `0_architecture/` | 架构与设计依据 | `design/` |
 | `1_delivery/` | 需求确认、计划、验收、协作与专题讨论 | 见下方 topic 索引 |
-| `2_bugs/` | 已知故障及其修复记录 | 33 条故障记录 |
+| `2_bugs/` | 已知故障及其修复记录 | 34 条故障记录 |
 | `3_reference/` | 外部资料与可复用参考实现 | `examples/antifab-deny-hook.rs` |
 | `4_archive/` | 已完成或已失效的历史材料 | 既有历史档案；后续按 `delivery/`、`bugs/` 分类归档 |
 | `5_project_knowledgebase/` | 项目自有知识话题与长期资料 | 当前为空 |
@@ -166,6 +166,7 @@ R07：[TODO 管理与归档收口一致性](1_delivery/todo-lifecycle/requiremen
 
 ## 当前 Bug records
 
+- [`BUG-schema3-historical-product-input-attribution.md`](2_bugs/BUG-schema3-historical-product-input-attribution.md)（schema 3 历史未登记项目文件的精确补认；工程检查与独立审计通过，等待正式发布及下游验证）
 - [`BUG-native-memory-windows-long-path-sync.md`](2_bugs/BUG-native-memory-windows-long-path-sync.md)（Windows 长路径导致同步失败、后台测试并行干扰及真实冲突恢复；1.17.5 正式安装与自动生命周期验证完成，已验收）
 - [`BUG-native-memory-snapshot-order-compatibility.md`](2_bugs/BUG-native-memory-snapshot-order-compatibility.md)（旧快照兼容与后台句柄继承已修复；1.14.7 真实启动、回复结束及关闭后同步验证通过，等待用户验收）
 - [`BUG-managed-markdown-commented-table-ambiguity.md`](2_bugs/BUG-managed-markdown-commented-table-ambiguity.md)（项目实表与注释示例表共存时被误判为歧义，六类验证与独立审计已通过，等待发布与下游 Apply 验收）
