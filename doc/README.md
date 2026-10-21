@@ -103,6 +103,7 @@ R07：[TODO 管理与归档收口一致性](1_delivery/todo-lifecycle/requiremen
 
 | Topic | 主要记录 |
 |---|---|
+| `git-sync-release-rewrite` | [schema 4 发布系统重写确认卡](1_delivery/git-sync-release-rewrite/requirements_2026-10-21_schema4.md)：14 项规则及五项重写边界已确认；12 小时/100000 token/1 名只读审计 Agent/2 轮完整验证；TODO-015 待执行，仅授权落盘，暂不实施 |
 | `refactor-scan` | [Skill 开发验收](1_delivery/refactor-scan/requirements_2026-10-09_refactor-scan.md)已完成；[工厂重构候选与经验](1_delivery/refactor-scan/scan_2026-10-09_factory-refactor.md)记录扫描时事实；[R01 清理](1_delivery/refactor-scan/requirements_2026-10-09_r01-cleanup.md)、[R02 公共持久化](1_delivery/refactor-scan/requirements_2026-10-09_r02-persistence.md)、[R03 Memory CLI](1_delivery/refactor-scan/requirements_2026-10-09_r03-memory-cli.md)及 [R04 独立缓存](1_delivery/refactor-scan/requirements_2026-10-10_r04-artifact-cache.md)均工程验证通过并于 2026-10-10 获用户验收；累计收据与验收边界见 R04；[扫描换机交接](1_delivery/refactor-scan/handoff_2026-10-09_factory-refactor.md)为历史记录；真实项目试用见 TODO-004 |
 | `summary-workflow` | [Summary 三模式与会话状态快照退役](1_delivery/summary-workflow/requirements_2026-10-08_summary-workflow.md)；[本轮经验教训](1_delivery/summary-workflow/lessons_2026-10-08.md) |
 | `git-sync-performance` | [普通同步与发布构建耗时优化](1_delivery/git-sync-performance/requirements_2026-10-08_git-sync-performance.md)；[开发收口与轻量发布](1_delivery/git-sync-performance/requirements_2026-10-08_prepared-release.md)：检查前移、发布准备记录和端到端验收 |
