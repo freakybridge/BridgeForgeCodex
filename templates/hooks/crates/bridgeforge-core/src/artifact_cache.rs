@@ -55,7 +55,7 @@ pub(crate) struct Cache {
     environment: String,
     build_context: PathBuf,
     protected: BTreeSet<String>,
-    _lock: FileLock,
+    _lock: Option<FileLock>,
 }
 
 fn hash(bytes: &[u8]) -> String {
@@ -267,7 +267,7 @@ pub(crate) fn environment(root: &Path, runner: &dyn ProcessRunner) -> Option<Str
     if let Some(home) = home {
         locations.push(("cargo-home".into(), home));
     }
-    for (label, directory) in locations {
+    for (_label, directory) in locations {
         for name in ["config", "config.toml"] {
             let path = directory.join(name);
             match fs::symlink_metadata(&path) {
@@ -292,7 +292,22 @@ pub(crate) fn environment(root: &Path, runner: &dyn ProcessRunner) -> Option<Str
                     {
                         return None;
                     }
-                    configs.insert(format!("{label}:{name}"), hash(&bytes));
+                    // One global Cargo config may be encountered both as an
+                    // ancestor and CARGO_HOME. Bind its identity, not the random
+                    // depth of a build snapshot beneath the user's temp folder.
+                    let canonical = path
+                        .canonicalize()
+                        .ok()?
+                        .to_string_lossy()
+                        .replace('\\', "/");
+                    configs.insert(
+                        if cfg!(windows) {
+                            canonical.to_lowercase()
+                        } else {
+                            canonical
+                        },
+                        hash(&bytes),
+                    );
                 }
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
                 Err(_) => return None,
@@ -368,6 +383,104 @@ fn footprint(path: &Path) -> Result<u64, String> {
 }
 
 impl Cache {
+    /// User-owned public artifacts share one cache across projects. This is only
+    /// opened during product preparation, never during project planning.
+    pub(crate) fn open_shared(
+        codex_root: &Path,
+        context: &Path,
+        runner: &dyn ProcessRunner,
+    ) -> Result<Self, String> {
+        let directory = codex_root.join(".cache/bridgeforge/public-build");
+        let started = std::time::Instant::now();
+        loop {
+            match Self::open_directory(codex_root, context, directory.clone(), runner) {
+                Ok(Some(cache)) => return Ok(cache),
+                Ok(None) => {
+                    return Err("public build environment cannot be verified for reuse".into());
+                }
+                Err(error)
+                    if error.contains("lock is held")
+                        && started.elapsed() < Duration::from_secs(30) =>
+                {
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+                Err(error) => return Err(format!("public build cache unavailable: {error}")),
+            }
+        }
+    }
+
+    pub(crate) fn prepared_reference(&self, asset: &Value) -> Result<Value, String> {
+        let identity = self.identity(asset);
+        let key = Self::key(&identity)?;
+        let (entry, _) = self.owned(&key)?;
+        if entry.identity != identity {
+            return Err("public artifact identity changed".into());
+        }
+        Ok(serde_json::to_value(entry).map_err(|e| e.to_string())?)
+    }
+
+    /// Consume immutable prepared bytes without compiler probes, self-tests,
+    /// recency writes or cache repair. Missing/changed entries fail closed.
+    pub(crate) fn read_prepared(
+        codex_root: &Path,
+        asset: &Value,
+        reference: &Value,
+    ) -> Result<(Vec<u8>, Vec<u8>), String> {
+        let expected: Entry =
+            serde_json::from_value(reference.clone()).map_err(|e| e.to_string())?;
+        let root = codex_root.canonicalize().map_err(|e| e.to_string())?;
+        let project = root.to_string_lossy().into_owned();
+        let directory = root.join(".cache/bridgeforge/public-build");
+        safe(&directory)?;
+        let owner: Owner = parse(&plain(&directory.join("owner.json"), 16 * 1024)?)?;
+        if owner
+            != (Owner {
+                schema: 1,
+                owner: OWNER.into(),
+                project: project.clone(),
+            })
+        {
+            return Err("public cache owner mismatch".into());
+        }
+        let environment = expected.identity["environment"]
+            .as_str()
+            .ok_or("public environment identity missing")?
+            .to_string();
+        let cache = Self {
+            root: root.clone(),
+            directory,
+            project,
+            environment,
+            build_context: root,
+            protected: BTreeSet::new(),
+            _lock: None,
+        };
+        if expected.identity != cache.identity(asset) {
+            return Err("prepared public input mismatch".into());
+        }
+        let (entry, metadata) = cache.owned(&expected.key)?;
+        if entry.identity != expected.identity
+            || entry.binary_sha256 != expected.binary_sha256
+            || entry.receipt_sha256 != expected.receipt_sha256
+        {
+            return Err("prepared public artifact changed".into());
+        }
+        let directory = cache.directory.join(&entry.key);
+        let binary = directory.join(binary_name(&entry.identity)?);
+        let payload = plain(&binary, MAX_BYTES)?;
+        let receipt = plain(&directory.join("receipt.json"), 64 * 1024)?;
+        if hash(&payload) != entry.binary_sha256 || hash(&receipt) != entry.receipt_sha256 {
+            return Err("prepared public artifact bytes changed".into());
+        }
+        verify_payload(asset, &payload, &receipt)?;
+        if plain(&binary, MAX_BYTES)? != payload
+            || plain(&directory.join("receipt.json"), 64 * 1024)? != receipt
+            || plain(&directory.join("entry.json"), 64 * 1024)? != metadata
+        {
+            return Err("public cache changed during capture".into());
+        }
+        Ok((payload, receipt))
+    }
     /// Plans may cache derived bytes outside the project, never installed files.
     pub(crate) fn open_temporary(
         root: &Path,
@@ -455,7 +568,7 @@ impl Cache {
             environment,
             build_context: build_context.to_path_buf(),
             protected: BTreeSet::new(),
-            _lock: lock,
+            _lock: Some(lock),
         };
         cache.recover()?;
         Ok(Some(cache))

@@ -53,7 +53,7 @@ fn self_test() -> CommandOutcome {
         "name": "bridgeforge",
         "status": "ok",
         "version": env!("CARGO_PKG_VERSION"),
-        "capabilities": ["git-sync-explicit-release-v1", "git-sync-prepared-release-v1", "git-sync-release-only-v1", "git-sync-release-readiness-v1", "git-sync-direct-release-v1", "git-sync-timing-v1", "git-sync-rust-independent-v1", "git-sync-setup-v1", "git-sync-rust-package-additions-v1", "git-sync-analysis-reuse-v1", "git-sync-polyglot-release-v1", "git-sync-python-independent-v1", "git-sync-package-lifecycle-v1", "user-cli-reuse-v1", "project-sync-build-reuse-v1", "git-sync-preflight-v1", "git-sync-phase-timing-v1"]
+        "capabilities": ["git-sync-explicit-release-v1", "git-sync-prepared-release-v1", "git-sync-release-only-v1", "git-sync-release-readiness-v1", "git-sync-direct-release-v1", "git-sync-timing-v1", "git-sync-rust-independent-v1", "git-sync-setup-v1", "git-sync-rust-package-additions-v1", "git-sync-analysis-reuse-v1", "git-sync-polyglot-release-v1", "git-sync-python-independent-v1", "git-sync-package-lifecycle-v1", "user-cli-reuse-v1", "project-sync-build-reuse-v1", "git-sync-preflight-v1", "git-sync-phase-timing-v1", "public-artifacts-v1"]
     }))
 }
 
@@ -229,11 +229,15 @@ fn with_build_metrics(
 fn project_sync(args: &[String]) -> CommandOutcome {
     let started = std::time::Instant::now();
     let mut out = project_sync_inner(args);
-    let format = value(args,"--output-format").unwrap_or_else(||"machine".into());
+    let format = value(args, "--output-format").unwrap_or_else(|| "machine".into());
     if format != "human" {
-        if let Some(receipt)=out.receipt.as_mut() {
-            let machine=if format=="combined" { &mut receipt["machine"] } else { receipt };
-            machine["elapsed_ms"]=json!(started.elapsed().as_millis());
+        if let Some(receipt) = out.receipt.as_mut() {
+            let machine = if format == "combined" {
+                &mut receipt["machine"]
+            } else {
+                receipt
+            };
+            machine["elapsed_ms"] = json!(started.elapsed().as_millis());
         }
     }
     out
@@ -310,6 +314,12 @@ fn project_sync_inner(args: &[String]) -> CommandOutcome {
     };
     let planning_ms = planning_started.elapsed().as_millis();
     let applying = has(args, "--apply");
+    if !applying {
+        plan.build_metrics
+            .timings_ms
+            .insert("planning".into(), planning_ms);
+        return bridgeforge_core::project_sync::outcome_plan_with_format(Ok(plan), &output_format);
+    }
     let fingerprint = if applying {
         let Some(value) = value(args, "--plan-fingerprint") else {
             return bridgeforge_core::project_sync::outcome_receipt_with_format(
@@ -352,10 +362,11 @@ fn project_sync_inner(args: &[String]) -> CommandOutcome {
             "project asset decisions require --confirmed-preservation-manifest",
         );
     }
-    let contract: Value = match fs::read(template_root.join("templates/managed-skeleton.json"))
-        .map_err(|error| error.to_string())
-        .and_then(|payload| serde_json::from_slice(&payload).map_err(|error| error.to_string()))
-    {
+    let contract_bytes = match fs::read(template_root.join("templates/managed-skeleton.json")) {
+        Ok(bytes) => bytes,
+        Err(error) => return blocked("project-sync", error),
+    };
+    let contract: Value = match serde_json::from_slice(&contract_bytes) {
         Ok(value) => value,
         Err(error) => {
             return blocked(
@@ -364,25 +375,36 @@ fn project_sync_inner(args: &[String]) -> CommandOutcome {
             );
         }
     };
-    if let Err(error) = bridgeforge_core::project_sync::attach_generated_assets(
-        &mut plan,
-        &template_root,
-        &project_root,
-        &contract,
-        &SystemProcessRunner,
-    ) {
-        plan.build_metrics.timings_ms.insert("planning".into(),planning_ms);
+    let prepared = if plan.public_installation_required {
+        let path = match value(args, "--public-artifacts")
+            .map(PathBuf::from)
+            .map(Ok)
+            .unwrap_or_else(|| {
+                bridgeforge_core::public_artifacts::codex_home().and_then(|root| {
+                    bridgeforge_core::public_artifacts::prepared_path(&root, &contract)
+                })
+            }) {
+            Ok(path) => path,
+            Err(error) => return blocked("project-sync", error),
+        };
+        bridgeforge_core::project_sync::attach_prepared_public(&mut plan, &contract_bytes, &path)
+    } else if contract["generated_assets"]
+        .as_array()
+        .is_some_and(|items| !items.is_empty())
+    {
+        Err("target product lacks the prepared-public-artifact contract; refresh the official product first".into())
+    } else {
+        Ok(())
+    };
+    if let Err(error) = prepared {
+        plan.build_metrics
+            .timings_ms
+            .insert("planning".into(), planning_ms);
         return with_build_metrics(
             bridgeforge_core::project_sync::outcome_receipt_with_format(Err(error), &output_format),
             plan.build_metrics.clone(),
             &output_format,
         );
-    }
-    if !applying {
-        plan.build_metrics
-            .timings_ms
-            .insert("planning".into(), planning_ms);
-        return bridgeforge_core::project_sync::outcome_plan_with_format(Ok(plan), &output_format);
     }
     plan.build_metrics
         .timings_ms
@@ -446,9 +468,13 @@ fn git_sync(args: &[String]) -> CommandOutcome {
         return blocked("git-sync", "release modes are mutually exclusive");
     }
     if has(args, "--preflight") {
-        let mut outcome = bridgeforge_core::git_sync::preflight(context.root(), &SystemProcessRunner);
+        let mut outcome =
+            bridgeforge_core::git_sync::preflight(context.root(), &SystemProcessRunner);
         if let Some(receipt) = outcome.receipt.as_mut().and_then(|r| r.as_object_mut()) {
-            receipt.insert("tool".into(), self_test().receipt.expect("self-test receipt"));
+            receipt.insert(
+                "tool".into(),
+                self_test().receipt.expect("self-test receipt"),
+            );
         }
         return outcome;
     }
@@ -674,6 +700,42 @@ fn run(args: &[String]) -> CommandOutcome {
     };
     match command {
         "self-test" if has(args, "--json") => self_test(),
+        "project-hook-migration" => {
+            let result = (|| {
+                let root = path_value(args,"--root")?.canonicalize().map_err(|e|e.to_string())?;
+                match args.get(1).map(String::as_str) {
+                    Some("status")=>bridgeforge_core::project_hook_migration::status(&root),
+                    Some("verify")=>{
+                        if has(args,"--check")||has(args,"--dry-run") {return Err("migration verification builds project code and records completion; use status for a read-only report".into());}
+                        bridgeforge_core::project_hook_migration::verify_completed(&root,has(args,"--confirmed-behavior"),&SystemProcessRunner)
+                    },
+                    _=>Err("expected project-hook-migration status or verify".into()),
+                }
+            })();
+            match result {Ok(v)=>CommandOutcome::with_receipt(v),Err(e)=>blocked("project-hook-migration",e)}
+        },
+        "public-artifacts" => {
+            if args.get(1).map(String::as_str) == Some("locate") {
+                return bridgeforge_core::public_artifacts::outcome((|| {
+                    bridgeforge_core::public_artifacts::locate_cli(&path_value(args,"--product-root")?,&path_value(args,"--codex-home")?,&SystemProcessRunner)
+                })());
+            }
+            if args.get(1).map(String::as_str) != Some("prepare") {
+                return blocked("public-artifacts", "expected prepare");
+            }
+            if has(args, "--check") || has(args, "--dry-run") {
+                return blocked("public-artifacts", "preparation writes a derived cache; preview flags are not supported");
+            }
+            let result = (|| {
+                let product = path_value(args, "--product-root")?;
+                let codex = path_value(args, "--codex-home")?;
+                let bootstrap = value(args, "--bootstrap-cli").map(PathBuf::from);
+                let identity = value(args, "--bootstrap-identity");
+                let target = value(args, "--bootstrap-target").map(PathBuf::from);
+                bridgeforge_core::public_artifacts::prepare(&product, &codex, bootstrap.as_deref(), identity.as_deref(), target.as_deref(), &SystemProcessRunner)
+            })();
+            bridgeforge_core::public_artifacts::outcome(result)
+        },
         "build-environment" => match path_value(args, "--source-root") {
             Ok(root) => bridgeforge_core::runtime::build_environment(&root, &SystemProcessRunner),
             Err(e) => blocked("build-environment", e),
@@ -757,7 +819,7 @@ fn run(args: &[String]) -> CommandOutcome {
         "batch" => batch(&args[1..]),
         _ => CommandOutcome {
             code: EXIT_BLOCKED,
-            stderr: "usage: bridgeforge <self-test|doctor|check|archive-scan|audit-user-allow|project-sync|git-sync|memory-sync|manifest|build-assets|batch>\n".into(),
+            stderr: "usage: bridgeforge <self-test|doctor|check|archive-scan|audit-user-allow|project-sync|public-artifacts|project-hook-migration|git-sync|memory-sync|manifest|build-assets|batch>\n".into(),
             ..CommandOutcome::default()
         },
     }

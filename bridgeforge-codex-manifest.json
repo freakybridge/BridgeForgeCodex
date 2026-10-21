@@ -12,12 +12,12 @@
             {
               "source": "scripts/bridgeforge_codex_shared_update.ps1",
               "target": "scripts/bridgeforge_codex_shared_update.ps1",
-              "sha256": "sha256:76e2db98e0584b436b721b7967c6a8a6acccbbb81c7f1f43bd2b419206231df8"
+              "sha256": "sha256:04d5d90203561e80eeea0d0be1b20b3a611dec71460044161ebe3bf3e74c853a"
             },
             {
               "source": "skills/bridgeforge-codex/SKILL.md",
               "target": "SKILL.md",
-              "sha256": "sha256:b3f16b0e8917a67bb1a91fd322f9da1937a1586ebe276f9b03b3940032b33820"
+              "sha256": "sha256:ed5069da6a6f8a5ea727bc751aadb76863d402af586418f63f3bca98a106a799"
             },
             {
               "source": "skills/bridgeforge-codex/agents/openai.yaml",
@@ -50,14 +50,19 @@
               "sha256": "sha256:886304b417d7297a9191644c34efbf1e8ec82c73c5bb548c457246c36e8d662c"
             },
             {
+              "source": "skills/bridgeforge-codex/references/project-hook-independence.md",
+              "target": "references/project-hook-independence.md",
+              "sha256": "sha256:fddff29ef1d86c8d23ce2065bb87f152ccf451c66c740fb9afeb8940da318a9a"
+            },
+            {
               "source": "skills/bridgeforge-codex/references/technical-receipts.md",
               "target": "references/technical-receipts.md",
-              "sha256": "sha256:07f0c1568c916cfe4c0da35b6b9a78f477079b50eeb7e05817a1abe9d3e7c751"
+              "sha256": "sha256:77b98a3256353b41e04d72088001067ef835d9ff5427e0bc36ee6792cad7e826"
             },
             {
               "source": "skills/bridgeforge-codex/references/transaction.md",
               "target": "references/transaction.md",
-              "sha256": "sha256:e1edcb0802a32e7854f2bf1d59a6e85ed8f6dc1c2b744aa9dcb1fbbce72ae845"
+              "sha256": "sha256:552633818433cebab3ec2083ace05098d7d1c570b36626da8ff2173ee8040292"
             },
             {
               "source": "skills/bridgeforge-codex/references/update.md",
@@ -67,7 +72,7 @@
             {
               "source": "skills/bridgeforge-codex/references/user-skill-maintenance.md",
               "target": "references/user-skill-maintenance.md",
-              "sha256": "sha256:e163670393e230a7d4d069fd2c28d953432af82990963218017d1bd00f9dac8b"
+              "sha256": "sha256:5cc4fa6e108951942477abce7994a7c3e4f66b71378829c809492f91530ca648"
             }
           ]
         },

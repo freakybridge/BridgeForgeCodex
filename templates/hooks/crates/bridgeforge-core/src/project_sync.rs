@@ -68,6 +68,10 @@ pub struct SyncPlan {
     pub preservation_manifest: Value,
     pub confirmation_required: bool,
     pub aggregate_fingerprint: String,
+    #[serde(default)]
+    pub public_installation_required: bool,
+    #[serde(default)]
+    pub hook_migration: Value,
     #[serde(skip)]
     project_root: PathBuf,
     #[serde(skip)]
@@ -80,6 +84,8 @@ pub struct SyncPlan {
     project_hook_inputs: Vec<(crate::project_hooks::Hook, crate::project_hooks::Input)>,
     #[serde(skip)]
     project_hook_reads: BTreeMap<String, Option<Vec<u8>>>,
+    #[serde(skip)]
+    public_actions: Vec<SyncAction>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -101,6 +107,8 @@ pub struct SyncReceipt {
     pub release_setup: Value,
     pub asset_migration_manifest_sha256: Option<String>,
     pub preserved_asset_ids: Vec<String>,
+    #[serde(default)]
+    pub hook_migration: Value,
 }
 
 fn sha_raw(payload: &[u8]) -> String {
@@ -398,6 +406,12 @@ fn plan_fingerprint(
     generated_source_fingerprints: &BTreeMap<String, String>,
 ) -> Result<String, String> {
     let mut material = format!("schema=1\nmode={mode:?}\nversion={version}\n");
+    for (key, value) in generated_source_fingerprints
+        .iter()
+        .filter(|(key, _)| key.starts_with("prepared:") || key.starts_with("project-migration:"))
+    {
+        material.push_str(&format!("{key}={value}\n"));
+    }
     for action in safe.iter().chain(risk.iter()) {
         material.push_str(&format!(
             "{}\t{}\t{}\t{}\n",
@@ -972,6 +986,7 @@ pub fn build_plan_with_inputs(
         .map_err(|error| format!("template root is unavailable: {error}"))?;
     let mode = resolved_mode(&project_root, requested_mode)?;
     let (contract, contract_bytes) = read_contract(&template_root)?;
+    let independent_hooks = crate::project_hook_migration::enabled(&contract);
     let version = contract["release_version"]
         .as_str()
         .ok_or("managed contract release_version is missing")?
@@ -1024,6 +1039,8 @@ pub fn build_plan_with_inputs(
     let mut gaps = Vec::new();
     let mut blockers = Vec::new();
     let mut generated_source_fingerprints = BTreeMap::<String, String>::new();
+    generated_source_fingerprints.insert("prepared:contract".into(), sha_raw(&contract_bytes));
+    let mut target_reads = BTreeMap::new();
     let mut ids = BTreeSet::new();
     let mut targets = BTreeSet::new();
     let assets = contract["assets"]
@@ -1062,6 +1079,7 @@ pub fn build_plan_with_inputs(
             proposed,
             allow_structure_upgrade,
         )?;
+        target_reads.insert(target_raw.to_string(), before.clone());
         if before.as_deref() == Some(payload.as_slice()) {
             continue;
         }
@@ -1191,6 +1209,8 @@ pub fn build_plan_with_inputs(
     for item in contract["generated_assets"]
         .as_array()
         .ok_or("generated_assets is missing")?
+        .iter()
+        .filter(|_| !independent_hooks)
     {
         let id = item["id"].as_str().ok_or("generated asset id is missing")?;
         if generated_asset_current(&project_root, item)? {
@@ -1233,6 +1253,14 @@ pub fn build_plan_with_inputs(
                 .into(),
         });
     }
+    target_reads.insert(
+        contract["contract_target"].as_str().unwrap().into(),
+        fs::read(&contract_target).ok(),
+    );
+    target_reads.insert(
+        contract["stamp"].as_str().unwrap().into(),
+        fs::read(&stamp_target).ok(),
+    );
     if fs::read(&contract_target).ok().as_deref() != Some(contract_bytes.as_slice()) {
         writes.insert(contract_target.clone(), contract_bytes.clone());
         safe.push(SyncAction {
@@ -1357,15 +1385,59 @@ pub fn build_plan_with_inputs(
         &mut gaps,
         &mut generated_source_fingerprints,
     )?;
-    let (project_hook_inputs, project_hook_reads) = plan_project_hooks(
-        &project_root,
-        &contract,
-        &mut writes,
-        &deletes,
-        &mut safe,
-        &mut risk,
-        &mut generated_source_fingerprints,
-    )?;
+    let mut hook_migration = Value::Null;
+    let (project_hook_inputs, mut project_hook_reads) = if independent_hooks {
+        let policy_path = project_root.join(crate::project_hook_migration::POLICY);
+        let policy = writes
+            .get(&policy_path)
+            .cloned()
+            .or_else(|| fs::read(&policy_path).ok())
+            .ok_or("project Hook ownership policy is missing")?;
+        let inspection = crate::project_hook_migration::inspect(
+            &project_root,
+            &policy,
+            previous_version.as_deref(),
+        )?;
+        hook_migration = inspection.notice;
+        if inspection.blocked {
+            blockers
+                .push("project Hook compatibility migration is required before this update".into());
+        }
+        for (relative, before) in &inspection.reads {
+            generated_source_fingerprints.insert(
+                format!("project-migration:{relative}"),
+                crate::manifest::canonical_sha(&json!(before))?,
+            );
+        }
+        for (target, payload) in inspection.writes {
+            let relative = relative_posix(&project_root, &target)?;
+            safe.push(SyncAction {
+                id: format!("migration-status:{relative}"),
+                target: relative.clone(),
+                operation: "record".into(),
+                risk: false,
+                before_sha256: inspection
+                    .reads
+                    .get(&relative)
+                    .and_then(|v| v.as_deref())
+                    .map(sha_raw),
+                after_sha256: sha_raw(&payload),
+            });
+            writes.insert(target, payload);
+        }
+        (Vec::new(), inspection.reads)
+    } else {
+        plan_project_hooks(
+            &project_root,
+            &contract,
+            &mut writes,
+            &deletes,
+            &mut safe,
+            &mut risk,
+            &mut generated_source_fingerprints,
+        )?
+    };
+    project_hook_reads.extend(target_reads);
     // Hook projection can rewrite a migration target. Receipts must describe the
     // final transactional payload, not the pre-projection configuration.
     if let Some(targets) = asset_migration["targets"].as_array_mut() {
@@ -1391,7 +1463,13 @@ pub fn build_plan_with_inputs(
     Ok(SyncPlan {
         build_metrics: Default::default(),
         schema: 1,
-        status: if safe.is_empty() && risk.is_empty() {
+        status: if safe.is_empty()
+            && risk.is_empty()
+            && !(independent_hooks
+                && contract["generated_assets"]
+                    .as_array()
+                    .is_some_and(|a| !a.is_empty()))
+        {
             "current"
         } else {
             "planned"
@@ -1415,12 +1493,18 @@ pub fn build_plan_with_inputs(
         preservation_manifest,
         confirmation_required,
         aggregate_fingerprint: fingerprint,
+        public_installation_required: independent_hooks
+            && contract["generated_assets"]
+                .as_array()
+                .is_some_and(|a| !a.is_empty()),
+        hook_migration,
         project_root,
         writes,
         deletes,
         generated_source_fingerprints,
         project_hook_inputs,
         project_hook_reads,
+        public_actions: Vec::new(),
     })
 }
 
@@ -1570,6 +1654,92 @@ pub fn apply_plan(
     apply_plan_internal(plan, confirmed_plan_fingerprint, confirmed_risk, None)
 }
 
+/// Fixed public deliveries are chosen by product preparation. They do not
+/// participate in project planning or compilation, but enter the same protected
+/// write set and rollback snapshots when Apply consumes them.
+pub fn attach_prepared_public(
+    plan: &mut SyncPlan,
+    contract_bytes: &[u8],
+    prepared: &Path,
+) -> Result<(), String> {
+    if plan.generated_source_fingerprints.get("prepared:contract") != Some(&sha_raw(contract_bytes))
+    {
+        return Err("target contract changed after project planning".into());
+    }
+    if !plan.public_installation_required {
+        return Ok(());
+    }
+    let contract = crate::json::parse_unique_json(contract_bytes, "prepared public contract")?;
+    let payloads = crate::public_artifacts::read(prepared, &contract)?;
+    for asset in contract["generated_assets"]
+        .as_array()
+        .ok_or("public assets missing")?
+    {
+        let binary_relative = asset["binary_targets"][current_platform()]
+            .as_str()
+            .ok_or("public binary target missing")?;
+        let receipt_relative = asset["receipt_target"]
+            .as_str()
+            .ok_or("public receipt target missing")?;
+        let binary_path = safe_join(&plan.project_root, binary_relative, "public installation")?;
+        let receipt_path = safe_join(
+            &plan.project_root,
+            receipt_relative,
+            "public installation receipt",
+        )?;
+        let binary = transaction_file_state(&binary_path)?;
+        let receipt = transaction_file_state(&receipt_path)?;
+        let desired_binary = payloads
+            .get(binary_relative)
+            .ok_or("prepared public binary missing")?;
+        let desired_receipt = payloads
+            .get(receipt_relative)
+            .ok_or("prepared public receipt missing")?;
+        if binary.as_deref() == Some(desired_binary.as_slice())
+            && receipt.as_deref() == Some(desired_receipt.as_slice())
+        {
+            continue;
+        }
+        let old = receipt
+            .as_deref()
+            .map(|b| crate::json::parse_unique_json(b, "installed public receipt"))
+            .transpose()?;
+        let owned = old.as_ref().is_some_and(|r| {
+            r["schema_version"] == 2
+                && r["generated_asset_id"] == asset["id"]
+                && binary
+                    .as_deref()
+                    .is_none_or(|b| r["binary_sha256"].as_str() == Some(sha_raw(b).as_str()))
+        });
+        if (binary.is_some() || receipt.is_some()) && !owned {
+            return Err(format!(
+                "unowned public installation target is preserved: {binary_relative}"
+            ));
+        }
+        for (relative, path, before, payload) in [
+            (binary_relative, binary_path, binary, desired_binary),
+            (receipt_relative, receipt_path, receipt, desired_receipt),
+        ] {
+            if before.as_deref() == Some(payload.as_slice()) {
+                continue;
+            }
+            if plan.writes.contains_key(&path) || plan.deletes.contains(&path) {
+                return Err("public installation overlaps project plan".into());
+            }
+            plan.public_actions.push(SyncAction {
+                id: format!("public:{}:{relative}", asset["id"].as_str().unwrap_or("")),
+                target: relative.into(),
+                operation: "install".into(),
+                risk: false,
+                before_sha256: before.as_deref().map(sha_raw),
+                after_sha256: sha_raw(payload),
+            });
+            plan.writes.insert(path, payload.clone());
+        }
+    }
+    Ok(())
+}
+
 fn validate_transaction_path(path: &Path) -> Result<(), String> {
     for ancestor in path.ancestors() {
         match fs::symlink_metadata(ancestor) {
@@ -1615,6 +1785,16 @@ fn delete_unchanged_file(path: &Path, before: Option<&[u8]>) -> Result<(), Strin
     Ok(())
 }
 
+fn write_unchanged_file(path: &Path, before: Option<&[u8]>, payload: &[u8]) -> Result<(), String> {
+    if transaction_file_state(path)?.as_deref() != before {
+        return Err(format!(
+            "target changed before write; external state preserved: {}",
+            path.display()
+        ));
+    }
+    atomic_write(path, payload)
+}
+
 fn apply_plan_internal(
     plan: SyncPlan,
     confirmed_plan_fingerprint: &str,
@@ -1646,7 +1826,6 @@ fn apply_plan_internal(
     {
         return Err("retired role or reference inputs drifted; regenerate the plan".into());
     }
-    verify_project_hook_reads(&plan)?;
     let legacy = legacy_receipt(&plan.project_root)?;
     if legacy
         .as_ref()
@@ -1674,12 +1853,6 @@ fn apply_plan_internal(
         || plan.aggregate_fingerprint != current_fingerprint
     {
         return Err("aggregate fingerprint drifted; regenerate the plan".into());
-    }
-    if !plan.risk.is_empty() && !confirmed_risk {
-        return Err("risk actions require --confirmed-risk".into());
-    }
-    if !plan.gaps.is_empty() || !plan.blockers.is_empty() {
-        return Err("unresolved gap or blocker prevents apply".into());
     }
     for entry in plan.preservation_manifest["entries"]
         .as_array()
@@ -1710,21 +1883,39 @@ fn apply_plan_internal(
             ));
         }
     }
-    for action in plan.safe.iter().chain(plan.risk.iter()) {
-        let relative = Path::new(&action.target);
-        let target = plan
-            .writes
-            .keys()
-            .chain(plan.deletes.iter())
-            .find(|path| path.ends_with(relative))
-            .ok_or_else(|| {
-                format!(
-                    "planned target is missing from transaction: {}",
-                    action.target
-                )
-            })?;
-        let current = fs::read(target).ok();
-        let digest = if action.id.starts_with("migration.") {
+    let mut snapshots = plan
+        .writes
+        .keys()
+        .chain(plan.deletes.iter())
+        .map(|path| transaction_file_state(path).map(|before| (path.clone(), before)))
+        .collect::<Result<BTreeMap<_, _>, _>>()?;
+    for (relative, expected) in &plan.project_hook_reads {
+        let path = safe_join(&plan.project_root, relative, "planned input")?;
+        let actual = match snapshots.get(&path) {
+            Some(v) => v.clone(),
+            None => transaction_file_state(&path)?,
+        };
+        if &actual != expected {
+            return Err(format!("project input changed after plan: {relative}"));
+        }
+    }
+    for action in plan
+        .safe
+        .iter()
+        .chain(plan.risk.iter())
+        .chain(plan.public_actions.iter())
+    {
+        let target = safe_join(&plan.project_root, &action.target, "transaction target")?;
+        let current = snapshots.get(&target).ok_or_else(|| {
+            format!(
+                "planned target is missing from transaction: {}",
+                action.target
+            )
+        })?;
+        let digest = if action.id.starts_with("migration.")
+            || action.id.starts_with("migration-status:")
+            || action.id.starts_with("public:")
+        {
             sha_raw
         } else {
             sha_git
@@ -1736,7 +1927,7 @@ fn apply_plan_internal(
                 action.target
             ));
         }
-        if let Some(payload) = plan.writes.get(target)
+        if let Some(payload) = plan.writes.get(&target)
             && digest(payload) != action.after_sha256
         {
             return Err(format!(
@@ -1745,12 +1936,6 @@ fn apply_plan_internal(
             ));
         }
     }
-    let snapshots = plan
-        .writes
-        .keys()
-        .chain(plan.deletes.iter())
-        .map(|path| transaction_file_state(path).map(|before| (path.clone(), before)))
-        .collect::<Result<Vec<_>, _>>()?;
     let contract_path = plan.project_root.join(".codex/managed-skeleton.json");
     let contract_payload = plan
         .writes
@@ -1774,6 +1959,11 @@ fn apply_plan_internal(
         .cloned()
         .or_else(|| fs::read(&stamp_path).ok())
         .ok_or("version stamp is missing from the transaction")?;
+    if !plan.writes.is_empty() || !plan.deletes.is_empty() {
+        if !snapshots.contains_key(&stamp_path) {
+            snapshots.insert(stamp_path.clone(), transaction_file_state(&stamp_path)?);
+        }
+    }
     let mut retired_directories = Vec::new();
     for entry in plan.preservation_manifest["entries"]
         .as_array()
@@ -1798,11 +1988,19 @@ fn apply_plan_internal(
     let mut removed_directories = Vec::new();
     let mut expected_after = BTreeMap::<PathBuf, Option<Vec<u8>>>::new();
     let apply_result = (|| {
+        if plan.writes.is_empty() && plan.deletes.is_empty() {
+            crate::baseline::verify(&plan.project_root, None, true)?;
+            return Ok::<(), String>(());
+        }
         for (path, payload) in &plan.writes {
             if path == &stamp_path {
                 continue;
             }
-            atomic_write(path, payload)?;
+            write_unchanged_file(
+                path,
+                snapshots.get(path).and_then(|bytes| bytes.as_deref()),
+                payload,
+            )?;
             expected_after.insert(path.clone(), Some(payload.clone()));
         }
         for path in &plan.deletes {
@@ -1810,12 +2008,7 @@ fn apply_plan_internal(
                 .as_ref()
                 .filter(|(legacy_path, _)| legacy_path == path)
                 .map(|(_, bytes)| Some(bytes.as_slice()))
-                .unwrap_or_else(|| {
-                    snapshots
-                        .iter()
-                        .find(|(target, _)| target == path)
-                        .and_then(|(_, bytes)| bytes.as_deref())
-                });
+                .unwrap_or_else(|| snapshots.get(path).and_then(|bytes| bytes.as_deref()));
             delete_unchanged_file(path, original)?;
             expected_after.insert(path.clone(), None);
         }
@@ -1828,12 +2021,21 @@ fn apply_plan_internal(
             })?;
             removed_directories.push(directory.clone());
         }
-        crate::baseline::verify_prospective(
-            &plan.project_root,
-            &contract_path,
-            &plan.current_version,
-            true,
-        )?;
+        let mut evidence = if crate::project_hook_migration::enabled(&prospective_contract) {
+            Some(crate::baseline::verify_prospective_recorded(
+                &plan.project_root,
+                &contract_path,
+                &plan.current_version,
+            )?)
+        } else {
+            crate::baseline::verify_prospective(
+                &plan.project_root,
+                &contract_path,
+                &plan.current_version,
+                true,
+            )?;
+            None
+        };
         if let Some(observer) = before_stamp {
             observer(&plan.project_root, &stamp_path)?;
         }
@@ -1849,9 +2051,22 @@ fn apply_plan_internal(
                 );
             }
         }
-        atomic_write(&stamp_path, &stamp_payload)?;
+        write_unchanged_file(
+            &stamp_path,
+            snapshots
+                .get(&stamp_path)
+                .and_then(|bytes| bytes.as_deref()),
+            &stamp_payload,
+        )?;
         expected_after.insert(stamp_path.clone(), Some(stamp_payload.clone()));
-        crate::baseline::verify(&plan.project_root, None, true)?;
+        if let Some(evidence) = evidence.as_mut() {
+            for (path, bytes) in &expected_after {
+                evidence.include(path.clone(), bytes.clone());
+            }
+            evidence.verify_unchanged(&plan.project_root)?;
+        } else {
+            crate::baseline::verify(&plan.project_root, None, true)?;
+        }
         if project_identity(&plan.project_root)? != Some((plan.current_version.clone(), false)) {
             return Err("final version identity does not match the installed baseline".into());
         }
@@ -1908,6 +2123,8 @@ fn apply_plan_internal(
     }
     let mut applied = plan.safe.clone();
     applied.extend(plan.risk.clone());
+    applied.extend(plan.public_actions.clone());
+    let stamp_written_last = !applied.is_empty();
     Ok(SyncReceipt {
         build_metrics: plan.build_metrics,
         schema: 1,
@@ -1919,9 +2136,10 @@ fn apply_plan_internal(
         aggregate_fingerprint: plan.aggregate_fingerprint,
         applied,
         rollback_performed: false,
-        stamp_written_last: true,
+        stamp_written_last,
         project_readiness: "ready".into(),
         release_setup: crate::git_sync::release_setup_status(&plan.project_root),
+        hook_migration: plan.hook_migration,
         asset_migration_manifest_sha256: plan.asset_migration["manifest_sha256"]
             .as_str()
             .map(str::to_string),
@@ -1950,7 +2168,7 @@ fn human_plan(plan: &SyncPlan) -> Value {
     } else {
         ("可直接执行", "按当前计划执行骨架事务")
     };
-    let pending = if !plan.blockers.is_empty() {
+    let mut pending = if !plan.blockers.is_empty() {
         vec![format!("仍有 {} 项阻断需要处理", plan.blockers.len())]
     } else if !plan.gaps.is_empty() {
         vec![format!("仍有 {} 项决定需要确认", plan.gaps.len())]
@@ -1959,6 +2177,11 @@ fn human_plan(plan: &SyncPlan) -> Value {
     } else {
         Vec::new()
     };
+    if plan.hook_migration["show"] == true || plan.hook_migration["blocking"] == true {
+        if let Some(message) = plan.hook_migration["message"].as_str() {
+            pending.push(message.to_string());
+        }
+    }
     json!({
         "conclusion": conclusion,
         "pending": pending,
@@ -2021,10 +2244,16 @@ pub fn outcome_receipt_with_format(
 ) -> CommandOutcome {
     match result {
         Ok(receipt) => {
+            let notice = if receipt.hook_migration["show"] == true {
+                receipt.hook_migration["message"].as_str()
+            } else {
+                None
+            };
+            let noop = receipt.applied.is_empty();
             let human = json!({
-                "conclusion": "已完成",
-                "pending": [],
-                "next_step": "需要保存到 GitHub 时运行 $git-sync",
+                "conclusion": if noop {"无需处理"} else if notice.is_some() {"已完成但仍有待处理项"} else {"已完成"},
+                "pending": notice.into_iter().collect::<Vec<_>>(),
+                "next_step": if noop {"本次骨架操作已结束，无需继续处理"}else{"需要保存到 GitHub 时运行 $git-sync"},
                 "current_version": receipt.current_version,
                 "release_setup": receipt.release_setup,
                 "changed_count": receipt.applied.len()
@@ -2056,6 +2285,13 @@ pub fn attach_generated_assets(
     contract: &Value,
     runner: &dyn ProcessRunner,
 ) -> Result<Vec<Value>, String> {
+    // The planner owns a canonical root. Keep legacy callers' relative or
+    // Windows verbatim-path spellings from creating a second key for a target.
+    let canonical_root = project_root.canonicalize().map_err(|e| e.to_string())?;
+    if canonical_root != plan.project_root {
+        return Err("generated assets belong to a different project than the plan".into());
+    }
+    let project_root = canonical_root.as_path();
     let observed = crate::build_metrics::Observed {
         runner,
         metrics: Default::default(),
@@ -2077,7 +2313,11 @@ pub fn attach_generated_assets(
                 contract,
                 runner,
             );
-            observed.metrics.borrow_mut().timings_ms.insert("managed_assets".into(), started.elapsed().as_millis());
+            observed
+                .metrics
+                .borrow_mut()
+                .timings_ms
+                .insert("managed_assets".into(), started.elapsed().as_millis());
             let (writes, generated_receipts) = generated?;
             plan.writes.extend(writes);
             receipts.extend(generated_receipts);
@@ -2096,7 +2336,11 @@ pub fn attach_generated_assets(
             &plan.project_hook_inputs,
             runner,
         );
-        observed.metrics.borrow_mut().timings_ms.insert("project_hooks".into(), started.elapsed().as_millis());
+        observed
+            .metrics
+            .borrow_mut()
+            .timings_ms
+            .insert("project_hooks".into(), started.elapsed().as_millis());
         let project_writes = project_result?;
         verify_project_hook_reads(plan)?;
         for (hook, _) in &plan.project_hook_inputs {
@@ -2157,42 +2401,45 @@ pub fn build_generated_assets(
         contract,
         runner,
     )?;
-    let mut project_writes = BTreeMap::new();
-    let mut safe = Vec::new();
-    let mut risk = Vec::new();
-    let (inputs, reads) = plan_project_hooks(
-        project_root,
-        contract,
-        &mut project_writes,
-        &[],
-        &mut safe,
-        &mut risk,
-        &mut BTreeMap::new(),
-    )?;
-    if !risk.is_empty() || !project_writes.is_empty() {
-        return Err(
-            "project Rust hook registration changes require project-sync plan/apply".into(),
-        );
+    let independent_hooks = crate::project_hook_migration::enabled(contract);
+    if !independent_hooks {
+        let mut project_writes = BTreeMap::new();
+        let mut safe = Vec::new();
+        let mut risk = Vec::new();
+        let (inputs, reads) = plan_project_hooks(
+            project_root,
+            contract,
+            &mut project_writes,
+            &[],
+            &mut safe,
+            &mut risk,
+            &mut BTreeMap::new(),
+        )?;
+        if !risk.is_empty() || !project_writes.is_empty() {
+            return Err(
+                "project Rust hook registration changes require project-sync plan/apply".into(),
+            );
+        }
+        let outputs = crate::project_hooks::build(
+            &project_root.join(".codex/hooks"),
+            project_root,
+            contract,
+            &inputs,
+            runner,
+        )?;
+        crate::project_hooks::verify_reads(project_root, &reads)?;
+        for (hook, _) in &inputs {
+            receipts.push(
+                serde_json::from_slice(
+                    outputs
+                        .get(&project_root.join(hook.receipt()))
+                        .ok_or("project receipt missing")?,
+                )
+                .map_err(|e| e.to_string())?,
+            );
+        }
+        writes.extend(outputs);
     }
-    let outputs = crate::project_hooks::build(
-        &project_root.join(".codex/hooks"),
-        project_root,
-        contract,
-        &inputs,
-        runner,
-    )?;
-    crate::project_hooks::verify_reads(project_root, &reads)?;
-    for (hook, _) in &inputs {
-        receipts.push(
-            serde_json::from_slice(
-                outputs
-                    .get(&project_root.join(hook.receipt()))
-                    .ok_or("project receipt missing")?,
-            )
-            .map_err(|e| e.to_string())?,
-        );
-    }
-    writes.extend(outputs);
     let snapshots = writes
         .keys()
         .map(|path| transaction_file_state(path).map(|state| (path.clone(), state)))
@@ -2201,7 +2448,9 @@ pub fn build_generated_assets(
         for (path, payload) in &writes {
             atomic_write(path, payload)?;
         }
-        crate::project_hooks::verify(project_root, contract, true)?;
+        if !independent_hooks {
+            crate::project_hooks::verify(project_root, contract, true)?;
+        }
         if let Some((path, before)) = &legacy {
             if fs::read(path).map_err(|error| error.to_string())? != *before {
                 return Err("legacy build receipt changed during build".into());

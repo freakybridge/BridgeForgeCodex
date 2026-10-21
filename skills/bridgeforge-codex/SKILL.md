@@ -32,7 +32,7 @@ $BRIDGEFORGE_CODEX_HOME = Join-Path $env:USERPROFILE ".bridgeforge-codex"
 
 薄入口只是 Codex 可发现入口，完整产品只能来自包含 `templates/hooks/Cargo.toml` 与受管 `bridgeforge` 二进制的官方产品 home。updater 失败、产品 home 缺文件、非普通目录、工作树不干净或 origin 不匹配时，读取 [用户级受管 Skill 维护](references/user-skill-maintenance.md) 后停止；禁止从旧用户目录、本地 clone 或当前项目补文件，也禁止读取、迁移或删除旧 BridgeForge/Claude 遗留。
 
-## 2. 判断模式并锁定 Rust 工具
+## 2. 判断模式并锁定已验证工具
 
 项目写入前，只读检查版本戳并锁定唯一 `$MODE`：
 
@@ -41,28 +41,19 @@ $BRIDGEFORGE_CODEX_HOME = Join-Path $env:USERPROFILE ".bridgeforge-codex"
 3. 没有合法戳但已有 `.codex/`、`AGENTS.md` 或其他骨架资产：`adopt`。
 4. 没有骨架身份的空白项目：`init`。
 
-每轮以刷新后的产品 home 为最新安装目标，固定升级分界线不得随发布上移。低于分界线时禁止读取旧 manifest、旧 schema、旧 hash lineage 或逐版本迁移链来选择实现；等于或高于分界线时兼容更新并保留项目定制。只允许使用 updater 安装并自检通过的受管 Rust CLI：
+每轮以刷新后的产品 home 为安装目标，固定升级分界线不得随发布上移。低于分界线时禁止读取旧 manifest、旧 schema、旧 hash lineage 或逐版本迁移链来选择实现；等于或高于分界线时兼容更新并保留项目定制。只允许使用 updater 事务安装并验证的受管 Rust CLI：
 
 ```powershell
 $BRIDGEFORGE = Join-Path $env:USERPROFILE ".codex\bin\bridgeforge.exe"
-& $BRIDGEFORGE doctor --product-root $BRIDGEFORGE_CODEX_HOME --json
 ```
 
-验证成功后锁定 `$BRIDGEFORGE`；本轮禁止切换到项目脚本、Python fallback 或其他本地 clone。Cargo、锁文件或受管二进制不健康时，必须先读取 [Rust runtime preflight](references/runtime-preflight.md)；未取得有效 runtime 收据不得继续。
+从 updater 成功收据读取 `public_artifacts.receipt` 并保存为 `$PUBLIC_ARTIFACTS`；其状态必须为 `prepared`。工具与公共产物验证归用户级事务，普通维护不再重复运行 doctor。缺少有效收据时停止，不切换到项目脚本、Python fallback 或其他 clone。主动诊断或异常定位才读取 [Rust runtime preflight](references/runtime-preflight.md)。
 
-## 3. 按需处理 Codex 原生 Memories
+## 3. 用户级与项目级 Hook 边界
 
-锁定 `$BRIDGEFORGE` 后运行一次状态检查；健康、pending、no-op 和已展示告警必须静默：
+普通 update 不检查 Native Memory 同步状态，不执行 reconcile、首次启用或常规 repair。只有目标版本明确要求迁移用户级 Hook 注册时才读取 [Native Memory 状态处理](references/native-memory.md)，按既有授权保留启用/禁用状态；主动 Memory 维护仍是独立任务。
 
-```powershell
-& $BRIDGEFORGE memory-sync status --codex-home (Join-Path $env:USERPROFILE ".codex")
-```
-
-- `declined`：只记用户级 gap，禁止再次询问或改配置。
-- 当前策略的 `approved + enabled + hookInstalled + hookRuntimeVerified`，且无未解决的 `degraded` / `failed` / `conflicted`：no-op。
-- 其他授权、安装、runtime 或 disabled 状态：执行任何动作前读取 [Native Memory 状态处理](references/native-memory.md)。
-
-Native Memory 的 safe/risk/gap 必须并入本轮唯一 accumulator；项目骨架更新禁止顺手执行完整 `reconcile`。
+项目自有 Hook 由项目独立开发、构建和注册，普通 update 保留其程序与注册，不检查开发产物是否最新，不扫描完整源码或编译。同步器只按明确迁移声明做有限的一次性识别：仅有旧耦合提示可继续；明确不兼容才阻断。收到首次迁移提示时读取 [项目 Hook 独立迁移](references/project-hook-independence.md)；不得自动实施迁移或把“已提示”记为完成。
 
 ## 4. 读取唯一模式手册并生成计划
 
@@ -78,7 +69,8 @@ Native Memory 的 safe/risk/gap 必须并入本轮唯一 accumulator；项目骨
 
 ```powershell
 & $BRIDGEFORGE project-sync --project-root . `
-  --template-root $BRIDGEFORGE_CODEX_HOME --mode $MODE --output-format combined
+  --template-root $BRIDGEFORGE_CODEX_HOME --mode $MODE --output-format combined `
+  --public-artifacts $PUBLIC_ARTIFACTS
 ```
 
 plan 必须零写入。同步器 `machine` 区负责 fingerprint、safe、risk、gap、blocker 与一次性 `PreservationManifest`；`human` 区负责稳定的用户结果。blocker 必须立即停止；无 risk 的 current baseline 更新零确认。存在 risk 时，主对话只能把所有用户决策合并为本轮一次确认，确认前禁止执行 safe 或 risk 动作。
@@ -87,7 +79,7 @@ plan 必须零写入。同步器 `machine` 区负责 fingerprint、safe、risk�
 
 ## 5. Apply 与用户结果
 
-准备 Apply 时必须用同一份内存中的迁移 manifest 重新生成 plan；fingerprint 漂移则零写停止并重新展示。只有 fingerprint 与用户选择仍有效时，才读取 [事务与回滚](references/transaction.md) 并按其唯一顺序执行；Apply 必须传入刚生成的 `--plan-fingerprint`，禁止人工 copy、merge、删除或写版本戳。
+准备 Apply 时复用已取得的计划指纹、用户选择和同一份内存迁移 manifest；不在 Skill 中额外跑一遍完整 planner。读取 [事务与回滚](references/transaction.md)，Apply 传 `--plan-fingerprint` 与同一 `$PUBLIC_ARTIFACTS`；执行入口集中复核，漂移时零写停止并重新展示。安装准备是内部步骤，没有单独命令。禁止人工 copy、merge、删除或写版本戳。
 
 维护结果逐项原样展示同步器 `human` 区的“结论、待处理事项、下一步”，只使用“已完成、无需处理、可直接执行、等待确认、未完成、已完成但仍有待处理项”六类状态。safe-only 必须为“可直接执行”，禁止改成“等待确认”、改写结论或倾倒 `machine` 内部字段。用户追问未覆盖的背景时可补充，但不得改变同步器结论。
 

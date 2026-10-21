@@ -44,6 +44,10 @@ pub(crate) fn generated_writes(
         contract,
         runner,
         false,
+        None,
+        None,
+        None,
+        None,
     )
 }
 
@@ -61,7 +65,42 @@ pub(crate) fn generated_writes_reusing(
         contract,
         runner,
         true,
+        None,
+        None,
+        None,
+        None,
     )
+}
+
+pub(crate) fn prepare_public(
+    source_base: &Path,
+    codex_root: &Path,
+    contract: &Value,
+    runner: &dyn ProcessRunner,
+    bootstrap_cli: Option<&Path>,
+    bootstrap_target: Option<&Path>,
+) -> Result<
+    (
+        BTreeMap<PathBuf, Vec<u8>>,
+        Vec<Value>,
+        BTreeMap<String, Value>,
+    ),
+    String,
+> {
+    let mut references = BTreeMap::new();
+    let (writes, receipts) = generated_writes_internal(
+        source_base,
+        "source_root",
+        codex_root,
+        contract,
+        runner,
+        true,
+        Some(codex_root),
+        bootstrap_cli,
+        bootstrap_target,
+        Some(&mut references),
+    )?;
+    Ok((writes, receipts, references))
 }
 
 fn generated_writes_internal(
@@ -71,6 +110,10 @@ fn generated_writes_internal(
     contract: &Value,
     runner: &dyn ProcessRunner,
     reuse: bool,
+    shared_root: Option<&Path>,
+    bootstrap_cli: Option<&Path>,
+    bootstrap_target: Option<&Path>,
+    mut public_references: Option<&mut BTreeMap<String, Value>>,
 ) -> Result<(BTreeMap<PathBuf, Vec<u8>>, Vec<Value>), String> {
     let generated = contract["generated_assets"]
         .as_array()
@@ -109,6 +152,12 @@ fn generated_writes_internal(
                 .get(&source_root)
                 .ok_or("generated snapshot is missing")?;
             inputs.verify_unchanged()?;
+            if bootstrap_cli.is_some()
+                && crate::artifact_cache::environment(&source_root, runner)
+                    != crate::artifact_cache::environment(&inputs.snapshot, runner)
+            {
+                return Err("bootstrap and isolated compiler environments differ".into());
+            }
             // Validate each asset's recipe/self-test too, including shared workspaces.
             let binary = item["build"]["binary_name"]
                 .as_str()
@@ -128,15 +177,35 @@ fn generated_writes_internal(
             {
                 return Err("generated build input contract mismatch".into());
             }
-            if reuse && runner.artifact_cache_enabled() && !cache_attempted {
-                cache = crate::artifact_cache::Cache::open_temporary(
-                    project_root,
-                    &inputs.snapshot,
-                    runner,
-                );
+            if reuse
+                && (runner.artifact_cache_enabled() || shared_root.is_some())
+                && !cache_attempted
+            {
+                cache = if let Some(root) = shared_root {
+                    Some(crate::artifact_cache::Cache::open_shared(
+                        root,
+                        &inputs.snapshot,
+                        runner,
+                    )?)
+                } else {
+                    crate::artifact_cache::Cache::open_temporary(
+                        project_root,
+                        &inputs.snapshot,
+                        runner,
+                    )
+                };
                 cache_attempted = true;
             }
             if let Some((payload, receipt)) = cache.as_mut().and_then(|c| c.load(item, runner)) {
+                if let Some(references) = public_references.as_deref_mut() {
+                    references.insert(
+                        id.into(),
+                        cache
+                            .as_ref()
+                            .ok_or("public cache missing")?
+                            .prepared_reference(item)?,
+                    );
+                }
                 inputs.verify_unchanged()?;
                 let platform = if cfg!(windows) {
                     "windows-x86_64"
@@ -175,7 +244,18 @@ fn generated_writes_internal(
             // One target per isolated workspace shares dependency compilation.
             // Remove this asset's final executable first: a successful no-op
             // runner must never be able to validate the previous asset's output.
-            let output_dir = inputs.snapshot.with_extension("target");
+            let imported = if binary_name == "bridgeforge" {
+                bootstrap_cli
+            } else {
+                None
+            };
+            let output_dir = if imported.is_some() {
+                inputs.snapshot.with_extension("bootstrap-test")
+            } else {
+                bootstrap_target
+                    .map(Path::to_path_buf)
+                    .unwrap_or_else(|| inputs.snapshot.with_extension("target"))
+            };
             let built = output_dir.join("release").join(if cfg!(windows) {
                 format!("{binary_name}.exe")
             } else {
@@ -190,26 +270,41 @@ fn generated_writes_internal(
                     ));
                 }
             }
-            let mut request = ProcessRequest::new("cargo", &inputs.snapshot);
-            request.args = vec![
-                OsString::from("build"),
-                OsString::from("--locked"),
-                OsString::from("--profile"),
-                OsString::from("release"),
-                OsString::from("--manifest-path"),
-                manifest.into_os_string(),
-                OsString::from("--target-dir"),
-                output_dir.clone().into_os_string(),
-                OsString::from("--bin"),
-                OsString::from(binary_name),
-            ];
-            request.timeout = Duration::from_secs(900);
-            let output = runner.run(&request).map_err(|error| error.to_string())?;
-            if output.timed_out || output.code != 0 {
-                return Err(format!(
-                    "generated asset build failed: {id}: {}",
-                    String::from_utf8_lossy(&output.stderr).trim()
-                ));
+            if let Some(imported) = imported {
+                // The updater binds this bootstrap to the exact source and
+                // compiler identity. Its bytes still undergo the asset self-test.
+                let payload = fs::read(imported).map_err(|e| e.to_string())?;
+                fs::create_dir_all(built.parent().ok_or("bootstrap target parent missing")?)
+                    .map_err(|e| e.to_string())?;
+                fs::write(&built, &payload).map_err(|e| e.to_string())?;
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    fs::set_permissions(&built, fs::Permissions::from_mode(0o700))
+                        .map_err(|e| e.to_string())?;
+                }
+            } else {
+                let mut request = ProcessRequest::new("cargo", &inputs.snapshot);
+                request.args = vec![
+                    OsString::from("build"),
+                    OsString::from("--locked"),
+                    OsString::from("--profile"),
+                    OsString::from("release"),
+                    OsString::from("--manifest-path"),
+                    manifest.into_os_string(),
+                    OsString::from("--target-dir"),
+                    output_dir.clone().into_os_string(),
+                    OsString::from("--bin"),
+                    OsString::from(binary_name),
+                ];
+                request.timeout = Duration::from_secs(900);
+                let output = runner.run(&request).map_err(|error| error.to_string())?;
+                if output.timed_out || output.code != 0 {
+                    return Err(format!(
+                        "generated asset build failed: {id}: {}",
+                        String::from_utf8_lossy(&output.stderr).trim()
+                    ));
+                }
             }
             let platform = if cfg!(windows) {
                 "windows-x86_64"
@@ -276,7 +371,13 @@ fn generated_writes_internal(
                 serde_json::to_vec_pretty(&receipt).map_err(|error| error.to_string())?;
             encoded.push(b'\n');
             if let Some(cache) = cache.as_mut() {
-                let _ = cache.store(item, &payload, &encoded, runner);
+                let stored = cache.store(item, &payload, &encoded, runner);
+                if shared_root.is_some() {
+                    stored?;
+                }
+                if let Some(references) = public_references.as_deref_mut() {
+                    references.insert(id.into(), cache.prepared_reference(item)?);
+                }
             }
             writes.insert(target, payload);
             writes.insert(receipt_target, encoded);

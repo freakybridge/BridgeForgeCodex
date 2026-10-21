@@ -205,7 +205,16 @@ fn project_sync_plan_apply_and_fingerprint_gate_are_transactional() {
 
     write(&project.join(".codex/example.txt"), b"external drift\n");
     let drift = apply_plan(plan.clone(), &plan.aggregate_fingerprint, false).unwrap_err();
-    assert!(drift.contains("drifted"));
+    assert!(
+        drift.contains("project input changed after plan"),
+        "{drift}"
+    );
+    assert_eq!(
+        fs::read(project.join(".codex/example.txt")).unwrap(),
+        b"external drift\n"
+    );
+    assert!(!project.join(".codex/managed-skeleton.json").exists());
+    assert!(!project.join(".codex/.bridgeforge_codex_version").exists());
     fs::remove_file(project.join(".codex/example.txt")).unwrap();
 
     let fingerprint = plan.aggregate_fingerprint.clone();
@@ -228,14 +237,38 @@ fn project_sync_real_init_builds_and_applies_generated_assets() {
     let temp = TestDirectory::new("project-sync-generated-init");
     let project = temp.0.join("project");
     fs::create_dir_all(&project).unwrap();
-    let factory = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+    let original_factory = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .ancestors()
         .nth(2)
         .unwrap()
         .to_path_buf();
-    let contract: serde_json::Value =
-        serde_json::from_slice(&fs::read(factory.join("templates/managed-skeleton.json")).unwrap())
-            .unwrap();
+    let mut contract: serde_json::Value = serde_json::from_slice(
+        &fs::read(original_factory.join("templates/managed-skeleton.json")).unwrap(),
+    )
+    .unwrap();
+    // Keep this legacy-library regression fixture explicit. The production CLI
+    // no longer uses its implicit Hook build path; the new prepared workflow is
+    // covered separately below. Preserve the original safety assertions here.
+    contract["assets"]
+        .as_array_mut()
+        .unwrap()
+        .retain(|a| a["id"] != "codex.project-hook-policy");
+    let factory = temp.0.join("legacy-product");
+    for asset in contract["assets"].as_array().unwrap() {
+        let source = asset["source"].as_str().unwrap();
+        write(
+            &factory.join(source),
+            &fs::read(original_factory.join(source)).unwrap(),
+        );
+    }
+    write(
+        &factory.join("templates/managed-skeleton.json"),
+        &serde_json::to_vec_pretty(&contract).unwrap(),
+    );
+    write(
+        &factory.join("VERSION"),
+        &fs::read(original_factory.join("VERSION")).unwrap(),
+    );
     // A registered project-owned Rust program shares the verified locked workspace,
     let mut initial = build_plan(&project, &factory, SyncMode::Init).unwrap();
     attach_generated_assets(
@@ -285,10 +318,20 @@ fn project_sync_real_init_builds_and_applies_generated_assets() {
     )
     .unwrap();
     assert!(!receipts.is_empty());
-    attach_generated_assets(&mut repeated_plan,&factory,&project,&contract,&SystemProcessRunner).unwrap();
-    assert_eq!(repeated_plan.aggregate_fingerprint,confirmed_source_fingerprint);
+    attach_generated_assets(
+        &mut repeated_plan,
+        &factory,
+        &project,
+        &contract,
+        &SystemProcessRunner,
+    )
+    .unwrap();
+    assert_eq!(
+        repeated_plan.aggregate_fingerprint,
+        confirmed_source_fingerprint
+    );
     // This fixture uses a closed, legacy project Hook and the real toolchain.
-    assert_eq!(repeated_plan.build_metrics.cargo_build_invocations,0);
+    assert_eq!(repeated_plan.build_metrics.cargo_build_invocations, 0);
     assert!(repeated_plan.build_metrics.cache_hits >= 1);
     assert_eq!(plan.aggregate_fingerprint, confirmed_source_fingerprint);
     let input_path = project.join(".codex/hooks/project_demo/entrypoint.rs");
@@ -502,6 +545,190 @@ fn project_sync_real_init_builds_and_applies_generated_assets() {
         0,
         "ordinary downstream Cargo test must not require factory tests: {}",
         String::from_utf8_lossy(&result.stderr)
+    );
+}
+
+#[test]
+fn prepared_public_artifacts_are_shared_and_update_preserves_project_hooks() {
+    use bridgeforge_core::{project_sync::attach_prepared_public, public_artifacts};
+    let temp = TestDirectory::new("prepared-update");
+    let factory = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .ancestors()
+        .nth(2)
+        .unwrap();
+    let codex = temp.0.join("profile/.codex");
+    fs::create_dir_all(&codex).unwrap();
+    let contract_bytes = fs::read(factory.join("templates/managed-skeleton.json")).unwrap();
+    let contract: serde_json::Value = serde_json::from_slice(&contract_bytes).unwrap();
+    let prepared =
+        public_artifacts::prepare(factory, &codex, None, None, None, &SystemProcessRunner).unwrap();
+    assert_eq!(prepared["build_metrics"]["cargo_build_invocations"], 2);
+    let prepared_path = PathBuf::from(prepared["receipt"].as_str().unwrap());
+    for name in ["first", "second"] {
+        let project = temp.0.join(name);
+        fs::create_dir(&project).unwrap();
+        let mut plan = build_plan(&project, factory, SyncMode::Init).unwrap();
+        assert!(plan.public_installation_required);
+        assert!(
+            !project.join(".codex").exists(),
+            "project preview must be read only"
+        );
+        assert_eq!(plan.build_metrics.cargo_build_invocations, 0);
+        let fingerprint = plan.aggregate_fingerprint.clone();
+        attach_prepared_public(&mut plan, &contract_bytes, &prepared_path).unwrap();
+        assert_eq!(plan.aggregate_fingerprint, fingerprint);
+        let installed = apply_plan(plan, &fingerprint, false).unwrap();
+        assert!(
+            installed
+                .applied
+                .iter()
+                .any(|a| a.id.starts_with("public:"))
+        );
+        bridgeforge_core::baseline::verify(&project, None, true).unwrap();
+        // A legacy project's private program and even invalid source must not
+        // be touched or compiled by ordinary update.
+        let native = project.join(".codex/hooks.json");
+        let mut hooks: serde_json::Value =
+            serde_json::from_slice(&fs::read(&native).unwrap()).unwrap();
+        hooks["hooks"]["Stop"].as_array_mut().unwrap().push(json!({"hooks":[{"type":"command","bridgeforgeProjectHookId":"demo:0","command":".codex/bin/project_demo"}]}));
+        write(&native, &serde_json::to_vec_pretty(&hooks).unwrap());
+        write(
+            &project.join(".codex/hooks/project_demo/entrypoint.rs"),
+            b"not Rust; private project data",
+        );
+        let private_binary = project.join(format!(
+            ".codex/bin/project_demo{}",
+            std::env::consts::EXE_SUFFIX
+        ));
+        write(&private_binary, b"project-owned executable");
+        let mut update = build_plan(&project, factory, SyncMode::Update).unwrap();
+        assert_eq!(update.hook_migration["show"], true);
+        assert!(
+            update
+                .safe
+                .iter()
+                .chain(&update.risk)
+                .all(|a| !a.id.starts_with("project-hook:generated:"))
+        );
+        let fingerprint = update.aggregate_fingerprint.clone();
+        attach_prepared_public(&mut update, &contract_bytes, &prepared_path).unwrap();
+        apply_plan(update, &fingerprint, true).unwrap();
+        assert_eq!(
+            fs::read(&private_binary).unwrap(),
+            b"project-owned executable"
+        );
+        let mut again = build_plan(&project, factory, SyncMode::Update).unwrap();
+        assert_eq!(again.hook_migration["show"], false);
+        let fingerprint = again.aggregate_fingerprint.clone();
+        attach_prepared_public(&mut again, &contract_bytes, &prepared_path).unwrap();
+        let receipt = apply_plan(again, &fingerprint, false).unwrap();
+        assert!(receipt.applied.is_empty());
+        assert!(!receipt.stamp_written_last);
+        assert_eq!(receipt.build_metrics.cargo_build_invocations, 0);
+        let mut cli = ProcessRequest::new(
+            project
+                .join(format!(
+                    ".codex/bin/bridgeforge{}",
+                    std::env::consts::EXE_SUFFIX
+                ))
+                .into_os_string(),
+            &project,
+        );
+        cli.args = vec![
+            "check".into(),
+            "baseline".into(),
+            "--root".into(),
+            project.clone().into_os_string(),
+        ];
+        cli.env.insert(
+            "USERPROFILE".into(),
+            temp.0.join("profile-without-product").into_os_string(),
+        );
+        cli.env.insert(
+            "CODEX_HOME".into(),
+            temp.0
+                .join("profile-without-product/.codex")
+                .into_os_string(),
+        );
+        let result = SystemProcessRunner.run(&cli).unwrap();
+        assert_eq!(
+            result.code,
+            0,
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+    }
+    let reused =
+        public_artifacts::prepare(factory, &codex, None, None, None, &SystemProcessRunner).unwrap();
+    assert_eq!(reused["build_metrics"]["cargo_build_invocations"], 0);
+    assert_eq!(reused["build_metrics"]["cache_hits"], 2);
+    assert_eq!(
+        public_artifacts::read(&prepared_path, &contract)
+            .unwrap()
+            .len(),
+        4
+    );
+}
+
+#[test]
+fn independent_project_hook_completion_requires_own_build_and_rejects_external_inputs() {
+    let temp = TestDirectory::new("independent-hook-completion");
+    let project = &temp.0;
+    let package = project.join(".codex/hooks/project_demo");
+    write(
+        &project.join(".codex/project-hook-policy.json"),
+        include_bytes!("../../../templates/project-hook-policy.json"),
+    );
+    write(&project.join(".codex/hooks.json"), br#"{"hooks":{"Stop":[{"hooks":[{"type":"command","bridgeforgeProjectHookId":"demo:0","command":".codex/bin/project_demo"}]}]}}"#);
+    write(
+        &package.join("Cargo.toml"),
+        b"[package]\nname=\"project_demo\"\nversion=\"0.1.0\"\nedition=\"2024\"\n[workspace]\n",
+    );
+    write(
+        &package.join("Cargo.lock"),
+        b"version = 4\n[[package]]\nname = \"project_demo\"\nversion = \"0.1.0\"\n",
+    );
+    write(
+        &package.join("src/main.rs"),
+        b"#![cfg_attr(windows, windows_subsystem = \"windows\")]\nfn main() {}\n",
+    );
+    let mut command = ProcessRequest::new("cargo", &package);
+    command.args = ["build", "--locked", "--release"].map(Into::into).to_vec();
+    let result = SystemProcessRunner.run(&command).unwrap();
+    assert_eq!(
+        result.code,
+        0,
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let binary = format!("project_demo{}", std::env::consts::EXE_SUFFIX);
+    write(
+        &project.join(".codex/bin").join(&binary),
+        &fs::read(package.join("target/release").join(&binary)).unwrap(),
+    );
+    let result = bridgeforge_core::project_hook_migration::verify_completed(
+        project,
+        true,
+        &SystemProcessRunner,
+    )
+    .unwrap();
+    assert_eq!(result["status"], "completed");
+    let state = fs::read(project.join(".codex/project-hook-migrations.json")).unwrap();
+    write(
+        &project.join(".codex/hooks/shared.txt"),
+        b"skeleton-owned dependency",
+    );
+    write(&package.join("src/main.rs"), b"#![cfg_attr(windows, windows_subsystem = \"windows\")]\nfn main() { let _ = include_str!(\"../../shared.txt\"); }\n");
+    let error = bridgeforge_core::project_hook_migration::verify_completed(
+        project,
+        true,
+        &SystemProcessRunner,
+    )
+    .unwrap_err();
+    assert!(error.contains("outside its independent package"), "{error}");
+    assert_eq!(
+        fs::read(project.join(".codex/project-hook-migrations.json")).unwrap(),
+        state
     );
 }
 
@@ -1135,7 +1362,8 @@ fn project_sync_combined_upgrade_preserves_project_assets_and_is_idempotent() {
         fs::read(factory.join("VERSION")).unwrap()
     );
     let again = build_plan(&project, &factory, SyncMode::Update).unwrap();
-    assert_eq!(again.status, "current");
+    assert!(again.public_installation_required);
+    assert_eq!(again.status, "planned");
     assert!(again.safe.is_empty() && again.risk.is_empty() && again.gaps.is_empty());
     assert_eq!(fs::read(project.join(local_skill)).unwrap(), local_content);
 }

@@ -195,10 +195,12 @@ pub fn build_environment(root: &Path, runner: &dyn ProcessRunner) -> CommandOutc
         let sources = crate::manifest::generated_sources(&root)?;
         let source = crate::manifest::generated_source_sha(&root, &sources)?;
         use sha2::Digest;
-        let lock = std::fs::read(root.join("Cargo.lock")).map_err(|e|e.to_string())?;
-        let lock = format!("sha256:{:x}",sha2::Sha256::digest(&lock));
-        let identity = crate::manifest::canonical_sha(&json!({"schema":1,"source":source,"lock":lock,
-            "environment":environment,"recipe":["build","--locked","--release","--bin","bridgeforge"]}))?;
+        let lock = std::fs::read(root.join("Cargo.lock")).map_err(|e| e.to_string())?;
+        let lock = format!("sha256:{:x}", sha2::Sha256::digest(&lock));
+        let identity = crate::manifest::canonical_sha(
+            &json!({"schema":1,"source":source,"lock":lock,
+            "environment":environment,"recipe":crate::manifest::generated_build_recipe("bridgeforge")}),
+        )?;
         Ok(json!({"schema":1,"status":"cacheable","identity":identity}))
     })();
     match result {

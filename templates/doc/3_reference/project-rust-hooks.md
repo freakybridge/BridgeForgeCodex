@@ -1,64 +1,58 @@
 # 项目自有 Rust Hook
 
-项目 Hook 的业务源码归项目所有，骨架只负责锁定构建、生成注册和校验。像工厂提供统一烤箱，项目提供自己的配方：升级烤箱不能把配方变成工厂资产。
+项目 Hook 的源码、依赖、入口、构建、安装和注册归项目所有。普通骨架 update 只保留它们，不借用骨架 workspace 编译，不检查项目开发产物是否最新。公共 Hook 由骨架维护，两者只共用 Codex 的事件配置，不共享业务实现或构建依赖。
 
-## 配置与入口
+## 独立工程
 
-在 `.codex/hooks/project_demo/entrypoint.rs` 实现 `pub fn run(args: Vec<String>) -> i32`。业务处理直接读取 stdin 并写 stdout/stderr，返回原有退出码。
+已有 project_demo 可在 .codex/hooks/project_demo/ 维护自己的 Cargo.toml、Cargo.lock 和 main.rs。以下 manifest 的 [workspace] 使工程独立于父级骨架 workspace：
 
-没有 `Cargo.toml` 时保持既有单文件模式，使用受管 workspace 已锁定的依赖（包括 `bridgeforge_core::ProcessRunner`）。需要额外依赖或多个源码文件时，在同一目录维护独立 `Cargo.toml` 和 `Cargo.lock`，无需修改上游骨架。例如：
+    [package]
+    name = "project_demo"
+    version = "0.1.0"
+    edition = "2024"
 
-```toml
-[package]
-name = "demo-hook"
-version = "0.1.0"
-edition = "2021"
+    [workspace]
 
-[workspace]
+    [[bin]]
+    name = "project_demo"
+    path = "main.rs"
 
-[dependencies]
-toml_edit = "=0.23.7"
+项目自行声明第三方依赖，不使用 bridgeforge_core 或骨架目录中的源码。Windows main 使用 #![cfg_attr(windows, windows_subsystem = "windows")]；启动子进程也需保持隐藏窗口、stdin/stdout/stderr、退出码及超时/子进程树语义。迁移时不能只替换成缺少超时处理的 Command::output。
 
-[[bin]]
-name = "demo-hook"
-path = "entrypoint.rs"
-```
+在项目开发流程中生成并保存锁文件，用项目自己的 cargo build --locked --release 入口构建，验证原业务行为，再安装到 .codex/bin/project_demo.exe。不依赖下一次骨架升级来补构建。项目可采用自己的目录和构建脚本，但要自己维护完整调用链。
 
-在项目 Hook 目录用 Cargo 的正常依赖维护流程生成并保存 `Cargo.lock`；如需独立检查，可使用提供 main 的本地入口。骨架构建时在临时副本中生成 main 并选定唯一 bin，项目仍只需实现 run，不修改项目 manifest。`[workspace]` 防止本地 Cargo 操作误加入父级骨架工程。独立模式不隐式提供骨架依赖，项目自行声明所需 crate。
+## 注册与调用
 
-工程必须自包含：路径依赖、源码及资源放在该 Hook 目录内；禁止路径依赖越界、符号链接、重解析点和项目 `.cargo` 配置。`target`、`.git` 不参与捕获，`.bridgeforge-main.rs` 是保留文件名。`.cargo` 和 `.bridgeforge-main.rs` 的保留名称检查忽略大小写，适用于工作区、待写入文件和暂存区，避免 Windows 大小写别名绕过；`.cargo-notes` 等不同名称不受影响。注册、完整文件集合和每个文件内容参与构建指纹；新增依赖或模块也会触发重建。首次下载第三方依赖需要 Cargo 缓存或网络。项目代码与第三方构建脚本均为受信可执行代码，临时快照不是安全沙箱。
+项目直接维护 .codex/hooks.json 中自己的 native handler，例如：
 
-在项目所有的 `.codex/project-hooks.json` 中登记：
+    {
+      "hooks": {
+        "SessionStart": [
+          {"hooks": [{
+            "type": "command",
+            "command": ".codex/bin/project_demo check",
+            "commandWindows": ".codex/bin/project_demo.exe check",
+            "timeout": 150
+          }]}
+        ]
+      }
+    }
 
-```json
-{
-  "schema_version": 1,
-  "hooks": [{
-    "id": "demo",
-    "events": [
-      {"event": "SessionStart", "args": ["check"], "timeout": 150},
-      {"event": "Stop", "args": ["snapshot"], "timeout": 150}
-    ]
-  }]
-}
-```
+将自己的条目合入已有配置，不覆盖公共条目。bridgeforgeCodexId 的 bridgeforge-codex.project-hook.v1: 前缀归骨架所有，项目不能冒用。不同项目各自注册并调用自己的程序，不在用户级重复登记公共项目 Hook。
 
-ID 和参数仅允许小写字母开头、其后小写字母/数字/下划线，最长 64 字符；事件为当前骨架支持的 SessionStart、Stop、PreToolUse、PostToolUse、PostCompact，可指定 matcher，timeout 为 1–900 秒。一个程序可服务多个事件，共享内部业务逻辑。`--bridgeforge-self-test` 是骨架保留参数，不调用项目 run 函数；项目 Rust 源码属于受信任可执行代码，不是安全沙箱。
+旧 .codex/project-hooks.json、bridgeforgeProjectHookId 等登记可在迁移完成前保留供一次性识别；新工程不需要骨架生成注册。公共更新不能因项目修改业务 Hook 就自动重写项目注册。
 
-`.codex/hooks.json` 是 Codex 直接读取的原生配置，顶层只使用 `description`、`hooks`；禁止放入 `bridgeforgeProjectHooks` 等骨架专用顶层字段。项目登记与骨架原生命令仍在同一个项目中，但分为两个文件：`project-hooks.json` 给骨架构建器读，`hooks.json` 给 Codex 执行器读。无需写入用户级配置，也不自动授权信任。
+## 旧版本的一次性兼容迁移
 
-## 构建和安装
+旧单文件模式曾借用骨架依赖，普通 update 按固定声明提示一次。仅发现旧耦合不阻断，程序与注册原样保留；只有目标升级明确破坏原运行合同才阻断。骨架版本、workspace 哈希变化或“已经提示”都不能作为迁移完成证明。
 
-使用 `$bridgeforge-codex` 的正式 project-sync plan/apply 流程。同步器合并旧的项目配置后，生成带 `bridgeforgeProjectHookId` 的命令注册，构建 `.codex/bin/project_demo.exe`（Windows）或无扩展名程序，并生成对应构建收据。源码、注册、产物、收据均在同一可回滚事务内；旧项目资产仍须逐项确认。已经生成注册的项目可使用 `bridgeforge build-assets --project-root <项目绝对路径>` 重建缺失或变更的产物；注册变化必须走 project-sync。
+用户明确授权迁移后，在项目内补齐独立 manifest/lock/main，去掉骨架私有依赖，保持原输入输出、参数、退出码、超时及隐藏启动行为。完整依赖分析、构建和业务验证只在显式迁移中执行；普通 update 不执行项目代码或业务事件。
 
-编译发生在隔离快照中，单文件模式使用受管 Cargo.lock，独立工程模式使用项目自己的 Cargo.lock；两者均执行 `cargo build --locked --profile release`，不自动生成或更新锁文件，不修改原始 Cargo.toml，不在 Hook 事件触发时编译。单文件模式继续限制源码依赖，独立模式捕获整个工程并核对本地路径边界；Windows 产物采用骨架生成的 GUI subsystem 入口，项目启动子进程仍须使用可验证的隐藏窗口入口。构建失败、输入漂移或无效锁文件必须停止，不回退 Python。
+仍保留 .codex/hooks/project_<id>/、.codex/bin/project_<id>.exe 和可识别旧登记的项目，在自己的构建、安装及行为验收完成后，可用项目 CLI 记录证据：
 
-独立工程支持 `build.rs` 在 `OUT_DIR` 生成源码并由 `include!` 引用。构建器仅捕获本次临时输出 `release/build/<package>/out/` 下、编译依赖清单实际引用的文件，并核对它们在自检期间未变化；工程外文件、其他输出路径和链接绕过仍被拒绝。旧单文件模式不放宽源码范围。
+    .codex/bin/bridgeforge project-hook-migration status --root .
+    .codex/bin/bridgeforge project-hook-migration verify --root . --confirmed-behavior
 
-`bridgeforge check baseline --root <项目绝对路径>` 核对注册、源码、锁定 workspace 与二进制收据；暂存区校验同时检查项目注册和入口源码。只有通过构建及校验的事务才最后写骨架版本戳。同名既有产物没有匹配 ownership 收据时必须列为风险，不得静默覆盖。
+status 只读；verify 是独立维护动作，会核对独立 workspace/依赖、执行锁定构建并与已安装程序比对，成功才保存完成记录。它不修改业务代码、不生成入口、不替用户验证实际业务事件；项目采用不同布局时应按明确的项目迁移方案验证，不能猜测路径。
 
-旧版 `.codex/hooks.json` 顶层登记由同步器在同一风险确认事务中迁到 `.codex/project-hooks.json`，并移除原生配置中的旧字段；保留已有事件、参数和项目源码。两处登记同时存在且内容不一致时停止，不猜测采用哪份。独立登记文件由项目所有，骨架更新不得用模板覆盖；规划、构建、应用之间发生登记漂移必须拒绝写入。legacy 源文件迁移包应同时提供原生 `hooks.json` 与独立登记文件，二者使用 `hook-registration` 类型。
-
-暂存区校验从 Git 暂存区读取两份配置及项目工程全部文件，不能用工作区文件补齐未暂存的登记、依赖清单或锁文件。
-
-本能力不自动执行项目业务验收。真实外部写入、网络副作用或镜像删除仍须由项目在明确授权的测试环境验证。
+迁移状态与本机提示去重分别保存，待办跨骨架升版保留，已提示不是已完成。只读预览不保存提示状态；未知状态保留并报告。构建脚本和项目代码是受信任的可执行输入，不能把编译叫作安全沙箱。真实外部写入或删除仍须在明确授权的环境验收。

@@ -1,0 +1,7 @@
+{
+  "schema": 1,
+  "owner": "bridgeforge-project-hook-policy-v1",
+  "migration_id": "project-hooks-independent-v1",
+  "legacy_versions_through": "2.6.2",
+  "runtime_compatible": true
+}

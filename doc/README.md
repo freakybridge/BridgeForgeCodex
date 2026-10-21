@@ -79,6 +79,8 @@ delivery_layout: flat
 
 ## Delivery topic
 
+update part I–V：[完整更新流程与项目 Hook 解耦](1_delivery/project-sync-performance/requirements_2026-10-21_update-part-i.md#用户验收与发布授权2026-10-21)（2026-10-21 用户验收，TODO-014 已完成；七项检查、workspace 449 项、fixture 96 项及独立审计通过；已授权本轮受管 release，发布结果以最终收据为准；暂不升级用户级安装和真实下游）。
+
 同步编排优化：[确认卡与计时基线](1_delivery/git-sync-performance/requirements_2026-10-12_orchestration.md#用户验收与发布授权2026-10-20)（R10/R11/R08 工程已验收：七项检查、workspace 435 项及 fixture 93 项通过；本地 CLI 中位数减少 3.8%，波动较大，不代表真实端到端；TODO-009 保持待验证。已授权本次受管 release，尚未分发到用户级或真实下游）。
 
 R08：[严格 JSON 解析器职责归位](1_delivery/shared-json/requirements_2026-10-11_R08.md)（2026-10-11 用户已验收，TODO-007 已完成；工程检查与独立增量审计通过；正式 release 因 fetch TLS 错误未完成，后续 TODO-008）。

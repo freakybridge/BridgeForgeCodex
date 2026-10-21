@@ -29,8 +29,9 @@ $CommandHomeLogName = ".bridgeforge-codex-home-update.json"
 $script:PhaseTimings = [ordered]@{}
 $script:CleanupPending = $false
 $script:UserAgentsReceipt = $null
+$script:PublicArtifactsReceipt = $null
 $script:UpdateTimer = [Diagnostics.Stopwatch]::StartNew()
-$script:BuildCounts = [ordered]@{ cargo_build_invocations = 0; installed_cli_reused = 0 }
+$script:BuildCounts = [ordered]@{ cargo_build_invocations = 0; installed_cli_reused = 0; public_cli_reused = 0; source_clones = 0; source_reused = 0 }
 
 function Complete-PhaseTiming {
     param(
@@ -63,6 +64,7 @@ function Write-UpdateReceipt {
         build_counts = $script:BuildCounts
         cleanup_pending = $script:CleanupPending
         user_agents = $script:UserAgentsReceipt
+        public_artifacts = $script:PublicArtifactsReceipt
     }
     if (-not [string]::IsNullOrWhiteSpace($ErrorMessage)) {
         $receipt["error"] = $ErrorMessage
@@ -357,14 +359,24 @@ function Write-JsonAtomic {
 function Assert-Repository {
     param(
         [Parameter(Mandatory = $true)][string]$Root,
-        [switch]$SkipFetch
+        [switch]$SkipFetch,
+        [string]$ExpectedCommit,
+        [string]$InstalledHome
     )
     if (-not (Test-Path -LiteralPath $Root -PathType Container)) {
         throw "Source repository does not exist: $Root"
     }
     $temporaryRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd("\") + "\"
     $repositoryFull = [IO.Path]::GetFullPath($Root).TrimEnd("\")
-    if (-not $repositoryFull.StartsWith($temporaryRoot, [StringComparison]::OrdinalIgnoreCase)) {
+    $installed = -not [string]::IsNullOrWhiteSpace($InstalledHome)
+    if ($installed) {
+        if ($repositoryFull -ne [IO.Path]::GetFullPath($InstalledHome).TrimEnd('\') -or
+            -not $SkipFetch -or $ExpectedCommit -notmatch '^[0-9a-f]{40}$') {
+            throw 'Installed source reuse requires the exact managed home and a freshly observed commit.'
+        }
+        Assert-NoReparseUnderProfile -Path $repositoryFull -UserProfile (Split-Path -Parent $InstalledHome)
+    }
+    elseif (-not $repositoryFull.StartsWith($temporaryRoot, [StringComparison]::OrdinalIgnoreCase)) {
         throw "Source repository must be a clean clone under the system temporary directory."
     }
     $remote = ((Invoke-Git -WorkingDirectory $Root -Arguments @("config", "--get", "remote.origin.url")) -join "").Trim()
@@ -393,6 +405,9 @@ function Assert-Repository {
     ) -join "").Trim().ToLowerInvariant()
     if ($remoteCommit -notmatch "^[0-9a-f]{40}$" -or $commit -ne $remoteCommit) {
         throw "Source repository HEAD does not match the fetched canonical origin/main."
+    }
+    if (-not [string]::IsNullOrWhiteSpace($ExpectedCommit) -and $commit -ne $ExpectedCommit) {
+        throw 'Canonical source changed after the remote probe; retry with a fresh source selection.'
     }
     if (Test-Path -LiteralPath (Join-Path $Root ".gitmodules")) {
         throw "Submodules are not allowed in the shared-skill source."
@@ -1329,6 +1344,38 @@ function New-CanonicalClone {
     return $root
 }
 
+# Probe before downloading. A matching installed source still passes all source
+# and manifest checks; only the clone/fetch work is skipped. Never fetch in place.
+function Select-CanonicalSource {
+    param([Parameter(Mandatory = $true)][string]$UserProfile)
+    $lines = @(Invoke-Git -Arguments @('ls-remote', '--exit-code', '--refs', $CanonicalRemote, "refs/heads/$CanonicalBranch"))
+    if ($lines.Count -ne 1 -or [string]$lines[0] -notmatch '^([0-9a-fA-F]{40})\s+refs/heads/main$') {
+        throw 'Canonical remote probe did not return one main commit.'
+    }
+    $expected = $Matches[1].ToLowerInvariant()
+    $installedSourceRoot = Join-Path $UserProfile $CommandHomeName
+    if (Test-Path -LiteralPath $installedSourceRoot) {
+        # Dirty/unowned homes are errors, even if the remote has advanced.
+        $identity = Get-RepositoryIdentity -Root $installedSourceRoot
+        if ([string]$identity.commit -eq $expected) {
+            $commit = Assert-Repository -Root $installedSourceRoot -SkipFetch -ExpectedCommit $expected -InstalledHome $installedSourceRoot
+            $script:BuildCounts.source_reused += 1
+            return [ordered]@{ root=$installedSourceRoot; clone=$null; commit=$commit }
+        }
+    }
+    $clone = New-CanonicalClone
+    try {
+        $script:BuildCounts.source_clones += 1
+        $commit = Assert-Repository -Root $clone -SkipFetch -ExpectedCommit $expected
+        Invoke-Git -WorkingDirectory $clone -Arguments @('-c', 'core.autocrlf=false', 'sparse-checkout', 'disable') | Out-Null
+        return [ordered]@{ root=$clone; clone=$clone; commit=$commit }
+    }
+    catch {
+        if (Test-Path -LiteralPath $clone) { Remove-SafeTree -Path $clone }
+        throw
+    }
+}
+
 function Get-RepositoryIdentity {
     param([Parameter(Mandatory = $true)][string]$Root)
     if (-not (Test-Path -LiteralPath $Root -PathType Container) -or
@@ -1572,7 +1619,8 @@ function New-RustCliPlan {
     param(
         [Parameter(Mandatory = $true)][string]$RepositoryRoot,
         [Parameter(Mandatory = $true)][string]$UserProfile,
-        [Parameter(Mandatory = $true)][string]$OperationId
+        [Parameter(Mandatory = $true)][string]$OperationId,
+        [switch]$KeepBuildTree
     )
     $manifest = Join-Path $RepositoryRoot "templates\hooks\Cargo.toml"
     $lockfile = Join-Path $RepositoryRoot "templates\hooks\Cargo.lock"
@@ -1585,6 +1633,8 @@ function New-RustCliPlan {
     $provenance = Join-Path $binRoot 'bridgeforge-cli-provenance.json'
     $stage = Join-Path $binRoot ".bridgeforge-stage-$OperationId.exe"
     $backup = Join-Path $binRoot ".bridgeforge-backup-$OperationId.exe"
+    if ((Test-Path -LiteralPath $stage) -or (Test-Path -LiteralPath $backup)) { throw 'CLI staging paths already exist.' }
+    $trustedInstalled = $false
     $phase = [Diagnostics.Stopwatch]::StartNew()
     try {
         Assert-NoReparseUnderProfile -Path $provenance -UserProfile $UserProfile
@@ -1593,6 +1643,7 @@ function New-RustCliPlan {
             if ([int]$saved.schema -eq 1 -and [string]$saved.owner -eq 'bridgeforge-user-cli-v1' -and
                 (Test-Path -LiteralPath $target -PathType Leaf) -and
                 (Get-Sha256 -Path $target) -eq [string]$saved.binary_sha256) {
+                $trustedInstalled = $true
                 $identity = Get-RustCliReuseIdentity -Binary $target -RepositoryRoot $RepositoryRoot
                 if ($identity -and $identity -eq [string]$saved.identity -and
                     (Get-Sha256 -Path $target) -eq [string]$saved.binary_sha256) {
@@ -1603,7 +1654,36 @@ function New-RustCliPlan {
         }
     } catch { Write-Verbose "CLI reuse unavailable: $($_.Exception.Message)" }
     finally { Complete-PhaseTiming -Name 'rust_cli_reuse_probe' -Stopwatch $phase }
+    # A previous preparation may have succeeded while installation rolled back.
+    # The installed CLI locates a verified public candidate; the candidate itself
+    # must prove the target version/source identity before any swap is planned.
+    try {
+        if ($trustedInstalled -and (Test-Path -LiteralPath $target -PathType Leaf) -and -not (Test-ReparsePoint -Path $target)) {
+            $located = & $target public-artifacts locate --product-root $RepositoryRoot --codex-home (Join-Path $UserProfile '.codex') 2>$null
+            if ($LASTEXITCODE -eq 0) {
+                $candidate = ($located -join "`n") | ConvertFrom-Json
+                if ([int]$candidate.schema -eq 1 -and [string]$candidate.status -eq 'available') {
+                    $cached = [string]$candidate.binary
+                    Assert-NoReparseUnderProfile -Path $cached -UserProfile $UserProfile
+                    $candidateHash = (Get-Sha256 -Path $cached)
+                    $identity = Get-RustCliReuseIdentity -Binary $cached -RepositoryRoot $RepositoryRoot
+                    if ($identity -and $identity -eq [string]$candidate.identity -and
+                        "sha256:$candidateHash" -eq [string]$candidate.binary_sha256 -and
+                        (Get-Sha256 -Path $cached) -eq $candidateHash) {
+                        Copy-Item -LiteralPath $cached -Destination $stage
+                        if ((Get-Sha256 -Path $stage) -ne $candidateHash) { throw 'Cached CLI changed while staging.' }
+                        $script:BuildCounts.public_cli_reused += 1
+                        return [ordered]@{ target=$target; stage=$stage; backup=$backup; had_original=$true; needs_swap=$true; status='staged'; cache_identity=$identity; binary_sha256=$candidateHash }
+                    }
+                }
+            }
+        }
+    } catch {
+        if (Test-Path -LiteralPath $stage) { throw }
+        Write-Verbose "Public CLI bootstrap unavailable: $($_.Exception.Message)"
+    }
     $targetDirectory = Join-Path ([IO.Path]::GetTempPath()) "bridgeforge-cli-build-$OperationId"
+    $sourceBefore = Get-DirectoryContentHash -Root (Split-Path -Parent $manifest)
     if (Test-Path -LiteralPath $targetDirectory) {
         Remove-SafeTree -Path $targetDirectory
     }
@@ -1613,7 +1693,7 @@ function New-RustCliPlan {
     Push-Location -LiteralPath (Split-Path -Parent $manifest)
     try {
         $script:BuildCounts.cargo_build_invocations += 1
-        $output = & cargo build --locked --release --manifest-path $manifest --target-dir $targetDirectory --bin bridgeforge 2>&1
+        $output = & cargo build --locked --profile release --manifest-path $manifest --target-dir $targetDirectory --bin bridgeforge 2>&1
         $exitCode = $LASTEXITCODE
     }
     finally {
@@ -1626,6 +1706,10 @@ function New-RustCliPlan {
             Remove-SafeTree -Path $targetDirectory
         }
         throw "Managed Rust CLI build failed: $($output -join [Environment]::NewLine)"
+    }
+    if ((Get-DirectoryContentHash -Root (Split-Path -Parent $manifest)) -ne $sourceBefore) {
+        Remove-SafeTree -Path $targetDirectory
+        throw 'Managed source changed during CLI bootstrap.'
     }
     $built = Join-Path $targetDirectory "release\bridgeforge.exe"
     if (-not (Test-Path -LiteralPath $built -PathType Leaf)) {
@@ -1663,7 +1747,7 @@ function New-RustCliPlan {
     $cacheIdentity = Get-RustCliReuseIdentity -Binary $built -RepositoryRoot $RepositoryRoot
     $binaryHash = Get-Sha256 -Path $built
     Complete-PhaseTiming -Name 'rust_cli_identity' -Stopwatch $phase
-    Remove-SafeTree -Path $targetDirectory
+    if (-not $KeepBuildTree) { Remove-SafeTree -Path $targetDirectory }
     $current = Test-Path -LiteralPath $target -PathType Leaf
     $needsSwap = -not $current -or (Get-Sha256 -Path $target) -ne (Get-Sha256 -Path $stage)
     if (-not $needsSwap) {
@@ -1678,7 +1762,30 @@ function New-RustCliPlan {
         status = if ($needsSwap) { "staged" } else { "current" }
         cache_identity = $cacheIdentity
         binary_sha256 = $binaryHash
+        bootstrap_target = if ($KeepBuildTree) { $targetDirectory } else { $null }
     }
+}
+
+function Prepare-PublicArtifacts {
+    param($Plan, [string]$RepositoryRoot, [string]$UserProfile)
+    $binary = if ([bool]$Plan.needs_swap) { [string]$Plan.stage } else { [string]$Plan.target }
+    if (-not $Plan.cache_identity) { throw 'Public artifact preparation requires a verified compiler/source identity.' }
+    $arguments = @('public-artifacts', 'prepare', '--product-root', $RepositoryRoot,
+        '--codex-home', (Join-Path $UserProfile '.codex'), '--bootstrap-cli', $binary,
+        '--bootstrap-identity', [string]$Plan.cache_identity)
+    if ($Plan.Contains('bootstrap_target') -and $Plan.bootstrap_target) {
+        $arguments += @('--bootstrap-target', [string]$Plan.bootstrap_target)
+    }
+    $phase = [Diagnostics.Stopwatch]::StartNew()
+    try {
+        $output = & $binary @arguments
+        if ($LASTEXITCODE -ne 0) { throw 'Public artifact preparation failed; user installation was not committed.' }
+        $receipt = ($output -join "`n") | ConvertFrom-Json
+        if ([int]$receipt.schema -ne 1 -or [string]$receipt.status -ne 'prepared') {
+            throw 'Public artifact preparation returned an invalid receipt.'
+        }
+        $script:PublicArtifactsReceipt = $receipt
+    } finally { Complete-PhaseTiming -Name 'public_artifacts' -Stopwatch $phase }
 }
 
 function Install-RustCli {
@@ -1778,17 +1885,14 @@ function Invoke-Main {
             $phase = [Diagnostics.Stopwatch]::StartNew()
             try {
             if ([string]::IsNullOrWhiteSpace($SourceRepositoryRoot)) {
-                $cloneRoot = New-CanonicalClone
-                $repositoryRoot = $cloneRoot
+                $selection = Select-CanonicalSource -UserProfile $userProfile
+                $cloneRoot = $selection.clone
+                $repositoryRoot = [string]$selection.root
+                $commit = [string]$selection.commit
             }
             else {
                 $repositoryRoot = [IO.Path]::GetFullPath($SourceRepositoryRoot)
-            }
-            $commit = Assert-Repository -Root $repositoryRoot -SkipFetch:($null -ne $cloneRoot)
-            if ($cloneRoot) {
-                Invoke-Git -WorkingDirectory $repositoryRoot -Arguments @(
-                    "-c", "core.autocrlf=false", "sparse-checkout", "disable"
-                ) | Out-Null
+                $commit = Assert-Repository -Root $repositoryRoot
             }
             $manifestResult = Assert-Manifest `
                 -RepositoryRoot $repositoryRoot `
@@ -1807,7 +1911,8 @@ function Invoke-Main {
             $rustCliPlan = New-RustCliPlan `
                 -RepositoryRoot $repositoryRoot `
                 -UserProfile $userProfile `
-                -OperationId $operationId
+                -OperationId $operationId -KeepBuildTree
+            Prepare-PublicArtifacts -Plan $rustCliPlan -RepositoryRoot $repositoryRoot -UserProfile $userProfile
             $userAgentsPlan = New-UserAgentsPlan -RepositoryRoot $repositoryRoot -UserProfile $userProfile -OperationId $operationId -RustCliPlan $rustCliPlan
             } finally { Complete-PhaseTiming -Name 'component_preparation' -Stopwatch $preparationPhase }
             $phase = [Diagnostics.Stopwatch]::StartNew()
@@ -1882,6 +1987,10 @@ function Invoke-Main {
             }
             if ($null -ne $rustCliPlan -and [string]$rustCliPlan.status -eq "staged") {
                 Undo-RustCli -Plan $rustCliPlan
+            }
+            if ($null -ne $rustCliPlan -and $rustCliPlan.Contains('bootstrap_target') -and
+                $rustCliPlan.bootstrap_target -and (Test-Path -LiteralPath ([string]$rustCliPlan.bootstrap_target))) {
+                Remove-SafeTree -Path ([string]$rustCliPlan.bootstrap_target)
             }
             if ($cloneRoot -and (Test-Path -LiteralPath $cloneRoot)) {
                 Remove-SafeTree -Path $cloneRoot

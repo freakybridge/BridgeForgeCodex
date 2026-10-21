@@ -49,13 +49,13 @@ before 包或迁移账本。
 
 ## 共享构建边界
 
-project-sync 的计划、重规划、Apply 共用受管产物缓存，派生内容位于系统临时目录中按规范化项目身份绑定的 `bridgeforge-artifacts-<hash>`，不写项目目标或用户源文件。沿用 artifact_cache 的 ownership、锁、字节/收据/自检/环境复核及单项目容量限制；损坏、占用和未知环境正常构建。计划 fingerprint 与安装收据语义保持不变。
+公共产物由用户级 updater 准备，缓存位于当前用户 .codex/.cache/bridgeforge/public-build，身份绑定源码、锁、配方、自检与编译环境，不绑定下游项目。沿用 artifact_cache 的 ownership、锁、内容校验和容量限制；public-ready 存放有界引用收据。项目 Apply 只读捕获字节，不编译、自检或更新 recency，缺失或损坏时需重新准备。
 
-项目 Hook 同样复用：旧式 Hook 绑定受管 workspace；独立 package 额外绑定完整环境摘要与受管 lock，只允许受管 registry 依赖子集，不复用自定义 build script、本地过程宏或未建模外部依赖。`build_metrics` 展示 Cargo 实际调用、验证命中及阶段耗时；`build_preparation`、`cargo_build` 与内置/项目 Hook 阶段有包含关系，不可相加。失败保留已经取得的计时，用户级 CLI 的复用由 updater 自己负责。
+项目 Hook 独立维护。project-hook-policy.json 声明所有权及一次性迁移；普通 update 不捕获完整工程、编译或核对开发收据。首次有限识别后提示去重，实际不兼容仍阻断。显式迁移由项目提供独立 manifest/lock/main、构建和已安装程序；骨架不补业务代码。旧显式构建 API 的兼容夹具不代表普通 update 仍使用旧路径。
 
-core 内部 `build_inputs` 负责受管输入快照及漂移验证，`generated_assets` 负责隔离 Cargo 构建、每个产物的自测、来源收据和构建目录清理；后者返回目标路径对应的字节及收据，不安装到项目目标。项目同步与工厂 Git 同步直接调用这一能力，项目 Hook 的旧格式兼容构建直接调用输入快照。
+core 的 build_inputs 负责输入快照及漂移验证，generated_assets 负责隔离构建、自测和收据，public_artifacts 负责用户级准备和只读交付。工厂自身构建及 Git 同步仍使用受管构建能力；普通下游 project-sync 不直接编译。初次 CLI 引导结果按相同身份进入缓存，并与公共 Hook 共用依赖输出。
 
-`project_sync` 继续拥有项目锁、产物挂接、安装、版本戳及回滚；`git_sync_plan` 保留缓存决策与工厂写入计划；`project_hooks` 保留项目自有 Hook 的配置和兼容编译。共享构建不得反向调用项目同步。`managed_paths::safe_join` 原样承接上述两侧共用的受管相对路径检查，其他模块的不同路径策略不在此统一。
+project_sync 拥有只读项目计划、内部准备、固定公共产物挂接、项目锁、安装、版本戳与回滚，不重做公共版本选择。project_hook_migration 负责一次性识别与显式独立验证；git_sync_plan 保留工厂构建职责。共享构建不反向调用项目同步。用户级事务成功后，项目失败不撤销共享安装。
 
 `source_root` 与 `target_source_root`、Cargo 参数/超时、输入验证、自测、清理错误和收据 schema 均保持原合同。开发证据见[R02 需求卡](../../1_delivery/shared-generated-build/requirements_2026-10-11_R02.md)。
 
@@ -80,22 +80,24 @@ core 内部 `build_inputs` 负责受管输入快照及漂移验证，`generated_
 ## Current-only 事务
 
 ```text
-refresh product home + identify project
+probe canonical commit + reuse/stage product source
+  -> prepare public artifacts + commit verified user-level installation
+  -> identify project
   -> build deterministic actions + aggregate fingerprint
   -> confirm every Rule / Memory source in one continuous session when required
-  -> immediate replan/fingerprint check
-  -> 在仓库外临时目录构建并自检 Rust Hook 生成资产
-  -> temporary transaction snapshot
+  -> Apply owns the necessary replan/fingerprint check (no extra Skill replan)
+  -> internal payload preparation + capture prepared public bytes
+  -> project lock + input verification and rollback snapshot from the same read
   -> combine latest assets / generated binary + receipt / migration targets / selected project assets
   -> remove confirmed Rule / Memory sources
   -> verify actions + preserved knowledge
   -> config health + text hygiene validators
   -> verify prospective current baseline on real disk
   -> write .codex/.bridgeforge_codex_version last
+  -> verify unchanged validated contents + final stamp
 ```
 
-任一可捕获失败必须逐字恢复迁移前项目，包括已删除的 Rule / Memory。Planner、Apply、`$git-sync` 与
-pre-commit 直接复用 `bridgeforge check baseline`。编码门禁通过 NUL 文件列表与 Git 原始 blob 检查实际 index 内容，不能以工作区内容代替暂存字节；项目 Skill 检查覆盖 `.codex/skills`，工厂额外检查共享 `skills`。pre-commit 只读检查 worktree 与 Git index，
+可捕获失败恢复本事务能够证明归属的改动；外部编辑保留并报告回滚未完成。Apply、`$git-sync` 与 pre-commit 复用 baseline 规则，规划不额外执行完整健康检查。编码门禁通过 NUL 文件列表与 Git 原始 blob 检查实际 index 内容，不能以工作区内容代替暂存字节；项目 Skill 检查覆盖 `.codex/skills`，工厂额外检查共享 `skills`。pre-commit 只读检查 worktree 与 Git index，
 不得生成文件或执行 `git add`；`$git-sync` 在写入前生成完整 `SyncWritePlan`，并在提交前失败时
 恢复自动写入和完整 index。工厂 `git-sync` 的计划先将版本变更投影到仓库外快照，渲染 manifest，按锁定 Cargo 配方构建 Hook / CLI 并生成实测收据；完整计划包含版本、Cargo manifests / locks、CHANGELOG、三份清单、二进制和收据。构建后复核原始输入、源码文件集合、目标原值、仓库身份及 index，任何漂移均阻断写入。安装后先验证含生成产物的完整 baseline，再暂存和提交。构建与安装持有 project-sync 锁，整个同步仍持有 Git common-dir 锁；两者均由系统句柄持有，进程退出释放。
 
@@ -105,10 +107,7 @@ Windows 上当前 CLI 的运行映像不能直接覆盖：新程序先写入同�
 
 同版本修复也从可信产品目录重新生成目标，不信任项目内合同自证 ownership；已有 whole 资产替换须确认。版本戳内容未变化时仍可应用其他已确认动作，最后验证当前唯一版本戳与完整基线。
 
-Rust Hook 在 `init`、`adopt`、`update` 的计划物化及 apply 前构建；构建只写仓库外临时目录。Cargo 缺失、平台不受支持、源码或
-锁文件漂移、构建失败、自检不匹配均在产品写入前阻断；成功产物与包含真实 binary hash 的收据
-由同一事务写入。日常 Hook 直接执行 `.codex/bin/bridgeforge-hook[.exe]`，禁止现场调用 Cargo、
-Python 或 PowerShell 包装器。
+公共 Rust Hook 在用户级准备时构建或复用；项目预览零构建，Apply 只安装已验证产物。构建、环境或自检失败在用户级提交前阻断；公共二进制与收据随项目配置同事务安装。日常公共 Hook 使用项目程序，不依赖产品源 home 或现场编译；项目业务 Hook 使用自己的独立工程。
 
 生成阶段先从实际受管 workspace 读取文件并建立仓库外独立快照，按 manifest 相同的规范化算法
 重新计算源码树与 Cargo.lock 哈希；构建配方必须与执行的锁定 Cargo 命令一致，自检合同也需重算。

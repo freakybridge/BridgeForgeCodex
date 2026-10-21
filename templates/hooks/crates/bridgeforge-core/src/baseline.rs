@@ -1,5 +1,7 @@
 use crate::json::parse_unique_json;
-use crate::managed_markdown::{projection_rows as table_rows, projection_section as heading_section};
+use crate::managed_markdown::{
+    projection_rows as table_rows, projection_section as heading_section,
+};
 use crate::{BaselineReport, BaselineState, ProcessRequest, ProcessRunner, SystemProcessRunner};
 use regex::Regex;
 use serde_json::Value;
@@ -627,17 +629,6 @@ pub(crate) fn verify_asset_payload(asset: &Value, payload: &[u8]) -> Result<Stri
     Ok(id)
 }
 
-fn verify_asset(root: &Path, asset: &Value) -> Result<String, String> {
-    let id = asset["id"].as_str().ok_or("asset id is missing")?;
-    if asset["strategy"].as_str() == Some("seed") {
-        return Ok(format!("skip:{id}"));
-    }
-    let target = safe_target(root, &asset["target"], &format!("asset {id} target"))?;
-    let payload = fs::read(&target)
-        .map_err(|_| format!("managed asset is missing: {id}: {}", asset["target"]))?;
-    verify_asset_payload(asset, &payload)
-}
-
 fn platform_key() -> Result<&'static str, String> {
     if !cfg!(target_arch = "x86_64") {
         return Err("unsupported generated-asset architecture".into());
@@ -662,17 +653,22 @@ pub(crate) fn verify_generated(root: &Path, generated: &Value) -> Result<String,
     let receipt = safe_target(root, &generated["receipt_target"], "generated receipt")?;
     let binary_payload =
         fs::read(&binary).map_err(|_| format!("generated binary is missing: {id}"))?;
-    let receipt_payload = fs::read(&receipt).map_err(|_| format!("generated receipt is missing: {id}"))?;
+    let receipt_payload =
+        fs::read(&receipt).map_err(|_| format!("generated receipt is missing: {id}"))?;
     verify_generated_payload(generated, &binary_payload, &receipt_payload)
 }
 
-pub(crate) fn verify_generated_payload(generated: &Value, binary_payload: &[u8], receipt_payload: &[u8]) -> Result<String, String> {
-    let id = generated["id"].as_str().ok_or("generated asset id is missing")?;
+pub(crate) fn verify_generated_payload(
+    generated: &Value,
+    binary_payload: &[u8],
+    receipt_payload: &[u8],
+) -> Result<String, String> {
+    let id = generated["id"]
+        .as_str()
+        .ok_or("generated asset id is missing")?;
     let key = platform_key()?;
-    let document: Value = serde_json::from_slice(
-        receipt_payload,
-    )
-    .map_err(|error| format!("invalid generated receipt: {error}"))?;
+    let document: Value = serde_json::from_slice(receipt_payload)
+        .map_err(|error| format!("invalid generated receipt: {error}"))?;
     if document["schema_version"].as_u64() != Some(2)
         || document["generated_asset_id"].as_str() != Some(id)
         || document["platform"].as_str() != Some(key)
@@ -723,6 +719,7 @@ pub fn verify(
         &contract,
         &version,
         verify_generated_runtime,
+        None,
     )
 }
 
@@ -747,7 +744,71 @@ pub fn verify_prospective(
         &contract,
         version,
         verify_generated_runtime,
+        None,
     )
+}
+
+/// Exact file bytes already subjected to semantic validation. Reuse is local
+/// to this transaction, never persisted as a claim about mutable future files.
+pub(crate) struct InstalledEvidence {
+    files: BTreeMap<PathBuf, Option<Vec<u8>>>,
+}
+
+impl InstalledEvidence {
+    pub(crate) fn include(&mut self, path: PathBuf, bytes: Option<Vec<u8>>) {
+        self.files.insert(path, bytes);
+    }
+    pub(crate) fn verify_unchanged(&self, root: &Path) -> Result<(), String> {
+        for (path, expected) in &self.files {
+            let relative = path
+                .strip_prefix(root)
+                .map_err(|_| "verification evidence escaped project")?
+                .to_string_lossy()
+                .replace('\\', "/");
+            let path = crate::managed_paths::safe_join(
+                root,
+                &relative,
+                "installed verification evidence",
+            )?;
+            let actual = match fs::read(&path) {
+                Ok(bytes) => Some(bytes),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+                Err(e) => return Err(e.to_string()),
+            };
+            if &actual != expected {
+                return Err(format!(
+                    "installed asset changed after verification: {relative}"
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+pub(crate) fn verify_prospective_recorded(
+    root: &Path,
+    contract_path: &Path,
+    version: &str,
+) -> Result<InstalledEvidence, String> {
+    let contract = load(contract_path)?;
+    if contract["release_version"].as_str() != Some(version) {
+        return Err("prospective version identity mismatch".into());
+    }
+    if !crate::project_hook_migration::enabled(&contract) {
+        return Err("recorded verification requires independent project hooks".into());
+    }
+    let mut evidence = InstalledEvidence {
+        files: BTreeMap::new(),
+    };
+    verify_contract_assets(
+        root,
+        contract_path,
+        &contract,
+        version,
+        true,
+        Some(&mut evidence),
+    )?;
+    Ok(evidence)
 }
 
 fn verify_contract_assets(
@@ -756,7 +817,15 @@ fn verify_contract_assets(
     contract: &Value,
     version: &str,
     verify_generated_runtime: bool,
+    mut evidence: Option<&mut InstalledEvidence>,
 ) -> Result<BaselineReport, String> {
+    let contract_bytes = fs::read(contract_path).map_err(|error| error.to_string())?;
+    if &parse_unique_json(&contract_bytes, "verification contract")? != contract {
+        return Err("contract changed during verification".into());
+    }
+    if let Some(e) = evidence.as_deref_mut() {
+        e.include(contract_path.to_path_buf(), Some(contract_bytes.clone()));
+    }
     let mut checked = Vec::new();
     let mut skipped = Vec::new();
     let factory = root.join("templates/managed-skeleton.json").is_file();
@@ -768,7 +837,18 @@ fn verify_contract_assets(
             skipped.push("codex.doc.readme".into());
             continue;
         }
-        let result = verify_asset(root, asset)?;
+        let result = if asset["strategy"] == "seed" {
+            format!("skip:{}", asset["id"].as_str().unwrap_or(""))
+        } else {
+            let target = safe_target(root, &asset["target"], "managed verification asset")?;
+            let payload = fs::read(&target)
+                .map_err(|e| format!("managed asset is missing: {}: {e}", asset["id"]))?;
+            let checked = verify_asset_payload(asset, &payload)?;
+            if let Some(e) = evidence.as_deref_mut() {
+                e.include(target, Some(payload));
+            }
+            checked
+        };
         if let Some(id) = result.strip_prefix("skip:") {
             skipped.push(id.to_string())
         } else {
@@ -777,17 +857,36 @@ fn verify_contract_assets(
     }
     for generated in contract["generated_assets"].as_array().unwrap() {
         if verify_generated_runtime {
-            checked.push(verify_generated(root, generated)?)
+            let binary = safe_target(
+                root,
+                &generated["binary_targets"][platform_key()?],
+                "generated binary",
+            )?;
+            let receipt = safe_target(root, &generated["receipt_target"], "generated receipt")?;
+            let payload =
+                fs::read(&binary).map_err(|e| format!("generated binary is missing: {e}"))?;
+            let receipt_payload =
+                fs::read(&receipt).map_err(|e| format!("generated receipt is missing: {e}"))?;
+            checked.push(verify_generated_payload(
+                generated,
+                &payload,
+                &receipt_payload,
+            )?);
+            if let Some(e) = evidence.as_deref_mut() {
+                e.include(binary, Some(payload));
+                e.include(receipt, Some(receipt_payload));
+            }
         } else {
             skipped.push(generated["id"].as_str().unwrap_or("").to_string())
         }
     }
-    let contract_bytes = fs::read(&contract_path).map_err(|error| error.to_string())?;
-    checked.extend(crate::project_hooks::verify(
-        root,
-        contract,
-        verify_generated_runtime,
-    )?);
+    if !crate::project_hook_migration::enabled(contract) {
+        checked.extend(crate::project_hooks::verify(
+            root,
+            contract,
+            verify_generated_runtime,
+        )?);
+    }
     let fingerprint = sha(format!(
         "{}\n{}\n{}",
         version,
@@ -932,11 +1031,12 @@ pub fn verify_index(root: &Path, runner: &dyn ProcessRunner) -> Result<BaselineR
             skipped.push(generated["id"].as_str().unwrap_or("").to_string());
         }
     }
-    if contract["assets"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .any(|asset| asset["target"] == ".codex/hooks.json")
+    if !crate::project_hook_migration::enabled(&contract)
+        && contract["assets"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .any(|asset| asset["target"] == ".codex/hooks.json")
     {
         let document = parse_unique_json(
             &git_index_blob(root, ".codex/hooks.json", runner)?,

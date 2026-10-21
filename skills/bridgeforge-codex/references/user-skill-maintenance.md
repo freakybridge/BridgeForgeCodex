@@ -1,6 +1,10 @@
 # 用户级受管 skill 维护
 
-updater 仅构建用户级 CLI；重复维护可复用 `~/.codex/bin/bridgeforge-cli-provenance.json` 绑定的已安装产物。该文件是可选本机派生缓存，只有来源源码、Cargo.lock、实际编译环境、二进制字节和自检全部匹配才复用；旧入口或证据不足正常构建。编译与环境探测使用同一 workspace 工作目录，未知 provenance 保留。收据 `build_counts` 区分构建与复用；`component_preparation` 包含 `rust_cli_*` 子阶段，分项不能与父阶段相加。
+updater 先查询官方 main 提交：本机产品源同提交且完整、干净时直接复用，不 clone；变化时验证临时源，不原地 fetch/覆盖正式安装。离线、来源异常、未知本地改动或查询后提交漂移时停止。
+
+updater 统一准备公共 CLI 与公共 Hook。重复维护先复用有效的已安装 CLI 或公共缓存中的 CLI，证据不足才按锁定配方引导构建；首次 CLI 构建结果作为已验证输入进入公共缓存，不在项目端重编。编译与环境身份必须匹配，未知 provenance 保留。产物缓存位于用户级 `.codex/.cache/bridgeforge/public-build`，沿用 ownership、锁、内容/收据/自检验证和有限保留；准备收据位于 `public-ready`，仅引用不可变构建身份。缓存不属于产品源工作树或 Git 资产。
+
+成功收据的 `public_artifacts.receipt` 交给项目 Apply；项目只读捕获公共字节，不执行编译器、缓存自检或写缓存 recency。用户级安装与项目安装分别报告和回滚，项目失败不能撤销已成功的共享用户级安装。`build_counts` 和 `public_artifacts.build_metrics` 区分引导编译、公共编译与复用；父子阶段计时不能相加。普通 update 不重复 doctor，也不巡检 Native Memory。
 
 用户级 `~/.codex/AGENTS.md` 由 `templates/user/AGENTS.md` 单向分发，独立合同为产品根 `user-agents-manifest.json`。相同文本（忽略换行差异）不写；不同则以原始字节备份到 `~/.codex/.AGENTS.bridgeforge-backup-<operation_id>.md` 后覆盖。成功备份长期保留，失败按同一分发日志回滚。该覆盖策略仅适用于用户指令，不改变 Skill 的归属冲突检查。
 

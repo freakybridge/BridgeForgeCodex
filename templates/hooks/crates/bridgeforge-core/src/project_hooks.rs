@@ -30,7 +30,11 @@ fn cache_asset(hook: &Hook, input: &Input, contract: &Value) -> Result<Value, St
     // tracking value. Runtime-only `std::env` conservatively takes this path too.
     let references_env = input.package.as_ref().map_or_else(
         || String::from_utf8_lossy(&input.source).contains("env"),
-        |files| files.values().any(|b| String::from_utf8_lossy(b).contains("env")),
+        |files| {
+            files
+                .values()
+                .any(|b| String::from_utf8_lossy(b).contains("env"))
+        },
     );
     let vars = std::env::vars_os()
         .filter(|(k, _)| references_env || k != "CODEX_TOOL_CALL_ID")
@@ -600,7 +604,7 @@ fn verify_dependencies_with_generated(
     Ok(())
 }
 
-fn dependency_paths(depfile: &Path, snapshot: &Path) -> Result<Vec<PathBuf>, String> {
+pub(crate) fn dependency_paths(depfile: &Path, snapshot: &Path) -> Result<Vec<PathBuf>, String> {
     let text = fs::read_to_string(depfile)
         .map_err(|e| format!("project hook dependency receipt missing: {e}"))?;
     let (_, dependencies) = text

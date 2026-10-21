@@ -11,10 +11,20 @@ fn r05_render_asset_preserves_strategy_bytes_and_disk_snapshot() {
         ("seed", b"new\n", None, b"new\n"),
         ("seed", b"new\n", Some(b"custom\r\n"), b"custom\r\n"),
         ("whole", b"new\r\n", Some(b"old\n"), b"new\r\n"),
-        ("region", b"BEGIN\nnew\nEND\n", Some(b"prefix\nBEGIN\nold\nEND\ntail"), b"prefix\nBEGIN\nnew\nEND\ntail"),
+        (
+            "region",
+            b"BEGIN\nnew\nEND\n",
+            Some(b"prefix\nBEGIN\nold\nEND\ntail"),
+            b"prefix\nBEGIN\nnew\nEND\ntail",
+        ),
         ("region", b"BEGIN\nnew\nEND\n", None, b"BEGIN\nnew\nEND\n"),
         ("merge", b"{\"a\":1}", None, b"{\"a\":1}"),
-        ("merge", b"{\"a\":1}", Some(b"{\"custom\":true}"), b"{\n  \"custom\": true,\n  \"a\": 1\n}\n"),
+        (
+            "merge",
+            b"{\"a\":1}",
+            Some(b"{\"custom\":true}"),
+            b"{\n  \"custom\": true,\n  \"a\": 1\n}\n",
+        ),
     ];
     for &(strategy, incoming, current, expected) in cases {
         fs::write(&source, incoming).unwrap();
@@ -40,34 +50,43 @@ fn r05_render_asset_migration_and_special_policy_precedence() {
     let target = root.join("target.txt");
     fs::write(&source, b"unused").unwrap();
     fs::write(&target, b"disk\r\n").unwrap();
-    let mut asset = json!({"id":"fixture", "source":"source.txt", "target":"target.txt", "strategy":"seed"});
+    let mut asset =
+        json!({"id":"fixture", "source":"source.txt", "target":"target.txt", "strategy":"seed"});
     let (rendered, before) = render_asset(&root, &root, &asset, Some(b"migration"), false).unwrap();
     assert_eq!(rendered, b"migration");
     assert_eq!(before.as_deref(), Some(b"disk\r\n".as_slice()));
     fs::remove_file(&target).unwrap();
-    assert_eq!(render_asset(&root, &root, &asset, Some(b"migration"), false).unwrap(),
-        (b"migration".to_vec(), None));
+    assert_eq!(
+        render_asset(&root, &root, &asset, Some(b"migration"), false).unwrap(),
+        (b"migration".to_vec(), None)
+    );
 
     // AGENTS zones take precedence over both seed and the Hook merge policy.
     asset["agents_zones"] = json!({"project":{"begin":"BEGIN", "end":"END"}});
     asset["merge_policy"] = json!("codex-hooks");
     fs::write(&source, b"public-new\nBEGIN\ndefault\nEND\n").unwrap();
     fs::write(&target, b"public-old\nBEGIN\ncustom\r\nEND\n").unwrap();
-    assert_eq!(render_asset(&root, &root, &asset, None, false).unwrap().0,
-        b"public-new\nBEGIN\ncustom\r\nEND\n");
+    assert_eq!(
+        render_asset(&root, &root, &asset, None, false).unwrap().0,
+        b"public-new\nBEGIN\ncustom\r\nEND\n"
+    );
 
     asset.as_object_mut().unwrap().remove("agents_zones");
     asset["managed_blocks"] = json!({"headings":["## Managed"], "keyed_tables":[]});
     fs::write(&source, b"## Managed\nnew\n").unwrap();
     fs::write(&target, b"## Managed\nold\n## Custom\nkeep\n").unwrap();
-    assert_eq!(render_asset(&root, &root, &asset, None, false).unwrap().0,
-        b"## Managed\nnew\n## Custom\nkeep\n");
+    assert_eq!(
+        render_asset(&root, &root, &asset, None, false).unwrap().0,
+        b"## Managed\nnew\n## Custom\nkeep\n"
+    );
 
     asset.as_object_mut().unwrap().remove("managed_blocks");
     fs::write(&source, b"{\"hooks\":{}}").unwrap();
     fs::write(&target, b"{\"hooks\":{},\"custom\":true}").unwrap();
-    assert_eq!(render_asset(&root, &root, &asset, None, false).unwrap().0,
-        b"{\n  \"hooks\": {},\n  \"custom\": true\n}\n");
+    assert_eq!(
+        render_asset(&root, &root, &asset, None, false).unwrap().0,
+        b"{\n  \"hooks\": {},\n  \"custom\": true\n}\n"
+    );
 
     asset["strategy"] = json!("merge");
     asset["merge_policy"] = json!("git-attributes-default-lf");
@@ -75,7 +94,10 @@ fn r05_render_asset_migration_and_special_policy_precedence() {
     let merged = render_asset(&root, &root, &asset, None, false).unwrap().0;
     assert_eq!(merged, b"custom -text\n* text=auto eol=lf\n");
     fs::write(&target, &merged).unwrap();
-    assert_eq!(render_asset(&root, &root, &asset, None, false).unwrap().0, merged);
+    assert_eq!(
+        render_asset(&root, &root, &asset, None, false).unwrap().0,
+        merged
+    );
     fs::remove_dir_all(root).unwrap();
 }
 
@@ -87,20 +109,32 @@ fn r05_render_asset_retains_rendering_and_failure_order() {
     let mut asset = json!({"id":"fixture", "source":"source.txt", "target":"target.txt",
         "strategy":"whole", "render":"project-name"});
     fs::write(&source, b"{{PROJECT_NAME}}\r\n").unwrap();
-    assert_eq!(render_asset(&root, &root, &asset, None, false).unwrap().0,
-        format!("{}\r\n", root.file_name().unwrap().to_str().unwrap()).into_bytes());
+    assert_eq!(
+        render_asset(&root, &root, &asset, None, false).unwrap().0,
+        format!("{}\r\n", root.file_name().unwrap().to_str().unwrap()).into_bytes()
+    );
     fs::write(&source, [0xff]).unwrap();
-    assert_eq!(render_asset(&root, &root, &asset, None, false).unwrap_err(),
-        "asset \"fixture\" render source is not UTF-8");
+    assert_eq!(
+        render_asset(&root, &root, &asset, None, false).unwrap_err(),
+        "asset \"fixture\" render source is not UTF-8"
+    );
     asset["strategy"] = json!("seed");
     fs::write(&target, b"keep").unwrap();
-    assert_eq!(render_asset(&root, &root, &asset, None, false).unwrap().0, b"keep");
+    assert_eq!(
+        render_asset(&root, &root, &asset, None, false).unwrap().0,
+        b"keep"
+    );
     asset["strategy"] = json!("unknown");
-    assert_eq!(render_asset(&root, &root, &asset, None, false).unwrap_err(),
-        "unsupported asset strategy: fixture: unknown");
+    assert_eq!(
+        render_asset(&root, &root, &asset, None, false).unwrap_err(),
+        "unsupported asset strategy: fixture: unknown"
+    );
     fs::remove_file(&source).unwrap();
-    assert!(render_asset(&root, &root, &asset, None, false).unwrap_err()
-        .starts_with("cannot read asset source source.txt:"));
+    assert!(
+        render_asset(&root, &root, &asset, None, false)
+            .unwrap_err()
+            .starts_with("cannot read asset source source.txt:")
+    );
     assert_eq!(fs::read(target).unwrap(), b"keep");
     fs::remove_dir_all(root).unwrap();
 }
@@ -617,8 +651,6 @@ fn new_or_changed_legacy_sources_invalidate_apply_without_writing() {
     }
 }
 
-
-
 #[test]
 fn hook_removal_matches_path_boundaries_and_platform_commands() {
     let payload = json!({"hooks":{"Stop":[{"hooks":[
@@ -895,7 +927,6 @@ fn legacy_business_hook_bundle_is_language_neutral_and_fingerprinted() {
     );
     fs::remove_dir_all(root).unwrap();
 }
-
 
 #[test]
 fn retired_hook_directories_rollback_with_their_files() {
@@ -1255,6 +1286,8 @@ fn transaction_fixture(valid_asset_hash: bool) -> (PathBuf, SyncPlan) {
         preservation_manifest,
         confirmation_required: false,
         aggregate_fingerprint: fingerprint,
+        public_installation_required: false,
+        hook_migration: Value::Null,
         project_root: root.clone(),
         writes: BTreeMap::from([
             (asset_path, b"new\n".to_vec()),
@@ -1265,6 +1298,7 @@ fn transaction_fixture(valid_asset_hash: bool) -> (PathBuf, SyncPlan) {
         generated_source_fingerprints,
         project_hook_inputs: Vec::new(),
         project_hook_reads: BTreeMap::new(),
+        public_actions: Vec::new(),
     };
     (root, plan)
 }
@@ -1374,9 +1408,14 @@ fn project_hook_registration_serialization_is_stable_on_next_merge() {
     let payload = writes.get(&root.join(".codex/hooks.json")).unwrap();
     assert_eq!(
         content::render(
-            "fixture", b"{\"hooks\":{}}", Some(payload),
-            &json!({"merge_policy":"codex-hooks"}), &root, false,
-        ).unwrap(),
+            "fixture",
+            b"{\"hooks\":{}}",
+            Some(payload),
+            &json!({"merge_policy":"codex-hooks"}),
+            &root,
+            false,
+        )
+        .unwrap(),
         *payload,
         "first install must already use the stable hook JSON encoding"
     );
@@ -1610,6 +1649,127 @@ fn prospective_baseline_failure_rolls_back_before_stamp() {
         fs::read(root.join(".codex/managed-skeleton.json")).unwrap(),
         b"old-contract\n"
     );
+    assert_eq!(
+        fs::read(root.join(".codex/.bridgeforge_codex_version")).unwrap(),
+        b"1.0.0\n"
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+fn recorded_transaction_fixture() -> (PathBuf, SyncPlan) {
+    let (root, mut plan) = transaction_fixture(true);
+    let path = root.join(".codex/managed-skeleton.json");
+    let mut contract: Value = serde_json::from_slice(&plan.writes[&path]).unwrap();
+    for (id, target, bytes) in [
+        (
+            "codex.project-hook-policy",
+            crate::project_hook_migration::POLICY,
+            b"{}".as_slice(),
+        ),
+        ("unchanged.asset", "unchanged.txt", b"retained".as_slice()),
+    ] {
+        fs::write(root.join(target), bytes).unwrap();
+        contract["assets"].as_array_mut().unwrap().push(json!({
+            "id":id,"source":format!("templates/{target}"),"target":target,
+            "strategy":"whole","current_sha256":sha_git(bytes)
+        }));
+    }
+    plan.writes
+        .insert(path, serde_json::to_vec(&contract).unwrap());
+    (root, plan)
+}
+
+#[test]
+fn recorded_transaction_preserves_external_stamp_and_rolls_back_own_writes() {
+    let (root, plan) = recorded_transaction_fixture();
+    let fingerprint = plan.aggregate_fingerprint.clone();
+    let observer = |_: &Path, stamp: &Path| {
+        fs::write(stamp, b"external stamp").unwrap();
+        Ok(())
+    };
+    let error = apply_plan_internal(plan, &fingerprint, false, Some(&observer)).unwrap_err();
+    assert!(error.contains("target changed before write"), "{error}");
+    assert!(error.contains("rollback incomplete"), "{error}");
+    assert_eq!(fs::read(root.join("managed.txt")).unwrap(), b"old\n");
+    assert_eq!(
+        fs::read(root.join(".codex/.bridgeforge_codex_version")).unwrap(),
+        b"external stamp"
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn recorded_evidence_detects_post_validation_edits_and_preserves_external_bytes() {
+    for target in ["unchanged.txt", "managed.txt"] {
+        let (root, plan) = recorded_transaction_fixture();
+        let fingerprint = plan.aggregate_fingerprint.clone();
+        let observer = |root: &Path, _: &Path| {
+            fs::write(root.join(target), b"external edit").unwrap();
+            Ok(())
+        };
+        let error = apply_plan_internal(plan, &fingerprint, false, Some(&observer)).unwrap_err();
+        assert!(
+            error.contains("installed asset changed after verification"),
+            "{error}"
+        );
+        assert_eq!(fs::read(root.join(target)).unwrap(), b"external edit");
+        assert_eq!(
+            fs::read(root.join(".codex/.bridgeforge_codex_version")).unwrap(),
+            b"1.0.0\n"
+        );
+        assert_eq!(
+            fs::read(root.join(".codex/managed-skeleton.json")).unwrap(),
+            b"old-contract\n"
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[test]
+fn write_guard_rejects_changed_missing_and_replaced_targets() {
+    let (root, _) = transaction_fixture(true);
+    let target = root.join("pending.txt");
+    fs::write(&target, b"external").unwrap();
+    assert!(write_unchanged_file(&target, None, b"ours").is_err());
+    assert!(write_unchanged_file(&target, Some(b"original"), b"ours").is_err());
+    assert_eq!(fs::read(&target).unwrap(), b"external");
+    fs::remove_file(&target).unwrap();
+    fs::create_dir(&target).unwrap();
+    assert!(write_unchanged_file(&target, Some(b"external"), b"ours").is_err());
+    assert!(target.is_dir());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn recorded_transaction_rolls_back_public_payload_with_project_configuration() {
+    let (root, mut plan) = recorded_transaction_fixture();
+    let relative = ".codex/bin/bridgeforge.exe";
+    let target = root.join(relative);
+    fs::create_dir_all(target.parent().unwrap()).unwrap();
+    fs::write(&target, b"previous public payload").unwrap();
+    plan.writes
+        .insert(target.clone(), b"prepared public payload".to_vec());
+    plan.public_actions.push(SyncAction {
+        id: "public:bridgeforge".into(),
+        target: relative.into(),
+        operation: "replace".into(),
+        risk: false,
+        before_sha256: Some(sha_raw(b"previous public payload")),
+        after_sha256: sha_raw(b"prepared public payload"),
+    });
+    let fingerprint = plan.aggregate_fingerprint.clone();
+    let observer = |root: &Path, _: &Path| {
+        assert_eq!(
+            fs::read(root.join(relative)).unwrap(),
+            b"prepared public payload"
+        );
+        assert_eq!(fs::read(root.join("managed.txt")).unwrap(), b"new\n");
+        Err("injected after joint installation".into())
+    };
+    let error = apply_plan_internal(plan, &fingerprint, false, Some(&observer)).unwrap_err();
+    assert!(error.contains("transaction rolled back"), "{error}");
+    assert_eq!(fs::read(target).unwrap(), b"previous public payload");
+    assert_eq!(fs::read(root.join("managed.txt")).unwrap(), b"old\n");
     assert_eq!(
         fs::read(root.join(".codex/.bridgeforge_codex_version")).unwrap(),
         b"1.0.0\n"
