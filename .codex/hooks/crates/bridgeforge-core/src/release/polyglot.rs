@@ -10,7 +10,7 @@ pub(super) struct Adapters {
     pub python: Option<python::Config>,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct SharedInput {
     pub path: String,
@@ -55,6 +55,9 @@ const CONFIG: &str = ".codex/bridgeforge-version.json";
 
 pub(super) fn parse(payload: &[u8]) -> Result<Option<Config>, String> {
     let value = crate::json::parse_unique_json(payload, "version sync config")?;
+    if value["schema_version"].as_u64() == Some(4) {
+        return super::schema4::parse(payload).map(|cfg| cfg.map(|cfg| cfg.native));
+    }
     if value["schema_version"].as_u64() != Some(3) {
         return Ok(None);
     }
@@ -181,15 +184,14 @@ pub(super) fn load_config(root: &Path) -> Result<Option<Config>, String> {
 }
 
 #[derive(Clone, Debug, Default)]
-struct Snapshot {
-    packages: BTreeMap<String, NativePackage>,
-    dependencies: Vec<NativeDependency>,
-    inputs: model::Inputs,
-    inventory: Vec<String>,
-    config: Option<Config>,
+pub(super) struct Snapshot {
+    pub packages: BTreeMap<String, NativePackage>,
+    pub dependencies: Vec<NativeDependency>,
+    pub inputs: model::Inputs,
+    pub config: Option<Config>,
 }
 
-fn owns(prefix: &str, path: &str) -> bool {
+pub(super) fn owns(prefix: &str, path: &str) -> bool {
     prefix == path || prefix.ends_with('/') && path.starts_with(prefix)
 }
 
@@ -211,7 +213,7 @@ fn combine(target: &mut LanguageSnapshot, source: LanguageSnapshot) -> Result<()
     Ok(())
 }
 
-fn snapshot(
+pub(super) fn snapshot(
     cfg: &Config,
     paths: Vec<String>,
     historical: bool,
@@ -330,7 +332,6 @@ fn snapshot(
         .collect::<Vec<_>>();
     let mut manifests = BTreeMap::new();
     let mut result = Snapshot {
-        inventory: paths.clone(),
         config: if historical {
             at.clone()
         } else {
@@ -418,7 +419,7 @@ fn snapshot(
     Ok(result)
 }
 
-fn historical(
+pub(super) fn historical(
     root: &Path,
     revision: &str,
     cfg: &Config,
@@ -443,55 +444,14 @@ pub(super) fn verify_historical(
     historical(root, revision, cfg, runner).map(|_| ())
 }
 
-pub(super) fn validate_current(
-    root: &Path,
-    boundary: &str,
-    cfg: &Config,
-    runner: &dyn ProcessRunner,
-) -> Result<(), String> {
-    let head = history::git(root, runner, &["rev-parse", "HEAD"])?;
-    let reader = history_cache::Reader::new(root, runner);
-    build(
-        root,
-        "chore: inspect release history",
-        vec![],
-        head.trim(),
-        boundary,
-        cfg,
-        &reader,
-    )?;
-    reader.verify_unchanged()
+pub(super) fn validate_current(root:&Path,boundary:&str,cfg:&Config,runner:&dyn ProcessRunner)->Result<(),String>{
+    let current=snapshot(cfg,independent::inventory(root,runner)?,false,&mut |p|config::read_current(root,p))?;
+    let old=historical(root,boundary,cfg,runner)?;
+    for (id,p) in &current.packages {if old.packages.get(id).is_some_and(|b|b.version!=p.version){return Err(format!("{id}: native version differs from published baseline"));}}
+    Ok(())
 }
 
-pub(super) fn configuration_inputs(
-    root: &Path,
-    cfg: &Config,
-    runner: &dyn ProcessRunner,
-) -> Result<BTreeMap<PathBuf, Option<Vec<u8>>>, String> {
-    let snapshot = snapshot(
-        cfg,
-        independent::inventory(root, runner)?,
-        false,
-        &mut |p| config::read_current(root, p),
-    )?;
-    Ok(snapshot
-        .inputs
-        .into_iter()
-        .map(|(p, b)| (root.join(p), b))
-        .collect())
-}
-
-fn level(commit: &CommitInfo) -> u8 {
-    if commit.breaking {
-        3
-    } else if commit.kind == "feat" {
-        2
-    } else {
-        1
-    }
-}
-
-fn owner(snapshot: &Snapshot, path: &str, cfg: &Config) -> Result<Vec<String>, String> {
+pub(super) fn owner(snapshot: &Snapshot, path: &str, cfg: &Config) -> Result<Vec<String>, String> {
     let scope = snapshot.config.as_ref().unwrap_or(cfg);
     if scope.product_inputs.iter().any(|p| owns(p, path)) {
         return Ok(vec![]);
@@ -529,6 +489,7 @@ fn owner(snapshot: &Snapshot, path: &str, cfg: &Config) -> Result<Vec<String>, S
         if ids.len() == 1 {
             return Ok(ids);
         }
+        return Err(format!("ambiguous package ownership: {path}; configure shared_inputs"));
     }
     if snapshot.inputs.contains_key(path) {
         return Err(format!(
@@ -540,7 +501,7 @@ fn owner(snapshot: &Snapshot, path: &str, cfg: &Config) -> Result<Vec<String>, S
     ))
 }
 
-fn bump_native(package: &NativePackage, impact: u8) -> Result<String, String> {
+pub(super) fn bump_native(package: &NativePackage, impact: u8) -> Result<String, String> {
     match package.language {
         Language::Python => python::bump_version(&package.version, impact),
         Language::Rust => {
@@ -566,7 +527,7 @@ fn bump_native(package: &NativePackage, impact: u8) -> Result<String, String> {
     }
 }
 
-fn add_writes(target: &mut model::Writes, source: model::Writes) -> Result<(), String> {
+pub(super) fn add_writes(target: &mut model::Writes, source: model::Writes) -> Result<(), String> {
     for (path, bytes) in source {
         if let Some(old) = target.insert(path.clone(), bytes.clone()) {
             if old != bytes {
@@ -577,527 +538,7 @@ fn add_writes(target: &mut model::Writes, source: model::Writes) -> Result<(), S
     Ok(())
 }
 
-pub(super) fn build(
-    root: &Path,
-    message: &str,
-    changed: Vec<String>,
-    head: &str,
-    boundary: &str,
-    cfg: &Config,
-    runner: &history_cache::Reader<'_>,
-) -> Result<Option<FileReleasePlan>, String> {
-    let initial_status = independent::status(root, runner)?;
-    let inventory = independent::inventory(root, runner)?;
-    let current = snapshot(cfg, inventory.clone(), false, &mut |p| {
-        config::read_current(root, p)
-    })?;
-    let baseline = historical(root, boundary, cfg, runner)?;
-    if let Some(old) = &baseline.config {
-        if cfg.lifecycle.len() < old.lifecycle.len()
-            || cfg.lifecycle[..old.lifecycle.len()] != old.lifecycle
-        {
-            return Err("published lifecycle history must be preserved verbatim".into());
-        }
-    }
-    let transitions = cfg
-        .lifecycle
-        .iter()
-        .filter(|t| t.base == boundary)
-        .cloned()
-        .collect::<Vec<_>>();
-    let known_old_events = baseline
-        .config
-        .as_ref()
-        .map(|c| c.lifecycle.iter().map(|t| &t.id).collect::<BTreeSet<_>>())
-        .unwrap_or_default();
-    if cfg
-        .lifecycle
-        .iter()
-        .any(|t| t.base != boundary && !known_old_events.contains(&t.id))
-    {
-        return Err("new lifecycle event must be bound to the current release baseline".into());
-    }
-    let mut consumed = BTreeSet::new();
-    let mut ordered_transitions = Vec::new();
-    let mut previous = baseline.clone();
-    let mut infos = Vec::new();
-    let mut paths_all = BTreeSet::new();
-    let mut impacts = BTreeMap::<String, u8>::new();
-    let mut raw_impacts = Vec::new();
-    let mut first_versions = baseline
-        .packages
-        .iter()
-        .map(|(id, p)| (id.clone(), p.version.clone()))
-        .collect::<BTreeMap<_, _>>();
-    let mut retired = BTreeSet::new();
-    if let Some(old) = &baseline.config {
-        for t in &old.lifecycle {
-            for source in &t.from {
-                if !t.to.iter().any(|p| p.id == source.id) {
-                    retired.insert(source.id.clone());
-                }
-            }
-        }
-    }
-    if current.packages.keys().any(|id| retired.contains(id)) {
-        return Err("published retired identity cannot be reused".into());
-    }
-    let factory = root.join("templates/managed-skeleton.json").is_file();
-    let commits = history::git(
-        root,
-        runner,
-        &[
-            "rev-list",
-            "--reverse",
-            "--topo-order",
-            &format!("{boundary}..{head}"),
-        ],
-    )?;
-    for revision in commits.lines().filter(|s| !s.is_empty()) {
-        let parents = history::git(
-            root,
-            runner,
-            &["rev-list", "--parents", "-n", "1", revision],
-        )?;
-        let parts = parents.split_whitespace().collect::<Vec<_>>();
-        if parts.len() != 2 {
-            return Err(format!(
-                "release history requires review of merge/root commit {revision}"
-            ));
-        }
-        let before = parts[1];
-        let touched = history::paths(&history::git(
-            root,
-            runner,
-            &[
-                "diff",
-                "--name-only",
-                "--no-renames",
-                "-z",
-                before,
-                revision,
-                "--",
-            ],
-        )?);
-        let next = historical(root, revision, cfg, runner)?;
-        let used_before = consumed.clone();
-        let transition_start = ordered_transitions.len();
-        let matched = lifecycle::validate_step(
-            &previous.packages,
-            &next.packages,
-            &transitions,
-            &mut consumed,
-        )?;
-        ordered_transitions.extend(
-            matched
-                .iter()
-                .map(|id| transitions.iter().find(|t| &t.id == id).unwrap().clone()),
-        );
-        let mechanical = mechanical_paths(
-            &previous,
-            &next,
-            cfg,
-            &transitions,
-            &used_before,
-            &consumed,
-            &mut |p| revision_payload(root, before, p, runner),
-            &mut |p| revision_payload(root, revision, p, runner),
-        )?;
-        record_identities(&previous, &next, &mut first_versions, &mut retired)?;
-        let classifier = if factory {
-            None
-        } else {
-            let payload = revision_payload(root, revision, ".codex/managed-skeleton.json", runner)?
-                .ok_or("release history has no ownership contract")?;
-            Some(PayloadClassifier::new(&payload, |p| {
-                revision_payload(root, before, p, runner)
-            })?)
-        };
-        let mut business = Vec::new();
-        for path in &touched {
-            if !factory
-                && classifier.as_ref().unwrap().classify(
-                    std::slice::from_ref(path),
-                    |p| revision_payload(root, before, p, runner),
-                    |p| revision_payload(root, revision, p, runner),
-                )? == ReleaseKind::SkeletonOnly
-            {
-                continue;
-            }
-            business.push(path.clone());
-        }
-        if !business.is_empty() {
-            let info = parse_commit_message(&history::git(
-                root,
-                runner,
-                &["show", "-s", "--format=%B", revision],
-            )?)?;
-            attribute(
-                &previous,
-                &next,
-                &business,
-                &info,
-                cfg,
-                transition_start,
-                &mechanical,
-                &mut raw_impacts,
-            )?;
-            infos.push(info);
-        }
-        paths_all.extend(touched);
-        previous = next;
-    }
-    let used_before = consumed.clone();
-    let transition_start = ordered_transitions.len();
-    let matched = lifecycle::validate_step(
-        &previous.packages,
-        &current.packages,
-        &transitions,
-        &mut consumed,
-    )?;
-    ordered_transitions.extend(
-        matched
-            .iter()
-            .map(|id| transitions.iter().find(|t| &t.id == id).unwrap().clone()),
-    );
-    let mechanical = mechanical_paths(
-        &previous,
-        &current,
-        cfg,
-        &transitions,
-        &used_before,
-        &consumed,
-        &mut |p| revision_payload(root, head, p, runner),
-        &mut |p| config::read_current(root, p),
-    )?;
-    record_identities(&previous, &current, &mut first_versions, &mut retired)?;
-    let mut actual = changed.into_iter().collect::<BTreeSet<_>>();
-    actual.extend(history::paths(&history::git(
-        root,
-        runner,
-        &["diff", "--name-only", "--no-renames", "-z", "HEAD", "--"],
-    )?));
-    actual.extend(history::paths(&history::git(
-        root,
-        runner,
-        &["ls-files", "--others", "--exclude-standard", "-z"],
-    )?));
-    let mut business = Vec::new();
-    for path in &actual {
-        if factory
-            || classify(root, std::slice::from_ref(path), runner)? != ReleaseKind::SkeletonOnly
-        {
-            business.push(path.clone());
-        }
-    }
-    if !business.is_empty() {
-        let info = parse_commit_message(message)?;
-        attribute(
-            &previous,
-            &current,
-            &business,
-            &info,
-            cfg,
-            transition_start,
-            &mechanical,
-            &mut raw_impacts,
-        )?;
-        infos.push(info);
-    }
-    paths_all.extend(actual);
-    if transitions.iter().any(|t| !consumed.contains(&t.id)) {
-        return Err("lifecycle declaration has no matching observed transition".into());
-    }
-    if infos.is_empty() {
-        return Ok(None);
-    }
-    for (id, impact, start) in raw_impacts {
-        for live in lifecycle::next_ids(&id, &ordered_transitions[start..]) {
-            impacts
-                .entry(live)
-                .and_modify(|level| *level = (*level).max(impact))
-                .or_insert(impact);
-        }
-    }
-    let mut product_level = infos.iter().map(level).max().unwrap_or(1);
-    for (index, transition) in ordered_transitions.iter().enumerate() {
-        let severity = if transition.compatibility == "breaking" {
-            3
-        } else {
-            1
-        };
-        product_level = product_level.max(severity);
-        if transition.compatibility != "mechanical" {
-            for p in &transition.to {
-                for id in lifecycle::next_ids(&p.id, &ordered_transitions[index + 1..]) {
-                    impacts
-                        .entry(id)
-                        .and_modify(|v| *v = (*v).max(severity))
-                        .or_insert(severity);
-                }
-            }
-        }
-    }
-    // Include removed/replaced incoming edges, which no longer occur in the
-    // final reverse graph, before propagating through current live edges.
-    for edge in &baseline.dependencies {
-        if current.packages.contains_key(&edge.owner) && !current.dependencies.contains(edge) {
-            impacts.entry(edge.owner.clone()).or_insert(1);
-        }
-    }
-    let additions = current
-        .packages
-        .keys()
-        .filter(|id| !baseline.packages.contains_key(*id))
-        .cloned()
-        .collect::<BTreeSet<_>>();
-    for id in &additions {
-        impacts.entry(id.clone()).or_insert(1);
-    }
-    loop {
-        let mut progress = false;
-        for edge in &current.dependencies {
-            if impacts.contains_key(&edge.target) && !impacts.contains_key(&edge.owner) {
-                impacts.insert(edge.owner.clone(), 1);
-                progress = true;
-            }
-        }
-        if !progress {
-            break;
-        }
-    }
-    let mut versions = BTreeMap::new();
-    let mut changes = Vec::new();
-    let mut events = Vec::new();
-    for (id, package) in &current.packages {
-        if let Some(impact) = impacts.get(id) {
-            let next = if additions.contains(id) {
-                package.version.clone()
-            } else if let Some(explicit) = cfg.target_versions.get(id) {
-                validate_target(package, explicit)?;
-                if let Ok(minimum) = bump_native(package, *impact) {
-                    validate_minimum(package, explicit, &minimum)?;
-                } else if cfg.target_levels.get(id).is_none_or(|level| level < impact) {
-                    return Err(format!(
-                        "{id}: nonstandard version target requires an explicit impact policy at least {impact}"
-                    ));
-                }
-                explicit.clone()
-            } else {
-                bump_native(package, *impact)?
-            };
-            versions.insert(package.manifest.clone(), next.clone());
-            changes.push(PackageChange {
-                manifest: package.manifest.clone(),
-                name: package.name.clone(),
-                version_before: package.version.clone(),
-                version_after: next,
-                reason: if additions.contains(id) {
-                    "first_release"
-                } else {
-                    "direct_or_dependency_change"
-                }
-                .into(),
-                dependencies: current
-                    .dependencies
-                    .iter()
-                    .filter(|e| e.owner == *id && impacts.contains_key(&e.target))
-                    .map(|e| current.packages[&e.target].manifest.clone())
-                    .collect(),
-            });
-        }
-    }
-    for id in baseline
-        .packages
-        .keys()
-        .chain(current.packages.keys())
-        .collect::<BTreeSet<_>>()
-    {
-        let old = baseline.packages.get(id);
-        let new = current.packages.get(id);
-        if old.is_none()
-            || new.is_none()
-            || old
-                .zip(new)
-                .is_some_and(|(a, b)| a.manifest != b.manifest || a.name != b.name)
-            || impacts.contains_key(id)
-        {
-            let operation = if old.is_none() {
-                "add"
-            } else if new.is_none() {
-                "retire"
-            } else if old.unwrap().name != new.unwrap().name {
-                "rename"
-            } else if old.unwrap().manifest != new.unwrap().manifest {
-                "move"
-            } else {
-                "modify"
-            };
-            events.push(PackageEvent {
-                id: id.clone(),
-                language: format!("{:?}", old.or(new).unwrap().language).to_lowercase(),
-                operation: operation.into(),
-                manifest_before: old.map(|p| p.manifest.clone()),
-                manifest_after: new.map(|p| p.manifest.clone()),
-                name_before: old.map(|p| p.name.clone()),
-                name_after: new.map(|p| p.name.clone()),
-                version_before: old.map(|p| p.version.clone()),
-                version_after: new.map(|p| versions.get(&p.manifest).unwrap_or(&p.version).clone()),
-                related: transitions
-                    .iter()
-                    .filter(|t| t.from.iter().chain(&t.to).any(|p| p.id == *id))
-                    .flat_map(|t| t.from.iter().chain(&t.to).map(|p| p.id.clone()))
-                    .filter(|p| p.as_str() != id.as_str())
-                    .collect::<BTreeSet<_>>()
-                    .into_iter()
-                    .collect(),
-            });
-        }
-    }
-    let mut writes = BTreeMap::new();
-    if let Some(rust_cfg) = &cfg.adapters.rust {
-        let targets = versions
-            .iter()
-            .filter(|(m, _)| {
-                current
-                    .packages
-                    .values()
-                    .any(|p| p.manifest.as_str() == m.as_str() && p.language == Language::Rust)
-            })
-            .map(|(a, b)| (a.clone(), b.clone()))
-            .collect();
-        add_writes(
-            &mut writes,
-            rust::render_versions(
-                rust_cfg,
-                &inventory,
-                &mut |p| config::read_current(root, p),
-                &targets,
-            )?,
-        )?;
-    }
-    if let Some(python_cfg) = &cfg.adapters.python {
-        let targets = versions
-            .iter()
-            .filter(|(m, _)| {
-                current
-                    .packages
-                    .values()
-                    .any(|p| p.manifest.as_str() == m.as_str() && p.language == Language::Python)
-            })
-            .map(|(a, b)| (a.clone(), b.clone()))
-            .collect();
-        add_writes(
-            &mut writes,
-            python::render_versions(
-                python_cfg,
-                &inventory,
-                &mut |p| config::read_current(root, p),
-                &targets,
-            )?,
-        )?;
-    }
-    let old_version = fs::read_to_string(root.join("VERSION"))
-        .map_err(|e| e.to_string())?
-        .trim()
-        .parse::<SemVer>()?;
-    let product = NativePackage {
-        manifest: "VERSION".into(),
-        name: "product".into(),
-        version: old_version.to_string(),
-        language: Language::Rust,
-        workspace: String::new(),
-        source_roots: vec![],
-    };
-    let new_version = bump_native(&product, product_level)?.parse::<SemVer>()?;
-    let kind = if factory {
-        ReleaseKind::Factory
-    } else {
-        ReleaseKind::Business
-    };
-    let paths = paths_all.into_iter().collect::<Vec<_>>();
-    let mut log = String::from_utf8(render_changelog(root, new_version, &infos, &kind, &paths)?)
-        .map_err(|e| e.to_string())?;
-    let marker = format!("## [{new_version}]");
-    let start = log.find(&marker).ok_or("release heading missing")?;
-    let end = log[start + marker.len()..]
-        .find("\n## [")
-        .map(|n| start + marker.len() + n)
-        .unwrap_or(log.len());
-    let mut section = "\n### Package lifecycle\n\n".to_string();
-    for event in &events {
-        section.push_str(&format!(
-            "- `{}` [{}]: {} -> {} ({})\n",
-            event.id,
-            event.language,
-            event.version_before.as_deref().unwrap_or("none"),
-            event.version_after.as_deref().unwrap_or("retired"),
-            event.operation
-        ));
-    }
-    for transition in &transitions {
-        section.push_str(&format!(
-            "- `{}`: {} [{}], {} -> {}\n",
-            transition.id,
-            transition.operation,
-            transition.compatibility,
-            transition
-                .from
-                .iter()
-                .map(|p| p.id.as_str())
-                .collect::<Vec<_>>()
-                .join(", "),
-            transition
-                .to
-                .iter()
-                .map(|p| p.id.as_str())
-                .collect::<Vec<_>>()
-                .join(", ")
-        ));
-    }
-    log.insert_str(end, &section);
-    writes.insert("VERSION".into(), format!("{new_version}\n").into_bytes());
-    writes.insert("CHANGELOG.md".into(), log.into_bytes());
-    let mut inputs = current
-        .inputs
-        .into_iter()
-        .map(|(p, b)| (root.join(p), b))
-        .collect::<BTreeMap<_, _>>();
-    for p in paths
-        .iter()
-        .map(String::as_str)
-        .chain([CONFIG, "VERSION", "CHANGELOG.md"])
-    {
-        inputs
-            .entry(root.join(p))
-            .or_insert(config::read_current(root, p)?);
-    }
-    verify_release_inputs(&inputs)?;
-    if independent::status(root, runner)? != initial_status
-        || independent::inventory(root, runner)? != inventory
-        || history::git(root, runner, &["rev-parse", "HEAD"])?.trim() != head
-    {
-        return Err("repository changed during release planning".into());
-    }
-    Ok(Some(FileReleasePlan {
-        inputs,
-        old_version,
-        new_version,
-        kind,
-        writes: writes.into_iter().map(|(p, b)| (root.join(p), b)).collect(),
-        package_changes: changes,
-        package_events: events,
-        lifecycle_events: transitions
-            .iter()
-            .map(serde_json::to_value)
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| e.to_string())?,
-        release_inventory: Some(inventory),
-        release_status: Some(initial_status),
-    }))
-}
-
-fn validate_target(package: &NativePackage, target: &str) -> Result<(), String> {
+pub(super) fn validate_target(package: &NativePackage, target: &str) -> Result<(), String> {
     match package.language {
         Language::Rust => {
             if target.parse::<SemVer>()? <= package.version.parse::<SemVer>()? {
@@ -1116,109 +557,6 @@ fn validate_target(package: &NativePackage, target: &str) -> Result<(), String> 
                 return Err("target version must increase".into());
             }
         }
-    }
-    Ok(())
-}
-
-fn record_identities(
-    before: &Snapshot,
-    after: &Snapshot,
-    versions: &mut BTreeMap<String, String>,
-    retired: &mut BTreeSet<String>,
-) -> Result<(), String> {
-    for id in before
-        .packages
-        .keys()
-        .filter(|id| !after.packages.contains_key(*id))
-    {
-        retired.insert(id.clone());
-    }
-    for (id, p) in &after.packages {
-        if retired.contains(id) {
-            return Err(format!("{id}: retired identity cannot be reused"));
-        }
-        if let Some(version) = versions.get(id) {
-            if version != &p.version {
-                return Err(format!("{id}: version changed outside managed release"));
-            }
-        } else {
-            versions.insert(id.clone(), p.version.clone());
-        }
-    }
-    Ok(())
-}
-
-// An exact current product-file declaration can fill a missing historical
-// attribution. It never replaces a historical owner, broadens a directory
-// declaration into a retroactive rule, or masks native adapter/package inputs.
-fn recover_product_file(before: &Snapshot, after: &Snapshot, path: &str, cfg: &Config) -> bool {
-    cfg.product_inputs
-        .iter()
-        .any(|p| p == path && !p.ends_with('/'))
-        && [before, after].iter().all(|snapshot| {
-            !snapshot.inputs.contains_key(path)
-                && !snapshot.packages.values().any(|package| {
-                    package.manifest == path
-                        || package.source_roots.iter().any(|root| {
-                            root.is_empty()
-                                || path == root
-                                || path.starts_with(&format!("{}/", root.trim_end_matches('/')))
-                        })
-                })
-        })
-}
-
-fn attribute(
-    before: &Snapshot,
-    after: &Snapshot,
-    paths: &[String],
-    info: &CommitInfo,
-    cfg: &Config,
-    transition_start: usize,
-    mechanical: &BTreeSet<String>,
-    impacts: &mut Vec<(String, u8, usize)>,
-) -> Result<(), String> {
-    for path in paths {
-        if matches!(path.as_str(), CONFIG | "VERSION" | "CHANGELOG.md") || mechanical.contains(path)
-        {
-            continue;
-        }
-        let mut ids = BTreeSet::new();
-        let old = owner(before, path, cfg);
-        let new = owner(after, path, cfg);
-        if let Ok(value) = &old {
-            ids.extend(value.iter().cloned());
-        }
-        if let Ok(value) = &new {
-            ids.extend(value.iter().cloned());
-        }
-        if old.is_err() && new.is_err() && !recover_product_file(before, after, path, cfg) {
-            return Err(format!("unattributed historical release input: {path}"));
-        }
-        for id in ids {
-            impacts.push((id, level(info), transition_start));
-        }
-    }
-    Ok(())
-}
-
-fn validate_minimum(package: &NativePackage, target: &str, minimum: &str) -> Result<(), String> {
-    let lower = match package.language {
-        Language::Rust => target.parse::<SemVer>()? < minimum.parse::<SemVer>()?,
-        Language::Python => {
-            target
-                .parse::<pep440_rs::Version>()
-                .map_err(|e| e.to_string())?
-                < minimum
-                    .parse::<pep440_rs::Version>()
-                    .map_err(|e| e.to_string())?
-        }
-    };
-    if lower {
-        return Err(format!(
-            "{}: target version is below required impact floor {minimum}",
-            package.manifest
-        ));
     }
     Ok(())
 }
@@ -1244,123 +582,7 @@ fn validate_version_ownership(cfg: &Config) -> Result<(), String> {
     Ok(())
 }
 
-fn mechanical_paths(
-    before: &Snapshot,
-    after: &Snapshot,
-    cfg: &Config,
-    transitions: &[Transition],
-    used_before: &BTreeSet<String>,
-    used_after: &BTreeSet<String>,
-    old_read: &mut impl FnMut(&str) -> Result<Option<Vec<u8>>, String>,
-    new_read: &mut impl FnMut(&str) -> Result<Option<Vec<u8>>, String>,
-) -> Result<BTreeSet<String>, String> {
-    let mut result = BTreeSet::new();
-    for t in transitions.iter().filter(|t| {
-        t.compatibility == "mechanical"
-            && !used_before.contains(&t.id)
-            && used_after.contains(&t.id)
-    }) {
-        let from = &t.from[0];
-        let to = &t.to[0];
-        if !before
-            .packages
-            .get(&from.id)
-            .is_some_and(|p| lifecycle::matches(from, p))
-            || !after
-                .packages
-                .get(&to.id)
-                .is_some_and(|p| lifecycle::matches(to, p))
-        {
-            return Err(format!(
-                "{}: cannot prove chained mechanical move from observed snapshots; declare compatible",
-                t.id
-            ));
-        }
-        let edges = |s: &Snapshot| {
-            s.dependencies
-                .iter()
-                .filter(|e| e.owner == from.id)
-                .map(|e| (e.target.clone(), e.kind.clone()))
-                .collect::<BTreeSet<_>>()
-        };
-        if edges(before) != edges(after) {
-            return Err(format!(
-                "{}: mechanical move changes dependency identities",
-                t.id
-            ));
-        }
-        let collect = |s: &Snapshot,
-                       p: &Identity,
-                       read: &mut dyn FnMut(&str) -> Result<Option<Vec<u8>>, String>|
-         -> Result<BTreeMap<String, Vec<u8>>, String> {
-            let dir = p
-                .manifest
-                .rsplit_once('/')
-                .map(|(d, _)| format!("{d}/"))
-                .unwrap_or_default();
-            let mut values = BTreeMap::new();
-            for path in &s.inventory {
-                if path == &p.manifest {
-                    continue;
-                }
-                if owner(s, path, cfg).is_ok_and(|ids| ids == vec![p.id.clone()]) {
-                    let suffix = path
-                        .strip_prefix(&dir)
-                        .map(|p| format!("package:{p}"))
-                        .unwrap_or_else(|| format!("shared:{path}"));
-                    values.insert(suffix, read(path)?.ok_or("mechanical source file missing")?);
-                }
-            }
-            Ok(values)
-        };
-        if collect(before, from, old_read)? != collect(after, to, new_read)? {
-            return Err(format!("{}: mechanical move changes source contents", t.id));
-        }
-        let old = old_read(&from.manifest)?.ok_or("mechanical manifest missing")?;
-        let new = new_read(&to.manifest)?.ok_or("mechanical manifest missing")?;
-        if native_semantics(&old)? != native_semantics(&new)? {
-            return Err(format!("{}: mechanical move changes native metadata", t.id));
-        }
-        for (s, p) in [(before, from), (after, to)] {
-            result.insert(p.manifest.clone());
-            for path in &s.inventory {
-                if owner(s, path, cfg).is_ok_and(|ids| ids == vec![p.id.clone()]) {
-                    result.insert(path.clone());
-                }
-            }
-        }
-        for (id, old) in &before.packages {
-            if let Some(new) = after.packages.get(id) {
-                if old.manifest != new.manifest
-                    || old.name != new.name
-                    || old.version != new.version
-                {
-                    continue;
-                }
-                let old_edges = before
-                    .dependencies
-                    .iter()
-                    .filter(|e| e.owner == *id)
-                    .collect::<Vec<_>>();
-                let new_edges = after
-                    .dependencies
-                    .iter()
-                    .filter(|e| e.owner == *id)
-                    .collect::<Vec<_>>();
-                if old_edges != new_edges {
-                    continue;
-                }
-                if let (Some(a), Some(b)) = (old_read(&old.manifest)?, new_read(&new.manifest)?) {
-                    if a != b && native_semantics(&a)? == native_semantics(&b)? {
-                        result.insert(new.manifest.clone());
-                    }
-                }
-            }
-        }
-    }
-    Ok(result)
-}
-
+#[cfg(test)]
 fn native_semantics(bytes: &[u8]) -> Result<Value, String> {
     let text = std::str::from_utf8(bytes).map_err(|e| e.to_string())?;
     let doc = text.parse::<toml_edit::DocumentMut>().map_err(

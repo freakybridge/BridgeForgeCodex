@@ -128,7 +128,7 @@ fn parser_collects_repeated_batch_roots_in_order() {
 }
 
 #[test]
-fn first_sync_requires_choice_before_any_git_write() {
+fn ordinary_sync_does_not_require_release_choice_but_release_does() {
     let root=std::env::temp_dir().join(format!("bf-cli-first-use-{}-{}",std::process::id(),SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()));
     fs::create_dir_all(&root).unwrap();fs::write(root.join("app.py"),"pass\n").unwrap();
     for args in [vec!["init"],vec!["config","user.name","Fixture"],vec!["config","user.email","fixture@example.invalid"],vec!["config","core.hooksPath",".git/hooks"],vec!["add","."],vec!["commit","-m","chore: initial"]] {
@@ -138,7 +138,9 @@ fn first_sync_requires_choice_before_any_git_write() {
     for release in [false,true] {
         let mut args=vec!["git-sync".into(),"--root".into(),root.display().to_string(),"--message".into(),"chore: test".into()];
         if release {args.push("--release".into());}
-        let output=run(&args);assert_eq!(output.code,EXIT_BLOCKED);assert_eq!(output.receipt.unwrap()["status"],"configuration-required");
+        let output=run(&args);assert_eq!(output.code,EXIT_BLOCKED);
+        if release{assert_eq!(output.receipt.unwrap()["status"],"configuration-required");}
+        else{assert_eq!(output.receipt.unwrap()["status"],"blocked");assert!(output.stderr.contains("no push target"),"{}",output.stderr);}
         assert_eq!(fs::read(root.join(".git/index")).unwrap(),index);assert!(!root.join(".git/FETCH_HEAD").exists());assert!(!root.join(".runtime").exists());
     }
     fs::remove_dir_all(root).unwrap();

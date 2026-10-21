@@ -411,3 +411,4 @@ mod distribution_regressions;
 mod git_sync_runtime;
 #[cfg(test)]
 mod git_sync_polyglot_runtime;
+mod schema4_fixture;

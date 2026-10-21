@@ -1,7 +1,8 @@
 //! Pure Rust release adapter. All filesystem access is supplied by the caller.
-use super::{CommitInfo, SemVer, bump};
+use super::SemVer;
 use super::model::{Language, LanguageSnapshot, NativeDependency, NativePackage, Writes};
-pub use super::model::PackageChange;
+#[cfg(test)]
+use super::model::PackageChange;
 use regex::Regex;
 use serde::Deserialize;
 use std::collections::{BTreeMap, BTreeSet};
@@ -69,12 +70,7 @@ pub(super) struct SharedInput {
     pub packages: Vec<String>,
 }
 
-#[derive(Clone, Debug)]
-pub(super) struct AdapterPlan {
-    pub inputs: BTreeMap<String, Option<Vec<u8>>>,
-    pub writes: BTreeMap<String, Vec<u8>>,
-    pub packages: Vec<PackageChange>,
-}
+
 
 #[derive(Clone, Debug)]
 struct Package {
@@ -107,7 +103,6 @@ enum DependencyKind {
 
 #[derive(Clone, Debug)]
 pub(super) struct Workspace {
-    config: RustConfig,
     inventory: BTreeSet<String>,
     inputs: BTreeMap<String, Option<Vec<u8>>>,
     documents: BTreeMap<String, DocumentMut>,
@@ -385,6 +380,96 @@ pub(super) fn render_versions(
     Ok(writes)
 }
 
+/// Return only owners whose *effective declared requirement* changed in proposed
+/// output. A target version changing within an accepted range is not propagation.
+pub(super) fn requirement_changes(
+    config:&RustConfig, inventory:&[String],
+    read:&mut impl FnMut(&str)->Result<Option<Vec<u8>>,String>, writes:&Writes,
+)->Result<BTreeSet<String>,String>{
+    let workspace=load(config,inventory,read)?;
+    let mut affected=BTreeSet::new();
+    for dependency in &workspace.dependencies {
+        let Some(bytes)=writes.get(&dependency.document) else {continue};
+        let proposed=std::str::from_utf8(bytes).map_err(|e|e.to_string())?.parse::<DocumentMut>().map_err(|e|e.to_string())?;
+        let mut before=workspace.documents[&dependency.document].as_item();
+        let mut after=proposed.as_item();
+        for key in &dependency.keys {
+            before=before.get(key).ok_or("original dependency requirement disappeared")?;
+            after=after.get(key).ok_or("proposed dependency requirement disappeared")?;
+        }
+        if before.get("version").and_then(Item::as_str)!=after.get("version").and_then(Item::as_str){affected.insert(dependency.owner.clone());}
+    }
+    Ok(affected)
+}
+
+/// Unified products keep Cargo's workspace inheritance rather than turning all
+/// followers into unrelated literal versions. The final graph is revalidated.
+pub(super) fn render_synchronized_versions(
+    config:&RustConfig,inventory:&[String],
+    read:&mut impl FnMut(&str)->Result<Option<Vec<u8>>,String>,versions:&BTreeMap<String,String>,
+)->Result<Writes,String>{
+    if versions.is_empty(){return Ok(Writes::new());}
+    let target=versions.values().next().unwrap();
+    if versions.values().any(|v|v!=target){return Err("synchronized Rust targets must agree".into());}
+    let mut writes=render_versions(config,inventory,read,versions)?;
+    let snapshot=snapshot(config,inventory,read)?;
+    for root in &config.workspaces {
+        let Some(bytes)=read(root)? else{return Err("synchronized workspace missing".into())};
+        let mut doc=parse(root,writes.get(root).unwrap_or(&bytes))?;
+        if doc.get("workspace").and_then(|w|w.get("package")).and_then(|p|p.get("version")).is_some(){doc["workspace"]["package"]["version"]=value(target);writes.insert(root.clone(),doc.to_string().into_bytes());}
+    }
+    for path in snapshot.packages.keys(){
+        let bytes=read(path)?.ok_or("synchronized package disappeared")?;
+        let old=parse(path,&bytes)?;
+        let Some(version)=old.get("package").and_then(|p|p.get("version"))else{continue};
+        if version.get("workspace").and_then(Item::as_bool)==Some(true){let mut doc=parse(path,writes.get(path).unwrap_or(&bytes))?;doc["package"]["version"]=version.clone();writes.insert(path.clone(),doc.to_string().into_bytes());}
+    }
+    let final_snapshot=self::snapshot(config,inventory,&mut |p|if let Some(b)=writes.get(p){Ok(Some(b.clone()))}else{read(p)})?;
+    if final_snapshot.packages.values().any(|p|&p.version!=target){return Err("synchronized Rust workspace versions disagree after rendering".into());}
+    Ok(writes)
+}
+
+// Product mappings can contain independent copies of the same workspace (the
+// factory's template and dogfood). Validate each connected workspace group with
+// the same native graph/lock rules, without merging duplicate lock identities.
+fn product_groups(roots:&[String],inventory:&[String],read:&mut impl FnMut(&str)->Result<Option<Vec<u8>>,String>,product:SemVer)->Result<(Workspace,Vec<Vec<String>>),String>{
+    let cfg=RustConfig{workspaces:roots.to_vec(),dependency_bump:"patch".into(),shared_inputs:vec![],product_inputs:vec![]};
+    let all=load_with_lock_scope(&cfg,inventory,Some(&BTreeSet::new()),read)?;
+    for (path,package) in &all.packages{if package.version!=product{return Err(format!("{path}: synchronized product mapping version differs from VERSION"));}}
+    let mut groups=BTreeSet::new();
+    for root in roots {
+        let mut connected=BTreeSet::from([root.clone()]);
+        loop{
+            let packages=all.packages.iter().filter(|(_,p)|connected.contains(&p.workspace)).map(|(p,_)|p.clone()).collect::<BTreeSet<_>>();
+            let extra=all.dependencies.iter().filter(|d|packages.contains(&d.owner)).map(|d|all.packages[&d.target].workspace.clone()).collect::<BTreeSet<_>>();
+            let count=connected.len();connected.extend(extra);if connected.len()==count{break;}
+        }
+        let mut group=all.clone();group.roots.retain(|root,_|connected.contains(root));group.packages.retain(|_,p|connected.contains(&p.workspace));group.dependencies.retain(|d|group.packages.contains_key(&d.owner)&&group.packages.contains_key(&d.target));
+        group.validate_locks(None)?;group.validate_lock_edges()?;
+        groups.insert(connected.into_iter().collect::<Vec<_>>());
+    }
+    Ok((all,groups.into_iter().collect()))
+}
+
+pub(super) fn product_mapping_inputs(roots:&[String],inventory:&[String],read:&mut impl FnMut(&str)->Result<Option<Vec<u8>>,String>,product:SemVer)->Result<BTreeMap<String,Option<Vec<u8>>>,String>{
+    if roots.is_empty(){return Ok(BTreeMap::new());}
+    Ok(product_groups(roots,inventory,read,product)?.0.inputs)
+}
+
+pub(super) fn render_product_mappings(roots:&[String],inventory:&[String],read:&mut impl FnMut(&str)->Result<Option<Vec<u8>>,String>,product:SemVer,target:SemVer)->Result<Writes,String>{
+    if roots.is_empty(){return Ok(Writes::new());}
+    let(all,groups)=product_groups(roots,inventory,read,product)?;
+    let mut writes=Writes::new();
+    for group in groups {
+        let cfg=RustConfig{workspaces:group.clone(),dependency_bump:"patch".into(),shared_inputs:vec![],product_inputs:vec![]};
+        let versions=all.packages.iter().filter(|(_,p)|group.contains(&p.workspace)).map(|(p,_)|(p.clone(),target.to_string())).collect();
+        for(path,bytes)in render_synchronized_versions(&cfg,inventory,read,&versions)?{
+            if writes.get(&path).is_some_and(|old|old!=&bytes){return Err(format!("product mapping groups disagree on {path}"));}writes.insert(path,bytes);
+        }
+    }
+    Ok(writes)
+}
+
 /// A schema 1 snapshot predates independent Rust lock ownership. Keep full
 /// discovery and identity checks; validate locks for its managed roots/members.
 pub(super) fn load_legacy_history(
@@ -410,7 +495,6 @@ fn load_with_lock_scope(
         return Err("rust.dependency_bump currently supports only patch".into());
     }
     let mut result = Workspace {
-        config: config.clone(),
         inventory: inventory.iter().cloned().collect(),
         inputs: BTreeMap::new(),
         documents: BTreeMap::new(),
@@ -604,6 +688,7 @@ fn load_with_lock_scope(
 }
 
 impl Workspace {
+    #[cfg(test)]
     pub(super) fn inputs(&self) -> &BTreeMap<String, Option<Vec<u8>>> {
         &self.inputs
     }
@@ -657,157 +742,6 @@ impl Workspace {
             }
         }
         Ok(())
-    }
-
-    /// Shared inputs win over inferred package ownership. Root manifest changes
-    /// conservatively affect every member; lock changes require an explicit map.
-    pub(super) fn affected(&self, path: &str) -> Result<Vec<String>, String> {
-        let path = normalize("", path)?;
-        if let Some(mapping) = self
-            .config
-            .shared_inputs
-            .iter()
-            .find(|m| matches_input(&m.path, &path))
-        {
-            return Ok(mapping.packages.clone());
-        }
-        if self
-            .config
-            .product_inputs
-            .iter()
-            .any(|m| matches_input(m, &path))
-        {
-            return Ok(Vec::new());
-        }
-        if self.locks.contains(&path) {
-            return Err(format!(
-                "{path}: Cargo.lock changes require explicit shared_inputs or product_inputs attribution"
-            ));
-        }
-        if let Some(members) = self.roots.get(&path) {
-            return Ok(members.iter().cloned().collect());
-        }
-        let best = self
-            .packages
-            .keys()
-            .filter(|manifest| {
-                let dir = directory(manifest);
-                path == **manifest || (!dir.is_empty() && path.starts_with(&format!("{dir}/")))
-            })
-            .max_by_key(|manifest| directory(manifest).len());
-        if let Some(manifest) = best {
-            return Ok(vec![manifest.clone()]);
-        }
-        // A root package owns ordinary root files, but never another unregistered
-        // Cargo package or a lock/config file whose impact cannot be inferred.
-        if self.packages.contains_key("Cargo.toml")
-            && !path.ends_with("Cargo.toml")
-            && !path.ends_with("Cargo.lock")
-        {
-            return Ok(vec!["Cargo.toml".into()]);
-        }
-        Err(format!(
-            "unattributed Rust release input: {path}; configure shared_inputs or product_inputs"
-        ))
-    }
-
-    pub(super) fn is_mechanical_change(
-        &self,
-        path: &str,
-        before: Option<&[u8]>,
-        after: Option<&[u8]>,
-    ) -> Result<bool, String> {
-        let (Some(before), Some(after)) = (before, after) else {
-            return Ok(false);
-        };
-        if !self.packages.contains_key(path) && !self.roots.contains_key(path) {
-            return Ok(false);
-        }
-        let old = parse(path, before)?;
-        let new = parse(path, after)?;
-        let mut old_value: serde_json::Value = toml_to_json(old.as_item())?;
-        let mut new_value: serde_json::Value = toml_to_json(new.as_item())?;
-        if let Some(package) = self.packages.get(path) {
-            for value in [&mut old_value, &mut new_value] {
-                let version = value.pointer_mut("/package/version");
-                if let Some(version) = version {
-                    let inherited = version
-                        .get("workspace")
-                        .and_then(serde_json::Value::as_bool)
-                        == Some(true);
-                    if inherited {
-                        *version = serde_json::Value::String(package.version.to_string());
-                    }
-                }
-            }
-        }
-        // Removing an unused workspace.package.version after all inherited
-        // versions have been materialized is a mechanical migration as well.
-        if self.roots.contains_key(path) {
-            let old_version = old_value.pointer("/workspace/package/version").cloned();
-            let new_version = new_value.pointer("/workspace/package/version").cloned();
-            if old_version != new_version && (old_version.is_none() || new_version.is_none()) {
-                let version = old_version
-                    .as_ref()
-                    .or(new_version.as_ref())
-                    .and_then(serde_json::Value::as_str);
-                if version.is_some_and(|v| {
-                    self.roots[path]
-                        .iter()
-                        .all(|p| self.packages[p].version.to_string() == v)
-                }) {
-                    for value in [&mut old_value, &mut new_value] {
-                        if let Some(table) = value
-                            .pointer_mut("/workspace/package")
-                            .and_then(serde_json::Value::as_object_mut)
-                        {
-                            table.remove("version");
-                        }
-                    }
-                }
-            }
-        }
-        Ok(old_value == new_value)
-    }
-
-    /// Merely appending members which are new since the release boundary does
-    /// not constitute a business change to every existing member of the root.
-    pub(super) fn is_registration_change(
-        &self,
-        path: &str,
-        before: Option<&[u8]>,
-        after: Option<&[u8]>,
-        baseline: &Workspace,
-    ) -> Result<bool, String> {
-        let (Some(before), Some(after), Some(members)) = (before, after, self.roots.get(path)) else {
-            return Ok(false);
-        };
-        let old = parse(path, before)?;
-        let new = parse(path, after)?;
-        let entries = |doc: &DocumentMut| strings(doc.get("workspace").and_then(|w| w.get("members")), "workspace.members");
-        let old_entries = entries(&old)?;
-        let new_entries = entries(&new)?;
-        if old_entries.iter().any(|entry| !new_entries.contains(entry)) {
-            return Ok(false);
-        }
-        let mut added = false;
-        for entry in new_entries.iter().filter(|e| !old_entries.contains(e)) {
-            let pattern = member_pattern(&normalize(directory(path), entry)?)?;
-            let matched = members.iter().filter(|p| pattern.is_match(directory(p))).collect::<Vec<_>>();
-            if matched.is_empty() || matched.iter().any(|p| baseline.packages.contains_key(*p)) {
-                return Ok(false);
-            }
-            added = true;
-        }
-        if !added { return Ok(false); }
-        let mut old = toml_to_json(old.as_item())?;
-        let mut new = toml_to_json(new.as_item())?;
-        for doc in [&mut old, &mut new] {
-            if let Some(table) = doc.get_mut("workspace").and_then(serde_json::Value::as_object_mut) {
-                table.remove("members");
-            }
-        }
-        Ok(old == new)
     }
 
     fn collect_dependencies(&mut self) -> Result<(), String> {
@@ -1236,116 +1170,6 @@ impl Workspace {
         (optional, dependency_features)
     }
 
-    #[cfg(all(test, bridgeforge_factory_tests))]
-    pub(super) fn plan(&self, events: &[(CommitInfo, Vec<String>)]) -> Result<AdapterPlan, String> {
-        self.plan_additions(events, &BTreeSet::new())
-    }
-
-    pub(super) fn plan_from_baseline(
-        &self,
-        events: &[(CommitInfo, Vec<String>)],
-        baseline: &Workspace,
-    ) -> Result<AdapterPlan, String> {
-        self.validate_baseline(baseline)?;
-        let additions = self.packages.keys()
-            .filter(|p| !baseline.packages.contains_key(*p)).cloned().collect();
-        self.plan_additions(events, &additions)
-    }
-
-    fn plan_additions(
-        &self,
-        events: &[(CommitInfo, Vec<String>)],
-        additions: &BTreeSet<String>,
-    ) -> Result<AdapterPlan, String> {
-        // First inclusion is a release at the valid, existing manifest version,
-        // including when a new package depends on another changed package.
-        let mut versions = additions.iter().map(|p| (p.clone(), self.packages[p].version))
-            .collect::<BTreeMap<_, _>>();
-        let mut direct = BTreeSet::<String>::new();
-        for (commit, paths) in events {
-            for path in paths {
-                for manifest in self.affected(path)? {
-                    if additions.contains(&manifest) {
-                        continue;
-                    }
-                    let old = self.packages[&manifest].version;
-                    let component = if commit.breaking {
-                        old.major
-                    } else if commit.kind == "feat" {
-                        old.minor
-                    } else {
-                        old.patch
-                    };
-                    if component == u64::MAX {
-                        return Err(format!("{manifest}: Rust package version overflow"));
-                    }
-                    let next = bump(old, commit);
-                    versions
-                        .entry(manifest.clone())
-                        .and_modify(|v| *v = (*v).max(next))
-                        .or_insert(next);
-                    direct.insert(manifest);
-                }
-            }
-        }
-        loop {
-            let mut changed = false;
-            for dependency in &self.dependencies {
-                if versions.contains_key(&dependency.target)
-                    && !versions.contains_key(&dependency.owner)
-                {
-                    let old = self.packages[&dependency.owner].version;
-                    let next = SemVer {
-                        patch: old
-                            .patch
-                            .checked_add(1)
-                            .ok_or("Rust package version overflow")?,
-                        ..old
-                    };
-                    versions.insert(dependency.owner.clone(), next);
-                    changed = true;
-                }
-            }
-            if !changed {
-                break;
-            }
-        }
-        let writes = self.render_versions(&versions)?;
-        let packages = versions
-            .iter()
-            .map(|(manifest, next)| {
-                let package = &self.packages[manifest];
-                let dependencies = self
-                    .dependencies
-                    .iter()
-                    .filter(|d| d.owner == *manifest && versions.contains_key(&d.target))
-                    .map(|d| d.target.clone())
-                    .collect::<BTreeSet<_>>()
-                    .into_iter()
-                    .collect::<Vec<_>>();
-                PackageChange {
-                    manifest: manifest.clone(),
-                    name: package.name.clone(),
-                    version_before: package.version.to_string(),
-                    version_after: next.to_string(),
-                    reason: if additions.contains(manifest) {
-                        "first_release".into()
-                    } else if direct.contains(manifest) {
-                        "direct_change".into()
-                    } else {
-                        "dependency_change".into()
-                    },
-                    dependencies,
-                }
-            })
-            .collect();
-        Ok(AdapterPlan {
-            inputs: self.inputs.clone(),
-            writes,
-            packages,
-        })
-    }
-
     fn render_versions(&self, versions: &BTreeMap<String, SemVer>) -> Result<Writes, String> {
         let mut documents = self.documents.clone();
         let mut touched = BTreeSet::new();
@@ -1473,59 +1297,6 @@ impl Workspace {
 
 // Canonical semantic comparison without depending on serialization of Item
 // (which retains trivia and formatting rather than TOML values).
-fn toml_to_json(item: &Item) -> Result<serde_json::Value, String> {
-    if let Some(table) = item.as_table_like() {
-        let mut result = serde_json::Map::new();
-        for (key, value) in table.iter() {
-            result.insert(key.into(), toml_to_json(value)?);
-        }
-        return Ok(serde_json::Value::Object(result));
-    }
-    if let Some(value) = item.as_value() {
-        return value_json(value);
-    }
-    if let Some(array) = item.as_array_of_tables() {
-        return Ok(serde_json::Value::Array(
-            array
-                .iter()
-                .map(|t| toml_to_json(&Item::Table(t.clone())))
-                .collect::<Result<Vec<_>, _>>()?,
-        ));
-    }
-    Ok(serde_json::Value::Null)
-}
-
-fn value_json(value: &toml_edit::Value) -> Result<serde_json::Value, String> {
-    if let Some(v) = value.as_str() {
-        return Ok(v.into());
-    }
-    if let Some(v) = value.as_bool() {
-        return Ok(v.into());
-    }
-    if let Some(v) = value.as_integer() {
-        return Ok(v.into());
-    }
-    if let Some(v) = value.as_float() {
-        return Ok(serde_json::json!(v));
-    }
-    if let Some(v) = value.as_array() {
-        return Ok(serde_json::Value::Array(
-            v.iter().map(value_json).collect::<Result<Vec<_>, _>>()?,
-        ));
-    }
-    if let Some(v) = value.as_inline_table() {
-        let mut result = serde_json::Map::new();
-        for (k, v) in v.iter() {
-            result.insert(k.into(), value_json(v)?);
-        }
-        return Ok(serde_json::Value::Object(result));
-    }
-    if let Some(v) = value.as_datetime() {
-        return Ok(v.to_string().into());
-    }
-    Err("unsupported TOML value".into())
-}
-
 fn comparator(raw: &str, version: SemVer) -> Result<bool, String> {
     let raw = raw.trim();
     if raw == "*" {

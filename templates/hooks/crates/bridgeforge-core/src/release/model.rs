@@ -12,7 +12,7 @@ pub(super) enum Language {
     Python,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub(super) struct NativePackage {
     pub manifest: String,
     pub name: String,
@@ -22,7 +22,7 @@ pub(super) struct NativePackage {
     pub source_roots: Vec<String>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub(super) struct NativeDependency {
     pub owner: String,
     pub target: String,

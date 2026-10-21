@@ -40,7 +40,7 @@ $bridgeforge-codex
 旧项目缺少版本策略或保留 `per_commit` 时也遵守这条规则，先通过受管骨架升级取得新工具。
 用法与工具能力检查见 [git-sync Skill](skills/git-sync/SKILL.md)。
 
-Rust 多包项目可显式配置产品与内部包分别升版；旧项目不会自动切换策略。配置、支持边界与接入说明见 [Rust 独立包发布](doc/1_delivery/git-sync-independent-packages/requirements_2026-10-16_rust-release.md)。
+发布使用 schema 4 的两种策略：项目统一版本，或项目与内部包独立版本；两种策略共用 Rust/Python 适配器。旧格式项目在显式 release 前受控迁移，普通同步不自动升版。配置、最终差异分析与证据接入见 [schema 4 发布合同](doc/1_delivery/git-sync-release-rewrite/schema4-contract.md)。
 
 单项目长任务或多个已讨论任务需要托管时，在该项目的新对话中输入：
 

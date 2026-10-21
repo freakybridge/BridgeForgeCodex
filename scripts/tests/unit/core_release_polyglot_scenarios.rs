@@ -177,7 +177,15 @@ fn write_graph(root: &Path, language: &str, graph: &[Node<'_>], events: Vec<Valu
         }
         write(root, "Cargo.lock", lock.as_bytes());
     }
-    let cfg = graph_config(language, graph, events);
+    let mut cfg = graph_config(language, graph, events);
+    if let Ok(bytes) = fs::read(root.join(CONFIG)) {
+        let old: Value = serde_json::from_slice(&bytes).unwrap();
+        if old["schema_version"] == 4 {
+            cfg["schema_version"] = json!(4);
+            cfg["baseline"] = old["baseline"].clone();
+            cfg["git_sync_setup"] = old["git_sync_setup"].clone();
+        }
+    }
     write(root, CONFIG, &serde_json::to_vec(&cfg).unwrap());
     cfg
 }
@@ -189,6 +197,7 @@ fn fixture(language: &str) -> Repo {
     // real initial release boundary for both language variants.
     git(&root.0, &["add", "-A"]);
     git(&root.0, &["commit", "--amend", "--no-edit"]);
+    super::super::schema4::fixture::migrate(&root.0, &crate::SystemProcessRunner).unwrap();
     root
 }
 
@@ -201,157 +210,33 @@ fn assert_versions(p: &FileReleasePlan, expected: &[(&str, &str)]) {
     assert_eq!(actual, expected.iter().copied().collect());
 }
 
-#[test]
-fn historical_product_file_recovery_is_read_only_and_does_not_bump_components() {
-    let root = fixture("rust");
-    write(&root.0, "tools/startup.ps1", b"# startup cache\n");
-    git(&root.0, &["add", "."]);
-    git(&root.0, &["commit", "-m", "feat: improve startup"]);
-    assert!(
-        plan(&root.0)
-            .unwrap_err()
-            .contains("unattributed historical")
-    );
-    let mut cfg = graph_config("rust", &nodes(), vec![]);
-    cfg["product_inputs"]
-        .as_array_mut()
-        .unwrap()
-        .push(json!("tools/startup.ps1"));
-    write(&root.0, CONFIG, &serde_json::to_vec(&cfg).unwrap());
-    let index = fs::read(root.0.join(".git/index")).unwrap();
-    let p = plan(&root.0).unwrap().unwrap();
-    assert_versions(&p, &[]);
-    assert_eq!(p.new_version.to_string(), "1.1.0");
-    assert_eq!(p.writes.len(), 2);
-    assert_eq!(fs::read(root.0.join("VERSION")).unwrap(), b"1.0.0\n");
-    assert_eq!(fs::read(root.0.join(".git/index")).unwrap(), index);
-    finish_and_repeat(&root.0, &p);
-}
-
-#[test]
-fn historical_product_file_recovery_requires_an_exact_declaration() {
-    for declared in [None, Some("tools/")] {
-        let root = fixture("rust");
-        write(&root.0, "tools/startup.ps1", b"# startup cache\n");
-        git(&root.0, &["add", "."]);
-        git(&root.0, &["commit", "-m", "fix: improve startup"]);
-        let mut cfg = graph_config("rust", &nodes(), vec![]);
-        if let Some(declared) = declared {
-            cfg["product_inputs"]
-                .as_array_mut()
-                .unwrap()
-                .push(json!(declared));
-        }
-        write(&root.0, CONFIG, &serde_json::to_vec(&cfg).unwrap());
-        assert!(
-            plan(&root.0)
-                .unwrap_err()
-                .contains("unattributed historical")
-        );
-    }
-}
-
-#[test]
-fn historical_product_file_recovery_preserves_existing_component_impacts() {
-    let root = fixture("rust");
-    write(&root.0, "a/src/lib.rs", b"pub fn value() -> u8 { 2 }\n");
-    git(&root.0, &["add", "."]);
-    git(&root.0, &["commit", "-m", "feat: improve a"]);
-    let mut cfg = graph_config("rust", &nodes(), vec![]);
-    cfg["product_inputs"]
-        .as_array_mut()
-        .unwrap()
-        .push(json!("a/src/lib.rs"));
-    write(&root.0, CONFIG, &serde_json::to_vec(&cfg).unwrap());
-    let p = plan(&root.0).unwrap().unwrap();
-    assert_versions(&p, &[("a", "1.3.0"), ("b", "2.0.1")]);
-}
-
-#[test]
-fn historical_product_file_recovery_cannot_mask_native_lock_inputs() {
-    let root = fixture("rust");
-    let mut cfg = graph_config("rust", &nodes(), vec![]);
-    cfg["product_inputs"]
-        .as_array_mut()
-        .unwrap()
-        .retain(|p| p != "Cargo.lock");
-    write(&root.0, CONFIG, &serde_json::to_vec(&cfg).unwrap());
-    git(&root.0, &["add", "."]);
-    git(&root.0, &["commit", "--amend", "--no-edit"]);
-    let lock = fs::read_to_string(root.0.join("Cargo.lock")).unwrap();
-    write(
-        &root.0,
-        "Cargo.lock",
-        format!("{lock}\n# native lock input\n").as_bytes(),
-    );
-    git(&root.0, &["add", "."]);
-    git(&root.0, &["commit", "-m", "fix: touch native lock"]);
-    cfg["product_inputs"]
-        .as_array_mut()
-        .unwrap()
-        .push(json!("Cargo.lock"));
-    write(&root.0, CONFIG, &serde_json::to_vec(&cfg).unwrap());
-    assert!(
-        plan(&root.0)
-            .unwrap_err()
-            .contains("unattributed historical release input: Cargo.lock")
-    );
-}
-
-#[test]
-fn historical_product_file_recovery_does_not_implicitly_attribute_other_files() {
-    let root = fixture("rust");
-    write(&root.0, "tools/startup.ps1", b"# startup cache\n");
-    write(&root.0, "tools/unregistered.ps1", b"# another tool\n");
-    git(&root.0, &["add", "."]);
-    git(&root.0, &["commit", "-m", "fix: improve startup"]);
-    let mut cfg = graph_config("rust", &nodes(), vec![]);
-    cfg["product_inputs"]
-        .as_array_mut()
-        .unwrap()
-        .push(json!("tools/startup.ps1"));
-    write(&root.0, CONFIG, &serde_json::to_vec(&cfg).unwrap());
-    assert!(
-        plan(&root.0)
-            .unwrap_err()
-            .contains("unattributed historical release input: tools/unregistered.ps1")
-    );
-}
-
 fn finish_and_repeat(root: &Path, p: &FileReleasePlan) {
-    for (path, bytes) in &p.writes {
-        fs::write(path, bytes).unwrap();
-    }
-    git(root, &["add", "-A"]);
-    git(root, &["commit", "-m", "chore: release"]);
-    assert!(
-        plan(root).unwrap().is_none(),
-        "consumed lifecycle must not replay or bump again"
-    );
+    super::super::apply_file_release_plan(p).unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "chore: schema4 release"]);
+    assert!(plan(root).unwrap().is_none());
 }
 
 #[test]
-fn polyglot_both_languages_modification_and_new_package_have_distinct_version_rules() {
-    for language in ["python", "rust"] {
+fn schema4_both_languages_own_source_and_new_packages_have_distinct_versions() {
+    for language in ["rust", "python"] {
         let root = fixture(language);
-        let source = if language == "rust" {
-            "a/src/lib.rs"
-        } else {
-            "a/a.py"
-        };
         write(
             &root.0,
-            source,
             if language == "rust" {
-                b"pub fn value() -> u8 { 2 }\n"
+                "a/src/lib.rs"
+            } else {
+                "a/a.py"
+            },
+            if language == "rust" {
+                b"pub fn value()->u8{2}\n"
             } else {
                 b"VALUE=3\n"
             },
         );
         let p = plan(&root.0).unwrap().unwrap();
-        assert_versions(&p, &[("a", "1.2.4"), ("b", "2.0.1")]);
+        assert_versions(&p, &[("a", "1.2.4")]);
         finish_and_repeat(&root.0, &p);
-
         let root = fixture(language);
         let mut graph = nodes();
         graph.push(Node {
@@ -364,7 +249,6 @@ fn polyglot_both_languages_modification_and_new_package_have_distinct_version_ru
         write_graph(&root.0, language, &graph, vec![]);
         let p = plan(&root.0).unwrap().unwrap();
         assert_versions(&p, &[("c", "0.1.0")]);
-        assert_eq!(p.package_changes[0].reason, "first_release");
         assert!(
             p.package_events
                 .iter()
@@ -374,327 +258,165 @@ fn polyglot_both_languages_modification_and_new_package_have_distinct_version_ru
     }
 }
 
-#[test]
-fn polyglot_both_languages_rename_preserves_history_and_propagates_versions() {
-    for language in ["python", "rust"] {
-        let root = fixture(language);
-        let base = git(&root.0, &["rev-parse", "HEAD"]);
-        let before = nodes();
-        let mut after = before.clone();
-        after[0].name = "foundation";
-        after[0].dir = "foundation";
-        let event = transition(
-            language,
-            &base,
-            "rename",
-            "compatible",
-            &before[..1],
-            &after[..1],
-        );
-        write_graph(&root.0, language, &after, vec![event]);
-        let p = plan(&root.0).unwrap().unwrap();
-        assert_versions(&p, &[("foundation", "1.2.4"), ("b", "2.0.1")]);
-        let event = p.package_events.iter().find(|e| e.id == "a").unwrap();
-        assert_eq!(event.operation, "rename");
-        assert_eq!(event.name_before.as_deref(), Some("a"));
-        assert_eq!(event.name_after.as_deref(), Some("foundation"));
-        assert_eq!(event.version_before.as_deref(), Some("1.2.3"));
-        finish_and_repeat(&root.0, &p);
-    }
-}
-
-#[test]
-fn polyglot_both_languages_mechanical_move_does_not_bump_packages() {
-    for language in ["python", "rust"] {
-        let root = fixture(language);
-        let base = git(&root.0, &["rev-parse", "HEAD"]);
-        let before = nodes();
-        let mut after = before.clone();
-        after[0].dir = "moved";
-        let event = transition(
-            language,
-            &base,
-            "move",
-            "mechanical",
-            &before[..1],
-            &after[..1],
-        );
-        write_graph(&root.0, language, &after, vec![event]);
-        let p = plan(&root.0).unwrap().unwrap();
-        assert!(
-            p.package_changes.is_empty(),
-            "{language}: pure move unexpectedly changed versions: {:?}",
-            p.package_changes
-        );
-        assert_eq!(p.new_version.to_string(), "1.0.1");
-        let event = p.package_events.iter().find(|e| e.id == "a").unwrap();
-        assert_eq!(event.operation, "move");
-        assert_eq!(event.version_after.as_deref(), Some("1.2.3"));
-        finish_and_repeat(&root.0, &p);
-    }
-}
-
-#[test]
-fn polyglot_both_languages_removal_records_tombstone_and_changed_old_incoming_edge() {
-    for language in ["python", "rust"] {
-        let root = fixture(language);
-        let base = git(&root.0, &["rev-parse", "HEAD"]);
-        let before = nodes();
-        let mut survivor = before[1].clone();
-        survivor.dependencies.clear();
-        let event = transition(language, &base, "remove", "compatible", &before[..1], &[]);
-        write_graph(&root.0, language, &[survivor], vec![event]);
-        let p = plan(&root.0).unwrap().unwrap();
-        assert_versions(&p, &[("b", "2.0.1")]);
-        let event = p.package_events.iter().find(|e| e.id == "a").unwrap();
-        assert_eq!(event.operation, "retire");
-        assert!(event.version_after.is_none());
-        assert_eq!(event.version_before.as_deref(), Some("1.2.3"));
-        finish_and_repeat(&root.0, &p);
-    }
-}
-
-#[test]
-fn polyglot_both_languages_split_retains_one_version_line_and_starts_another() {
-    for language in ["python", "rust"] {
-        let root = fixture(language);
-        let base = git(&root.0, &["rev-parse", "HEAD"]);
-        let before = nodes();
-        let mut after = before.clone();
-        after.push(Node {
-            id: "c",
-            name: "c",
-            dir: "c",
-            version: "0.1.0",
-            dependencies: vec![],
-        });
-        after[1].dependencies.push("c");
-        let destinations = vec![after[0].clone(), after[2].clone()];
-        let event = transition(
-            language,
-            &base,
-            "split",
-            "compatible",
-            &before[..1],
-            &destinations,
-        );
-        write_graph(&root.0, language, &after, vec![event]);
-        let p = plan(&root.0).unwrap().unwrap();
-        assert_versions(&p, &[("a", "1.2.4"), ("b", "2.0.1"), ("c", "0.1.0")]);
-        assert!(
-            p.package_events
-                .iter()
-                .find(|e| e.id == "a")
-                .unwrap()
-                .related
-                .contains(&"c".into())
-        );
-        assert!(
-            p.package_events
-                .iter()
-                .any(|e| e.id == "c" && e.operation == "add")
-        );
-        finish_and_repeat(&root.0, &p);
-    }
-}
-
-#[test]
-fn polyglot_both_languages_split_can_retire_the_old_line_and_start_two_new_ones() {
-    for language in ["python", "rust"] {
-        let root = fixture(language);
-        let base = git(&root.0, &["rev-parse", "HEAD"]);
-        let before = nodes();
-        let mut consumer = before[1].clone();
-        consumer.dependencies = vec!["c", "d"];
-        let destinations = vec![
-            Node {
+fn lifecycle_case(language: &str, operation: &str, breaking: bool) -> Repo {
+    let root = fixture(language);
+    let base = super::super::schema4::load(&root.0)
+        .unwrap()
+        .unwrap()
+        .baseline
+        .revision;
+    let before = nodes();
+    let mut after = before.clone();
+    let (from, to) = match operation {
+        "move" => {
+            after[0].dir = "moved";
+            (vec![before[0].clone()], vec![after[0].clone()])
+        }
+        "rename" => {
+            after[0].name = "foundation";
+            after[0].dir = "foundation";
+            (vec![before[0].clone()], vec![after[0].clone()])
+        }
+        "remove" => {
+            after.remove(0);
+            after[0].dependencies.clear();
+            (vec![before[0].clone()], vec![])
+        }
+        "split" => {
+            after.push(Node {
                 id: "c",
                 name: "c",
                 dir: "c",
                 version: "0.1.0",
                 dependencies: vec![],
-            },
-            Node {
-                id: "d",
-                name: "d",
-                dir: "d",
-                version: "0.2.0",
-                dependencies: vec![],
-            },
-        ];
-        let event = transition(
-            language,
-            &base,
-            "split",
-            "breaking",
-            &before[..1],
-            &destinations,
-        );
-        let mut after = destinations;
-        after.push(consumer);
-        write_graph(&root.0, language, &after, vec![event]);
-        let p = plan(&root.0).unwrap().unwrap();
-        assert_versions(&p, &[("b", "2.0.1"), ("c", "0.1.0"), ("d", "0.2.0")]);
-        assert_eq!(p.new_version.to_string(), "2.0.0");
-        let retired = p.package_events.iter().find(|e| e.id == "a").unwrap();
-        assert_eq!(retired.operation, "retire");
-        assert_eq!(
-            retired.related,
-            BTreeSet::from(["c".to_string(), "d".to_string()])
-                .into_iter()
-                .collect::<Vec<_>>()
-        );
-        finish_and_repeat(&root.0, &p);
-    }
+            });
+            after[1].dependencies.push("c");
+            (
+                vec![before[0].clone()],
+                vec![after[0].clone(), after[2].clone()],
+            )
+        }
+        "merge" => {
+            after = vec![before[0].clone()];
+            (before.clone(), after.clone())
+        }
+        _ => unreachable!(),
+    };
+    let event = transition(
+        language,
+        &base,
+        operation,
+        if breaking { "breaking" } else { "compatible" },
+        &from,
+        &to,
+    );
+    write_graph(&root.0, language, &after, vec![event]);
+    root
 }
 
 #[test]
-fn polyglot_both_languages_breaking_rename_raises_inherited_line_and_product_major() {
-    for language in ["python", "rust"] {
-        let root = fixture(language);
-        let base = git(&root.0, &["rev-parse", "HEAD"]);
-        let before = nodes();
-        let mut after = before.clone();
-        after[0].name = "foundation";
-        after[0].dir = "foundation";
-        let event = transition(
-            language,
-            &base,
-            "rename",
-            "breaking",
-            &before[..1],
-            &after[..1],
-        );
-        write_graph(&root.0, language, &after, vec![event]);
-        let p = plan(&root.0).unwrap().unwrap();
-        assert_versions(&p, &[("foundation", "2.0.0"), ("b", "2.0.1")]);
-        assert_eq!(p.new_version.to_string(), "2.0.0");
-        finish_and_repeat(&root.0, &p);
-    }
-}
-
-#[test]
-fn polyglot_both_languages_merge_can_retain_or_replace_the_version_line() {
-    for language in ["python", "rust"] {
-        for retain in [true, false] {
-            let root = fixture(language);
-            let base = git(&root.0, &["rev-parse", "HEAD"]);
-            let before = nodes();
-            let destination = if retain {
-                before[0].clone()
-            } else {
-                Node {
-                    id: "merged",
-                    name: "merged",
-                    dir: "merged",
-                    version: "0.2.0",
-                    dependencies: vec![],
-                }
-            };
-            let event = transition(
-                language,
-                &base,
-                "merge",
-                "compatible",
-                &before,
-                std::slice::from_ref(&destination),
-            );
-            write_graph(
-                &root.0,
-                language,
-                std::slice::from_ref(&destination),
-                vec![event],
-            );
+fn schema4_both_languages_lifecycle_changes_keep_identity_and_tombstones() {
+    for language in ["rust", "python"] {
+        for operation in ["move", "rename", "remove", "split", "merge"] {
+            let root = lifecycle_case(language, operation, false);
+            let index = fs::read(root.0.join(".git/index")).unwrap();
             let p = plan(&root.0).unwrap().unwrap();
-            assert_versions(
-                &p,
-                &[(destination.name, if retain { "1.2.4" } else { "0.2.0" })],
-            );
-            assert!(
-                p.package_events
-                    .iter()
-                    .any(|e| e.id == "b" && e.operation == "retire")
-            );
-            if !retain {
+            assert_eq!(p.new_version.to_string(), "1.0.1");
+            assert_eq!(fs::read(root.0.join(".git/index")).unwrap(), index);
+            let expected: Vec<(&str, &str)> = match operation {
+                "move" => {
+                    if language == "rust" {
+                        vec![("a", "1.2.4"), ("b", "2.0.1")]
+                    } else {
+                        vec![("a", "1.2.4")]
+                    }
+                }
+                "rename" => vec![("foundation", "1.2.4"), ("b", "2.0.1")],
+                "remove" => vec![("b", "2.0.1")],
+                "split" => vec![("a", "1.2.4"), ("b", "2.0.1"), ("c", "0.1.0")],
+                "merge" => vec![("a", "1.2.4")],
+                _ => unreachable!(),
+            };
+            assert_versions(&p, &expected);
+            if matches!(operation, "remove" | "merge") {
                 assert!(
                     p.package_events
                         .iter()
-                        .any(|e| e.id == "a" && e.operation == "retire")
+                        .any(|e| e.operation == "retire" && e.version_after.is_none())
                 );
             }
-            let event = p
-                .package_events
-                .iter()
-                .find(|e| e.id == destination.id)
-                .unwrap();
-            assert!(event.related.contains(&"b".into()));
+            assert_eq!(p.lifecycle_events.len(), 1);
             finish_and_repeat(&root.0, &p);
         }
     }
 }
 
 #[test]
-fn polyglot_both_languages_accept_declaration_added_after_committed_refactor() {
-    for language in ["python", "rust"] {
-        let root = fixture(language);
-        let base = git(&root.0, &["rev-parse", "HEAD"]);
-        let before = nodes();
-        let mut after = before.clone();
-        after[0].name = "foundation";
-        after[0].dir = "foundation";
-        let mut cfg = write_graph(&root.0, language, &after, vec![]);
-        git(&root.0, &["add", "-A"]);
-        git(&root.0, &["commit", "-m", "fix: relocate foundation"]);
-        let refactor = git(&root.0, &["rev-parse", "HEAD"]);
-        cfg["lifecycle"] = json!([transition(
-            language,
-            &base,
-            "rename",
-            "compatible",
-            &before[..1],
-            &after[..1]
-        )]);
-        write(&root.0, CONFIG, &serde_json::to_vec(&cfg).unwrap());
-        let p = plan(&root.0).unwrap().unwrap();
-        assert_versions(&p, &[("foundation", "1.2.4"), ("b", "2.0.1")]);
-        assert_eq!(
-            git(&root.0, &["rev-parse", "HEAD"]),
-            refactor,
-            "planning must not rewrite the committed refactor"
-        );
-        finish_and_repeat(&root.0, &p);
+fn schema4_all_breaking_lifecycle_operations_require_explicit_acceptance() {
+    for language in ["rust", "python"] {
+        for operation in ["rename", "remove", "split", "merge"] {
+            let root = lifecycle_case(language, operation, true);
+            let request = super::super::schema4::fixture::analysis(
+                &root.0,
+                &crate::SystemProcessRunner,
+                "major",
+                &[],
+            )
+            .unwrap();
+            let path = root.0.join(request.analysis_file.as_ref().unwrap());
+            let mut value: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+            for object in value["packages"].as_object_mut().unwrap().values_mut() {
+                object["level"] = json!("major");
+            }
+            fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+            assert!(
+                super::super::schema4::build(
+                    &root.0,
+                    "feat!: lifecycle",
+                    &request,
+                    &crate::SystemProcessRunner
+                )
+                .unwrap_err()
+                .contains("breaking lifecycle")
+            );
+            let p = accepted_lifecycle_plan(&root.0);
+            assert_eq!(p.new_version.to_string(), "2.0.0");
+            finish_and_repeat(&root.0, &p);
+        }
     }
 }
 
-#[test]
-fn polyglot_mixed_repo_propagates_rust_build_change_into_python_distribution() {
-    let root = fixture("rust");
-    let mut cfg = graph_config("rust", &nodes(), vec![]);
-    cfg["adapters"]["python"] = json!({"projects":["py/pyproject.toml"]});
-    cfg["packages"]
-        .as_array_mut()
-        .unwrap()
-        .push(json!({"id":"py","language":"python","manifest":"py/pyproject.toml","name":"py"}));
-    cfg["dependencies"] = json!([{"owner":"py","target":"a","kind":"build"}]);
-    write(
-        &root.0,
-        "py/pyproject.toml",
-        b"[project]\nname='py'\nversion='3.0.0'\n",
-    );
-    write(&root.0, "py/package.py", b"VALUE=1\n");
-    write(&root.0, CONFIG, &serde_json::to_vec(&cfg).unwrap());
-    git(&root.0, &["add", "-A"]);
-    git(&root.0, &["commit", "--amend", "--no-edit"]);
-    write(&root.0, "a/src/lib.rs", b"pub fn value() -> u8 { 2 }\n");
-    let p = plan(&root.0).unwrap().unwrap();
-    assert_versions(&p, &[("a", "1.2.4"), ("b", "2.0.1"), ("py", "3.0.1")]);
-    assert_eq!(
-        p.package_changes
-            .iter()
-            .find(|c| c.name == "py")
-            .unwrap()
-            .dependencies,
-        ["a/Cargo.toml"]
-    );
-    finish_and_repeat(&root.0, &p);
+fn accepted_lifecycle_plan(root: &Path) -> FileReleasePlan {
+    let request =
+        super::super::schema4::fixture::analysis(root, &crate::SystemProcessRunner, "major", &[])
+            .unwrap();
+    let path = root.join(request.analysis_file.as_ref().unwrap());
+    let mut value: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    let cfg = super::super::schema4::load(root).unwrap().unwrap();
+    let mut ids = cfg
+        .native
+        .lifecycle
+        .iter()
+        .filter(|t| t.compatibility == "breaking")
+        .flat_map(|t| t.from.iter().chain(&t.to).map(|p| p.id.clone()))
+        .collect::<BTreeSet<_>>();
+    ids.insert("product".into());
+    let acceptance = json!({"fingerprint":value["fingerprint"],"scope":ids,"reason":"fixture user accepts declared lifecycle migration","source":"explicit fixture user decision"});
+    for id in ids {
+        let object = if id == "product" {
+            &mut value["product"]
+        } else {
+            &mut value["packages"][&id]
+        };
+        *object = json!({"level":"major","reason":"fixture declares breaking lifecycle scope","compatibility":"breaking","acceptance":acceptance});
+    }
+    fs::write(path, serde_json::to_vec(&value).unwrap()).unwrap();
+    super::super::schema4::build(
+        root,
+        "feat!: accepted lifecycle",
+        &request,
+        &crate::SystemProcessRunner,
+    )
+    .unwrap()
+    .unwrap()
 }

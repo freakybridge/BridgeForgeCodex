@@ -105,8 +105,10 @@ fn fixture_development_checks(root: &Path) {
     // Factory build/rollback fixtures start from an already confirmed policy;
     // first-use interaction is tested through the real CLI below.
     let path=root.join(".codex/bridgeforge-version.json");
-    let mut config:serde_json::Value=serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
-    config["git_sync_setup"]=serde_json::json!({"schema":1,"confirmed":true,"selection":"current"});
+    let copied:serde_json::Value=serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    // Each copied fixture has its own Git history and must create its own baseline.
+    let mappings=copied.get("synchronized_manifests").or_else(||copied.get("manifests")).unwrap();
+    let config=serde_json::json!({"schema_version":1,"release_policy":"explicit_release","manifests":mappings,"git_sync_setup":{"schema":1,"confirmed":true,"selection":"current"}});
     fs::write(path,serde_json::to_vec_pretty(&config).unwrap()).unwrap();
 }
 
@@ -131,10 +133,12 @@ fn real_cli_check_reuse_ignores_invocation_trace_but_binds_business_environment(
     git(root, &["config", "user.email", "bridgeforge@example.invalid"]);
     git(root, &["add", "."]);
     git(root, &["commit", "-m", "chore: baseline"]);
+    super::schema4_fixture::migrate(&cli,root);
     fs::write(root.join("business.txt"), b"change\n").unwrap();
     for (trace, business, reused) in [("call-a", "a", 0), ("call-b", "a", 1), ("call-c", "b", 0), ("call-d", "b", 1)] {
+        super::schema4_fixture::analyze(&cli,root,"fix: repeat","patch",&[],&[("CODEX_TOOL_CALL_ID",trace),("BRIDGEFORGE_TEST_BUSINESS_INPUT",business)]);
         let mut request = ProcessRequest::new(cli.as_os_str(), root);
-        request.args = ["git-sync", "--prepare-release", "--message", "fix: repeat"].iter().map(Into::into).collect();
+        request.args = ["git-sync", "--prepare-release", "--message", "fix: repeat", "--release-analysis-file", ".runtime/schema4-analysis.json"].iter().map(Into::into).collect();
         request.env.insert("CODEX_TOOL_CALL_ID".into(), trace.into());
         request.env.insert("BRIDGEFORGE_TEST_BUSINESS_INPUT".into(), business.into());
         request.timeout = Duration::from_secs(120);
@@ -201,7 +205,7 @@ fn real_cli_release_flow(policy: &str) {
             .iter()
             .any(|v| v == "git-sync-direct-release-v1")
     );
-    assert!(call(&["self-test", "--json"])["capabilities"].as_array().unwrap().iter().any(|v| v == "git-sync-rust-package-additions-v1"));
+    assert!(call(&["self-test", "--json"])["capabilities"].as_array().unwrap().iter().any(|v| v == "git-sync-schema4-v1"));
     assert!(call(&["self-test", "--json"])["capabilities"].as_array().unwrap().iter().any(|v| v == "git-sync-analysis-reuse-v1"));
     for flag in ["--dry-run", "--check"] {
         let mut probe = ProcessRequest::new(cli.as_os_str(), &root);
@@ -266,6 +270,7 @@ fn real_cli_release_flow(policy: &str) {
     );
     git(&root, &["push", "-u", "origin", "HEAD"]);
     let initial_head = git(&root, &["rev-parse", "HEAD"]);
+    let initial_entries=git(&root,&["ls-files","--stage"]);
     let initial_index = fs::read(root.join(".git/index")).unwrap();
     fs::write(root.join("VERSION"), b"0.9.9\n").unwrap();
     let mut probe = ProcessRequest::new(cli.as_os_str(), &root);
@@ -283,10 +288,10 @@ fn real_cli_release_flow(policy: &str) {
     let version_files = ["VERSION", "Cargo.toml", "Cargo.lock", "CHANGELOG.md"];
     let mut first=ProcessRequest::new(cli.as_os_str(),&root);
     first.args=["git-sync","--message","feat: wait for choice"].iter().map(Into::into).collect();
-    let initial=SystemProcessRunner.run(&first).unwrap();assert_eq!(initial.code,2);
-    let initial:serde_json::Value=serde_json::from_slice(&initial.stdout).unwrap();assert_eq!(initial["status"],"configuration-required");
+    let initial=SystemProcessRunner.run(&first).unwrap();assert_eq!(initial.code,0,"{}",String::from_utf8_lossy(&initial.stderr));
+    let initial:serde_json::Value=serde_json::from_slice(&initial.stdout).unwrap();assert_eq!(initial["status"],"synced");
     assert_eq!(git(&root,&["rev-parse","HEAD"]),initial_head);
-    assert_eq!(fs::read(root.join(".git/index")).unwrap(),initial_index);
+    assert_eq!(git(&root,&["ls-files","--stage"]),initial_entries);
     assert!(!root.join(".runtime").exists());
     let proposal=call(&["git-sync","--setup-plan","--strategy","current"]);
     let key=proposal["fingerprint"].as_str().unwrap();
@@ -301,9 +306,8 @@ fn real_cli_release_flow(policy: &str) {
         fs::write(root.join("Cargo.toml"), b"[package]\nname='demo'\nversion='0.4.0'\nedition='2024'\n[dependencies]\nnew={path='new',version='=0.1.7'}\n").unwrap();
         fs::write(root.join("Cargo.lock"), b"version=4\n[[package]]\nname='demo'\nversion='0.4.0'\ndependencies=['new']\n[[package]]\nname='new'\nversion='0.1.7'\n").unwrap();
         let mut cfg: serde_json::Value = serde_json::from_slice(&fs::read(&policy_path).unwrap()).unwrap();
-        cfg["rust"]["workspaces"] = serde_json::json!(["Cargo.toml", "new/Cargo.toml"]);
-        cfg["rust"]["product_inputs"] = serde_json::json!(["new/Cargo.lock"]);
-        cfg["rust"]["shared_inputs"] = serde_json::json!([{"path":"Cargo.lock","packages":["Cargo.toml"]}]);
+        cfg["adapters"]["rust"]["workspaces"] = serde_json::json!(["Cargo.toml", "new/Cargo.toml"]);
+        cfg["packages"].as_array_mut().unwrap().push(serde_json::json!({"id":"new","language":"rust","manifest":"new/Cargo.toml","name":"new"}));
         fs::write(&policy_path, serde_json::to_vec(&cfg).unwrap()).unwrap();
     }
     let version_bytes = version_files.map(|name| fs::read(root.join(name)).unwrap());
@@ -311,7 +315,7 @@ fn real_cli_release_flow(policy: &str) {
     fs::write(root.join("business.txt"), b"feature\n").unwrap();
     let ordinary = call(&["git-sync", "--message", "feat: new capability"]);
     assert_eq!(ordinary["version_bumped"], false);
-    assert_eq!(ordinary["version_strategy"],if policy == "rust-independent" {"rust_independent"} else {"synchronized"});
+    assert_eq!(ordinary["version_strategy"],if policy == "rust-independent" {"independent"} else {"synchronized"});
     assert_eq!(ordinary["release_requested"], false);
     assert_eq!(ordinary["release_policy"], "explicit_release");
     assert_eq!(ordinary["version_before"], "1.0.0");
@@ -334,13 +338,14 @@ fn real_cli_release_flow(policy: &str) {
     let before = git(&root, &["rev-parse", "HEAD"]);
     let index = fs::read(root.join(".git/index")).unwrap();
     let fetch = fs::read(root.join(".git/FETCH_HEAD")).unwrap();
-    let preview = call(&["git-sync", "--release-preview", "--message", "fix: release"]);
+    super::schema4_fixture::analyze(&cli,&root,"fix: release","minor",&[],&[]);
+    let preview = call(&["git-sync", "--release-preview", "--message", "fix: release", "--release-analysis-file", ".runtime/schema4-analysis.json"]);
     assert_eq!(preview["version_after"], "1.1.0");
     if policy == "rust-independent" {
-        assert_eq!(preview["version_strategy"],"rust_independent");
+        assert_eq!(preview["version_strategy"],"independent");
         assert_eq!(preview["package_changes"][0]["version_after"],"0.5.0");
         if additions {
-            assert_eq!(preview["package_changes"][1]["reason"], "first_release");
+            assert_eq!(preview["package_events"][1]["operation"], "add");
             assert_eq!(preview["package_changes"][1]["version_after"], "0.1.7");
         }
     }
@@ -352,7 +357,7 @@ fn real_cli_release_flow(policy: &str) {
         call(&["git-sync", "--release-status"])["status"],
         "release-ready"
     );
-    let released = call(&["git-sync", "--release", "--message", "fix: release"]);
+    let released = call(&["git-sync", "--release", "--message", "fix: release", "--release-analysis-file", ".runtime/schema4-analysis.json"]);
     assert_eq!(released["version_after"], "1.1.0");
     assert_eq!(released["release_requested"], true);
     assert_eq!(released["version_bumped"], true);
@@ -373,16 +378,17 @@ fn real_cli_release_flow(policy: &str) {
     assert_eq!(fs::read(&record).ok(), record_bytes);
     let repeated = call(&["git-sync", "--release", "--message", "feat!: ignored"]);
     assert_eq!(repeated["version_bumped"], false);
-    assert_eq!(repeated["version_strategy"],if policy == "rust-independent" {"rust_independent"} else {"synchronized"});
+    assert_eq!(repeated["version_strategy"],if policy == "rust-independent" {"independent"} else {"synchronized"});
     assert_eq!(repeated["commit"], released["commit"]);
     if additions {
         fs::write(root.join("new/src/lib.rs"), b"pub fn value() -> u32 { 8 }\n").unwrap();
-        let next = call(&["git-sync", "--release-preview", "--message", "fix: improve existing new package"]);
+        super::schema4_fixture::analyze(&cli,&root,"fix: improve existing new package","patch",&[("demo","patch")],&[]);
+        let next = call(&["git-sync", "--release-preview", "--message", "fix: improve existing new package", "--release-analysis-file", ".runtime/schema4-analysis.json"]);
         assert_eq!(next["version_after"], "1.1.1");
         assert_eq!(next["package_changes"][0]["version_after"], "0.5.1");
-        assert_eq!(next["package_changes"][0]["reason"], "dependency_change");
+        assert!(next["package_changes"][0]["reason"].as_str().unwrap().contains("requirement"));
         assert_eq!(next["package_changes"][1]["version_after"], "0.1.8");
-        assert_eq!(next["package_changes"][1]["reason"], "direct_change");
+        assert!(next["package_changes"][1]["reason"].as_str().unwrap().contains("actual package"));
     }
 }
 
@@ -428,14 +434,17 @@ fn real_factory_cli_sync_builds_new_runtime_and_commits_through_precommit() {
     } else {
         ".codex/bin/bridgeforge"
     });
+    super::schema4_fixture::migrate(&cli,&root);
     let original = fs::read(&cli).unwrap();
     let mut readme = fs::read(root.join("README.md")).unwrap();
     readme.extend_from_slice(b"\nFixture: exercise complete automatic release.\n");
     fs::write(root.join("README.md"), &readme).unwrap();
+    super::schema4_fixture::analyze(&cli,&root,"fix: verify factory automatic runtime release","patch",&[],&[]);
     let mut request = ProcessRequest::new(cli.as_os_str(), &root);
     request.args = [
         "git-sync",
         "--release",
+        "--release-analysis-file", ".runtime/schema4-analysis.json",
         "--message",
         "fix: verify factory automatic runtime release",
     ]
@@ -578,6 +587,7 @@ fn factory_ordinary_sync_performance() {
     } else {
         ".codex/bin/bridgeforge"
     });
+    super::schema4_fixture::migrate(&cli,&root);
     let cli_before = fs::metadata(&cli).unwrap().modified().unwrap();
     let mut readme = fs::read(root.join("README.md")).unwrap();
     readme.extend_from_slice(b"\nPerformance fixture: documentation-only change.\n");
@@ -618,7 +628,9 @@ fn factory_ordinary_sync_performance() {
         let mut readme = fs::read(root.join("README.md")).unwrap();
         readme.extend_from_slice(b"\nPerformance fixture: explicit release.\n");
         fs::write(root.join("README.md"), readme).unwrap();
+        super::schema4_fixture::analyze(&cli,&root,"perf: explicit fixture release","patch",&[],&[]);
         request.args.insert(1, "--release".into());
+        request.args.extend(["--release-analysis-file".into(),".runtime/schema4-analysis.json".into()]);
         println!("performance explicit release starts now");
         let started = std::time::Instant::now();
         let output = SystemProcessRunner.run(&request).unwrap();
@@ -662,16 +674,18 @@ fn factory_artifact_cache_performance() {
         git(&root,&["init","--bare",remote.to_str().unwrap()]);git(&root,&["remote","add","origin",remote.to_str().unwrap()]);git(&root,&["push","-u","origin","HEAD"]);
         let mut readme=fs::read(root.join("README.md")).unwrap();readme.extend_from_slice(b"\nR04 identical documentation-only release workload.\n");fs::write(root.join("README.md"),readme).unwrap();
         let cli=root.join(if cfg!(windows){".codex/bin/bridgeforge.exe"}else{".codex/bin/bridgeforge"});
+        super::schema4_fixture::migrate(&cli,&root);
+        super::schema4_fixture::analyze(&cli,&root,"perf: cache benchmark","patch",&[],&[]);
         let before_version=fs::read(root.join("VERSION")).unwrap();
         let mut request=ProcessRequest::new(cli.as_os_str(),&root);
-        request.args=["git-sync","--prepare-release","--message","perf: cache benchmark"].iter().map(Into::into).collect();request.timeout=Duration::from_secs(1800);
+        request.args=["git-sync","--prepare-release","--release-analysis-file",".runtime/schema4-analysis.json","--message","perf: cache benchmark"].iter().map(Into::into).collect();request.timeout=Duration::from_secs(1800);
         let prepared=SystemProcessRunner.run(&request).unwrap();assert_eq!(prepared.code,0,"{}",String::from_utf8_lossy(&prepared.stderr));
         assert_eq!(fs::read(root.join("VERSION")).unwrap(),before_version);
         let cache=root.join(".runtime/bridgeforge-codex/build-artifact-cache");assert!(cache.join("owner.json").is_file(),"benchmark requires supported compiler inputs");
         if !warm {fs::remove_dir_all(&cache).unwrap();}
         // A corrupted prepared record must have no influence on actual cache reuse.
         fs::write(root.join(".runtime/bridgeforge-codex/release-preparation/current.json"),b"invalid prepared/audit").unwrap();
-        request.args=["git-sync","--release","--message","perf: cache benchmark"].iter().map(Into::into).collect();
+        request.args=["git-sync","--release","--release-analysis-file",".runtime/schema4-analysis.json","--message","perf: cache benchmark"].iter().map(Into::into).collect();
         let started=std::time::Instant::now();let output=SystemProcessRunner.run(&request).unwrap();let elapsed_ms=started.elapsed().as_millis();
         assert!(!output.timed_out && output.code==0,"{}",String::from_utf8_lossy(&output.stderr));
         let receipt:serde_json::Value=serde_json::from_slice(&output.stdout).unwrap();

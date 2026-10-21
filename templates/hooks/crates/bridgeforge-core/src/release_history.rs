@@ -6,7 +6,7 @@ pub fn explicit_release_policy(root: &Path) -> Result<bool, String> {
     };
     let value = crate::json::parse_unique_json(&payload, "version sync config")?;
     setup::confirmation(&value)?;
-    if matches!(value["schema_version"].as_u64(), Some(2 | 3)) {
+    if matches!(value["schema_version"].as_u64(), Some(2 | 3 | 4)) {
         config::parse(&payload)?;
         return Ok(true);
     }
@@ -83,6 +83,9 @@ fn verify_historical_manifests(
     runner: &dyn ProcessRunner,
 ) -> Result<(), String> {
     let config = revision_payload(root, revision, ".codex/bridgeforge-version.json", runner)?;
+    if let Some(cfg) = config.as_deref().map(super::schema4::parse).transpose()?.flatten() {
+        return super::schema4::verify_historical(root, revision, &cfg, runner);
+    }
     if let Some(payload) = &config {
         if let Some(cfg) = polyglot::parse(payload)? {
             return polyglot::verify_historical(root, revision, &cfg, runner);
@@ -158,7 +161,14 @@ fn verify_historical_manifests(
     Ok(())
 }
 
-fn release_boundary(root: &Path, head: &str, runner: &dyn ProcessRunner) -> Result<String, String> {
+pub(super) fn release_boundary(root: &Path, head: &str, runner: &dyn ProcessRunner) -> Result<String, String> {
+    let schema4 = super::schema4::load(root)?;
+    if let Some(cfg) = &schema4 {
+        if git(root, runner, &["merge-base", &cfg.baseline.revision, head])?.trim()!=cfg.baseline.revision
+            || git(root, runner, &["merge-base", &cfg.baseline.migration_head, head])?.trim()!=cfg.baseline.migration_head {
+            return Err("schema 4 migration baseline is not an ancestor of HEAD".into());
+        }
+    }
     let candidates = git(
         root,
         runner,
@@ -172,6 +182,12 @@ fn release_boundary(root: &Path, head: &str, runner: &dyn ProcessRunner) -> Resu
         ],
     )?;
     for candidate in candidates.lines().filter(|s| !s.is_empty()) {
+        if let Some(cfg) = &schema4 {
+            if candidate == cfg.baseline.revision {
+                if version_at(root,candidate,runner)?.map(|v|v.to_string()).as_deref()!=Some(cfg.baseline.product_version.as_str()) {return Err("schema 4 migration product version disagrees with history".into());}
+                return Ok(candidate.to_string());
+            }
+        }
         let current =
             version_at(root, candidate, runner)?.ok_or("release history deletes VERSION")?;
         let parents = git(
@@ -203,6 +219,7 @@ fn release_boundary(root: &Path, head: &str, runner: &dyn ProcessRunner) -> Resu
         if current == previous {
             continue;
         }
+        if schema4.is_some(){let payload=revision_payload(root,candidate,".codex/bridgeforge-version.json",runner)?.ok_or("post-migration release has no schema 4 config")?;if super::schema4::parse(&payload)?.is_none(){return Err("post-migration release must use schema 4".into());}}
         if current < previous {
             return Err("release history decreases VERSION".into());
         }
@@ -230,20 +247,7 @@ pub fn validate_release_baseline(
     validate_baseline(root, runner, None, true)
 }
 
-pub(super) fn validate_candidate_baseline(
-    root: &Path,
-    runner: &dyn ProcessRunner,
-    candidate: &rust::RustConfig,
-) -> Result<(String, String), String> {
-    validate_baseline(root, runner, Some(candidate), true)
-}
-
-pub(super) fn validate_polyglot_candidate(root:&Path,cfg:&polyglot::Config,runner:&history_cache::Reader<'_>)->Result<BTreeMap<PathBuf,Option<Vec<u8>>>,String>{
-    let(head,boundary)=validate_baseline(root,runner,None,false)?;
-    if let Some(plan)=polyglot::build(root,"chore: inspect release configuration",vec![],&head,&boundary,cfg,runner)?{Ok(plan.inputs)}else{polyglot::configuration_inputs(root,cfg,runner)}
-}
-
-fn validate_baseline(
+pub(super) fn validate_baseline(
     root: &Path,
     runner: &dyn ProcessRunner,
     candidate: Option<&rust::RustConfig>,
@@ -270,7 +274,9 @@ fn validate_baseline(
                 .into(),
         );
     }
-    if let Some(cfg) = candidate {
+    if let Some(cfg) = super::schema4::load(root)? {
+        if validate_workspace { super::schema4::validate_current(root,boundary,&cfg,runner)?; }
+    } else if let Some(cfg) = candidate {
         if validate_workspace { independent::validate_current(root, boundary, cfg, runner)?; }
     } else if let Some(cfg) = polyglot::load_config(root)? {
         if validate_workspace { polyglot::validate_current(root, boundary, &cfg, runner)?; }
@@ -294,108 +300,20 @@ pub fn build_explicit_release_plan(
     Ok(plan)
 }
 
+pub fn build_explicit_release_plan_with_request(root:&Path,message:&str,changed:Vec<String>,runner:&dyn ProcessRunner,request:&schema4::Request)->Result<Option<FileReleasePlan>,String>{
+    if schema4::load(root)?.is_some(){schema4::build(root,message,request,runner)}else{build_explicit_release_plan(root,message,changed,runner)}
+}
+
 fn build_with_reader(root: &Path, message: &str, changed: Vec<String>, runner: &history_cache::Reader<'_>) -> Result<Option<FileReleasePlan>, String> {
-    // Diagnostics and the write transaction validate the same release baseline.
-    // The Rust builder validates the same workspace/baseline pair while loading
-    // it for planning. Diagnostics still perform that validation independently.
-    let (head, boundary) = validate_baseline(root, runner, None, false)?;
-    if let Some(cfg) = polyglot::load_config(root)? {
-        return polyglot::build(root, message, changed, &head, &boundary, &cfg, runner);
+    if super::schema4::load(root)?.is_some() {
+        return super::schema4::build(root, message, &super::schema4::Request::default(), runner);
     }
-    if let Some(cfg) = config::load(root)? {
-        return independent::build(root, message, changed, &head, &boundary, &cfg, runner);
-    }
-    let head = head.as_str();
-    let boundary = boundary.as_str();
-    let factory = root.join("templates/managed-skeleton.json").is_file();
-    let range = format!("{boundary}..{head}");
-    let commits = git(
-        root,
-        runner,
-        &["rev-list", "--reverse", "--topo-order", &range],
-    )?;
-    let mut infos = Vec::new();
-    let mut all_paths = BTreeSet::new();
-    for commit in commits.lines().filter(|s| !s.is_empty()) {
-        let parents = git(root, runner, &["rev-list", "--parents", "-n", "1", commit])?;
-        let parts = parents.split_whitespace().collect::<Vec<_>>();
-        if parts.len() != 2 {
-            return Err(format!(
-                "release history requires review of merge/root commit {commit}"
-            ));
-        }
-        let before = parts[1];
-        let mut touched = paths(&git(
-            root,
-            runner,
-            &[
-                "diff",
-                "--name-only",
-                "--no-renames",
-                "-z",
-                before,
-                commit,
-                "--",
-            ],
-        )?);
-        if version_at(root, before, runner)? == version_at(root, commit, runner)? {
-            touched.retain(|path| path != "VERSION");
-        }
-        if touched.is_empty() {
-            continue;
-        }
-        let kind = if factory {
-            ReleaseKind::Factory
-        } else {
-            let current = revision_payload(root, commit, ".codex/managed-skeleton.json", runner)?
-                .ok_or_else(|| {
-                format!("release history has no ownership contract at {commit}")
-            })?;
-            let classifier = PayloadClassifier::new(&current, |path| revision_payload(root, before, path, runner))?;
-            let payloads = classifier.payload_paths(&touched);
-            runner.prefetch(before, &payloads)?;
-            runner.prefetch(commit, &payloads)?;
-            classifier.classify(
-                &touched,
-                |path| revision_payload(root, before, path, runner),
-                |path| revision_payload(root, commit, path, runner),
-            )?
-        };
-        if kind == ReleaseKind::SkeletonOnly {
-            continue;
-        }
-        let text = git(root, runner, &["show", "-s", "--format=%B", commit])?;
-        infos.push(
-            parse_commit_message(&text)
-                .map_err(|e| format!("cannot classify unreleased commit {commit}: {e}"))?,
-        );
-        all_paths.extend(touched);
-    }
-    let changed = changed
-        .into_iter()
-        .filter(|path| path != "VERSION")
-        .collect::<Vec<_>>();
-    if !changed.is_empty() && classify(root, &changed, runner)? != ReleaseKind::SkeletonOnly {
-        infos.push(parse_commit_message(message)?);
-        all_paths.extend(changed);
-    }
-    let plan = build_selected_release_plan(
-        root,
-        &infos,
-        if factory {
-            ReleaseKind::Factory
-        } else {
-            ReleaseKind::Business
-        },
-        &all_paths.into_iter().collect::<Vec<_>>(),
-    )?;
-    if git(root, runner, &["rev-parse", "HEAD"])?.trim() != head {
-        return Err("HEAD changed during release planning; no apply".into());
-    }
-    Ok(plan)
+    let _=(message,changed,runner);
+    Err("release requires schema 4 migration; run --migration-plan".into())
 }
 
 pub fn preview(root: &Path, message: &str, runner: &dyn ProcessRunner) -> crate::CommandOutcome {
+    if matches!(schema4::load(root),Ok(Some(_))){return schema4::preview(root,message,&schema4::Request::default(),runner);}
     let strategy = match version_strategy(root) {
         Ok(strategy) => strategy,
         Err(error) => {

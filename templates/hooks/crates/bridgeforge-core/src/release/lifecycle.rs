@@ -98,6 +98,7 @@ pub(super) fn matches(identity: &Identity, package: &NativePackage) -> bool {
             .is_none_or(|root| root == &package.workspace)
 }
 
+#[cfg(test)]
 pub(super) fn next_ids(id: &str, transitions: &[Transition]) -> BTreeSet<String> {
     let mut result = BTreeSet::from([id.to_owned()]);
     for transition in transitions {

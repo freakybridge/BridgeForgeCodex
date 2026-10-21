@@ -1,14 +1,58 @@
 {
+  "adapters": {},
+  "baseline": {
+    "dependencies": [],
+    "initial_configuration": {
+      "adapters": {},
+      "git_sync_setup": {
+        "confirmed": true,
+        "schema": 1,
+        "selection": "synchronized"
+      },
+      "packages": [],
+      "release_policy": "explicit_release",
+      "schema_version": 4,
+      "strategy": "synchronized",
+      "synchronized_manifests": [
+        "templates/hooks/Cargo.toml",
+        ".codex/hooks/Cargo.toml",
+        "scripts/tests/Cargo.toml"
+      ]
+    },
+    "initial_configuration_hash": "sha256:a3dab050be8b0150e03f4871a02aeb879c9d06312cb41f03fd77f341c0d0ee91",
+    "input_hashes": {
+      ".codex/bridgeforge-version.json": "sha256:fcb66ee69a73d9e6e9e84aa677073ff07e4f57980620218b1b72ecff09437822",
+      "CHANGELOG.md": "sha256:05d358ef423b3dab06bc8deec00662f15b01a252a47f993b2de068ff7b185d84",
+      "VERSION": "sha256:362148d7721ad4a1bb64981ff8d604ef7f4d22267ea8845042f54f90940f24fd"
+    },
+    "lifecycle": [],
+    "lineage": [
+      {
+        "packages": {},
+        "revision": "5f2b1350ce39ad4ec470c3178bcc470f1a0ce81a"
+      }
+    ],
+    "migration_head": "5f2b1350ce39ad4ec470c3178bcc470f1a0ce81a",
+    "packages": {},
+    "product_inputs": [],
+    "product_version": "2.7.0",
+    "retired_ids": [],
+    "revision": "6464ffc83840321e9b04754f42e6375b3b9baa10",
+    "shared_inputs": [],
+    "source_schema": 1
+  },
   "git_sync_setup": {
     "confirmed": true,
     "schema": 1,
-    "selection": "current"
+    "selection": "synchronized"
   },
-  "manifests": [
+  "packages": [],
+  "release_policy": "explicit_release",
+  "schema_version": 4,
+  "strategy": "synchronized",
+  "synchronized_manifests": [
     "templates/hooks/Cargo.toml",
     ".codex/hooks/Cargo.toml",
     "scripts/tests/Cargo.toml"
-  ],
-  "release_policy": "explicit_release",
-  "schema_version": 1
+  ]
 }

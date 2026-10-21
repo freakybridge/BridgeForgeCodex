@@ -227,12 +227,17 @@
             {
               "source": "skills/git-sync/SKILL.md",
               "target": "SKILL.md",
-              "sha256": "sha256:c22da6bd3a8d549cb0274315400d537f55eca3f9cbe3f7316536cabcf37376d5"
+              "sha256": "sha256:40c2bb6aeca99dbfbc7bb204bbc62eb826461176ef120879d54dce4969fc2293"
             },
             {
               "source": "skills/git-sync/references/first-use.md",
               "target": "references/first-use.md",
-              "sha256": "sha256:951db0dfbcf7f890fc62ebf59c7c30a520bbd4187bebf9a959c5bf6442dc213c"
+              "sha256": "sha256:7ee5b767a3caca6e568d203aef07af5122c2a7d12b04c04871521a52936d0490"
+            },
+            {
+              "source": "skills/git-sync/references/schema4.md",
+              "target": "references/schema4.md",
+              "sha256": "sha256:0b2ad94a551948b25301c0560e35297367952e2de34e50e73a22bdf273f673de"
             }
           ]
         },

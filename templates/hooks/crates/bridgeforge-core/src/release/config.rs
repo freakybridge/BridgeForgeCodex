@@ -39,6 +39,10 @@ pub(super) fn parse(payload: &[u8]) -> Result<Option<super::rust::RustConfig>, S
             super::polyglot::parse(payload)?;
             Ok(None)
         }
+        Some(4) => {
+            super::schema4::parse(payload)?;
+            Ok(None)
+        }
         _ => Err("version sync config must use schema_version=1 or 2".into()),
     }
 }

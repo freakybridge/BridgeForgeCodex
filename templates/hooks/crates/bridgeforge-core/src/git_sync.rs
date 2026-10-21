@@ -27,7 +27,9 @@ pub fn release_status(root: &Path, runner: &dyn ProcessRunner) -> CommandOutcome
     if !root.join("VERSION").exists() {
         return CommandOutcome::with_receipt(json!({"schema":1,"status":"not-applicable","development_checks_required":false}));
     }
+    let migration_required=fs::read(root.join(".codex/bridgeforge-version.json")).ok().and_then(|b|serde_json::from_slice::<serde_json::Value>(&b).ok()).is_none_or(|v|v["schema_version"]!=4);
     match crate::release::validate_release_baseline(root, runner) {
+        Ok(_) if migration_required=>CommandOutcome{code:crate::EXIT_BLOCKED,receipt:Some(json!({"schema":1,"status":"migration-required","development_checks_required":false,"reason":"release requires schema 4 migration; run --migration-plan"})),..CommandOutcome::default()},
         Ok(_) => CommandOutcome::with_receipt(json!({
             "schema":1,"status":"release-ready","development_checks_required":false,
             "version_before":fs::read_to_string(root.join("VERSION")).ok().map(|v|v.trim().to_string())
@@ -55,13 +57,21 @@ pub fn release_setup_status(root: &Path) -> serde_json::Value {
     json!({"status":if root.join("VERSION").exists() { "not-required" } else { "not-applicable" },"development_checks_required":false})
 }
 
+pub(crate) fn verify_readonly_git(root:&Path,runner:&dyn ProcessRunner)->Result<(),String>{
+    inspection::reject_external_filters(&Git{root,runner})
+}
+
 pub fn prepare_release(
     root: &Path,
     runner: &dyn ProcessRunner,
     message: &str,
     audit_file: Option<&Path>,
 ) -> CommandOutcome {
-    match preparation::prepare(root, runner, message, audit_file) {
+    prepare_release_with_request(root,runner,message,audit_file,&crate::release::schema4::Request::default())
+}
+
+pub fn prepare_release_with_request(root:&Path,runner:&dyn ProcessRunner,message:&str,audit_file:Option<&Path>,request:&crate::release::schema4::Request)->CommandOutcome{
+    match preparation::prepare(root, runner, message, audit_file, request) {
         Ok(value) => CommandOutcome::with_receipt(value),
         Err(error) => CommandOutcome::blocked(format!("[prepare-release] {error}\n")),
     }
@@ -121,6 +131,7 @@ pub struct GitSyncOptions {
     pub skip_fetch: bool,
     pub skip_push: bool,
     pub release: bool,
+    pub release_request: crate::release::schema4::Request,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -497,11 +508,12 @@ fn sync_impl(
             // An optional optimization must not introduce preparation-only
             // inventory restrictions into the release workflow.
             let inputs = timings.measure("input_validation", || ReleasePlanningInputs::capture(&git)).ok();
-            let plan = timings.measure("release_analysis", || crate::release::build_explicit_release_plan(
+            let plan = timings.measure("release_analysis", || crate::release::build_explicit_release_plan_with_request(
                 root,
                 &message,
                 git.changed_paths()?,
                 runner,
+                &options.release_request,
             ))?;
             if let Some(inputs) = inputs {
                 if timings.measure("input_validation", || ReleasePlanningInputs::capture(&git))? != inputs {
@@ -670,6 +682,7 @@ fn sync_impl(
     let mut package_changes = Vec::new();
     let mut package_events = Vec::new();
     let mut lifecycle_events = Vec::new();
+    let mut release_details = None;
     let version_strategy = match crate::release::version_strategy(root) {
         Ok(strategy) => strategy,
         Err(error) => return blocked(error),
@@ -725,7 +738,7 @@ fn sync_impl(
                             release_plan_reused = true;
                             Ok(plan)
                         },
-                    _ => timings.measure("release_analysis", || crate::release::build_explicit_release_plan(root, &message, changed_paths, runner)),
+                    _ => timings.measure("release_analysis", || crate::release::build_explicit_release_plan_with_request(root, &message, changed_paths, runner, &options.release_request)),
                 }
             } else {
                 Ok(None)
@@ -745,6 +758,7 @@ fn sync_impl(
             package_changes = plan.package_changes.clone();
             package_events = plan.package_events.clone();
             lifecycle_events = plan.lifecycle_events.clone();
+            release_details = plan.details.clone();
         }
         let _project_lock = if factory {
             match crate::project_sync::ProjectLock::acquire(root) {
@@ -771,6 +785,7 @@ fn sync_impl(
             }
         }
         let release_inventory = release.as_ref().and_then(|p| p.release_inventory.clone());
+        let release_environment=release.as_ref().and_then(|p|p.environment.clone());
         let release_status = release.as_ref().and_then(|p| p.release_status.clone());
         let (mut release_inputs, release_writes) =
             release.map(|p| (p.inputs, p.writes)).unwrap_or_default();
@@ -801,6 +816,7 @@ fn sync_impl(
         if let Err(error) = plan.verify_unchanged(root) {
             return blocked(error);
         }
+        if let Some(environment)=&release_environment{if let Err(error)=environment.verify(root){return blocked(error);}}
         if let Some(inventory) = &release_inventory {
             if let Err(error) = crate::release::verify_release_inventory(root, runner, inventory) {
                 return blocked(error);
@@ -1093,6 +1109,7 @@ fn sync_impl(
     final_receipt["package_events"] = json!(package_events);
     final_receipt["lifecycle_events"] = json!(lifecycle_events);
     final_receipt["release_plan_reused"] = json!(release_plan_reused);
+    if let Some(details) = release_details { final_receipt["release_details"] = details; }
     if matches!(version_strategy, "rust_independent" | "independent") {
         final_receipt["compatibility_validation"] = json!("not_performed_by_git_sync");
     }

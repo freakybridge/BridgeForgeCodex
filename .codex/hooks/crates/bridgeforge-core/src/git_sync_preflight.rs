@@ -4,7 +4,7 @@ use crate::ProcessOutput;
 
 struct ReadOnly<'a>(&'a dyn ProcessRunner);
 
-fn reject_external_filters(git: &Git<'_>) -> Result<(), String> {
+pub(super) fn reject_external_filters(git: &Git<'_>) -> Result<(), String> {
     fn query(git: &Git<'_>, args: &[&str], stdin: Vec<u8>) -> Result<ProcessOutput, String> {
         let mut request = ProcessRequest::new("git", git.root);
         request.args = args.iter().map(Into::into).collect();
@@ -115,7 +115,7 @@ impl ProcessRunner for ReadOnly<'_> {
         // A configured fsmonitor hook is executable project code, even for status.
         request.args.splice(
             0..0,
-            [OsString::from("-c"), OsString::from("core.fsmonitor=false")],
+            [OsString::from("-c"), OsString::from("core.fsmonitor=false"),OsString::from("-c"),OsString::from("diff.autoRefreshIndex=false")],
         );
         // Even status must not refresh the index during a read-only inspection.
         request.env.insert("GIT_OPTIONAL_LOCKS".into(), "0".into());
@@ -127,7 +127,7 @@ pub(super) fn inspect(root: &Path, runner: &dyn ProcessRunner) -> CommandOutcome
     let read_only = ReadOnly(runner);
     let mut setup = crate::release::setup::status_with(root, &read_only, false);
     if setup.code != 0
-        || setup.receipt.as_ref().and_then(|r| r["status"].as_str()) != Some("configured")
+        || !matches!(setup.receipt.as_ref().and_then(|r| r["status"].as_str()),Some("configured"|"configuration-required"))
     {
         setup.code = crate::EXIT_BLOCKED;
         if setup.receipt.is_none() {

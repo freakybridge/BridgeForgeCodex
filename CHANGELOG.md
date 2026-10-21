@@ -15,6 +15,16 @@
 
 > **追溯说明**：v0.1.0 - v0.7.0 基于 git log 历史回溯标记，**git tag 仅从 v0.8.0 开始打**。早期未启用版本号管理是 setup_agent 自打脸问题（要求下游用但自己没用），v0.8.0 修补。
 
+## [3.0.0] - 2026-10-22
+
+### Added
+
+- [product][repo][meta] 发布 schema4 双策略及 Rust Python 支持 **BREAKING:**
+
+### Release analysis
+
+- Product: 发布合同统一为schema4，schema1–3退出日常发布并要求受控迁移；两种策略共用Rust/Python，构成已接受的配置使用要求变化。
+
 ## [2.7.0] - 2026-10-21
 
 ### Added

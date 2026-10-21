@@ -48,13 +48,15 @@ fn path_value(args: &[String], flag: &str) -> Result<PathBuf, String> {
 }
 
 fn self_test() -> CommandOutcome {
-    CommandOutcome::with_receipt(json!({
+    let mut outcome=CommandOutcome::with_receipt(json!({
         "schema": 1,
         "name": "bridgeforge",
         "status": "ok",
         "version": env!("CARGO_PKG_VERSION"),
-        "capabilities": ["git-sync-explicit-release-v1", "git-sync-prepared-release-v1", "git-sync-release-only-v1", "git-sync-release-readiness-v1", "git-sync-direct-release-v1", "git-sync-timing-v1", "git-sync-rust-independent-v1", "git-sync-setup-v1", "git-sync-rust-package-additions-v1", "git-sync-analysis-reuse-v1", "git-sync-polyglot-release-v1", "git-sync-python-independent-v1", "git-sync-package-lifecycle-v1", "user-cli-reuse-v1", "project-sync-build-reuse-v1", "git-sync-preflight-v1", "git-sync-phase-timing-v1", "public-artifacts-v1"]
-    }))
+        "capabilities": ["git-sync-explicit-release-v1", "git-sync-prepared-release-v1", "git-sync-release-only-v1", "git-sync-release-readiness-v1", "git-sync-direct-release-v1", "git-sync-timing-v1", "git-sync-setup-v1", "git-sync-analysis-reuse-v1", "git-sync-package-lifecycle-v1", "user-cli-reuse-v1", "project-sync-build-reuse-v1", "git-sync-preflight-v1", "git-sync-phase-timing-v1", "public-artifacts-v1"]
+    }));
+    if let Some(capabilities)=outcome.receipt.as_mut().and_then(|r|r["capabilities"].as_array_mut()){capabilities.push(json!("git-sync-schema4-v1"));}
+    outcome
 }
 
 fn instruction_source() -> CommandOutcome {
@@ -460,12 +462,21 @@ fn git_sync(args: &[String]) -> CommandOutcome {
         "--prepare-release",
         "--release-status",
         "--development-status",
+        "--migration-plan",
+        "--migration-apply",
     ]
     .iter()
     .filter(|flag| has(args, flag))
     .count();
     if modes > 1 {
         return blocked("git-sync", "release modes are mutually exclusive");
+    }
+    let release_request=bridgeforge_core::release::schema4::Request{analysis_file:value(args,"--release-analysis-file").map(PathBuf::from)};
+    if has(args,"--migration-plan") {
+        return bridgeforge_core::release::schema4::configuration_plan(context.root(),&SystemProcessRunner,value(args,"--setup-config-file").as_deref(),value(args,"--strategy").as_deref());
+    }
+    if has(args,"--migration-apply") {
+        return bridgeforge_core::release::schema4::configuration_apply(context.root(),&SystemProcessRunner,value(args,"--setup-config-file").as_deref(),value(args,"--strategy").as_deref(),&value(args,"--migration-fingerprint").unwrap_or_default(),has(args,"--confirmed-choice"));
     }
     if has(args, "--preflight") {
         let mut outcome =
@@ -487,10 +498,10 @@ fn git_sync(args: &[String]) -> CommandOutcome {
     }
     if has(args, "--setup-plan") {
         if let Some(path) = value(args, "--setup-config-file") {
-            if value(args, "--strategy").as_deref() != Some("independent") {
+            if !matches!(value(args, "--strategy").as_deref(),Some("independent"|"synchronized")) {
                 return blocked(
                     "git-sync",
-                    "--setup-config-file requires --strategy independent",
+                    "--setup-config-file requires --strategy independent or synchronized",
                 );
             }
             return bridgeforge_core::release::setup::plan_configuration(
@@ -507,10 +518,10 @@ fn git_sync(args: &[String]) -> CommandOutcome {
     }
     if has(args, "--setup-apply") {
         if let Some(path) = value(args, "--setup-config-file") {
-            if value(args, "--strategy").as_deref() != Some("independent") {
+            if !matches!(value(args, "--strategy").as_deref(),Some("independent"|"synchronized")) {
                 return blocked(
                     "git-sync",
-                    "--setup-config-file requires --strategy independent",
+                    "--setup-config-file requires --strategy independent or synchronized",
                 );
             }
             return bridgeforge_core::release::setup::apply_configuration(
@@ -550,11 +561,12 @@ fn git_sync(args: &[String]) -> CommandOutcome {
                 .unwrap_or_default()
         };
         let audit = value(args, "--audit-file").map(PathBuf::from);
-        return bridgeforge_core::git_sync::prepare_release(
+        return bridgeforge_core::git_sync::prepare_release_with_request(
             context.root(),
             &SystemProcessRunner,
             &message,
             audit.as_deref(),
+            &release_request,
         );
     }
     if has(args, "--release-preview") {
@@ -568,9 +580,9 @@ fn git_sync(args: &[String]) -> CommandOutcome {
                 .or_else(|| value(args, "-m"))
                 .unwrap_or_else(|| "chore: release accumulated changes".into())
         };
-        return bridgeforge_core::release::preview(context.root(), &message, &SystemProcessRunner);
+        return bridgeforge_core::release::schema4::preview(context.root(), &message, &release_request, &SystemProcessRunner);
     }
-    match bridgeforge_core::release::setup::is_confirmed(context.root()) {
+    if has(args,"--release") { match bridgeforge_core::release::setup::is_confirmed(context.root()) {
         Ok(true) => {}
         Ok(false) => {
             let mut outcome =
@@ -581,7 +593,7 @@ fn git_sync(args: &[String]) -> CommandOutcome {
             return outcome;
         }
         Err(error) => return blocked("git-sync-setup", error),
-    }
+    } }
     bridgeforge_core::git_sync::sync(
         context.root(),
         &SystemProcessRunner,
@@ -592,6 +604,7 @@ fn git_sync(args: &[String]) -> CommandOutcome {
             skip_fetch: has(args, "--skip-fetch"),
             skip_push: has(args, "--skip-push"),
             release: has(args, "--release"),
+            release_request,
         },
     )
 }

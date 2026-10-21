@@ -108,7 +108,15 @@ fn real_cli_python_lock_preview_release_rollback_and_repeat() {
         &["remote", "add", "origin", remote.to_str().unwrap()],
     );
     git(&root, &["push", "-u", "origin", "HEAD"]);
+    let legacy_config=fs::read(root.join(".codex/bridgeforge-version.json")).unwrap();
+    let legacy_index=fs::read(root.join(".git/index")).unwrap();
+    let denied=call(&cli,&root,&["git-sync","--release-preview","--message","fix: legacy release"],false);
+    assert!(denied["stderr"].as_str().unwrap().contains("schema 4 migration"));
+    assert_eq!(fs::read(root.join(".git/index")).unwrap(),legacy_index);
+    assert_eq!(fs::read(root.join(".codex/bridgeforge-version.json")).unwrap(),legacy_config);
+    super::schema4_fixture::migrate(&cli,&root);
     write(&root, "app.py", b"VALUE=2\n");
+    super::schema4_fixture::analyze(&cli,&root,"fix: adjust app","patch",&[],&[]);
     let status = git(&root, &["status", "--porcelain=v1"]);
     let head = git(&root, &["rev-parse", "HEAD"]);
     let index = fs::read(root.join(".git/index")).unwrap();
@@ -122,6 +130,7 @@ fn real_cli_python_lock_preview_release_rollback_and_repeat() {
         &[
             "git-sync",
             "--release-preview",
+            "--release-analysis-file", ".runtime/schema4-analysis.json",
             "--message",
             "fix: adjust app",
         ],
@@ -134,7 +143,7 @@ fn real_cli_python_lock_preview_release_rollback_and_repeat() {
     call(
         &cli,
         &root,
-        &["git-sync", "--release", "--message", "fix: adjust app"],
+        &["git-sync", "--release", "--message", "fix: adjust app", "--release-analysis-file", ".runtime/schema4-analysis.json"],
         false,
     );
     for (p, b) in &before {
@@ -146,7 +155,7 @@ fn real_cli_python_lock_preview_release_rollback_and_repeat() {
     let result = call(
         &cli,
         &root,
-        &["git-sync", "--release", "--message", "fix: adjust app"],
+        &["git-sync", "--release", "--message", "fix: adjust app", "--release-analysis-file", ".runtime/schema4-analysis.json"],
         true,
     );
     assert_eq!(result["package_changes"], preview["package_changes"]);

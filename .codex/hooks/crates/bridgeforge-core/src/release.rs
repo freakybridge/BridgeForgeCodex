@@ -35,12 +35,16 @@ mod python_metadata;
 #[path = "../../../../../scripts/tests/unit/core_release_python_native.rs"]
 mod python_native_tests;
 pub mod setup;
+pub mod schema4;
 pub use history::{
-    build_explicit_release_plan, explicit_release_policy, preview, validate_release_baseline,
+    build_explicit_release_plan, build_explicit_release_plan_with_request, explicit_release_policy, preview, validate_release_baseline,
 };
 pub use model::{PackageChange, PackageEvent};
 
 pub fn version_strategy(root: &Path) -> Result<&'static str, String> {
+    if let Some(cfg) = schema4::load(root)? {
+        return Ok(if cfg.strategy == "synchronized" { "synchronized" } else { "independent" });
+    }
     Ok(if polyglot::load_config(root)?.is_some() {
         "independent"
     } else if config::load(root)?.is_some() {
@@ -98,12 +102,6 @@ impl PartialOrd for SemVer {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum Bump {
-    Major,
-    Minor,
-    Patch,
-}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CommitInfo {
@@ -142,6 +140,8 @@ pub struct FileReleasePlan {
     pub lifecycle_events: Vec<Value>,
     pub release_inventory: Option<Vec<String>>,
     pub release_status: Option<String>,
+    pub details: Option<Value>,
+    pub environment: Option<schema4::EnvironmentGuard>,
 }
 
 pub fn parse_commit_message(message: &str) -> Result<CommitInfo, String> {
@@ -169,33 +169,6 @@ pub fn parse_commit_message(message: &str) -> Result<CommitInfo, String> {
         section: section.into(),
         breaking,
     })
-}
-
-fn bump(version: SemVer, info: &CommitInfo) -> SemVer {
-    let level = if info.breaking {
-        Bump::Major
-    } else if info.kind == "feat" {
-        Bump::Minor
-    } else {
-        Bump::Patch
-    };
-    match level {
-        Bump::Major => SemVer {
-            major: version.major + 1,
-            minor: 0,
-            patch: 0,
-        },
-        Bump::Minor => SemVer {
-            major: version.major,
-            minor: version.minor + 1,
-            patch: 0,
-        },
-        Bump::Patch => SemVer {
-            major: version.major,
-            minor: version.minor,
-            patch: version.patch + 1,
-        },
-    }
 }
 
 pub fn build_release_plan(paths: impl IntoIterator<Item = String>) -> ReleasePlan {
@@ -387,91 +360,25 @@ fn json_version(path: &Path) -> Result<Option<SemVer>, String> {
         .transpose()
 }
 
-fn render_cargo(path: &Path, old: SemVer, new: SemVer) -> Result<Vec<u8>, String> {
-    let text = fs::read_to_string(path).map_err(|error| error.to_string())?;
-    let version = Regex::new(&format!(
-        r#"(?m)^(version\s*=\s*)"{}"(\s*)$"#,
-        regex::escape(&old.to_string())
-    ))
-    .map_err(|error| error.to_string())?;
-    let mut output = String::with_capacity(text.len());
-    let mut count = 0;
-    let mut package_section = false;
-    for line in text.split_inclusive('\n') {
-        let body = line.trim_end_matches(['\r', '\n']);
-        let ending = &line[body.len()..];
-        let trimmed = body.trim();
-        if trimmed.starts_with('[') && trimmed.ends_with(']') {
-            package_section = matches!(trimmed, "[package]" | "[workspace.package]");
-        }
-        if package_section && version.is_match(body) {
-            output.push_str(&version.replace(body, format!("${{1}}\"{new}\"${{2}}")));
-            output.push_str(ending);
-            count += 1;
-        } else {
-            output.push_str(line);
-        }
-    }
-    if count != 1 {
-        return Err(format!(
-            "Cargo manifest has no unique version {old}: {}",
-            path.display()
-        ));
-    }
-    Ok(output.into_bytes())
+fn render_cargo(path:&Path,old:SemVer,new:SemVer)->Result<Vec<u8>,String>{
+    let text=fs::read_to_string(path).map_err(|e|e.to_string())?;
+    let mut doc=text.parse::<toml_edit::DocumentMut>().map_err(|e|e.to_string())?;
+    let package=doc.get("package").and_then(|p|p.get("version")).and_then(toml_edit::Item::as_str);
+    let workspace=doc.get("workspace").and_then(|p|p.get("package")).and_then(|p|p.get("version")).and_then(toml_edit::Item::as_str);
+    let mapped=match(package,workspace){(Some(version),None)=>(false,version.to_string()),(None,Some(version))=>(true,version.to_string()),_=>return Err(format!("Cargo manifest has no unique version {old}: {}",path.display()))};
+    if mapped.1.parse::<SemVer>()?!=old{return Err(format!("Cargo manifest version differs from product {old}: {}",path.display()));}
+    if mapped.0{doc["workspace"]["package"]["version"]=toml_edit::value(new.to_string());}else{doc["package"]["version"]=toml_edit::value(new.to_string());}
+    Ok(doc.to_string().into_bytes())
 }
 
-fn render_cargo_lock(path: &Path, old: SemVer, new: SemVer) -> Result<Vec<u8>, String> {
-    let text = fs::read_to_string(path).map_err(|error| error.to_string())?;
-    let marker = "[[package]]";
-    let version = Regex::new(&format!(
-        r#"(?m)^(version\s*=\s*)"{}"(\s*)$"#,
-        regex::escape(&old.to_string())
-    ))
-    .map_err(|error| error.to_string())?;
-    let mut changed = 0;
-    let mut rendered = Vec::new();
-    for (index, part) in text.split(marker).enumerate() {
-        if index == 0 {
-            rendered.push(part.to_string());
-            continue;
-        }
-        let prefix = format!("{marker}{part}");
-        if !part
-            .lines()
-            .any(|line| line.trim_start().starts_with("source ="))
-            && version.is_match(part)
-        {
-            changed += 1;
-            rendered.push(
-                version
-                    .replace(&prefix, format!("${{1}}\"{new}\"${{2}}"))
-                    .to_string(),
-            );
-        } else {
-            rendered.push(prefix);
-        }
-    }
-    if changed == 0 {
-        return Err(format!(
-            "Cargo.lock has no local package at version {old}: {}",
-            path.display()
-        ));
-    }
-    Ok(rendered.concat().into_bytes())
-}
-
-fn render_json_version(path: &Path, new: SemVer) -> Result<Vec<u8>, String> {
-    let payload = fs::read(path).map_err(|error| error.to_string())?;
-    let mut document: Value =
-        serde_json::from_slice(&payload).map_err(|error| error.to_string())?;
-    if !document.get("version").is_some_and(Value::is_string) {
-        return Err(format!("missing top-level version in {}", path.display()));
-    }
-    document["version"] = Value::String(new.to_string());
-    let mut encoded = serde_json::to_vec_pretty(&document).map_err(|error| error.to_string())?;
-    encoded.push(b'\n');
-    Ok(encoded)
+fn render_cargo_lock(path:&Path,old:SemVer,new:SemVer)->Result<Vec<u8>,String>{
+    let text=fs::read_to_string(path).map_err(|e|e.to_string())?;
+    let mut doc=text.parse::<toml_edit::DocumentMut>().map_err(|e|e.to_string())?;
+    let entries=doc.get_mut("package").and_then(toml_edit::Item::as_array_of_tables_mut).ok_or("Cargo.lock local package table missing")?;
+    let mut changed=0;
+    for entry in entries.iter_mut(){if entry.get("source").is_none() && entry.get("version").and_then(toml_edit::Item::as_str)==Some(old.to_string().as_str()){entry["version"]=toml_edit::value(new.to_string());changed+=1;}}
+    if changed==0{return Err(format!("Cargo.lock has no local package at version {old}: {}",path.display()));}
+    Ok(doc.to_string().into_bytes())
 }
 
 fn render_package_lock(path: &Path, old: SemVer, new: SemVer) -> Result<Vec<u8>, String> {
@@ -936,23 +843,6 @@ struct PayloadClassifier {
 }
 
 impl PayloadClassifier {
-fn payload_paths(&self, changed: &[String]) -> Vec<String> {
-    let mut paths = BTreeSet::new();
-    for path in changed {
-        let current = self.current_by_target.get(path);
-        let head = self.head_by_target.get(path);
-        for asset in current.into_iter().chain(head) {
-            paths.insert(asset["target"].as_str().unwrap().to_string());
-            if let Some(id) = asset["id"].as_str() {
-                for peer in [self.current_by_id.get(id), self.head_by_id.get(id)].into_iter().flatten() {
-                    paths.insert(peer["target"].as_str().unwrap().to_string());
-                }
-            }
-        }
-    }
-    paths.into_iter().collect()
-}
-
 fn new(current_bytes: &[u8], before: impl Fn(&str) -> Result<Option<Vec<u8>>, String>) -> Result<Self, String> {
     let current = crate::json::parse_unique_json(&current_bytes, "current-only baseline")?;
     let (current_by_target, current_by_id) = contract_assets(&current, "current")?;
@@ -1174,115 +1064,12 @@ fn render_changelog(
     Ok(text.into_bytes())
 }
 
-pub fn build_file_release_plan(
-    root: &Path,
-    message: &str,
-    changed_paths: Vec<String>,
-    runner: &dyn ProcessRunner,
-) -> Result<Option<FileReleasePlan>, String> {
-    if config::load(root)?.is_some() {
-        return build_explicit_release_plan(root, message, changed_paths, runner);
-    }
-    let mut changed = changed_paths
-        .into_iter()
-        .map(|path| path.replace('\\', "/"))
-        .filter(|path| !path.is_empty())
-        .collect::<Vec<_>>();
-    changed.sort();
-    changed.dedup();
-    if changed.is_empty() {
-        return Ok(None);
-    }
-    let info = parse_commit_message(message)?;
-    let kind = classify(root, &changed, runner)?;
-    if kind == ReleaseKind::SkeletonOnly {
-        return Ok(None);
-    }
-    build_selected_release_plan(root, &[info], kind, &changed)
-}
-
-fn build_selected_release_plan(
-    root: &Path,
-    infos: &[CommitInfo],
-    kind: ReleaseKind,
-    changed: &[String],
-) -> Result<Option<FileReleasePlan>, String> {
-    if infos.is_empty() {
-        return Ok(None);
-    }
-    let mut inputs = BTreeMap::new();
-    let config = root.join(".codex/bridgeforge-version.json");
-    inputs.insert(config.clone(), release_input(&config)?);
-    let manifests = configured_manifests(root)?;
-    for path in &manifests {
-        inputs.insert(path.clone(), release_input(path)?);
-        for name in [
-            "Cargo.lock",
-            "package-lock.json",
-            "pnpm-lock.yaml",
-            "yarn.lock",
-        ] {
-            let lock = path.with_file_name(name);
-            inputs.insert(lock.clone(), release_input(&lock)?);
-        }
-    }
-    let changelog = root.join("CHANGELOG.md");
-    inputs.insert(changelog.clone(), release_input(&changelog)?);
-    let version_path = root.join("VERSION");
-    inputs.insert(version_path.clone(), release_input(&version_path)?);
-    let old_version = fs::read_to_string(&version_path)
-        .map_err(|_| "root VERSION is missing")?
-        .trim()
-        .parse::<SemVer>()?;
-    let new_version = infos
-        .iter()
-        .map(|info| bump(old_version, info))
-        .max()
-        .unwrap();
-    validate_native_versions(root, old_version)?;
-    let mut writes = BTreeMap::new();
-    writes.insert(version_path, format!("{new_version}\n").into_bytes());
-    for path in manifests {
-        if path.file_name().and_then(|value| value.to_str()) == Some("Cargo.toml") {
-            writes.insert(path.clone(), render_cargo(&path, old_version, new_version)?);
-            let lock = path.with_file_name("Cargo.lock");
-            if lock.is_file() {
-                writes.insert(
-                    lock.clone(),
-                    render_cargo_lock(&lock, old_version, new_version)?,
-                );
-            }
-        } else {
-            writes.insert(path.clone(), render_json_version(&path, new_version)?);
-            let lock = path.with_file_name("package-lock.json");
-            if lock.is_file() {
-                writes.insert(
-                    lock.clone(),
-                    render_package_lock(&lock, old_version, new_version)?,
-                );
-            }
-        }
-    }
-    writes.insert(
-        root.join("CHANGELOG.md"),
-        render_changelog(root, new_version, infos, &kind, changed)?,
-    );
-    verify_release_inputs(&inputs)?;
-    Ok(Some(FileReleasePlan {
-        inputs,
-        old_version,
-        new_version,
-        kind,
-        writes,
-        package_changes: Vec::new(),
-        package_events: Vec::new(),
-        lifecycle_events: Vec::new(),
-        release_inventory: None,
-        release_status: None,
-    }))
+pub fn build_file_release_plan(root:&Path,message:&str,changed_paths:Vec<String>,runner:&dyn ProcessRunner)->Result<Option<FileReleasePlan>,String>{
+    build_explicit_release_plan(root,message,changed_paths,runner)
 }
 
 pub fn apply_file_release_plan(plan: &FileReleasePlan) -> Result<(), String> {
+    if let Some(environment)=&plan.environment{let root=plan.writes.keys().find(|p|p.file_name().is_some_and(|n|n=="VERSION")).and_then(|p|p.parent()).ok_or("release root missing")?;environment.verify(root)?;}
     verify_release_inputs(&plan.inputs)?;
     if let Some(inventory) = &plan.release_inventory {
         let root = plan

@@ -456,6 +456,7 @@ pub(super) fn prepare(
     runner: &dyn ProcessRunner,
     message: &str,
     audit_file: Option<&Path>,
+    request: &crate::release::schema4::Request,
 ) -> Result<serde_json::Value, String> {
     let git = Git { root, runner };
     let _lock = SyncLock::acquire(&git)?;
@@ -478,7 +479,7 @@ pub(super) fn prepare(
     let environment = check_cache::environment(root, &cfg, runner);
     let mut progress = check_cache::Progress::load(root, &key, &identity, &index_state, environment.as_deref())?;
     let Some(release) =
-        crate::release::build_explicit_release_plan(root, message, git.changed_paths()?, runner)?
+        crate::release::build_explicit_release_plan_with_request(root, message, git.changed_paths()?, runner, request)?
     else {
         return Ok(json!({"schema":1,"status":"nothing-to-release","validation_fingerprint":key}));
     };
@@ -546,8 +547,10 @@ pub(super) fn prepare(
         progress.save(root, &checks)?;
     }
     let factory = root.join("templates/managed-skeleton.json").is_file();
+    let release_environment=release.environment.clone();
     let plan =
         write_plan::WritePlan::prepare(root, release.writes, release.inputs, factory, runner)?;
+    if let Some(environment)=&release_environment{environment.verify(root)?;}
     let mut artifacts = BTreeMap::new();
     if factory {
         let contract: serde_json::Value =

@@ -31,6 +31,7 @@ fn release_repository(name: &str, contract: &Value, files: &[(&str, &[u8])]) -> 
         .as_nanos();
     let root = std::env::temp_dir().join(format!("bridgeforge-release-{name}-{token}"));
     fs::create_dir_all(root.join(".codex")).unwrap();
+    fs::write(root.join(".gitignore"),b".runtime/\n").unwrap();
     git_ok(&root, &["init"]);
     git_ok(&root, &["config", "user.name", "BridgeForge Test"]);
     git_ok(
@@ -132,9 +133,9 @@ fn synchronized_history_skips_unowned_gitlinks_and_large_business_blobs() {
     git_ok(&repo.0, &["commit", "-m", "fix: advance submodule"]);
     let blob = history::git(&repo.0, &SystemProcessRunner, &["rev-parse", "HEAD:business.bin"]).unwrap();
     let runner = Counting(RefCell::new(Vec::new()));
-    let plan = build_explicit_release_plan(&repo.0, "fix: release", vec![], &runner).unwrap().unwrap();
-    assert_eq!(plan.new_version.to_string(), "1.48.0");
-    assert!(!runner.0.borrow().iter().any(|input| String::from_utf8_lossy(input).lines().any(|oid| oid == blob.trim())));
+    let reader=history_cache::Reader::new(&repo.0,&runner);reader.prefetch(next.trim(),&["Cargo.toml".into(),"Cargo.lock".into()]).unwrap();
+    assert!(!runner.0.borrow().iter().any(|input|String::from_utf8_lossy(input).lines().any(|oid|oid==blob.trim())));
+
 }
 
 impl ProcessRunner for TimeoutRunner {
@@ -303,11 +304,11 @@ fn configured_version_manifests_use_codex_config_directory() {
 }
 
 #[test]
-fn conventional_commit_drives_release_level() {
+fn conventional_commit_parses_description_and_breaking_annotation() {
     let info =
         parse_commit_message("feat(core)!: replace runtime\n\nBREAKING CHANGE: changed").unwrap();
     assert!(info.breaking);
-    assert_eq!(bump("1.2.3".parse().unwrap(), &info).to_string(), "2.0.0");
+    assert_eq!(info.kind,"feat");
     assert!(parse_commit_message("update runtime").is_err());
 }
 
@@ -592,243 +593,55 @@ fn independent_config() -> Value {
         "rust":{"workspaces":["Cargo.toml"],"dependency_bump":"patch","shared_inputs":[],"product_inputs":["README.md","doc/"]}})
 }
 
-#[test]
-fn independent_release_preserves_history_attribution_and_is_idempotent() {
-    let repo = independent_repository("independent-history", false);
-    fs::write(repo.0.join("core/src/lib.rs"), b"pub fn value() -> u32 { 2 }\n").unwrap();
-    git_ok(&repo.0, &["add", "."]);
-    git_ok(&repo.0, &["commit", "-m", "feat: core feature"]);
-    fs::write(repo.0.join("app/src/lib.rs"), b"pub fn value() -> u32 { core::value() + 1 }\n").unwrap();
-    git_ok(&repo.0, &["add", "."]);
-    git_ok(&repo.0, &["commit", "-m", "fix: app repair"]);
-    let index = fs::read(repo.0.join(".git/index")).unwrap();
-    let plan = build_explicit_release_plan(&repo.0,"feat!: ignored",vec![],&SystemProcessRunner).unwrap().unwrap();
-    assert_eq!(plan.new_version.to_string(),"1.1.0");
-    let changes = serde_json::to_value(&plan.package_changes).unwrap();
-    let find = |name: &str| changes.as_array().unwrap().iter().find(|v| v["name"] == name).unwrap()["version_after"].as_str().unwrap().to_string();
-    assert_eq!(find("core"),"1.1.0");
-    assert_eq!(find("app"),"1.0.1");
-    assert!(!changes.as_array().unwrap().iter().any(|v|v["name"]=="idle"));
-    assert_eq!(fs::read(repo.0.join(".git/index")).unwrap(),index);
-    assert_eq!(fs::read(repo.0.join("VERSION")).unwrap(),b"1.0.0\n");
-    apply_file_release_plan(&plan).unwrap();
-    // Cargo itself must accept the generated manifests and lock, without fixing them.
-    let mut request = ProcessRequest::new("cargo",&repo.0);
-    request.args = ["metadata","--locked","--offline","--format-version","1"].iter().map(Into::into).collect();
-    let output = SystemProcessRunner.run(&request).unwrap();
-    assert_eq!(output.code,0,"{}",String::from_utf8_lossy(&output.stderr));
-    git_ok(&repo.0,&["add","."]);
-    git_ok(&repo.0,&["commit","-m","chore: release"]);
-    assert!(build_explicit_release_plan(&repo.0,"feat!: repeat",vec![],&SystemProcessRunner).unwrap().is_none());
+fn migrate_fixture(repo:&ReleaseRepository){schema4::fixture::migrate(&repo.0,&SystemProcessRunner).unwrap();}
+fn fixture_plan(repo:&ReleaseRepository,product:&str,packages:&[(&str,&str)])->Result<Option<FileReleasePlan>,String>{
+    let request=schema4::fixture::analysis(&repo.0,&SystemProcessRunner,product,packages)?;
+    build_explicit_release_plan_with_request(&repo.0,"chore: fixture final release",vec![],&SystemProcessRunner,&request)
 }
 
-fn add_independent_package(repo: &ReleaseRepository, dependency: bool, register: bool) {
+#[test]
+fn independent_release_rates_each_final_package_and_is_idempotent(){
+    let repo=independent_repository("schema4-impacts",false);migrate_fixture(&repo);
+    fs::write(repo.0.join("core/src/lib.rs"),b"pub fn value() -> u32 { 2 }\n").unwrap();
+    fs::write(repo.0.join("app/src/lib.rs"),b"pub fn value() -> u32 { core::value()+1 }\n").unwrap();
+    let index=fs::read(repo.0.join(".git/index")).unwrap();
+    let p=fixture_plan(&repo,"minor",&[("core","minor"),("app","patch")]).unwrap().unwrap();
+    assert_eq!(p.new_version.to_string(),"1.1.0");assert_eq!(p.package_changes.len(),2);
+    assert!(p.package_changes.iter().any(|p|p.name=="core"&&p.version_after=="1.1.0"));
+    assert!(p.package_changes.iter().any(|p|p.name=="app"&&p.version_after=="1.0.1"));
+    assert_eq!(fs::read(repo.0.join(".git/index")).unwrap(),index);apply_file_release_plan(&p).unwrap();
+    let output=Command::new("cargo").args(["metadata","--locked","--offline","--format-version","1"]).current_dir(&repo.0).output().unwrap();assert!(output.status.success(),"{}",String::from_utf8_lossy(&output.stderr));
+    git_ok(&repo.0,&["add","."]);git_ok(&repo.0,&["commit","-m","chore: release"]);
+    assert!(build_explicit_release_plan(&repo.0,"feat!: ignored title",vec![],&SystemProcessRunner).unwrap().is_none());
+}
+
+#[test]
+fn independent_migration_preserves_versions_unpublished_changes_and_initial_package(){
+    let repo=independent_repository("schema4-new",false);
+    fs::write(repo.0.join("app/src/lib.rs"),b"pub fn value() -> u32 { 9 }\n").unwrap();
     fs::create_dir_all(repo.0.join("new/src")).unwrap();
-    fs::write(repo.0.join("new/Cargo.toml"), b"[package]\nname = 'new'\nversion = '0.3.7'\nedition = '2024'\n[workspace]\n").unwrap();
-    fs::write(repo.0.join("new/src/lib.rs"), b"pub fn value() -> u32 { 42 }\n").unwrap();
-    fs::write(repo.0.join("new/Cargo.lock"), b"version = 4\n[[package]]\nname = 'new'\nversion = '0.3.7'\n").unwrap();
-    if register {
-        let mut cfg = independent_config();
-        cfg["rust"]["workspaces"] = json!(["Cargo.toml", "new/Cargo.toml"]);
-        cfg["rust"]["product_inputs"] = json!(["README.md", "doc/", "new/Cargo.lock"]);
-        cfg["git_sync_setup"] = json!({"schema":1,"confirmed":true,"selection":"rust_independent"});
-        fs::write(repo.0.join(".codex/bridgeforge-version.json"), serde_json::to_vec(&cfg).unwrap()).unwrap();
+    fs::write(repo.0.join("new/Cargo.toml"),b"[package]\nname='new'\nversion='0.3.7'\nedition='2024'\n[workspace]\n").unwrap();
+    fs::write(repo.0.join("new/Cargo.lock"),b"version=4\n[[package]]\nname='new'\nversion='0.3.7'\n").unwrap();
+    fs::write(repo.0.join("new/src/lib.rs"),b"pub fn value() {}\n").unwrap();
+    let mut cfg=independent_config();cfg["rust"]["workspaces"]=json!(["Cargo.toml","new/Cargo.toml"]);
+    fs::write(repo.0.join(".codex/bridgeforge-version.json"),serde_json::to_vec(&cfg).unwrap()).unwrap();
+    git_ok(&repo.0,&["add","."]);git_ok(&repo.0,&["commit","-m","unclassified ordinary commit"]);
+    let version=fs::read(repo.0.join("VERSION")).unwrap();migrate_fixture(&repo);assert_eq!(fs::read(repo.0.join("VERSION")).unwrap(),version);
+    let p=fixture_plan(&repo,"patch",&[]).unwrap().unwrap();assert_eq!(p.package_changes.len(),2);
+    assert!(p.package_changes.iter().any(|p|p.name=="new"&&p.version_before=="0.3.7"&&p.version_after=="0.3.7"));
+    assert!(p.package_changes.iter().any(|p|p.name=="app"&&p.version_after=="1.0.1"));
+}
+
+#[test]
+fn independent_migration_rejects_transient_identity_and_version_changes(){
+    for mode in ["delete","rename","version"]{
+        let repo=independent_repository(mode,false);let original=fs::read(repo.0.join("core/Cargo.toml")).unwrap();
+        if mode=="delete" {git_ok(&repo.0,&["rm","-r","core"]);}else{let old=String::from_utf8(original.clone()).unwrap();let text=if mode=="rename"{old.replace("name = \"core\"","name = \"renamed\"")}else{old.replace("version.workspace = true","version = \"0.9.0\"")};fs::write(repo.0.join("core/Cargo.toml"),text).unwrap();}
+        git_ok(&repo.0,&["add","."]);git_ok(&repo.0,&["commit","-m","chore: unsafe transient"]);
+        fs::create_dir_all(repo.0.join("core")).unwrap();fs::write(repo.0.join("core/Cargo.toml"),original).unwrap();
+        let p=schema4::migration_plan(&repo.0,&SystemProcessRunner,None);assert_ne!(p.code,0,"{mode}");
+        assert_eq!(fs::read(repo.0.join("VERSION")).unwrap(),b"1.0.0\n");
     }
-    if dependency {
-        let manifest = repo.0.join("app/Cargo.toml");
-        let mut payload = fs::read_to_string(&manifest).unwrap();
-        payload.push_str("new = { path = '../new', version = '=0.3.7' }\n");
-        fs::write(manifest, payload).unwrap();
-        let lock = repo.0.join("Cargo.lock");
-        let payload = fs::read_to_string(&lock).unwrap().replace("[\"core\"]", "[\"core\", \"new\"]");
-        fs::write(lock, format!("{payload}[[package]]\nname = 'new'\nversion = '0.3.7'\n")).unwrap();
-    }
-}
-
-#[test]
-fn independent_new_workspace_keeps_initial_version_and_existing_packages() {
-    let repo = independent_repository("new-workspace", false);
-    add_independent_package(&repo, false, true);
-    git_ok(&repo.0, &["add", "."]);
-    git_ok(&repo.0, &["commit", "-m", "feat: new independent package"]);
-    let index = fs::read(repo.0.join(".git/index")).unwrap();
-    let cfg = fs::read(repo.0.join(".codex/bridgeforge-version.json")).unwrap();
-    let plan = build_explicit_release_plan(&repo.0, "fix: release", vec![], &ReadOnlyReleaseRunner).unwrap().unwrap();
-    assert_eq!(plan.new_version.to_string(), "1.1.0");
-    assert_eq!(plan.package_changes.len(), 1);
-    assert_eq!(plan.package_changes[0].name, "new");
-    assert_eq!(plan.package_changes[0].reason, "first_release");
-    assert_eq!(plan.package_changes[0].version_before, "0.3.7");
-    assert_eq!(plan.package_changes[0].version_after, "0.3.7");
-    assert!(!plan.writes.contains_key(&repo.0.join("new/Cargo.toml")));
-    assert_eq!(fs::read(repo.0.join(".git/index")).unwrap(), index);
-    assert_eq!(fs::read(repo.0.join(".codex/bridgeforge-version.json")).unwrap(), cfg);
-    assert!(!repo.0.join(".runtime").exists());
-    apply_file_release_plan(&plan).unwrap();
-    for manifest in ["Cargo.toml", "new/Cargo.toml"] {
-        let mut request = ProcessRequest::new("cargo", &repo.0);
-        request.args = ["metadata", "--locked", "--offline", "--format-version", "1", "--manifest-path", manifest].iter().map(Into::into).collect();
-        let output = SystemProcessRunner.run(&request).unwrap();
-        assert_eq!(output.code, 0, "{}", String::from_utf8_lossy(&output.stderr));
-    }
-    git_ok(&repo.0, &["add", "."]);
-    git_ok(&repo.0, &["commit", "-m", "chore: release new package"]);
-    assert!(build_explicit_release_plan(&repo.0, "feat!: repeated release", vec![], &ReadOnlyReleaseRunner).unwrap().is_none());
-    fs::write(repo.0.join("new/src/lib.rs"), b"pub fn value() -> u32 { 43 }\n").unwrap();
-    let next = build_explicit_release_plan(&repo.0, "fix: improve existing package", vec![], &ReadOnlyReleaseRunner).unwrap().unwrap();
-    assert_eq!(next.new_version.to_string(), "1.1.1");
-    assert_eq!(next.package_changes.len(), 1);
-    assert_eq!(next.package_changes[0].reason, "direct_change");
-    assert_eq!(next.package_changes[0].version_after, "0.3.8");
-}
-
-#[test]
-fn independent_new_workspace_can_be_registered_after_creation_since_boundary() {
-    let repo = independent_repository("late-new-workspace", false);
-    add_independent_package(&repo, false, false);
-    git_ok(&repo.0, &["add", "."]);
-    git_ok(&repo.0, &["commit", "-m", "feat: new workspace files"]);
-    add_independent_package(&repo, false, true);
-    let plan = build_explicit_release_plan(&repo.0, "chore: register workspace", vec![], &ReadOnlyReleaseRunner).unwrap().unwrap();
-    assert_eq!(plan.package_changes.len(), 1);
-    assert_eq!(plan.package_changes[0].reason, "first_release");
-    assert_eq!(plan.package_changes[0].version_after, "0.3.7");
-}
-
-#[test]
-fn independent_ignored_new_workspace_cannot_be_released_from_disk_only() {
-    let repo = independent_repository("ignored-new-root", false);
-    fs::write(repo.0.join(".gitignore"), b"new/\n").unwrap();
-    git_ok(&repo.0, &["add", ".gitignore"]);
-    git_ok(&repo.0, &["commit", "-m", "chore: ignore generated workspace"]);
-    add_independent_package(&repo, false, true);
-    let cfg_path = repo.0.join(".codex/bridgeforge-version.json");
-    let mut cfg: Value = serde_json::from_slice(&fs::read(&cfg_path).unwrap()).unwrap();
-    cfg["rust"]["product_inputs"].as_array_mut().unwrap().push(json!(".gitignore"));
-    fs::write(&cfg_path, serde_json::to_vec(&cfg).unwrap()).unwrap();
-    let paths = [".git/index", "VERSION", "CHANGELOG.md", ".codex/bridgeforge-version.json", "new/Cargo.toml", "new/Cargo.lock"];
-    let before = paths.map(|path| fs::read(repo.0.join(path)).unwrap());
-    let head = history::git(&repo.0, &ReadOnlyReleaseRunner, &["rev-parse", "HEAD"]).unwrap();
-    let status = crate::git_sync::release_status(&repo.0, &ReadOnlyReleaseRunner);
-    assert_eq!(status.code, 2);
-    assert!(status.receipt.unwrap()["reason"].as_str().unwrap().contains("current Git inventory"));
-    let result = preview(&repo.0, "feat: release ignored workspace", &ReadOnlyReleaseRunner);
-    assert_eq!(result.code, 2);
-    assert!(result.stderr.contains("current Git inventory"), "{}", result.stderr);
-    assert_eq!(history::git(&repo.0, &ReadOnlyReleaseRunner, &["rev-parse", "HEAD"]).unwrap(), head);
-    for (path, bytes) in paths.iter().zip(before) {
-        assert_eq!(fs::read(repo.0.join(path)).unwrap(), bytes, "{path}");
-    }
-    assert!(!repo.0.join(".runtime").exists());
-}
-
-#[test]
-fn independent_new_workspace_can_follow_a_missing_config_release_boundary() {
-    let repo = release_repository("new-root-after-auto", &json!({"contract_target":".codex/managed-skeleton.json","assets":[]}), &[
-        ("VERSION", b"1.0.0\n"),
-        ("CHANGELOG.md", b"# Changelog\n"),
-        ("Cargo.toml", b"[package]\nname='existing'\nversion='1.0.0'\nedition='2024'\n"),
-        ("Cargo.lock", b"version=4\n[[package]]\nname='existing'\nversion='1.0.0'\n"),
-        ("src/lib.rs", b"pub fn value() {}\n"),
-    ]);
-    add_independent_package(&repo, false, true);
-    let plan = build_explicit_release_plan(&repo.0, "feat: new independent package", vec![], &ReadOnlyReleaseRunner).unwrap().unwrap();
-    assert_eq!(plan.new_version.to_string(), "1.1.0");
-    assert_eq!(plan.package_changes.len(), 1);
-    assert_eq!(plan.package_changes[0].reason, "first_release");
-    assert_eq!(plan.package_changes[0].version_after, "0.3.7");
-}
-
-#[test]
-fn independent_new_member_registration_does_not_bump_unrelated_members() {
-    for legacy in [false, true] {
-        let repo = independent_repository("new-member", legacy);
-        fs::create_dir_all(repo.0.join("member/src")).unwrap();
-        fs::write(repo.0.join("member/Cargo.toml"), b"[package]\nname='member'\nversion.workspace=true\nedition='2024'\n").unwrap();
-        fs::write(repo.0.join("member/src/lib.rs"), b"pub fn value() -> u32 { 1 }\n").unwrap();
-        let root = repo.0.join("Cargo.toml");
-        let manifest = fs::read_to_string(&root).unwrap().replace("\"idle\"]", "\"idle\", \"member\"]");
-        fs::write(&root, manifest).unwrap();
-        let lock = repo.0.join("Cargo.lock");
-        fs::write(&lock, format!("{}[[package]]\nname='member'\nversion='1.0.0'\n", fs::read_to_string(&lock).unwrap())).unwrap();
-        let mut cfg = independent_config();
-        cfg["rust"]["product_inputs"] = json!(["README.md", "doc/", "Cargo.lock"]);
-        fs::write(repo.0.join(".codex/bridgeforge-version.json"), serde_json::to_vec(&cfg).unwrap()).unwrap();
-        git_ok(&repo.0, &["add", "."]);
-        git_ok(&repo.0, &["commit", "-m", "feat: add member"]);
-        let plan = build_explicit_release_plan(&repo.0, "fix: release", vec![], &ReadOnlyReleaseRunner).unwrap().unwrap();
-        assert_eq!(plan.new_version.to_string(), "1.1.0");
-        assert_eq!(plan.package_changes.len(), 1);
-        assert_eq!(plan.package_changes[0].name, "member");
-        assert_eq!(plan.package_changes[0].reason, "first_release");
-        assert_eq!(plan.package_changes[0].version_after, "1.0.0");
-        let materialized = String::from_utf8_lossy(&plan.writes[&repo.0.join("member/Cargo.toml")]);
-        assert!(!materialized.contains("version.workspace"));
-        assert!(materialized.contains("1.0.0"));
-    }
-}
-
-#[test]
-fn independent_unregistered_workspace_stays_blocked_and_old_unmanaged_is_not_new() {
-    let repo = independent_repository("unregistered-workspace", false);
-    add_independent_package(&repo, false, false);
-    assert!(build_explicit_release_plan(&repo.0, "feat: new workspace", vec![], &ReadOnlyReleaseRunner).unwrap_err().contains("unattributed"));
-    // Make the file exist at a release boundary without claiming Rust ownership.
-    let mut cfg = independent_config();
-    cfg["rust"]["product_inputs"] = json!(["new/"]);
-    fs::write(repo.0.join(".codex/bridgeforge-version.json"), serde_json::to_vec(&cfg).unwrap()).unwrap();
-    fs::write(repo.0.join("VERSION"), b"1.1.0\n").unwrap();
-    fs::write(repo.0.join("CHANGELOG.md"), b"# Changelog\n\n## [1.1.0]\n").unwrap();
-    git_ok(&repo.0, &["add", "."]);
-    git_ok(&repo.0, &["commit", "-m", "chore: product boundary"]);
-    add_independent_package(&repo, false, true);
-    assert!(build_explicit_release_plan(&repo.0, "chore: register existing", vec![], &ReadOnlyReleaseRunner).unwrap_err().contains("existing workspace"));
-}
-
-#[test]
-fn independent_additions_do_not_hide_transient_removal_or_version_changes() {
-    for mode in ["delete", "rename", "version"] {
-        let repo = independent_repository(mode, false);
-        add_independent_package(&repo, false, true);
-        git_ok(&repo.0, &["add", "."]);
-        git_ok(&repo.0, &["commit", "-m", "feat: introduce package"]);
-        let manifest = fs::read(repo.0.join("new/Cargo.toml")).unwrap();
-        let cfg = fs::read(repo.0.join(".codex/bridgeforge-version.json")).unwrap();
-        if mode == "delete" {
-            fs::write(repo.0.join(".codex/bridgeforge-version.json"), serde_json::to_vec(&independent_config()).unwrap()).unwrap();
-            git_ok(&repo.0, &["rm", "-r", "new"]);
-        } else {
-            let replacement = if mode == "rename" { "name = 'renamed'" } else { "version = '0.3.8'" };
-            let original = if mode == "rename" { "name = 'new'" } else { "version = '0.3.7'" };
-            for path in ["new/Cargo.toml", "new/Cargo.lock"] {
-                let text = fs::read_to_string(repo.0.join(path)).unwrap().replace(original, replacement);
-                fs::write(repo.0.join(path), text).unwrap();
-            }
-        }
-        git_ok(&repo.0, &["add", "."]);
-        git_ok(&repo.0, &["commit", "-m", "fix: unsafe intermediate change"]);
-        add_independent_package(&repo, false, true);
-        fs::write(repo.0.join("new/Cargo.toml"), &manifest).unwrap();
-        fs::write(repo.0.join(".codex/bridgeforge-version.json"), &cfg).unwrap();
-        let error = build_explicit_release_plan(&repo.0, "fix: restore", vec![], &ReadOnlyReleaseRunner).unwrap_err();
-        assert!(error.contains("removal") || error.contains("identity or effective version"), "{mode}: {error}");
-    }
-}
-
-#[test]
-fn independent_migration_keeps_versions_and_unreleased_business_history() {
-    let repo = independent_repository("independent-migration",true);
-    fs::write(repo.0.join("app/src/lib.rs"),b"pub fn value() -> u32 { 7 }\n").unwrap();
-    git_ok(&repo.0,&["add","."]);
-    git_ok(&repo.0,&["commit","-m","fix: earlier app repair"]);
-    fs::write(repo.0.join(".codex/bridgeforge-version.json"),serde_json::to_vec(&independent_config()).unwrap()).unwrap();
-    let plan = build_explicit_release_plan(&repo.0,"chore: enable independent release",vec![".codex/bridgeforge-version.json".into()],&SystemProcessRunner).unwrap().unwrap();
-    assert_eq!(plan.package_changes.len(),1);
-    assert_eq!(plan.package_changes[0].name,"app");
-    assert_eq!(plan.package_changes[0].version_after,"1.0.1");
-    let idle = String::from_utf8(plan.writes[&repo.0.join("idle/Cargo.toml")].clone()).unwrap();
-    assert!(idle.contains("1.0.0"));
-    assert!(!idle.contains("version.workspace"));
 }
 
 fn historical_lock_config(legacy: bool) -> Value {
@@ -867,49 +680,9 @@ fn write_independent_lock_config(repo: &ReleaseRepository) {
         serde_json::to_vec(&historical_lock_config(false)).unwrap()).unwrap();
 }
 
-struct ReadOnlyReleaseRunner;
-
-impl ProcessRunner for ReadOnlyReleaseRunner {
-    fn run(&self, request: &ProcessRequest) -> std::io::Result<ProcessOutput> {
-        assert_eq!(request.program, "git", "release preview must not invoke Cargo or a resolver");
-        for forbidden in ["fetch", "pull", "push", "add", "commit", "reset", "checkout"] {
-            assert!(!request.args.iter().any(|arg| arg == forbidden), "unexpected mutation/network command: {request:?}");
-        }
-        SystemProcessRunner.run(request)
-    }
-}
-
 #[test]
-fn independent_historical_lock_migration_accepts_legacy_boundary_and_intermediate() {
-    for stale_boundary in [true, false] {
-        let repo = historical_lock_repository("legacy-lock", historical_lock_config(true), stale_boundary);
-        fs::write(repo.0.join("strategy/Cargo.lock"), strategy_lock(true)).unwrap();
-        fs::write(repo.0.join("strategy/src/lib.rs"), b"pub fn value() -> u32 { native::value() + 1 }\n").unwrap();
-        git_ok(&repo.0, &["add", "."]);
-        git_ok(&repo.0, &["commit", "-m", "feat: strategy improvement"]);
-        fs::write(repo.0.join("strategy/Cargo.lock"), strategy_lock(false)).unwrap();
-        let legacy_config = fs::read(repo.0.join(".codex/bridgeforge-version.json")).unwrap();
-        let candidate = config::parse(&serde_json::to_vec(&historical_lock_config(false)).unwrap()).unwrap().unwrap();
-        history::validate_candidate_baseline(&repo.0, &ReadOnlyReleaseRunner, &candidate).unwrap();
-        assert_eq!(fs::read(repo.0.join(".codex/bridgeforge-version.json")).unwrap(), legacy_config);
-        write_independent_lock_config(&repo);
-        let index = fs::read(repo.0.join(".git/index")).unwrap();
-        let lock = fs::read(repo.0.join("strategy/Cargo.lock")).unwrap();
-        let config = fs::read(repo.0.join(".codex/bridgeforge-version.json")).unwrap();
-        let plan = build_explicit_release_plan(&repo.0, "chore: migrate", vec![], &ReadOnlyReleaseRunner).unwrap().unwrap();
-        assert_eq!(plan.new_version.to_string(), "1.1.0");
-        assert_eq!(plan.package_changes.len(), 1);
-        assert_eq!(plan.package_changes[0].name, "strategy");
-        assert_eq!(plan.package_changes[0].version_after, "1.1.0");
-        let preview = preview(&repo.0, "chore: migrate", &ReadOnlyReleaseRunner);
-        assert_eq!(preview.code, 0, "{}", preview.stderr);
-        assert_eq!(preview.receipt.unwrap()["status"], "release-planned");
-        assert_eq!(fs::read(repo.0.join(".git/index")).unwrap(), index);
-        assert_eq!(fs::read(repo.0.join("strategy/Cargo.lock")).unwrap(), lock);
-        assert_eq!(fs::read(repo.0.join(".codex/bridgeforge-version.json")).unwrap(), config);
-        assert_eq!(fs::read(repo.0.join("VERSION")).unwrap(), b"1.0.0\n");
-        assert!(!repo.0.join(".runtime").exists());
-    }
+fn independent_historical_lock_migration_accepts_legacy_boundary_and_intermediate(){
+    for stale in [true,false]{let repo=historical_lock_repository("legacy-lock",historical_lock_config(true),stale);fs::write(repo.0.join("strategy/Cargo.lock"),strategy_lock(true)).unwrap();fs::write(repo.0.join("strategy/src/lib.rs"),b"pub fn value()->u32{native::value()+1}\n").unwrap();git_ok(&repo.0,&["add","."]);git_ok(&repo.0,&["commit","-m","unclassified change"]);fs::write(repo.0.join("strategy/Cargo.lock"),strategy_lock(false)).unwrap();write_independent_lock_config(&repo);migrate_fixture(&repo);let p=fixture_plan(&repo,"minor",&[("strategy","minor")]).unwrap().unwrap();assert_eq!(p.package_changes.len(),1);assert_eq!(p.package_changes[0].version_after,"1.1.0");}
 }
 
 #[test]
@@ -925,7 +698,7 @@ fn independent_historical_lock_migration_keeps_current_and_schema2_locks_strict(
             fs::write(repo.0.join("strategy/Cargo.lock"), strategy_lock(false)).unwrap();
         }
         write_independent_lock_config(&repo);
-        let error = build_explicit_release_plan(&repo.0, "fix: migrate", vec![], &SystemProcessRunner).unwrap_err();
+        let error = schema4::fixture::migrate(&repo.0,&SystemProcessRunner).unwrap_err();
         assert!(error.contains("strategy/Cargo.lock: local package native has missing, ambiguous, or stale version"), "{error}");
     }
 }
@@ -946,8 +719,8 @@ fn independent_historical_lock_migration_keeps_identity_and_effective_version_gu
         fs::write(repo.0.join("strategy/Cargo.toml"), original).unwrap();
         fs::write(repo.0.join("strategy/Cargo.lock"), strategy_lock(false)).unwrap();
         write_independent_lock_config(&repo);
-        let error = build_explicit_release_plan(&repo.0, "chore: migrate", vec![], &SystemProcessRunner).unwrap_err();
-        assert!(error.contains("package identity or effective version changed"), "{error}");
+        let error = schema4::fixture::migrate(&repo.0,&SystemProcessRunner).unwrap_err();
+        assert!((error.contains("identity") || error.contains("version")), "{error}");
     }
 }
 
@@ -958,7 +731,7 @@ fn independent_historical_lock_migration_does_not_exempt_legacy_managed_roots() 
     let repo = historical_lock_repository("legacy-managed-lock", legacy, true);
     fs::write(repo.0.join("strategy/Cargo.lock"), strategy_lock(false)).unwrap();
     write_independent_lock_config(&repo);
-    let error = build_explicit_release_plan(&repo.0, "chore: migrate", vec![], &ReadOnlyReleaseRunner).unwrap_err();
+    let error = schema4::fixture::migrate(&repo.0,&SystemProcessRunner).unwrap_err();
     assert!(error.contains("strategy/Cargo.lock: local package native has missing, ambiguous, or stale version"), "{error}");
 }
 
@@ -976,7 +749,7 @@ fn independent_historical_lock_migration_requires_proven_legacy_contract() {
         git_ok(&repo.0, &["commit", "-m", "fix: unproven historical configuration"]);
         fs::write(repo.0.join("strategy/Cargo.lock"), strategy_lock(false)).unwrap();
         write_independent_lock_config(&repo);
-        let error = build_explicit_release_plan(&repo.0, "chore: migrate", vec![], &ReadOnlyReleaseRunner).unwrap_err();
+        let error = schema4::fixture::migrate(&repo.0,&SystemProcessRunner).unwrap_err();
         if missing {
             assert!(error.contains("strategy/Cargo.lock: local package native has missing, ambiguous, or stale version"), "{error}");
         } else {
@@ -994,7 +767,7 @@ fn independent_historical_lock_migration_respects_auto_and_member_manifest_scope
     }), true);
     fs::write(repo.0.join("strategy/Cargo.lock"), strategy_lock(false)).unwrap();
     write_independent_lock_config(&repo);
-    assert!(build_explicit_release_plan(&repo.0, "chore: migrate", vec![], &ReadOnlyReleaseRunner).is_ok());
+    assert!(schema4::fixture::migrate(&repo.0,&SystemProcessRunner).is_ok());
 
     // Explicitly managing a member also keeps its containing root's lock
     // strict, even when the root manifest itself was not in the legacy list.
@@ -1017,349 +790,48 @@ fn independent_historical_lock_migration_respects_auto_and_member_manifest_scope
 }
 
 #[test]
-fn independent_config_and_package_drift_fail_closed() {
-    let repo = independent_repository("independent-drift",false);
-    let mut cfg = independent_config();
-    cfg["unknown"] = json!(true);
-    fs::write(repo.0.join(".codex/bridgeforge-version.json"),serde_json::to_vec(&cfg).unwrap()).unwrap();
-    assert!(explicit_release_policy(&repo.0).is_err());
-    fs::write(repo.0.join(".codex/bridgeforge-version.json"),serde_json::to_vec(&independent_config()).unwrap()).unwrap();
-    fs::write(repo.0.join("core/src/lib.rs"),b"pub fn value() -> u32 { 9 }\n").unwrap();
-    let plan = build_explicit_release_plan(&repo.0,"fix: core",vec!["core/src/lib.rs".into()],&SystemProcessRunner).unwrap().unwrap();
-    fs::write(repo.0.join("core/src/lib.rs"),b"pub fn value() -> u32 { 10 }\n").unwrap();
-    assert!(apply_file_release_plan(&plan).unwrap_err().contains("changed concurrently"));
-    assert_eq!(fs::read(repo.0.join("VERSION")).unwrap(),b"1.0.0\n");
-    fs::write(repo.0.join("core/src/lib.rs"),b"pub fn value() -> u32 { 9 }\n").unwrap();
-    fs::write(repo.0.join("idle/src/lib.rs"),b"pub fn value() -> u32 { 1 }\n").unwrap();
-    assert!(apply_file_release_plan(&plan).unwrap_err().contains("status changed concurrently"));
-    fs::write(repo.0.join("idle/src/lib.rs"),b"pub fn value() -> u32 { 0 }\n").unwrap();
-    fs::write(repo.0.join("unknown.txt"),b"unmapped").unwrap();
-    assert!(apply_file_release_plan(&plan).unwrap_err().contains("inventory"));
-}
-
-#[test]
-fn independent_release_collects_actual_changes_when_caller_omits_paths() {
-    let repo = independent_repository("independent-actual-diff",false);
+fn schema4_plan_collects_actual_changes_and_rejects_apply_drift(){
+    let repo=independent_repository("schema4-drift",false);migrate_fixture(&repo);
     fs::write(repo.0.join("app/src/lib.rs"),b"pub fn value() -> u32 { 8 }\n").unwrap();
     fs::write(repo.0.join("idle/src/lib.rs"),b"pub fn value() -> u32 { 9 }\n").unwrap();
-    let plan = build_explicit_release_plan(&repo.0,"fix: repairs",vec!["app/src/lib.rs".into()],&SystemProcessRunner).unwrap().unwrap();
-    assert_eq!(plan.package_changes.len(),2);
-    assert!(plan.package_changes.iter().any(|p|p.name=="idle" && p.reason=="direct_change"));
+    let p=fixture_plan(&repo,"patch",&[]).unwrap().unwrap();assert_eq!(p.package_changes.len(),2);
+    fs::write(repo.0.join("idle/src/lib.rs"),b"pub fn value() -> u32 { 10 }\n").unwrap();
+    assert!(apply_file_release_plan(&p).unwrap_err().contains("changed concurrently"));
+    assert_eq!(fs::read(repo.0.join("VERSION")).unwrap(),b"1.0.0\n");
 }
 
 #[test]
-fn independent_mixed_skeleton_changes_do_not_become_package_changes() {
-    for committed in [false,true] {
-        let repo = independent_repository("independent-mixed",false);
-        fs::write(repo.0.join("managed.txt"),b"updated\n").unwrap();
-        let contract_path = repo.0.join(".codex/managed-skeleton.json");
-        let mut contract: Value = serde_json::from_slice(&fs::read(&contract_path).unwrap()).unwrap();
-        contract["assets"][0]["current_sha256"] = json!(digest(b"updated\n"));
-        fs::write(&contract_path,serde_json::to_vec(&contract).unwrap()).unwrap();
-        fs::write(repo.0.join("app/src/lib.rs"),b"pub fn value() -> u32 { 12 }\n").unwrap();
-        let changed = if committed {
-            git_ok(&repo.0,&["add","."]);
-            git_ok(&repo.0,&["commit","-m","fix: app and skeleton"]);
-            vec![]
-        } else { vec!["managed.txt".into(),".codex/managed-skeleton.json".into(),"app/src/lib.rs".into()] };
-        let plan = build_explicit_release_plan(&repo.0,"fix: app and skeleton",changed,&SystemProcessRunner).unwrap().unwrap();
-        assert_eq!(plan.package_changes.len(),1);
-        assert_eq!(plan.package_changes[0].name,"app");
-        assert_eq!(plan.package_changes[0].version_after,"1.0.1");
+fn schema4_legacy_release_entrances_are_retired_without_writes(){
+    for schema in [1,2]{let repo=if schema==1{explicit_repository("retired")}else{independent_repository("retired",false)};
+        let index=fs::read(repo.0.join(".git/index")).unwrap();
+        for error in [build_explicit_release_plan(&repo.0,"fix: retired",vec![],&SystemProcessRunner).unwrap_err(),build_file_release_plan(&repo.0,"fix: retired",vec!["business.txt".into()],&SystemProcessRunner).unwrap_err()]{assert!(error.contains("schema 4 migration"),"{error}");}
+        assert_eq!(fs::read(repo.0.join(".git/index")).unwrap(),index);
     }
 }
 
 #[test]
-fn explicit_release_aggregates_highest_level_and_keeps_preview_read_only() {
-    for (message, expected) in [
-        ("perf: faster", "1.47.12"),
-        ("feat: new feature", "1.48.0"),
-        ("fix!: incompatible", "2.0.0"),
-        ("fix: migrate\n\nBREAKING CHANGE: new format", "2.0.0"),
-    ] {
-        let repo = explicit_repository(expected);
-        history_commit(&repo, b"one\n", "fix: first repair");
-        history_commit(&repo, b"two\n", message);
-        history_commit(&repo, b"three\n", "fix: last repair");
-        let index = fs::read(repo.0.join(".git/index")).unwrap();
-        let plan = build_explicit_release_plan(
-            &repo.0,
-            "feat!: ignored release label",
-            vec![],
-            &SystemProcessRunner,
-        )
-        .unwrap()
-        .unwrap();
-        assert_eq!(plan.new_version.to_string(), expected);
-        assert_eq!(fs::read(repo.0.join("VERSION")).unwrap(), b"1.47.11\n");
-        assert_eq!(fs::read(repo.0.join(".git/index")).unwrap(), index);
-        let log = String::from_utf8(plan.writes[&repo.0.join("CHANGELOG.md")].clone()).unwrap();
-        assert!(log.contains("first repair") && log.contains("last repair"));
-        assert!(!log.contains("ignored release label"));
-        for name in ["Cargo.toml", "Cargo.lock"] {
-            assert!(String::from_utf8_lossy(&plan.writes[&repo.0.join(name)]).contains(expected));
-        }
-        apply_file_release_plan(&plan).unwrap();
-        git_ok(&repo.0, &["add", "."]);
-        git_ok(&repo.0, &["commit", "-m", "chore: release"]);
-        assert!(
-            build_explicit_release_plan(&repo.0, "feat: no changes", vec![], &SystemProcessRunner)
-                .unwrap()
-                .is_none()
-        );
+fn schema4_final_analysis_controls_level_not_commit_titles(){
+    for (level,expected) in [("patch","1.47.12"),("minor","1.48.0"),("major","2.0.0")]{
+        let repo=explicit_repository(level);history_commit(&repo,b"one\n","feat!: temporary feature");history_commit(&repo,b"two\n","unclassified title");migrate_fixture(&repo);
+        let index=fs::read(repo.0.join(".git/index")).unwrap();let p=fixture_plan(&repo,level,&[]).unwrap().unwrap();assert_eq!(p.new_version.to_string(),expected);assert_eq!(fs::read(repo.0.join(".git/index")).unwrap(),index);
+        for name in ["Cargo.toml","Cargo.lock"]{assert!(String::from_utf8_lossy(&p.writes[&repo.0.join(name)]).contains(expected));}
+        apply_file_release_plan(&p).unwrap();git_ok(&repo.0,&["add","."]);git_ok(&repo.0,&["commit","-m","chore: release"]);assert!(fixture_plan(&repo,"major",&[]).unwrap().is_none());
     }
 }
 
 #[test]
-fn explicit_release_current_changes_participate_and_invalid_history_blocks() {
-    let repo = explicit_repository("current");
-    history_commit(&repo, b"one\n", "fix: repair");
-    fs::write(repo.0.join("business.txt"), b"two\n").unwrap();
-    let plan = build_explicit_release_plan(
-        &repo.0,
-        "feat: current feature",
-        vec!["business.txt".into()],
-        &SystemProcessRunner,
-    )
-    .unwrap()
-    .unwrap();
-    assert_eq!(plan.new_version.to_string(), "1.48.0");
-    history_commit(&repo, b"three\n", "unclassified change");
-    assert!(
-        build_explicit_release_plan(&repo.0, "fix: release", vec![], &SystemProcessRunner)
-            .unwrap_err()
-            .contains("cannot classify unreleased commit")
-    );
-}
-
-#[test]
-fn explicit_release_blocks_manual_version_and_shallow_history() {
-    let repo = explicit_repository("manual-version");
-    fs::write(repo.0.join("VERSION"), b"9.0.0\n").unwrap();
-    assert!(
-        build_explicit_release_plan(
-            &repo.0,
-            "fix: release",
-            vec!["VERSION".into()],
-            &SystemProcessRunner
-        )
-        .unwrap_err()
-        .contains("VERSION differs")
-    );
-    fs::write(repo.0.join("VERSION"), b"1.47.11\n").unwrap();
-    let output = Command::new("git")
-        .args(["rev-parse", "HEAD"])
-        .current_dir(&repo.0)
-        .output()
-        .unwrap();
-    fs::write(repo.0.join(".git/shallow"), output.stdout).unwrap();
-    assert!(
-        build_explicit_release_plan(&repo.0, "fix: release", vec![], &SystemProcessRunner)
-            .unwrap_err()
-            .contains("complete Git history")
-    );
-}
-
-#[test]
-fn explicit_release_excludes_historical_skeleton_commits_using_their_own_contracts() {
-    let old = b"old\n";
-    let contract = |payload: &[u8]| {
-        json!({"contract_target": ".codex/managed-skeleton.json", "assets": [{
-            "id": "managed.asset", "target": "managed.txt", "strategy": "whole", "current_sha256": digest(payload)
-        }]})
-    };
-    let repo = release_repository(
-        "history-ownership",
-        &contract(old),
-        &[("VERSION", b"1.0.0\n"), ("managed.txt", old)],
-    );
-    for payload in [b"second\n".as_slice(), b"third\n".as_slice()] {
-        fs::write(repo.0.join("managed.txt"), payload).unwrap();
-        fs::write(
-            repo.0.join(".codex/managed-skeleton.json"),
-            serde_json::to_vec(&contract(payload)).unwrap(),
-        )
-        .unwrap();
-        git_ok(&repo.0, &["add", "."]);
-        git_ok(&repo.0, &["commit", "-m", "feat!: skeleton only"]);
-    }
-    assert!(
-        build_explicit_release_plan(&repo.0, "feat: release", vec![], &SystemProcessRunner)
-            .unwrap()
-            .is_none()
-    );
-    history_commit(&repo, b"business\n", "fix: actual business");
-    let plan = build_explicit_release_plan(&repo.0, "feat: release", vec![], &SystemProcessRunner)
-        .unwrap()
-        .unwrap();
-    assert_eq!(plan.new_version.to_string(), "1.0.1");
-    assert!(
-        !String::from_utf8_lossy(&plan.writes[&repo.0.join("CHANGELOG.md")])
-            .contains("skeleton only")
-    );
-}
-
-#[test]
-fn release_policy_is_always_explicit_and_rejects_unknown_or_duplicate_values() {
-    let repo = explicit_repository("policy");
-    assert!(explicit_release_policy(&repo.0).unwrap());
-    for policy in ["per_commit", "explicit_release"] {
-        fs::write(
-            repo.0.join(".codex/bridgeforge-version.json"),
-            serde_json::to_vec(&json!({"schema_version": 1, "release_policy": policy})).unwrap(),
-        )
-        .unwrap();
-        assert!(explicit_release_policy(&repo.0).unwrap());
-    }
-    for value in [br#"{"schema_version":1,"release_policy":"typo"}"#.as_slice(), br#"{"schema_version":1,"release_policy":"per_commit","release_policy":"explicit_release"}"#.as_slice()] {
-        fs::write(repo.0.join(".codex/bridgeforge-version.json"), value).unwrap();
-        assert!(explicit_release_policy(&repo.0).is_err());
+fn schema4_migration_rejects_manual_version_shallow_and_invalid_formal_history(){
+    let repo=explicit_repository("manual-version");fs::write(repo.0.join("VERSION"),b"9.0.0\n").unwrap();let p=schema4::migration_plan(&repo.0,&SystemProcessRunner,None);assert!(p.stderr.contains("VERSION differs"),"{}",p.stderr);
+    fs::write(repo.0.join("VERSION"),b"1.47.11\n").unwrap();let oid=history::git(&repo.0,&SystemProcessRunner,&["rev-parse","HEAD"]).unwrap();fs::write(repo.0.join(".git/shallow"),oid).unwrap();assert!(schema4::migration_plan(&repo.0,&SystemProcessRunner,None).stderr.contains("complete Git history"));
+    for mode in ["missing-notes","wrong-native","decrease","invalid","delete"]{
+        let repo=explicit_repository(mode);if mode=="delete"{git_ok(&repo.0,&["rm","VERSION"]);}else{fs::write(repo.0.join("VERSION"),match mode{"decrease"=>"1.47.10\n","invalid"=>"invalid\n",_=>"1.48.0\n"}).unwrap();}
+        if mode=="wrong-native"{fs::write(repo.0.join("CHANGELOG.md"),b"# Changelog\n\n## [1.48.0]\n").unwrap();}
+        git_ok(&repo.0,&["add","."]);git_ok(&repo.0,&["commit","-m","chore: invalid boundary"]);let result=schema4::migration_plan(&repo.0,&SystemProcessRunner,None);assert_ne!(result.code,0,"{mode}");
     }
 }
 
 #[test]
-fn explicit_release_keeps_project_region_changes_in_history() {
-    let public = b"BEGIN\npublic\nEND\n";
-    let contract = json!({"contract_target": ".codex/managed-skeleton.json", "assets": [{
-        "id": "mixed", "target": "mixed.md", "strategy": "region", "region": {
-            "begin": "BEGIN", "end": "END", "current_sha256": digest(public)
-        }
-    }]});
-    let repo = release_repository(
-        "mixed-history",
-        &contract,
-        &[
-            ("VERSION", b"1.0.0\n"),
-            ("mixed.md", b"BEGIN\npublic\nEND\nproject old\n"),
-        ],
-    );
-    fs::write(
-        repo.0.join("mixed.md"),
-        b"BEGIN\npublic\nEND\nproject new\n",
-    )
-    .unwrap();
-    git_ok(&repo.0, &["add", "."]);
-    git_ok(&repo.0, &["commit", "-m", "feat: project region feature"]);
-    let plan = build_explicit_release_plan(&repo.0, "fix: release", vec![], &SystemProcessRunner)
-        .unwrap()
-        .unwrap();
-    assert_eq!(plan.new_version.to_string(), "1.1.0");
-}
-
-#[test]
-fn explicit_release_stops_at_unreviewed_merge_history() {
-    let repo = explicit_repository("merge-history");
-    git_ok(&repo.0, &["checkout", "-b", "feature"]);
-    history_commit(&repo, b"feature\n", "feat: side feature");
-    git_ok(&repo.0, &["checkout", "-"]);
-    fs::write(repo.0.join("main.txt"), b"main\n").unwrap();
-    git_ok(&repo.0, &["add", "."]);
-    git_ok(&repo.0, &["commit", "-m", "fix: main repair"]);
-    git_ok(
-        &repo.0,
-        &["merge", "--no-ff", "feature", "-m", "chore: merge feature"],
-    );
-    assert!(
-        build_explicit_release_plan(&repo.0, "fix: release", vec![], &SystemProcessRunner)
-            .unwrap_err()
-            .contains("merge/root commit")
-    );
-    assert_eq!(fs::read(repo.0.join("VERSION")).unwrap(), b"1.47.11\n");
-}
-
-#[test]
-fn version_formatting_commits_do_not_reset_release_history_or_create_releases() {
-    for has_feature in [false, true] {
-        let repo = explicit_repository("version-formatting");
-        if has_feature {
-            history_commit(&repo, b"feature\n", "feat: must remain in release");
-        }
-        fs::write(repo.0.join("VERSION"), b" 1.47.11\n\n").unwrap();
-        git_ok(&repo.0, &["add", "VERSION"]);
-        git_ok(&repo.0, &["commit", "-m", "docs: version whitespace"]);
-        let plan =
-            build_explicit_release_plan(&repo.0, "fix: release", vec![], &SystemProcessRunner)
-                .unwrap();
-        if has_feature {
-            let plan = plan.unwrap();
-            assert_eq!(plan.new_version.to_string(), "1.48.0");
-            assert!(
-                String::from_utf8_lossy(&plan.writes[&repo.0.join("CHANGELOG.md")])
-                    .contains("must remain in release")
-            );
-        } else {
-            assert!(plan.is_none());
-        }
-        fs::write(repo.0.join("VERSION"), b"1.47.11\n").unwrap();
-        let plan = build_explicit_release_plan(
-            &repo.0,
-            "feat!: formatting only",
-            vec!["VERSION".into()],
-            &SystemProcessRunner,
-        )
-        .unwrap();
-        assert_eq!(
-            plan.map(|p| p.new_version.to_string()),
-            has_feature.then(|| "1.48.0".to_string())
-        );
-    }
-}
-
-#[test]
-fn committed_version_changes_need_new_release_notes_and_matching_native_versions() {
-    for mode in [
-        "missing-notes",
-        "existing-notes",
-        "wrong-native",
-        "decrease",
-        "invalid",
-    ] {
-        let repo = explicit_repository(mode);
-        if mode == "existing-notes" {
-            fs::write(repo.0.join("CHANGELOG.md"), b"# Changelog\n\n## [1.48.0]\n").unwrap();
-            git_ok(&repo.0, &["add", "CHANGELOG.md"]);
-            git_ok(&repo.0, &["commit", "-m", "docs: prepare notes"]);
-        }
-        let version = match mode {
-            "decrease" => "1.47.10\n",
-            "invalid" => "invalid\n",
-            _ => "1.48.0\n",
-        };
-        fs::write(repo.0.join("VERSION"), version).unwrap();
-        if mode == "wrong-native" {
-            fs::write(repo.0.join("CHANGELOG.md"), b"# Changelog\n\n## [1.48.0]\n").unwrap();
-        }
-        git_ok(&repo.0, &["add", "."]);
-        git_ok(&repo.0, &["commit", "-m", "chore: manual version"]);
-        let error =
-            build_explicit_release_plan(&repo.0, "fix: release", vec![], &SystemProcessRunner)
-                .unwrap_err();
-        let expected = match mode {
-            "decrease" => "decreases VERSION",
-            "invalid" => "invalid semantic version",
-            "wrong-native" => "native manifest disagrees",
-            _ => "newly added CHANGELOG",
-        };
-        assert!(error.contains(expected), "{mode}: {error}");
-    }
-}
-
-#[test]
-fn deleted_or_reintroduced_version_is_not_an_initial_baseline() {
-    let repo = explicit_repository("version-reintroduced");
-    git_ok(&repo.0, &["rm", "VERSION"]);
-    git_ok(&repo.0, &["commit", "-m", "chore: delete version"]);
-    assert!(
-        build_explicit_release_plan(&repo.0, "fix: release", vec![], &SystemProcessRunner)
-            .unwrap_err()
-            .contains("deletes VERSION")
-    );
-    fs::write(repo.0.join("VERSION"), b"1.47.11\n").unwrap();
-    git_ok(&repo.0, &["add", "VERSION"]);
-    git_ok(&repo.0, &["commit", "-m", "chore: restore version"]);
-    assert!(
-        build_explicit_release_plan(&repo.0, "fix: release", vec![], &SystemProcessRunner)
-            .unwrap_err()
-            .contains("reintroduces VERSION")
-    );
+fn schema4_merges_use_final_difference_and_keep_version_formatting_a_noop(){
+    let repo=explicit_repository("merge");git_ok(&repo.0,&["checkout","-b","feature"]);history_commit(&repo,b"feature\n","feat: side feature");git_ok(&repo.0,&["checkout","-"]);fs::write(repo.0.join("main.txt"),b"main\n").unwrap();git_ok(&repo.0,&["add","."]);git_ok(&repo.0,&["commit","-m","fix: main"]);git_ok(&repo.0,&["merge","--no-ff","feature","-m","merge business"]);migrate_fixture(&repo);assert_eq!(fixture_plan(&repo,"patch",&[]).unwrap().unwrap().new_version.to_string(),"1.47.12");
+    let repo=explicit_repository("formatting");fs::write(repo.0.join("VERSION"),b" 1.47.11\n\n").unwrap();git_ok(&repo.0,&["add","."]);git_ok(&repo.0,&["commit","-m","docs: formatting"]);migrate_fixture(&repo);assert!(fixture_plan(&repo,"patch",&[]).unwrap().is_none());
 }

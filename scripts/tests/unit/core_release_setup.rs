@@ -64,130 +64,115 @@ fn apply_current(root: &Path) {
 }
 
 #[test]
-fn setup_python_ignores_managed_rust_and_preserves_auto_release() {
+fn setup_two_choices_ignore_managed_rust_and_generate_only_schema4() {
     let root = repo(&[
-        ("app.py", "print('app')\n"),
+        ("app.py", "pass\n"),
         (
             ".codex/hooks/Cargo.toml",
             "[package]\nname='hook'\nversion='1.0.0'\n",
         ),
     ]);
     let index = fs::read(root.0.join(".git/index")).unwrap();
-    let result = status(&root.0, &SystemProcessRunner);
-    assert_eq!(result.code, 0, "{}", result.stderr);
-    let receipt = result.receipt.unwrap();
-    assert_eq!(receipt["status"], "configuration-required");
-    assert_eq!(receipt["options"].as_array().unwrap().len(), 1);
+    let status = status(&root.0, &SystemProcessRunner);
+    assert_eq!(status.code, 0, "{}", status.stderr);
+    let v = status.receipt.unwrap();
+    assert_eq!(v["options"].as_array().unwrap().len(), 2);
+    assert_eq!(v["options"][0]["id"], "synchronized");
+    assert_eq!(v["options"][1]["id"], "independent");
+    assert_eq!(fs::read(root.0.join(".git/index")).unwrap(), index);
     assert!(!root.0.join(CONFIG).exists());
     assert!(!root.0.join(".runtime").exists());
-    assert_eq!(fs::read(root.0.join(".git/index")).unwrap(), index);
-    let denied = plan(&root.0, &SystemProcessRunner, "rust_independent");
-    assert_ne!(denied.code, 0);
-    assert!(!root.0.join(CONFIG).exists());
+    assert_ne!(
+        plan(&root.0, &SystemProcessRunner, "rust_independent").code,
+        0
+    );
     apply_current(&root.0);
+    let cfg: Value = serde_json::from_slice(&fs::read(root.0.join(CONFIG)).unwrap()).unwrap();
+    assert_eq!(cfg["schema_version"], 4);
+    assert_eq!(cfg["strategy"], "synchronized");
+    assert!(cfg["packages"].as_array().unwrap().is_empty());
     assert!(is_confirmed(&root.0).unwrap());
     assert!(
-        status(&root.0, &SystemProcessRunner)
+        !status_with(&root.0, &SystemProcessRunner, false)
             .receipt
+            .unwrap()["migration_required"]
+            .as_bool()
             .unwrap()
-            .get("options")
-            .is_none()
     );
-    assert!(
-        status_with(&root.0, &SystemProcessRunner, true)
-            .receipt
-            .unwrap()
-            .get("options")
-            .is_some()
-    );
-    assert!(
-        super::super::configured_manifests(&root.0)
-            .unwrap()
-            .is_empty()
-    );
-    git(&root.0, &["add", "."]);
-    git(&root.0, &["commit", "-m", "chore: remember choice"]);
-    assert!(super::super::validate_release_baseline(&root.0, &SystemProcessRunner).is_ok());
-    let configured = fs::read(root.0.join(CONFIG)).unwrap();
-    fs::write(root.0.join("VERSION"), "2.0.0\n").unwrap();
-    assert!(is_confirmed(&root.0).unwrap());
-    let clone = Repo(root.0.with_extension("clone"));
-    fs::create_dir_all(clone.0.join(".codex")).unwrap();
-    fs::write(clone.0.join(CONFIG), configured).unwrap();
-    assert!(is_confirmed(&clone.0).unwrap());
 }
 
 #[test]
-fn setup_existing_configuration_is_preserved_and_reconfiguration_is_explicit() {
+fn setup_legacy_rust_manifest_mapping_is_preserved_without_version_writes() {
     let root = repo(&[
         (
             CONFIG,
-            r#"{"schema_version":1,"manifests":["Cargo.toml"],"project_note":"keep"}"#,
+            r#"{"schema_version":1,"release_policy":"explicit_release","manifests":["Cargo.toml"]}"#,
         ),
-        ("Cargo.toml", "[package]\nname=\"app\"\nversion=\"1.0.0\"\n"),
-        ("src/lib.rs", "pub fn x() {}\n"),
+        ("Cargo.toml", "[package]\nname='app'\nversion='1.0.0'\n"),
     ]);
-    assert!(!is_confirmed(&root.0).unwrap());
+    let native = fs::read(root.0.join("Cargo.toml")).unwrap();
     apply_current(&root.0);
     let value: Value = serde_json::from_slice(&fs::read(root.0.join(CONFIG)).unwrap()).unwrap();
-    assert_eq!(value["project_note"], "keep");
-    assert_eq!(value["manifests"], json!(["Cargo.toml"]));
-    assert!(is_confirmed(&root.0).unwrap());
+    assert_eq!(value["synchronized_manifests"], json!(["Cargo.toml"]));
+    assert_eq!(value["baseline"]["source_schema"], 1);
+    assert_eq!(fs::read(root.0.join("Cargo.toml")).unwrap(), native);
+    assert_eq!(fs::read(root.0.join("VERSION")).unwrap(), b"1.0.0\n");
 }
 
 #[test]
-fn setup_missing_confirmation_or_discovery_drift_never_overwrites_config() {
+fn setup_missing_confirmation_and_source_drift_never_write_config() {
     let root = repo(&[("app.py", "pass\n")]);
-    let proposal = plan(&root.0, &SystemProcessRunner, "current")
-        .receipt
-        .unwrap();
-    let key = proposal["fingerprint"].as_str().unwrap();
+    let p = plan(&root.0, &SystemProcessRunner, "current");
+    assert_eq!(p.code, 0, "{}", p.stderr);
+    let fp = p.receipt.unwrap()["fingerprint"]
+        .as_str()
+        .unwrap()
+        .to_string();
     assert_ne!(
-        apply(&root.0, &SystemProcessRunner, "current", key, false).code,
+        apply(&root.0, &SystemProcessRunner, "current", &fp, false).code,
         0
     );
-    assert!(!root.0.join(".runtime").exists());
-    fs::write(
-        root.0.join("Cargo.toml"),
-        "[package]\nname='new'\nversion='1.0.0'\n",
-    )
-    .unwrap();
+    fs::write(root.0.join("new.py"), b"pass\n").unwrap();
     assert_ne!(
-        apply(&root.0, &SystemProcessRunner, "current", key, true).code,
+        apply(&root.0, &SystemProcessRunner, "current", &fp, true).code,
         0
     );
     assert!(!root.0.join(CONFIG).exists());
 }
 
 #[test]
-fn setup_rust_can_enable_safe_workspace_but_requires_hook_adaptation() {
+fn setup_explicit_python_proposal_binds_file_and_only_accepts_schema4() {
     let root = repo(&[
-        ("Cargo.toml", "[package]\nname='app'\nversion='1.0.0'\n"),
-        ("src/lib.rs", "pub fn x() {}\n"),
+        (
+            "pkg/pyproject.toml",
+            "[project]\nname='pkg'\nversion='0.2.0'\n",
+        ),
+        ("pkg/pkg.py", "VALUE=1\n"),
     ]);
-    let proposal = plan(&root.0, &SystemProcessRunner, "rust_independent");
-    assert_eq!(proposal.code, 0, "{}", proposal.stderr);
-    let key = proposal.receipt.unwrap()["fingerprint"]
+    fs::create_dir_all(root.0.join(".runtime")).unwrap();
+    let path = ".runtime/proposal.json";
+    let mut cfg = json!({"schema_version":3,"release_policy":"explicit_release","strategy":"independent","adapters":{"python":{"projects":["pkg/pyproject.toml"]}},"packages":[{"id":"pkg","language":"python","manifest":"pkg/pyproject.toml","name":"pkg"}],"product_inputs":[".gitignore"]});
+    fs::write(root.0.join(path), serde_json::to_vec(&cfg).unwrap()).unwrap();
+    assert_ne!(
+        plan_configuration(&root.0, &SystemProcessRunner, path).code,
+        0
+    );
+    cfg["schema_version"] = json!(4);
+    fs::write(root.0.join(path), serde_json::to_vec(&cfg).unwrap()).unwrap();
+    let p = plan_configuration(&root.0, &SystemProcessRunner, path);
+    assert_eq!(p.code, 0, "{}", p.stderr);
+    assert!(!root.0.join(CONFIG).exists());
+    let fp = p.receipt.unwrap()["fingerprint"]
         .as_str()
         .unwrap()
         .to_string();
-    let result = apply(
-        &root.0,
-        &SystemProcessRunner,
-        "rust_independent",
-        &key,
-        true,
-    );
+    let result = apply_configuration(&root.0, &SystemProcessRunner, path, &fp, true);
     assert_eq!(result.code, 0, "{}", result.stderr);
-    assert_eq!(version_strategy(&root.0).unwrap(), "rust_independent");
-    assert!(is_confirmed(&root.0).unwrap());
-    let hooked = repo(&[
-        ("Cargo.toml", "[package]\nname='app'\nversion='1.0.0'\n"),
-        (".codex/hooks/project_custom/entrypoint.rs", "fn main() {}"),
-    ]);
-    let denied = plan(&hooked.0, &SystemProcessRunner, "rust_independent");
-    assert!(denied.stderr.contains("adaptation"));
-    assert!(!hooked.0.join(CONFIG).exists());
+    assert_eq!(version_strategy(&root.0).unwrap(), "independent");
+    assert_eq!(
+        fs::read(root.0.join("pkg/pyproject.toml")).unwrap(),
+        b"[project]\nname='pkg'\nversion='0.2.0'\n"
+    );
 }
 
 #[test]
@@ -207,29 +192,7 @@ fn setup_invalid_config_or_confirmation_cannot_be_silently_replaced() {
 }
 
 #[test]
-fn setup_current_survives_deleted_or_invalid_rust_candidate() {
-    for deleted in [false, true] {
-        let root = repo(&[("Cargo.toml", "[package]\nname='app'\nversion='1.0.0'\n")]);
-        if deleted {
-            fs::remove_file(root.0.join("Cargo.toml")).unwrap();
-        } else {
-            fs::write(root.0.join("Cargo.toml"), "[broken").unwrap();
-        }
-        let result = status(&root.0, &SystemProcessRunner);
-        assert_eq!(result.code, 0, "{}", result.stderr);
-        assert!(
-            !result.receipt.unwrap()["rust_discovery_errors"]
-                .as_array()
-                .unwrap()
-                .is_empty()
-        );
-        apply_current(&root.0);
-        assert!(is_confirmed(&root.0).unwrap());
-    }
-}
-
-#[test]
-fn setup_plan_binds_ignored_lock_and_strategy() {
+fn setup_plan_binds_ignored_native_lock_and_choice() {
     let config = r#"{"schema_version":2,"release_policy":"explicit_release","strategy":"rust_independent","rust":{"workspaces":["Cargo.toml"]}}"#;
     let root = repo(&[
         (CONFIG, config),
@@ -239,86 +202,28 @@ fn setup_plan_binds_ignored_lock_and_strategy() {
             "version=4\n[[package]]\nname='app'\nversion='1.0.0'\n",
         ),
     ]);
-    fs::write(root.0.join(".gitignore"), ".runtime/\nCargo.lock\n").unwrap();
+    fs::write(root.0.join(".gitignore"), b".runtime/\nCargo.lock\n").unwrap();
     git(&root.0, &["rm", "--cached", "Cargo.lock"]);
-    git(&root.0, &["add", ".gitignore"]);
+    git(&root.0, &["add", "."]);
     git(&root.0, &["commit", "-m", "chore: ignore lock"]);
-    let proposal = plan(&root.0, &SystemProcessRunner, "current");
-    assert_eq!(proposal.code, 0, "{}", proposal.stderr);
-    let key = proposal.receipt.unwrap()["fingerprint"]
+    let p = plan(&root.0, &SystemProcessRunner, "current");
+    assert_eq!(p.code, 0, "{}", p.stderr);
+    let fp = p.receipt.unwrap()["fingerprint"]
         .as_str()
         .unwrap()
         .to_string();
     assert_ne!(
-        apply(
-            &root.0,
-            &SystemProcessRunner,
-            "rust_independent",
-            &key,
-            true
-        )
-        .code,
+        apply(&root.0, &SystemProcessRunner, "synchronized", &fp, true).code,
         0
     );
     fs::write(
         root.0.join("Cargo.lock"),
-        "version=3\n[[package]]\nname='app'\nversion='1.0.0'\n",
+        b"version=3\n[[package]]\nname='app'\nversion='1.0.0'\n",
     )
     .unwrap();
-    let result = apply(&root.0, &SystemProcessRunner, "current", &key, true);
-    assert_ne!(result.code, 0);
-    assert!(result.stderr.contains("changed"));
+    assert_ne!(
+        apply(&root.0, &SystemProcessRunner, "current", &fp, true).code,
+        0
+    );
     assert_eq!(fs::read_to_string(root.0.join(CONFIG)).unwrap(), config);
-}
-
-#[test]
-fn setup_rust_rejects_new_package_missing_from_release_baseline() {
-    let root = repo(&[("app.py", "pass\n")]);
-    fs::write(
-        root.0.join("Cargo.toml"),
-        "[package]\nname='app'\nversion='1.0.0'\n",
-    )
-    .unwrap();
-    fs::create_dir_all(root.0.join("src")).unwrap();
-    fs::write(root.0.join("src/lib.rs"), "pub fn f() {}\n").unwrap();
-    let result = plan(&root.0, &SystemProcessRunner, "rust_independent");
-    assert_ne!(result.code, 0);
-    assert!(result.stderr.contains("adaptation"));
-    assert!(!root.0.join(CONFIG).exists());
-}
-
-#[test]
-fn setup_confirmed_rust_rejects_invalid_static_policy() {
-    for rust in [
-        json!({"workspaces":[]}),
-        json!({"workspaces":["Cargo.toml"],"dependency_bump":"foo"}),
-    ] {
-        let root = repo(&[]);
-        let value = json!({"schema_version":2,"release_policy":"explicit_release","strategy":"rust_independent","rust":rust,
-            "git_sync_setup":{"schema":1,"confirmed":true,"selection":"current"}});
-        fs::write(root.0.join(CONFIG), serde_json::to_vec(&value).unwrap()).unwrap();
-        assert!(is_confirmed(&root.0).is_err());
-        assert_ne!(status(&root.0, &SystemProcessRunner).code, 0);
-    }
-}
-
-#[test]
-fn setup_rust_preflights_unreleased_intermediate_package_versions() {
-    let root = repo(&[
-        ("Cargo.toml", "[package]\nname='app'\nversion='1.0.0'\n"),
-        ("src/lib.rs", "pub fn f() {}\n"),
-    ]);
-    for version in ["1.0.1", "1.0.0"] {
-        fs::write(
-            root.0.join("Cargo.toml"),
-            format!("[package]\nname='app'\nversion='{version}'\n"),
-        )
-        .unwrap();
-        git(&root.0, &["add", "."]);
-        git(&root.0, &["commit", "-m", "chore: manual version"]);
-    }
-    let result = plan(&root.0, &SystemProcessRunner, "rust_independent");
-    assert_ne!(result.code, 0);
-    assert!(result.stderr.contains("adaptation"));
-    assert!(!root.0.join(CONFIG).exists());
 }

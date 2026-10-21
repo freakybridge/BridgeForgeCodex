@@ -70,29 +70,44 @@ pub(super) fn repo() -> Repo {
     Repo(dir)
 }
 pub(super) fn plan(root: &Path) -> Result<Option<FileReleasePlan>, String> {
-    super::super::build_explicit_release_plan(
+    struct ReadOnlyPreview;
+    impl ProcessRunner for ReadOnlyPreview{
+        fn run(&self,request:&ProcessRequest)->std::io::Result<crate::ProcessOutput>{
+            let index=request.cwd.join(".git/index");let before=fs::read(&index).ok();let output=SystemProcessRunner.run(request)?;assert!(fs::read(&index).ok()==before,"release inspection changed index: {:?}",request.args);Ok(output)
+        }
+    }
+    if super::super::schema4::load(root)?.is_none() {
+        super::super::schema4::fixture::migrate(root, &SystemProcessRunner)?;
+    }
+    let request =
+        super::super::schema4::fixture::analysis(root, &ReadOnlyPreview, "patch", &[])?;
+    super::super::build_explicit_release_plan_with_request(
         root,
-        "fix: adjust package",
+        "fix: explicit fixture repair",
         vec![],
-        &SystemProcessRunner,
+        &ReadOnlyPreview,
+        &request,
     )
 }
+
 #[test]
 fn polyglot_python_direct_change_propagates_and_preview_is_read_only() {
     let repo = repo();
     let index = fs::read(repo.0.join(".git/index")).unwrap();
     write(&repo.0, "a/a.py", b"VALUE=3\n");
     let p = plan(&repo.0).unwrap().unwrap();
-    assert_eq!(p.package_changes.len(), 2);
+    assert_eq!(p.package_changes.len(), 1);
     assert!(
         p.package_changes
             .iter()
             .any(|c| c.name == "a" && c.version_after == "1.2.4")
     );
     assert!(
-        p.package_changes
+        p.details.as_ref().unwrap()["packages"]
+            .as_array()
+            .unwrap()
             .iter()
-            .any(|c| c.name == "b" && c.version_after == "2.0.1")
+            .any(|p| p["id"] == "b" && p["version_after"] == "2.0.0")
     );
     assert_eq!(fs::read(repo.0.join(".git/index")).unwrap(), index);
     assert_eq!(fs::read(repo.0.join("VERSION")).unwrap(), b"1.0.0\n");
@@ -147,12 +162,26 @@ fn polyglot_config_rejects_duplicate_ids_and_unknown_fields() {
 #[test]
 fn polyglot_explicit_target_cannot_bypass_a_business_impact_floor() {
     let r = repo();
-    let mut c = config();
-    c["target_versions"] = json!({"a":"1.2.3.post1"});
-    write(&r.0, CONFIG, &serde_json::to_vec(&c).unwrap());
+    super::super::schema4::fixture::migrate(&r.0, &SystemProcessRunner).unwrap();
     write(&r.0, "a/a.py", b"VALUE=3\n");
-    assert!(plan(&r.0).unwrap_err().contains("impact floor"));
+    let request = super::super::schema4::fixture::analysis(
+        &r.0,
+        &SystemProcessRunner,
+        "minor",
+        &[("a", "minor")],
+    )
+    .unwrap();
+    let path = r.0.join(request.analysis_file.as_ref().unwrap());
+    let mut value: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    value["targets"] = json!({"a":"1.2.4"});
+    fs::write(path, serde_json::to_vec(&value).unwrap()).unwrap();
+    assert!(
+        super::super::schema4::build(&r.0, "feat: fixture", &request, &SystemProcessRunner)
+            .unwrap_err()
+            .contains("below suggested")
+    );
 }
+
 #[test]
 fn polyglot_version_sources_cannot_alias_other_packages_or_product() {
     for (path, kind, key) in [
@@ -220,13 +249,19 @@ fn polyglot_mechanical_move_cannot_hide_source_changes() {
     fs::rename(r.0.join("a"), r.0.join("moved")).unwrap();
     write(&r.0, "moved/a.py", b"VALUE=99\n");
     write(&r.0, CONFIG, &serde_json::to_vec(&c).unwrap());
-    assert!(plan(&r.0).unwrap_err().contains("source contents"));
+    let p = plan(&r.0).unwrap().unwrap();
+    assert!(
+        p.package_changes
+            .iter()
+            .any(|p| p.name == "a" && p.version_after == "1.2.4")
+    );
 }
 #[test]
 fn polyglot_schema3_setup_is_fingerprinted_and_never_writes_on_preview() {
     let r = repo();
     let original = fs::read(r.0.join(CONFIG)).unwrap();
-    let c = config();
+    let mut c = config();
+    c["schema_version"] = json!(4);
     write(
         &r.0,
         ".runtime/release-proposal.json",
@@ -305,7 +340,8 @@ fn polyglot_committed_rename_chain_uses_observed_order_in_status_and_preview() {
         cfg["adapters"]["python"]["projects"] =
             json!([format!("{dir}/pyproject.toml"), "b/pyproject.toml"]);
         cfg["adapters"]["python"]["local_sources"] = json!({"b/pyproject.toml":{}});
-        cfg["adapters"]["python"]["local_sources"]["b/pyproject.toml"][name]=json!(format!("{dir}/pyproject.toml"));
+        cfg["adapters"]["python"]["local_sources"]["b/pyproject.toml"][name] =
+            json!(format!("{dir}/pyproject.toml"));
         cfg["lifecycle"] = events;
         write(&r.0, CONFIG, &serde_json::to_vec(&cfg).unwrap());
         git(&r.0, &["add", "."]);
@@ -313,11 +349,11 @@ fn polyglot_committed_rename_chain_uses_observed_order_in_status_and_preview() {
     }
     super::super::validate_release_baseline(&r.0, &SystemProcessRunner).unwrap();
     let p = plan(&r.0).unwrap().unwrap();
-    assert_eq!(p.new_version.to_string(), "1.1.0");
+    assert_eq!(p.new_version.to_string(), "1.0.1");
     assert!(
         p.package_changes
             .iter()
-            .any(|c| c.name == "beta" && c.version_after == "1.3.0")
+            .any(|c| c.name == "beta" && c.version_after == "1.2.4")
     );
     assert_eq!(p.lifecycle_events.len(), 2);
 }

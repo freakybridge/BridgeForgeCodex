@@ -1,0 +1,454 @@
+use super::*;
+
+#[derive(Clone, Debug, Serialize)]
+pub(super) struct Change {
+    pub path: String,
+    pub role: String,
+    pub packages: Vec<String>,
+    pub before: Option<String>,
+    pub after: Option<String>,
+    pub mode_changed: bool,
+}
+
+pub(super) struct Capture {
+    pub head: String,
+    pub boundary: String,
+    pub inventory: Vec<String>,
+    pub status: String,
+    pub current: polyglot::Snapshot,
+    pub baseline: polyglot::Snapshot,
+    pub changes: Vec<Change>,
+    pub inputs: BTreeMap<PathBuf, Option<Vec<u8>>>,
+    pub fingerprint: String,
+    pub validation_fingerprint: String,
+    pub product_version: String,
+    pub environment_guard: Option<EnvironmentGuard>,
+}
+
+// Content identity is independent of HEAD, staging and automatic records. Existing
+// Git blob ids avoid reading unchanged large assets; dirty bytes use the same Git
+// canonicalization, after external filters have been rejected by capture().
+fn validation_fingerprint(
+    root: &Path,
+    cfg: &Config,
+    head: &str,
+    inventory: &[String],
+    inputs: &BTreeMap<PathBuf, Option<Vec<u8>>>,
+    environment: &str,
+    runner: &dyn ProcessRunner,
+) -> Result<String, String> {
+    let mut tree = BTreeMap::<String, (String, String)>::new();
+    for entry in history::git(root, runner, &["ls-tree", "-r", "-z", head])?
+        .split('\0')
+        .filter(|s| !s.is_empty())
+    {
+        let (metadata, path) = entry
+            .split_once('\t')
+            .ok_or("malformed Git validation tree")?;
+        let fields = metadata.split_whitespace().collect::<Vec<_>>();
+        if fields.len() != 3 {
+            return Err("malformed Git validation tree metadata".into());
+        }
+        tree.insert(path.into(), (fields[0].into(), fields[2].into()));
+    }
+    let raw = history::git(
+        root,
+        runner,
+        &["diff", "--raw", "--no-renames", "-z", head, "--"],
+    )?;
+    let entries = raw
+        .split('\0')
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>();
+    if entries.len() % 2 != 0 {
+        return Err("malformed validation mode comparison".into());
+    }
+    let modes = entries
+        .chunks_exact(2)
+        .map(|p| {
+            Ok((
+                p[1].to_string(),
+                p[0].split_whitespace()
+                    .nth(1)
+                    .ok_or("malformed validation mode")?
+                    .to_string(),
+            ))
+        })
+        .collect::<Result<BTreeMap<_, _>, String>>()?;
+    let mut extras = BTreeMap::new();
+    for (path, bytes) in inputs {
+        let relative = path
+            .strip_prefix(root)
+            .map_err(|e| e.to_string())?
+            .to_string_lossy()
+            .replace('\\', "/");
+        if !inventory.contains(&relative) {
+            extras.insert(relative.clone(), bytes.as_deref().map(digest));
+        }
+        let Some(bytes) = bytes else {
+            tree.remove(&relative);
+            continue;
+        };
+        if cfg.record_inputs.contains(&relative)
+            || matches!(relative.as_str(), "VERSION" | "CHANGELOG.md")
+        {
+            continue;
+        }
+        let mut request = ProcessRequest::new("git", root);
+        request.args = ["hash-object", "--stdin", "--path", &relative]
+            .iter()
+            .map(Into::into)
+            .collect();
+        request.stdin = bytes.clone();
+        request.timeout = Duration::from_secs(45);
+        let output = runner.run(&request).map_err(|e| e.to_string())?;
+        if output.timed_out || output.code != 0 {
+            return Err(format!("cannot hash validation input: {relative}"));
+        }
+        let oid = String::from_utf8(output.stdout)
+            .map_err(|e| e.to_string())?
+            .trim()
+            .to_string();
+        let mode = modes
+            .get(&relative)
+            .cloned()
+            .or_else(|| tree.get(&relative).map(|v| v.0.clone()))
+            .unwrap_or_else(|| "100644".into());
+        tree.insert(relative, (mode, oid));
+    }
+    tree.retain(|path, _| {
+        !cfg.record_inputs.contains(path) && !matches!(path.as_str(), "VERSION" | "CHANGELOG.md")
+    });
+    extras.retain(|path, _| {
+        !cfg.record_inputs.contains(path) && !matches!(path.as_str(), "VERSION" | "CHANGELOG.md")
+    });
+    Ok(digest(
+        &serde_json::to_vec(
+            &json!({"tree":tree,"native_extra_inputs":extras,"environment":environment}),
+        )
+        .map_err(|e| e.to_string())?,
+    ))
+}
+
+fn environment(
+    root: &Path,
+    cfg: &Config,
+    guard: Option<&EnvironmentGuard>,
+    runner: &dyn ProcessRunner,
+) -> Result<String, String> {
+    let mut values = std::env::vars_os()
+        .filter(|(key, _)| key != "CODEX_TOOL_CALL_ID")
+        .map(|(k, v)| {
+            (
+                k.to_string_lossy().into_owned(),
+                v.to_string_lossy().into_owned(),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    if let Some(guard) = guard {
+        values.insert("python:environment".into(), guard.fingerprint.clone());
+    }
+    if cfg.native.adapters.rust.is_some() || !cfg.synchronized_manifests.is_empty() {
+        for (program, args) in [("rustc", vec!["-vV"]), ("cargo", vec!["-Vv"])] {
+            let mut request = ProcessRequest::new(program, root);
+            request.args = args.into_iter().map(Into::into).collect();
+            request.timeout = Duration::from_secs(30);
+            let output = runner
+                .run(&request)
+                .map_err(|e| format!("cannot inspect release toolchain: {e}"))?;
+            if output.code != 0 || output.timed_out {
+                return Err(format!("cannot inspect release toolchain: {program}"));
+            }
+            values.insert(
+                format!("tool:{program}"),
+                String::from_utf8(output.stdout).map_err(|e| e.to_string())?,
+            );
+        }
+    }
+    Ok(digest(
+        &serde_json::to_vec(&values).map_err(|e| e.to_string())?,
+    ))
+}
+
+fn lock(cfg: &Config, path: &str) -> bool {
+    Path::new(path).file_name().and_then(|p| p.to_str()) == Some("Cargo.lock")
+        || cfg
+            .native
+            .adapters
+            .python
+            .as_ref()
+            .is_some_and(|p| p.locks.iter().any(|l| l.path == path))
+}
+
+pub(super) fn capture(
+    root: &Path,
+    cfg: &Config,
+    runner: &dyn ProcessRunner,
+) -> Result<Capture, String> {
+    let inspection = InspectionRunner(runner);
+    crate::git_sync::verify_readonly_git(root, &inspection)?;
+    let reader = history_cache::Reader::new(root, &inspection);
+    let result = capture_with_reader(root, cfg, &reader)?;
+    reader.verify_unchanged()?;
+    Ok(result)
+}
+
+fn capture_with_reader(
+    root: &Path,
+    cfg: &Config,
+    runner: &history_cache::Reader<'_>,
+) -> Result<Capture, String> {
+    let (head, boundary) = history::validate_baseline(root, runner, None, false)?;
+    runner.prefetch(
+        &cfg.baseline.revision,
+        &cfg.baseline
+            .input_hashes
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>(),
+    )?;
+    let inventory = independent::inventory(root, runner)?;
+    let status = independent::status(root, runner)?;
+    let current = polyglot::snapshot(&cfg.native, inventory.clone(), false, &mut |p| {
+        config::read_current(root, p)
+    })?;
+    let baseline = super::baseline_snapshot(root, cfg, &boundary, runner)?;
+    super::lineage::validate(root, cfg, &baseline, &current, &head, &boundary, runner)?;
+    for (id, p) in &current.packages {
+        if cfg.baseline.retired_ids.contains(id) {
+            return Err(format!("{id}: retired identity cannot be reused"));
+        }
+        if let Some(old) = baseline.packages.get(id) {
+            if old.version != p.version {
+                return Err(format!("{id}: version changed outside managed release"));
+            }
+        } else if revision_payload(root, &boundary, &p.manifest, runner)?.is_some()
+            && !cfg.native.lifecycle.iter().any(|t| {
+                t.base == boundary
+                    && t.to.iter().any(|to| to.id == *id)
+                    && t.from
+                        .iter()
+                        .any(|from| baseline.packages.contains_key(&from.id))
+            })
+        {
+            return Err(format!(
+                "{id}: existing native package is missing from the verified release baseline"
+            ));
+        }
+    }
+    let mut paths = history::paths(&history::git(
+        root,
+        runner,
+        &["diff", "--name-only", "--no-renames", "-z", &boundary, "--"],
+    )?)
+    .into_iter()
+    .collect::<BTreeSet<_>>();
+    let raw = history::git(
+        root,
+        runner,
+        &["diff", "--raw", "--no-renames", "-z", &boundary, "--"],
+    )?;
+    let entries = raw
+        .split('\0')
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>();
+    if entries.len() % 2 != 0 {
+        return Err("malformed final Git mode comparison".into());
+    }
+    let mut modes = BTreeSet::new();
+    for pair in entries.chunks_exact(2) {
+        let fields = pair[0].split_whitespace().collect::<Vec<_>>();
+        if fields.len() < 2 {
+            return Err("malformed final Git mode entry".into());
+        }
+        if fields[0].trim_start_matches(':') != fields[1] {
+            modes.insert(pair[1].to_string());
+        }
+    }
+    paths.extend(history::paths(&history::git(
+        root,
+        runner,
+        &["ls-files", "--others", "--exclude-standard", "-z"],
+    )?));
+    runner.prefetch(&boundary, &paths.iter().cloned().collect::<Vec<_>>())?;
+    let mut inputs = current
+        .inputs
+        .iter()
+        .map(|(p, b)| (root.join(p), b.clone()))
+        .collect::<BTreeMap<_, _>>();
+    let product = fs::read_to_string(root.join("VERSION"))
+        .map_err(|e| e.to_string())?
+        .trim()
+        .parse::<SemVer>()?;
+    inputs.extend(
+        rust::product_mapping_inputs(
+            &cfg.synchronized_manifests,
+            &inventory,
+            &mut |p| config::read_current(root, p),
+            product,
+        )?
+        .into_iter()
+        .map(|(p, b)| (root.join(p), b)),
+    );
+    // A net-reverted path can remain dirty to HEAD. Bind it even though it has no release impact.
+    for path in history::paths(&history::git(
+        root,
+        runner,
+        &["diff", "--name-only", "--no-renames", "-z", "HEAD", "--"],
+    )?) {
+        inputs.insert(root.join(&path), config::read_current(root, &path)?);
+    }
+    let factory = root.join("templates/managed-skeleton.json").is_file();
+    let mut changes = Vec::new();
+    for path in paths {
+        if path == "VERSION" {
+            continue;
+        }
+        let old = revision_payload(root, &boundary, &path, runner)?;
+        let new = config::read_current(root, &path)?;
+        inputs.insert(root.join(&path), new.clone());
+        let mode_changed = modes.contains(&path);
+        if old == new && !mode_changed {
+            continue;
+        }
+        // A migration itself is bookkeeping; native/source changes remain visible.
+        if path == CONFIG && boundary == cfg.baseline.revision {
+            let value = crate::json::parse_unique_json(
+                new.as_deref().ok_or("release config removed")?,
+                "release config",
+            )?;
+            if configuration::configuration_hash(&value)? == cfg.baseline.initial_configuration_hash
+            {
+                continue;
+            }
+        }
+        if !factory
+            && classify(root, std::slice::from_ref(&path), runner)? == ReleaseKind::SkeletonOnly
+        {
+            continue;
+        }
+        let build_role = cfg.build_inputs.iter().any(|p| polyglot::owns(p, &path));
+        if build_role
+            && (matches!(
+                Path::new(&path).file_name().and_then(|p| p.to_str()),
+                Some("Cargo.toml" | "pyproject.toml" | "setup.cfg")
+            ) || matches!(
+                Path::new(&path).extension().and_then(|e| e.to_str()),
+                Some("rs" | "py" | "pyi" | "c" | "cc" | "cpp" | "h" | "hpp")
+            ))
+        {
+            return Err(format!(
+                "global build role cannot suppress package source/manifest change: {path}"
+            ));
+        }
+        let (role, owners) = if cfg.record_inputs.contains(&path) {
+            ("record", vec![])
+        } else if lock(cfg, &path) || build_role {
+            ("build", vec![])
+        } else if path == CONFIG
+            || path == "CHANGELOG.md"
+            || cfg.synchronized_manifests.contains(&path)
+        {
+            ("product", vec![])
+        } else {
+            let mut owners = BTreeSet::new();
+            if old.is_some() {
+                match polyglot::owner(&baseline, &path, &cfg.native) {
+                    Ok(ids) => owners.extend(ids),
+                    Err(e)
+                        if (cfg.strategy == "synchronized" || factory)
+                            && e.starts_with("unattributed release input:") => {}
+                    Err(e) => {
+                        // New configuration may supply a precise product declaration, never guess a package owner.
+                        if !cfg
+                            .native
+                            .product_inputs
+                            .iter()
+                            .any(|p| polyglot::owns(p, &path))
+                        {
+                            return Err(e);
+                        }
+                    }
+                }
+            }
+            if new.is_some() {
+                match polyglot::owner(&current, &path, &cfg.native) {
+                    Ok(ids) => owners.extend(ids),
+                    Err(e)
+                        if (cfg.strategy == "synchronized" || factory)
+                            && e.starts_with("unattributed release input:") => {}
+                    Err(e) => return Err(e),
+                }
+            }
+            (
+                if owners.is_empty() {
+                    "product"
+                } else {
+                    "package"
+                },
+                owners.into_iter().collect(),
+            )
+        };
+        changes.push(Change {
+            path,
+            role: role.into(),
+            packages: owners,
+            before: old.as_deref().map(digest),
+            after: new.as_deref().map(digest),
+            mode_changed,
+        });
+    }
+    for path in [CONFIG, "VERSION", "CHANGELOG.md"]
+        .into_iter()
+        .chain(cfg.synchronized_manifests.iter().map(String::as_str))
+    {
+        inputs
+            .entry(root.join(path))
+            .or_insert(config::read_current(root, path)?);
+    }
+    let hashes = inputs
+        .iter()
+        .map(|(p, b)| {
+            (
+                p.strip_prefix(root)
+                    .unwrap_or(p)
+                    .to_string_lossy()
+                    .replace('\\', "/"),
+                b.as_deref().map(digest),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    let environment_guard = cfg
+        .python_environment
+        .as_ref()
+        .map(|environment| environment.capture(root))
+        .transpose()?;
+    let environment = environment(root, cfg, environment_guard.as_ref(), runner)?;
+    let validation_fingerprint =
+        validation_fingerprint(root, cfg, &head, &inventory, &inputs, &environment, runner)?;
+    let fingerprint=digest(&serde_json::to_vec(&json!({"root":root.canonicalize().map_err(|e|e.to_string())?.to_string_lossy(),"head":head,"boundary":boundary,"history":planning_history_state(root,runner)?,"status":status,"inventory":inventory,"inputs":hashes,"changes":changes,"environment":environment,"validation_fingerprint":validation_fingerprint})).map_err(|e|e.to_string())?);
+    verify_release_inputs(&inputs)?;
+    if independent::status(root, runner)? != status
+        || independent::inventory(root, runner)? != inventory
+        || history::git(root, runner, &["rev-parse", "HEAD"])?.trim() != head
+    {
+        return Err("repository changed during schema 4 input capture".into());
+    }
+    Ok(Capture {
+        product_version: fs::read_to_string(root.join("VERSION"))
+            .map_err(|e| e.to_string())?
+            .trim()
+            .into(),
+        head,
+        boundary,
+        inventory,
+        status,
+        current,
+        baseline,
+        changes,
+        inputs,
+        fingerprint,
+        validation_fingerprint,
+        environment_guard,
+    })
+}
