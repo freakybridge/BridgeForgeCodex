@@ -60,4 +60,15 @@ $script:RemoteHead='invalid'
 Expect-Failure { Select-CanonicalSource -UserProfile $profileRoot } 'remote probe'
 Expect-Failure { Assert-Repository -Root $homeRoot -SkipFetch -ExpectedCommit ('b'*40) -InstalledHome $homeRoot } 'changed after the remote probe'
 Expect-Failure { Assert-Repository -Root $homeRoot -SkipFetch -ExpectedCommit $script:Head -InstalledHome (Join-Path $profileRoot 'other') } 'exact managed home'
-Write-Output 'Matching source reuse, changed source, offline, ownership, drift and exact-path gates passed.'
+$script:Offline=$true
+$script:Calls=@()
+$resumed=Select-ResumeSource -UserProfile $profileRoot -ExpectedCommit $script:Head
+if ($resumed.commit -ne $script:Head -or @($script:Calls | Where-Object {$_ -like 'ls-remote*' -or $_ -like 'fetch*' -or $_ -like 'clone*'}).Count) { throw 'Protocol resume queried upstream or changed the selected source' }
+Expect-Failure { Select-ResumeSource -UserProfile $profileRoot -ExpectedCommit ('b'*40) } 'changed after the remote probe'
+Expect-Failure { Select-ResumeSource -UserProfile $profileRoot -ExpectedCommit 'invalid' } 'receipt source commit'
+$script:Dirty=$true
+Expect-Failure { Select-ResumeSource -UserProfile $profileRoot -ExpectedCommit $script:Head } 'not clean'
+$script:Dirty=$false
+$script:Origin='https://github.com/unowned/repository.git'
+Expect-Failure { Select-ResumeSource -UserProfile $profileRoot -ExpectedCommit $script:Head } 'origin is not'
+Write-Output 'Matching source reuse, bounded protocol resume, offline, ownership, drift and exact-path gates passed.'

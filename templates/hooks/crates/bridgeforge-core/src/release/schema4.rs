@@ -12,6 +12,7 @@ mod plan;
 pub(super) use configuration::{load, parse, Baseline, Config};
 use inputs::{capture, Capture};
 pub use migration::{configuration_apply, configuration_plan, migration_apply, migration_plan};
+pub use migration::{repair_baseline_apply, repair_baseline_plan};
 pub use plan::{build, preview};
 pub(super) const CONFIG: &str = ".codex/bridgeforge-version.json";
 pub(super) fn digest(bytes: &[u8]) -> String {

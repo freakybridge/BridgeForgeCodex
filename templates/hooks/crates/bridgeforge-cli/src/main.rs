@@ -55,7 +55,7 @@ fn self_test() -> CommandOutcome {
         "version": env!("CARGO_PKG_VERSION"),
         "capabilities": ["git-sync-explicit-release-v1", "git-sync-prepared-release-v1", "git-sync-release-only-v1", "git-sync-release-readiness-v1", "git-sync-direct-release-v1", "git-sync-timing-v1", "git-sync-setup-v1", "git-sync-analysis-reuse-v1", "git-sync-package-lifecycle-v1", "user-cli-reuse-v1", "project-sync-build-reuse-v1", "git-sync-preflight-v1", "git-sync-phase-timing-v1", "public-artifacts-v1"]
     }));
-    if let Some(capabilities)=outcome.receipt.as_mut().and_then(|r|r["capabilities"].as_array_mut()){capabilities.push(json!("git-sync-schema4-v1"));}
+    if let Some(capabilities)=outcome.receipt.as_mut().and_then(|r|r["capabilities"].as_array_mut()){capabilities.push(json!("git-sync-schema4-v1"));capabilities.push(json!("git-sync-baseline-repair-v1"));}
     outcome
 }
 
@@ -464,6 +464,8 @@ fn git_sync(args: &[String]) -> CommandOutcome {
         "--development-status",
         "--migration-plan",
         "--migration-apply",
+        "--repair-baseline-plan",
+        "--repair-baseline-apply",
     ]
     .iter()
     .filter(|flag| has(args, flag))
@@ -472,6 +474,16 @@ fn git_sync(args: &[String]) -> CommandOutcome {
         return blocked("git-sync", "release modes are mutually exclusive");
     }
     let release_request=bridgeforge_core::release::schema4::Request{analysis_file:value(args,"--release-analysis-file").map(PathBuf::from)};
+    if has(args, "--repair-baseline-plan") || has(args, "--repair-baseline-apply") {
+        if value(args, "--strategy").is_some() || value(args, "--setup-config-file").is_some() {
+            return blocked("git-sync", "baseline repair cannot change configuration strategy or accept a proposal");
+        }
+        return if has(args, "--repair-baseline-plan") {
+            bridgeforge_core::release::schema4::repair_baseline_plan(context.root(), &SystemProcessRunner)
+        } else {
+            bridgeforge_core::release::schema4::repair_baseline_apply(context.root(), &SystemProcessRunner, &value(args, "--repair-baseline-fingerprint").unwrap_or_default(), has(args, "--confirmed-choice"))
+        };
+    }
     if has(args,"--migration-plan") {
         return bridgeforge_core::release::schema4::configuration_plan(context.root(),&SystemProcessRunner,value(args,"--setup-config-file").as_deref(),value(args,"--strategy").as_deref());
     }

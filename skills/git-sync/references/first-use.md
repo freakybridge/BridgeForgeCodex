@@ -9,15 +9,15 @@
 | synchronized | 根 VERSION 为统一产品版本，登记的跟随包同步该版本 |
 | independent | 根 VERSION 与各内部包独立版本，按实际最终差异分别判断 |
 
-两者都可使用 Rust/Python 或混合；不按文件扩展名把普通目录、第三方 SDK 或骨架 Rust 工具登记为业务包。项目配置明确包身份、原生声明和输入归属。默认只保留当前项目已选择的策略；缺决定或切换策略实质改变行为时才询问一次。
+两者都可使用 Rust/Python 或混合；不按文件扩展名把普通目录、第三方 SDK 或骨架 Rust 工具登记为业务包。项目配置明确包身份、原生声明和输入归属。复用已选策略；缺决定或切换策略时，将其与迁移/补正、所有已查明的不兼容对象及新增范围合并到根 Skill 的唯一确认，不单独先问策略。
 
 ## 受管迁移
 
 1. 确认 self-test 包含 git-sync-schema4-v1；缺能力先升级受管工具，不试跑未知参数。
 2. 已有 schema 4 且策略有效时直接继续发布输入分析。旧格式执行 --migration-plan；返回配置提案、最后正式发布基线和 fingerprint，不写文件。
-3. 核对策略、包身份、已发布版本、未发布变化、输入角色及项目自有 Hook 适配。迁移保留版本和历史，不以当前 HEAD 跳过未发布改动。Stratus 等项目的构建缓存属于项目业务，不能由迁移复制到公共工具。
-4. 复用适用用户决定，使用 --migration-apply --migration-fingerprint <值> --confirmed-choice 应用。它只原子保存配置，不修改版本/锁、不暂存、不提交推送。fingerprint 漂移则重算计划，不能手改 JSON 绕过。
-5. 完成后按 [发布分析合同](schema4.md) 检查最终差异、提供逐对象级别与证据，再预览及发布。
+3. 写配置前，依据 plan、配置提案与真实 diff 核对策略、身份、已发布版本、未发布变化、输入角色、Hook 适配及后续必须的兼容性决定，汇总缺失决定后才使用唯一确认。CLI 尚不能直接对未落盘迁移配置执行完整 release 预览；无法提前查明必要风险时停止，不先应用配置再逐轮询问，也不承诺任意项目一次确认必定完成。迁移不跳过未发布改动，不把项目构建缓存复制到公共工具。
+4. 复用已明确的全部适用决定，使用 --migration-apply --migration-fingerprint <值> --confirmed-choice 应用；flag 不代表新增一次用户询问。它只原子保存配置，不修改版本/锁、不暂存、不提交推送。fingerprint 漂移则重算计划并复核授权范围，不能手改 JSON；发现实质新风险且确认已用掉时停止，不再问第二次。
+5. 按 [发布分析合同](schema4.md) 检查最终差异、提供逐对象分析与证据；在根 Skill 已确定的同一实际执行环境完成预览与发布，不再确认提交或推送。
 
 --strategy 可明确 synchronized/independent。需要登记包或改变归属时，准备项目忽略目录内的 schema 4 提案，通过 --setup-config-file 提交给 plan/apply；baseline 由工具从历史产生，不能由 Agent 伪造。--setup-plan/--setup-apply 也是 schema 4 配置入口，使用 --setup-fingerprint；不再新建旧 schema。
 
@@ -25,7 +25,13 @@
 
 ## 迁移及接入边界
 
+已有 schema 4 在首次正式发布前出现历史 Cargo 外置源码归属缺口时，先确认 self-test 包含 `git-sync-baseline-repair-v1`，运行 `git-sync --repair-baseline-plan`。它从固定 Git 历史重建归属，返回完整配置和指纹；核对只增加显式外置 lib/bin/test/bench/example/build 入口及其静态 mod/path/include 可达文件和内容 hash，不改变包身份、版本、历史边界、已有 hash 键值、既有归属或输入角色。计划通过后复用本次修复授权，以 `--repair-baseline-apply --repair-baseline-fingerprint <值> --confirmed-choice` 原子补正，再继续 release 输入分析。不手改 baseline，不用 product_inputs 掩盖包源码；归属不明仍停止。已正式发布的迁移基线禁止改写。动态宏路径不猜测、不执行；未被静态图证明的源码仍需真实 shared_inputs 证据，不能把入口的父目录整体归包。
+
+基线补正缺少适用授权时，只能与其他缺失决定合并为根 Skill 的唯一确认。已经用掉确认机会且出现新的授权缺口时停止，不能再为补正询问；既有维护授权也不能推定为接受任意基线改写或不兼容发布。
+
 - schema 1–3 仅作为一次性迁移输入和历史证据，不执行旧发布算法。普通同步继续保持不升版。
+- 历史 Cargo manifest 中已缺失的显式外置入口只保留精确路径声明，不读取、不递归、不生成 hash；文件出现后才绑定可达内容。精确路径不拥有同名目录后代，归属快照不代表 Cargo 构建有效。
+- 静态图仅展开字面量引用；缺失的静态模块/include 不造归属或 hash，inventory 有记录但读取失败仍阻断。非字面量 include 和其他宏保持不透明，不读取本机环境变量或运行构建脚本；不能据此宣称动态消费者完整，动态共享源码须有真实 shared_inputs。
 - 包稳定 id 与路径、原生包名分别表达；移动、改名、删除、拆分、合并保留显式生命周期与退役约束。
 - 锁文件按真实已登记作用域验证，不因不触发包升版而删锁或放宽当前锁校验；历史豁免只沿用可核对的旧合同。
 - 动态 setup.py、SCM 后端、未知 lock 或不明归属明确阻断，不执行任意代码猜测元数据。

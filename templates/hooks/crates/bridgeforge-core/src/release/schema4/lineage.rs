@@ -74,7 +74,10 @@ pub(super) fn validate(
         if serde_json::to_value(&committed.baseline).map_err(|e| e.to_string())?
             != serde_json::to_value(&cfg.baseline).map_err(|e| e.to_string())?
         {
-            return Err("committed schema 4 migration baseline cannot be changed".into());
+            if boundary != cfg.baseline.revision {
+                return Err("committed schema 4 migration baseline cannot be changed".into());
+            }
+            migration::verify_correction(root, &committed, cfg, runner)?;
         }
         steps.push(polyglot::historical(root, commit, &cfg.native, runner)?.packages);
     }

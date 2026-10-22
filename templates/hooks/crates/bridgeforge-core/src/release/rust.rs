@@ -11,6 +11,8 @@ use toml_edit::{DocumentMut, Item, value};
 
 #[path = "rust_discovery.rs"]
 mod discovery;
+#[path = "rust_sources.rs"]
+mod sources;
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -318,23 +320,35 @@ pub(super) fn snapshot(
 ) -> Result<LanguageSnapshot, String> {
     let workspace = load(config, inventory, read)?;
     workspace.validate_lock_edges()?;
-    from_workspace(workspace)
+    from_workspace(workspace, read)
 }
 
 /// Convert an already validated workspace without strengthening its historical
 /// lock contract. In particular, schema 1 histories use the limited lock scope
 /// established by `load_legacy_history`, rather than today's ownership rules.
-pub(super) fn from_workspace(workspace: Workspace) -> Result<LanguageSnapshot, String> {
+pub(super) fn from_workspace(mut workspace: Workspace, read: &mut impl FnMut(&str) -> Result<Option<Vec<u8>>, String>) -> Result<LanguageSnapshot, String> {
+    let mut source_roots = BTreeMap::new();
+    for manifest in workspace.packages.keys() {
+        let mut roots = cargo_source_roots(
+            manifest, &workspace.documents[manifest], &workspace.inventory,
+        )?;
+        let entries = roots.iter().skip(1).cloned().collect::<Vec<_>>();
+        if !entries.is_empty() {
+            roots.extend(sources::reachable(&entries, &workspace.inventory, &mut workspace.inputs, read)?);
+            let directory_root = roots.remove(0);
+            roots = std::iter::once(directory_root).chain(roots.into_iter().collect::<BTreeSet<_>>()).collect();
+        }
+        source_roots.insert(manifest.clone(), roots);
+    }
     Ok(LanguageSnapshot {
         packages: workspace.packages.iter().map(|(manifest, package)| {
-            let dir = directory(manifest);
             (manifest.clone(), NativePackage {
                 manifest: manifest.clone(),
                 name: package.name.clone(),
                 version: package.version.to_string(),
                 language: Language::Rust,
                 workspace: package.workspace.clone(),
-                source_roots: vec![if dir.is_empty() { String::new() } else { format!("{dir}/") }],
+                source_roots: source_roots[manifest].clone(),
             })
         }).collect(),
         dependencies: workspace.dependencies.iter().map(|dependency| NativeDependency {
@@ -349,6 +363,62 @@ pub(super) fn from_workspace(workspace: Workspace) -> Result<LanguageSnapshot, S
         inputs: workspace.inputs,
         roots: workspace.roots.into_keys().collect(),
     })
+}
+
+/// Cargo permits explicit targets outside the package directory. Retain exact
+/// paths, not their parent directories: a sibling is not ownership evidence.
+/// This operates on the same parsed manifests/inventory for disk and Git history.
+fn cargo_source_roots(
+    manifest: &str,
+    doc: &DocumentMut,
+    _inventory: &BTreeSet<String>,
+) -> Result<Vec<String>, String> {
+    let dir = directory(manifest);
+    let root = if dir.is_empty() { String::new() } else { format!("{dir}/") };
+    let mut external = BTreeSet::new();
+    let mut add = |raw: &str| -> Result<(), String> {
+        let path = normalize(dir, raw)?;
+        // Package-local sources already belong to the directory root. Native
+        // version/lock snapshots may intentionally contain metadata only.
+        if path.starts_with(&root) {
+            return Ok(());
+        }
+        // A historical manifest can retain a removed target. Its declaration
+        // still proves exact ownership, but supplies no bytes to hash or scan.
+        external.insert(path);
+        Ok(())
+    };
+    if let Some(path) = doc.get("lib").and_then(|t| t.get("path")) {
+        add(path.as_str().ok_or("lib.path must be a string")?)?;
+    }
+    for kind in ["bin", "test", "bench", "example"] {
+        if let Some(targets) = doc.get(kind) {
+            if let Some(tables) = targets.as_array_of_tables() {
+                for target in tables {
+                    if let Some(path) = target.get("path") {
+                        add(path.as_str().ok_or("Cargo target path must be a string")?)?;
+                    }
+                }
+            } else if let Some(tables) = targets.as_array() {
+                for target in tables {
+                    let table = target.as_inline_table().ok_or("Cargo target must be a table")?;
+                    if let Some(path) = table.get("path") {
+                        add(path.as_str().ok_or("Cargo target path must be a string")?)?;
+                    }
+                }
+            } else {
+                return Err("Cargo targets must be tables".into());
+            }
+        }
+    }
+    if let Some(build) = doc.get("package").and_then(|p| p.get("build")) {
+        if let Some(path) = build.as_str() {
+            add(path)?;
+        } else if build.as_bool().is_none() {
+            return Err("package.build must be a string or boolean".into());
+        }
+    }
+    Ok(std::iter::once(root).chain(external).collect())
 }
 
 /// Render exact final versions chosen by the common release planner. No package

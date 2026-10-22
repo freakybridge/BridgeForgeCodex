@@ -8,6 +8,10 @@ delivery_layout: flat
 
 ## 从这里开始
 
+当前开发：[git-sync 执行环境一致性与单次确认](1_delivery/git-sync-release-rewrite/requirements_2026-10-22_git-sync-context-and-confirmation.md)（源码修复、当前版本受管构建、定向回归和独立审计完成；用户切换前保存已中断全测，五项基础检查通过，完整 workspace、factory fixture 和隔离准备待恢复，awaiting_validation；TODO-018、TODO-019 未结算，本次仅普通 Git 保存，不升版）。
+
+最近验收：[单次升级与历史 Cargo 归属补正](1_delivery/git-sync-release-rewrite/requirements_2026-10-22_upgrade-and-ownership.md#用户验收与发布授权2026-10-22)（2026-10-22 用户验收，TODO-016、TODO-017 已完成；workspace 456、fixture 96 项、七项工程检查与独立审计通过；发布预览因 analysis stale 中断，后续 TODO-018；未提交推送，用户级安装与真实下游升级未执行）。
+
 下游维护优化：[R04、R02、R01 耗时与构建复用](1_delivery/project-sync-performance/requirements_2026-10-20_build-reuse.md#用户验收与发布授权2026-10-20)（2026-10-20 工程验收，TODO-013 已完成；真实下游提速未验证；R05/R03 暂缓；本次受管 release 已获授权，实际发布以最终收据为准）。
 
 同步流程优化：[检查恢复与发布分析复用](1_delivery/git-sync-performance/requirements_2026-10-19_workflow-reuse.md)（2026-10-19 用户验收；428 通过、14 跳过；真实重复准备七项全复用约 13.7 秒；TODO-009 的端到端对照仍待验证；本次受管 release 已获授权，实际版本与同步状态以最终收据为准）。

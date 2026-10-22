@@ -25,6 +25,32 @@ pub(super) struct Capture {
     pub environment_guard: Option<EnvironmentGuard>,
 }
 
+// --name-only can report stat-only candidates when inspection disables index
+// refresh. --numstat reads the diff content and omits those false positives,
+// while retaining binary, empty-file and mode-only changes. -z/--no-renames
+// make the third tab-delimited field an unambiguous, possibly tabbed path.
+fn content_changed_paths(
+    root: &Path,
+    revision: &str,
+    runner: &dyn ProcessRunner,
+) -> Result<BTreeSet<String>, String> {
+    let raw = history::git(
+        root,
+        runner,
+        &["diff", "--numstat", "--no-renames", "-z", revision, "--"],
+    )?;
+    raw.split('\0')
+        .filter(|entry| !entry.is_empty())
+        .map(|entry| {
+            let fields = entry.splitn(3, '\t').collect::<Vec<_>>();
+            if fields.len() != 3 || fields[2].is_empty() {
+                return Err("malformed content diff path".into());
+            }
+            Ok(fields[2].to_string())
+        })
+        .collect()
+}
+
 // Content identity is independent of HEAD, staging and automatic records. Existing
 // Git blob ids avoid reading unchanged large assets; dirty bytes use the same Git
 // canonicalization, after external filters have been rejected by capture().
@@ -236,13 +262,7 @@ fn capture_with_reader(
             ));
         }
     }
-    let mut paths = history::paths(&history::git(
-        root,
-        runner,
-        &["diff", "--name-only", "--no-renames", "-z", &boundary, "--"],
-    )?)
-    .into_iter()
-    .collect::<BTreeSet<_>>();
+    let mut paths = content_changed_paths(root, &boundary, runner)?;
     let raw = history::git(
         root,
         runner,
@@ -291,11 +311,7 @@ fn capture_with_reader(
         .map(|(p, b)| (root.join(p), b)),
     );
     // A net-reverted path can remain dirty to HEAD. Bind it even though it has no release impact.
-    for path in history::paths(&history::git(
-        root,
-        runner,
-        &["diff", "--name-only", "--no-renames", "-z", "HEAD", "--"],
-    )?) {
+    for path in content_changed_paths(root, "HEAD", runner)? {
         inputs.insert(root.join(&path), config::read_current(root, &path)?);
     }
     let factory = root.join("templates/managed-skeleton.json").is_file();

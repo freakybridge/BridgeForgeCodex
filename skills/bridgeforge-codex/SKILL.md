@@ -26,7 +26,9 @@ $BRIDGEFORGE_CODEX_HOME = Join-Path $env:USERPROFILE ".bridgeforge-codex"
   (Join-Path $BRIDGEFORGE_CODEX_ENTRY "scripts\bridgeforge_codex_shared_update.ps1")
 ```
 
-成功收据必须包含 `BRIDGEFORGE_CODEX_SHARED_UPDATE_RECEIPT`。随后重新读取 `$BRIDGEFORGE_CODEX_HOME\skills\bridgeforge-codex\SKILL.md` 并以新版本继续。仅在旧入口成功收据完全缺少 `user_agents` 字段时，说明新增覆盖范围并从刚更新的薄入口补跑一次 updater；这是一次性版本过渡，其他情况本轮禁止再次刷新。过渡前的授权若明确限于 Skills 或项目文件，必须先确认用户级覆盖；无范围限制的维护授权直接复用。第二次仍缺字段、字段为空或状态不是 `updated/noop` 时停止，不循环重试或声称用户指令已更新。
+成功收据必须包含 `BRIDGEFORGE_CODEX_SHARED_UPDATE_RECEIPT`。随后重新读取 `$BRIDGEFORGE_CODEX_HOME\skills\bridgeforge-codex\SKILL.md` 并以新版本继续。旧入口成功收据完全缺少 `user_agents` 或 `public_artifacts` 字段时，在本次 Skill 调用内从刚更新的薄入口自动补跑一次 updater，传入 `-ResumeSourceCommit <首份收据的 source_commit>`，只完成同一已验证版本的过渡，不再次查询或追随上游。两个字段同时缺失也只补跑一次；禁止要求用户再次调用 Skill。字段存在但为空、状态失败或来源无法验证不属于旧协议过渡，必须停止。补跑仍缺字段或状态无效时停止，不循环重试。
+
+复用已有维护授权；无范围限制的显式调用覆盖上述用户级维护。已有授权明确排除用户级覆盖时，在任何新增范围写入前，将范围选择与项目风险、迁移决策合并为一次确认；不能安全完成只读规划时说明阻塞，禁止分拆为多轮授权。整次调用最多一次用户确认，内部版本过渡和权限重试不要求重新调用 Skill。
 
 结果简要展示 `user_agents.status`；覆盖时给出收据中的备份路径。`override_present=true` 时说明原有 `AGENTS.override.md` 可能优先生效，禁止删除它。用户指令由新会话加载，不声称当前会话已经重载。
 
@@ -47,7 +49,7 @@ $BRIDGEFORGE_CODEX_HOME = Join-Path $env:USERPROFILE ".bridgeforge-codex"
 $BRIDGEFORGE = Join-Path $env:USERPROFILE ".codex\bin\bridgeforge.exe"
 ```
 
-从 updater 成功收据读取 `public_artifacts.receipt` 并保存为 `$PUBLIC_ARTIFACTS`；其状态必须为 `prepared`。工具与公共产物验证归用户级事务，普通维护不再重复运行 doctor。缺少有效收据时停止，不切换到项目脚本、Python fallback 或其他 clone。主动诊断或异常定位才读取 [Rust runtime preflight](references/runtime-preflight.md)。
+从最终 updater 成功收据读取 `public_artifacts.receipt` 并保存为 `$PUBLIC_ARTIFACTS`；其状态必须为 `prepared`。工具与公共产物验证归用户级事务，普通维护不再重复运行 doctor。缺少有效收据时先按 §1 判定是否符合一次性旧协议过渡；不符合或过渡失败才停止，不切换到项目脚本、Python fallback 或其他 clone。主动诊断或异常定位才读取 [Rust runtime preflight](references/runtime-preflight.md)。
 
 ## 3. 用户级与项目级 Hook 边界
 
@@ -75,7 +77,7 @@ $BRIDGEFORGE = Join-Path $env:USERPROFILE ".codex\bin\bridgeforge.exe"
 
 plan 必须零写入。同步器 `machine` 区负责 fingerprint、safe、risk、gap、blocker 与一次性 `PreservationManifest`；`human` 区负责稳定的用户结果。blocker 必须立即停止；无 risk 的 current baseline 更新零确认。存在 risk 时，主对话只能把所有用户决策合并为本轮一次确认，确认前禁止执行 safe 或 risk 动作。
 
-两条升级路径只要 `asset_migration.source_count > 0`，都必须读取 [legacy Rule / Memory 逐文件迁移](references/project-asset-migration.md)，在同一连续流程中逐源文件确认完整迁移包；全部确认前禁止写入或删除，再以 stdin 重新规划。迁移确认本身就是对应旧源删除授权；禁止另问清理确认。
+两条升级路径只要 `asset_migration.source_count > 0`，都必须读取 [legacy Rule / Memory 逐文件迁移](references/project-asset-migration.md)，逐源展示完整迁移包，并将所有源的选择与 risk 合并为同一次确认；全部确认前禁止写入或删除，再以 stdin 重新规划。统一确认必须明确覆盖每个源及对应删除，不把未选择项推定为同意；用户要求修改或停止时保留未完成状态，不继续追问第二次确认。迁移确认本身就是对应旧源删除授权；禁止另问清理确认。
 
 ## 5. Apply 与用户结果
 

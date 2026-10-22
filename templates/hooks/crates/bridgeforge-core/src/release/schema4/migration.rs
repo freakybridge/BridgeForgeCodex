@@ -37,6 +37,19 @@ pub(super) fn verify_baseline(
         }
         return Ok(());
     }
+    let expected = reconstruct_baseline(root, cfg, runner)?;
+    if serde_json::to_value(&expected).map_err(|e| e.to_string())?
+        != serde_json::to_value(&cfg.baseline).map_err(|e| e.to_string())?
+    {
+        return Err("migration baseline facts disagree with immutable native history; use --repair-baseline-plan to inspect a source ownership correction".into());
+    }
+    Ok(())
+}
+
+fn reconstruct_baseline(root: &Path, cfg: &Config, runner: &dyn ProcessRunner) -> Result<Baseline, String> {
+    if configuration::configuration_hash(&cfg.baseline.initial_configuration)? != cfg.baseline.initial_configuration_hash {
+        return Err("migration initial configuration proof changed".into());
+    }
     let mut seed = cfg.baseline.initial_configuration.clone();
     seed["baseline"] = serde_json::to_value(&cfg.baseline).map_err(|e| e.to_string())?;
     let seed = parse(&serde_json::to_vec(&seed).map_err(|e| e.to_string())?)?
@@ -83,10 +96,63 @@ pub(super) fn verify_baseline(
             packages: polyglot::historical(root, revision, &seed.native, runner)?.packages,
         });
     }
-    let expected = json!({"packages":baseline.packages,"dependencies":baseline.dependencies,"retired_ids":retired,"input_hashes":hashes,"product_inputs":scope.product_inputs,"shared_inputs":scope.shared_inputs,"lifecycle":scope.lifecycle,"lineage":lineage});
-    let actual = json!({"packages":cfg.baseline.packages,"dependencies":cfg.baseline.dependencies,"retired_ids":cfg.baseline.retired_ids,"input_hashes":cfg.baseline.input_hashes,"product_inputs":cfg.baseline.product_inputs,"shared_inputs":cfg.baseline.shared_inputs,"lifecycle":cfg.baseline.lifecycle,"lineage":cfg.baseline.lineage});
-    if actual != expected {
-        return Err("migration baseline facts disagree with immutable native history".into());
+    let mut result = cfg.baseline.clone();
+    result.packages = baseline.packages.clone();
+    result.dependencies = baseline.dependencies.clone();
+    result.retired_ids = retired;
+    result.input_hashes = hashes;
+    result.product_inputs = scope.product_inputs.clone();
+    result.shared_inputs = scope.shared_inputs.clone();
+    result.lifecycle = scope.lifecycle.clone();
+    result.lineage = lineage;
+    Ok(result)
+}
+
+/// A correction can only add native, historical target paths. Everything else
+/// (including identity, versions, scope, hashes and history boundaries) is frozen.
+fn ownership_enrichment(old: &Baseline, new: &Baseline) -> Result<(), String> {
+    fn packages(old: &BTreeMap<String, NativePackage>, new: &mut BTreeMap<String, NativePackage>) -> Result<(), String> {
+        for (id, prior) in old {
+            let next = new.get_mut(id).ok_or("baseline repair cannot remove a package")?;
+            if prior.source_roots == next.source_roots { continue; }
+            if prior.language != Language::Rust { return Err("baseline repair only supports Cargo source ownership".into()); }
+            let root = prior.manifest.rsplit_once('/').map(|(d, _)| format!("{d}/")).unwrap_or_default();
+            if prior.source_roots.first() != Some(&root)
+                || prior.source_roots.iter().collect::<BTreeSet<_>>().len() != prior.source_roots.len()
+                || prior.source_roots.iter().any(|p| !next.source_roots.contains(p)) {
+                return Err("baseline repair cannot remove or invent prior source ownership".into());
+            }
+            next.source_roots = prior.source_roots.clone();
+        }
+        Ok(())
+    }
+    let mut normalized = new.clone();
+    for (path, hash) in &new.input_hashes {
+        if !old.input_hashes.contains_key(path) {
+            if hash.is_none() || !new.packages.values().any(|p| p.language == Language::Rust && p.source_roots.contains(path)) {
+                return Err("baseline repair can only add proven Rust source graph hashes".into());
+            }
+            normalized.input_hashes.remove(path);
+        }
+    }
+    packages(&old.packages, &mut normalized.packages)?;
+    if old.lineage.len() != normalized.lineage.len() {
+        return Err("baseline repair cannot change lineage".into());
+    }
+    for (prior, next) in old.lineage.iter().zip(&mut normalized.lineage) {
+        packages(&prior.packages, &mut next.packages)?;
+    }
+    if serde_json::to_value(old).map_err(|e| e.to_string())? != serde_json::to_value(normalized).map_err(|e| e.to_string())? {
+        return Err("baseline repair is limited to proven additive Cargo source ownership".into());
+    }
+    Ok(())
+}
+
+pub(super) fn verify_correction(root: &Path, old: &Config, new: &Config, runner: &dyn ProcessRunner) -> Result<(), String> {
+    ownership_enrichment(&old.baseline, &new.baseline)?;
+    let proven = reconstruct_baseline(root, old, runner)?;
+    if serde_json::to_value(proven).map_err(|e| e.to_string())? != serde_json::to_value(&new.baseline).map_err(|e| e.to_string())? {
+        return Err("baseline correction disagrees with immutable history".into());
     }
     Ok(())
 }
@@ -96,6 +162,7 @@ fn prepare(
     runner: &dyn ProcessRunner,
     proposal: Option<&str>,
     strategy: Option<&str>,
+    repair: bool,
 ) -> Result<Prepared, String> {
     let inspection = InspectionRunner(runner);
     crate::git_sync::verify_readonly_git(root, &inspection)?;
@@ -108,7 +175,7 @@ fn prepare(
     let source_schema = old_value["schema_version"]
         .as_u64()
         .ok_or("migration source schema is missing")? as u32;
-    if source_schema == 4 && proposal.is_none() && strategy.is_none() {
+    if source_schema == 4 && proposal.is_none() && strategy.is_none() && !repair {
         return Err("project already uses schema 4; use an explicit configuration proposal for reconfiguration".into());
     }
     if !(1..=4).contains(&source_schema) {
@@ -124,6 +191,15 @@ fn prepare(
         return Err("migration cannot discard pending legacy targets; review them and supply per-release targets explicitly".into());
     }
     let (head, boundary) = history::validate_baseline(root, &reader, None, false)?;
+    let corrected = if repair {
+        let cfg = parse(old.as_deref().ok_or("baseline repair requires schema 4")?)?.ok_or("baseline repair requires schema 4")?;
+        if boundary != cfg.baseline.revision {
+            return Err("published migration baseline cannot be repaired".into());
+        }
+        let corrected = reconstruct_baseline(root, &cfg, &reader)?;
+        ownership_enrichment(&cfg.baseline, &corrected)?;
+        Some(serde_json::to_value(corrected).map_err(|e| e.to_string())?)
+    } else { None };
     let mut value = if source_schema >= 3 {
         old_value.clone()
     } else {
@@ -310,7 +386,7 @@ fn prepare(
     })
     .map_err(|e| e.to_string())?;
     if source_schema == 4 {
-        value["baseline"] = old_value["baseline"].clone();
+        value["baseline"] = corrected.unwrap_or_else(|| old_value["baseline"].clone());
     }
     let cfg = parse(&serde_json::to_vec(&value).map_err(|e| e.to_string())?)?
         .ok_or("migration did not produce schema 4")?;
@@ -383,9 +459,17 @@ pub fn configuration_plan(
     proposal: Option<&str>,
     strategy: Option<&str>,
 ) -> CommandOutcome {
-    match prepare(root, runner, proposal, strategy) {
+    plan_mode(root, runner, proposal, strategy, false)
+}
+
+pub fn repair_baseline_plan(root: &Path, runner: &dyn ProcessRunner) -> CommandOutcome {
+    plan_mode(root, runner, None, None, true)
+}
+
+fn plan_mode(root: &Path, runner: &dyn ProcessRunner, proposal: Option<&str>, strategy: Option<&str>, repair: bool) -> CommandOutcome {
+    match prepare(root, runner, proposal, strategy, repair) {
         Ok(p) => CommandOutcome::with_receipt(
-            json!({"schema":1,"status":"migration-planned","fingerprint":p.fingerprint,"configuration":p.value,"writes":[CONFIG],"version_changes":false}),
+            json!({"schema":1,"status":if repair {"baseline-repair-planned"} else {"migration-planned"},"fingerprint":p.fingerprint,"configuration":p.value,"writes":[CONFIG],"version_changes":false,"ownership_analysis":{"mode":"static","dynamic_macros_expanded":false,"dynamic_shared_sources":"explicit shared_inputs required"}}),
         ),
         Err(e) => CommandOutcome::blocked(format!("[schema4-migration] {e}\n")),
     }
@@ -409,12 +493,20 @@ pub fn configuration_apply(
     expected: &str,
     confirmed: bool,
 ) -> CommandOutcome {
+    apply_mode(root, runner, proposal, strategy, expected, confirmed, false)
+}
+
+pub fn repair_baseline_apply(root: &Path, runner: &dyn ProcessRunner, expected: &str, confirmed: bool) -> CommandOutcome {
+    apply_mode(root, runner, None, None, expected, confirmed, true)
+}
+
+fn apply_mode(root: &Path, runner: &dyn ProcessRunner, proposal: Option<&str>, strategy: Option<&str>, expected: &str, confirmed: bool, repair: bool) -> CommandOutcome {
     let result = (|| {
         if !confirmed {
             return Err("migration requires a confirmed strategy choice".into());
         }
         let _lock = crate::project_sync::ProjectLock::acquire(root)?;
-        let p = prepare(root, runner, proposal, strategy)?;
+        let p = prepare(root, runner, proposal, strategy, repair)?;
         if p.fingerprint != expected {
             return Err("migration inputs changed; plan again before applying".into());
         }
@@ -429,7 +521,7 @@ pub fn configuration_apply(
         crate::persistence::atomic_write_json(&root.join(CONFIG), &p.value)
             .map_err(|e| e.to_string())?;
         Ok::<_, String>(
-            json!({"schema":1,"status":"migrated","configuration":CONFIG,"strategy":p.value["strategy"],"sync_performed":false,"version_changes":false}),
+            json!({"schema":1,"status":if repair {"baseline-repaired"} else {"migrated"},"configuration":CONFIG,"strategy":p.value["strategy"],"sync_performed":false,"version_changes":false}),
         )
     })();
     match result {

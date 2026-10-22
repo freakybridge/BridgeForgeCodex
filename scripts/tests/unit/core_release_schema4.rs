@@ -115,6 +115,246 @@ fn change(root: &Path, rust: bool) {
         },
     );
 }
+
+fn external_cargo_fixture() -> Repo {
+    let r = fixture("legacy", true);
+    write(&r.0, "pkg/Cargo.toml", b"[package]\nname='a'\nversion='1.0.0'\nedition='2021'\nbuild='../external/build.rs'\n[workspace]\n[lib]\npath='../external/lib.rs'\n[[bin]]\nname='inventory'\npath='../external/all_inventory.rs'\n[[test]]\nname='check'\npath='../external/check.rs'\n[[bench]]\nname='bench'\npath='../external/bench.rs'\n[[example]]\nname='example'\npath='../external/example.rs'\n");
+    for name in ["lib", "build", "all_inventory", "check", "bench", "example"] {
+        write(&r.0, &format!("external/{name}.rs"), b"fn main() {}\n");
+    }
+    git(&r.0, &["add", "."]);
+    git(&r.0, &["commit", "--amend", "--no-edit"]);
+    let p = migration_plan(&r.0, &SystemProcessRunner, None);
+    assert_eq!(p.code, 0, "{}", p.stderr);
+    let v = p.receipt.unwrap();
+    let a = migration_apply(&r.0, &SystemProcessRunner, None, v["fingerprint"].as_str().unwrap(), true);
+    assert_eq!(a.code, 0, "{}", a.stderr);
+    r
+}
+
+fn legacy_source_roots(root: &Path) -> Value {
+    let mut v: Value = serde_json::from_slice(&fs::read(root.join(CONFIG)).unwrap()).unwrap();
+    v["baseline"]["packages"]["a"]["source_roots"] = json!(["pkg/"]);
+    v["baseline"]["input_hashes"].as_object_mut().unwrap().retain(|path, _| !path.starts_with("external/"));
+    write(root, CONFIG, &serde_json::to_vec(&v).unwrap());
+    v
+}
+
+#[test]
+fn schema4_external_cargo_targets_survive_moves_without_claiming_siblings() {
+    let r = external_cargo_fixture();
+    let cfg = load(&r.0).unwrap().unwrap();
+    assert_eq!(cfg.baseline.packages["a"].source_roots.len(), 7);
+    fs::rename(r.0.join("external/all_inventory.rs"), r.0.join("pkg/src/inventory.rs")).unwrap();
+    let manifest = fs::read_to_string(r.0.join("pkg/Cargo.toml")).unwrap().replace("../external/all_inventory.rs", "src/inventory.rs");
+    write(&r.0, "pkg/Cargo.toml", manifest.as_bytes());
+    let c = capture(&r.0, &cfg, &SystemProcessRunner).unwrap();
+    let old = c.changes.iter().find(|c| c.path == "external/all_inventory.rs").unwrap();
+    assert_eq!(old.packages, vec!["a"]);
+    write(&r.0, "external/unrelated.rs", b"fn unrelated() {}\n");
+    let e = capture(&r.0, &cfg, &SystemProcessRunner).err().unwrap();
+    assert!(e.contains("unattributed release input: external/unrelated.rs"), "{e}");
+}
+
+#[test]
+fn schema4_opaque_include_does_not_claim_unknown_changed_file() {
+    let r = external_cargo_fixture();
+    let cfg = load(&r.0).unwrap().unwrap();
+    write(&r.0, "external/lib.rs", b"include!(env!(\"SOURCE_FILE\"));\n");
+    write(&r.0, "unknown/generated.rs", b"pub fn generated(){}\n");
+    let error = capture(&r.0, &cfg, &SystemProcessRunner).err().unwrap();
+    assert!(error.contains("unattributed release input: unknown/generated.rs"), "{error}");
+}
+
+#[test]
+fn schema4_missing_external_target_keeps_only_declared_ownership_without_hash() {
+    let r = external_cargo_fixture();
+    let cfg = load(&r.0).unwrap().unwrap();
+    let manifest = format!("{}\n[[test]]\nname='removed'\npath='../external/missing.rs'\n", fs::read_to_string(r.0.join("pkg/Cargo.toml")).unwrap());
+    write(&r.0, "pkg/Cargo.toml", manifest.as_bytes());
+    let c = capture(&r.0, &cfg, &SystemProcessRunner).unwrap();
+    assert!(c.current.packages["a"].source_roots.contains(&"external/missing.rs".into()));
+    assert!(!c.current.inputs.contains_key("external/missing.rs"));
+    assert_eq!(polyglot::owner(&c.current, "external/missing.rs", &cfg.native).unwrap(), vec!["a"]);
+    assert!(polyglot::owner(&c.current, "external/missing.rs/unrelated.txt", &cfg.native).unwrap_err().contains("unattributed"));
+    write(&r.0, "external/missing.rs", b"mod restored;\n");
+    write(&r.0, "external/restored.rs", b"pub fn restored() {}\n");
+    let c = capture(&r.0, &cfg, &SystemProcessRunner).unwrap();
+    assert!(c.current.packages["a"].source_roots.contains(&"external/restored.rs".into()));
+    assert_eq!(c.current.inputs["external/missing.rs"], Some(b"mod restored;\n".to_vec()));
+    assert!(c.current.inputs["external/restored.rs"].is_some());
+}
+
+#[test]
+fn schema4_baseline_repair_is_proven_atomic_and_accepts_committed_migration() {
+    let r = external_cargo_fixture();
+    let old = legacy_source_roots(&r.0);
+    git(&r.0, &["add", "."]);
+    git(&r.0, &["commit", "-m", "chore: old migration"]);
+    let head = git(&r.0, &["rev-parse", "HEAD"]);
+    let index = fs::read(r.0.join(".git/index")).unwrap();
+    let config = fs::read(r.0.join(CONFIG)).unwrap();
+    let lock = fs::read(r.0.join("pkg/Cargo.lock")).unwrap();
+    let blocked = preview(&r.0, "fix: release", &Request::default(), &SystemProcessRunner);
+    assert!(blocked.stderr.contains("--repair-baseline-plan"), "{}", blocked.stderr);
+    let p = repair_baseline_plan(&r.0, &SystemProcessRunner);
+    assert_eq!(p.code, 0, "{}", p.stderr);
+    let v = p.receipt.unwrap();
+    assert_eq!(v["status"], "baseline-repair-planned");
+    assert_eq!(fs::read(r.0.join(CONFIG)).unwrap(), config);
+    assert_eq!(fs::read(r.0.join(".git/index")).unwrap(), index);
+    let fp = v["fingerprint"].as_str().unwrap();
+    assert_ne!(repair_baseline_apply(&r.0, &SystemProcessRunner, fp, false).code, 0);
+    assert_eq!(fs::read(r.0.join(CONFIG)).unwrap(), config);
+    // A previously missing static reference appearing after planning must
+    // invalidate the inventory even though it has no old input hash.
+    write(&r.0, "external/lib.rs", b"mod restored;\n");
+    let missing_plan = repair_baseline_plan(&r.0, &SystemProcessRunner).receipt.unwrap();
+    write(&r.0, "external/restored.rs", b"pub fn restored(){}\n");
+    assert_ne!(repair_baseline_apply(&r.0, &SystemProcessRunner, missing_plan["fingerprint"].as_str().unwrap(), true).code, 0);
+    assert_eq!(fs::read(r.0.join(CONFIG)).unwrap(), config);
+    fs::remove_file(r.0.join("external/restored.rs")).unwrap();
+    write(&r.0, "external/lib.rs", b"fn main() {}\n");
+    write(&r.0, "README.md", b"changed after plan\n");
+    assert_ne!(repair_baseline_apply(&r.0, &SystemProcessRunner, fp, true).code, 0);
+    assert_eq!(fs::read(r.0.join(CONFIG)).unwrap(), config);
+    let p = repair_baseline_plan(&r.0, &SystemProcessRunner).receipt.unwrap();
+    let a = repair_baseline_apply(&r.0, &SystemProcessRunner, p["fingerprint"].as_str().unwrap(), true);
+    assert_eq!(a.code, 0, "{}", a.stderr);
+    let mut repaired: Value = serde_json::from_slice(&fs::read(r.0.join(CONFIG)).unwrap()).unwrap();
+    assert_eq!(repaired["baseline"]["packages"]["a"]["source_roots"].as_array().unwrap().len(), 7);
+    repaired["baseline"]["packages"]["a"]["source_roots"] = json!(["pkg/"]);
+    repaired["baseline"]["input_hashes"].as_object_mut().unwrap().retain(|path, _| !path.starts_with("external/"));
+    assert_eq!(repaired, old);
+    assert_eq!(git(&r.0, &["rev-parse", "HEAD"]), head);
+    assert_eq!(fs::read(r.0.join(".git/index")).unwrap(), index);
+    assert_eq!(fs::read(r.0.join("pkg/Cargo.lock")).unwrap(), lock);
+    assert_eq!(fs::read(r.0.join("VERSION")).unwrap(), b"1.0.0\n");
+    assert_eq!(preview(&r.0, "fix: release", &Request::default(), &SystemProcessRunner).code, 0);
+    let request = analyze(&r.0, "patch", None);
+    let release = build(&r.0, "fix: product", &request, &SystemProcessRunner).unwrap().unwrap();
+    apply_file_release_plan(&release).unwrap();
+    git(&r.0, &["add", "."]);
+    git(&r.0, &["commit", "-m", "fix: product"]);
+    let published = fs::read(r.0.join(CONFIG)).unwrap();
+    let blocked = repair_baseline_plan(&r.0, &SystemProcessRunner);
+    assert!(blocked.stderr.contains("published migration baseline cannot be repaired"), "{}", blocked.stderr);
+    assert_eq!(fs::read(r.0.join(CONFIG)).unwrap(), published);
+}
+
+#[test]
+fn schema4_baseline_repair_rejects_forged_facts_and_ownership() {
+    for field in ["version", "source_roots", "changed_hash", "removed_hash", "invented_hash"] {
+        let r = external_cargo_fixture();
+        let mut v = legacy_source_roots(&r.0);
+        match field {
+            "version" => v["baseline"]["packages"]["a"][field] = json!("9.0.0"),
+            "source_roots" => v["baseline"]["packages"]["a"][field] = json!(["pkg/", "unowned/"]),
+            "changed_hash" => {
+                let hashes = v["baseline"]["input_hashes"].as_object_mut().unwrap();
+                let key = hashes.keys().next().unwrap().clone();
+                hashes.insert(key, json!("sha256:forged"));
+            }
+            "removed_hash" => {
+                let hashes = v["baseline"]["input_hashes"].as_object_mut().unwrap();
+                let key = hashes.keys().next().unwrap().clone();
+                hashes.remove(&key);
+            }
+            "invented_hash" => v["baseline"]["input_hashes"]["external/unrelated.rs"] = json!("sha256:forged"),
+            _ => unreachable!(),
+        }
+        write(&r.0, CONFIG, &serde_json::to_vec(&v).unwrap());
+        let before = fs::read(r.0.join(CONFIG)).unwrap();
+        let p = repair_baseline_plan(&r.0, &SystemProcessRunner);
+        assert_ne!(p.code, 0, "forged {field} accepted");
+        assert_eq!(fs::read(r.0.join(CONFIG)).unwrap(), before);
+    }
+}
+
+#[test]
+fn schema4_external_targets_reject_ambiguity_and_path_escape() {
+    let r = external_cargo_fixture();
+    let cfg = load(&r.0).unwrap().unwrap();
+    let mut snapshot = baseline_snapshot(&r.0, &cfg, &cfg.baseline.revision, &SystemProcessRunner).unwrap();
+    let mut second = snapshot.packages["a"].clone();
+    second.manifest = "other/Cargo.toml".into();
+    snapshot.packages.insert("b".into(), second);
+    assert!(polyglot::owner(&snapshot, "external/lib.rs", &cfg.native).unwrap_err().contains("ambiguous"));
+    assert!(polyglot::owner(&snapshot, "external/lib.rs/unrelated.txt", &cfg.native).unwrap_err().contains("unattributed"));
+    snapshot.packages.get_mut("b").unwrap().source_roots = vec!["external/".into()];
+    assert!(polyglot::owner(&snapshot, "external/lib.rs", &cfg.native).unwrap_err().contains("ambiguous"));
+    // Python explicit version sources retain their existing precedence in the
+    // absence of Cargo external declarations; a cross-language collision does not.
+    for package in snapshot.packages.values_mut() { package.language = Language::Python; }
+    assert_eq!(polyglot::owner(&snapshot, "external/lib.rs", &cfg.native).unwrap(), vec!["a"]);
+    snapshot.packages.get_mut("b").unwrap().language = Language::Rust;
+    snapshot.packages.get_mut("b").unwrap().source_roots = vec!["external/lib.rs".into()];
+    assert!(polyglot::owner(&snapshot, "external/lib.rs", &cfg.native).unwrap_err().contains("ambiguous"));
+    let text = fs::read_to_string(r.0.join("pkg/Cargo.toml")).unwrap().replace("../external/lib.rs", "../../outside.rs");
+    write(&r.0, "pkg/Cargo.toml", text.as_bytes());
+    assert_ne!(preview(&r.0, "fix: release", &Request::default(), &SystemProcessRunner).code, 0);
+}
+
+#[test]
+fn schema4_inline_cargo_targets_keep_the_same_ownership() {
+    let r = external_cargo_fixture();
+    let cfg = load(&r.0).unwrap().unwrap();
+    let manifest = fs::read_to_string(r.0.join("pkg/Cargo.toml")).unwrap();
+    let manifest = format!("bin = [{{name='inventory',path='../external/all_inventory.rs'}}]\n{}",
+        manifest.replace("[[bin]]\nname='inventory'\npath='../external/all_inventory.rs'\n", ""));
+    write(&r.0, "pkg/Cargo.toml", manifest.as_bytes());
+    let c = capture(&r.0, &cfg, &SystemProcessRunner).unwrap();
+    assert_eq!(c.current.packages["a"].source_roots, cfg.baseline.packages["a"].source_roots);
+}
+
+#[test]
+fn schema4_external_lib_module_history_is_repaired_before_module_move_release() {
+    for exact_entry_already_recorded in [false, true] {
+        let r = fixture("legacy", true);
+        write(&r.0, "pkg/Cargo.toml", b"[package]\nname='a'\nversion='1.0.0'\nedition='2021'\n[workspace]\n[lib]\npath='../legacy/lib.rs'\n");
+        write(&r.0, "legacy/lib.rs", b"pub mod all_inventory;\n");
+        write(&r.0, "legacy/all_inventory.rs", b"#[cfg(test)]\n#[path=\"all_inventory_tests.rs\"] mod tests; pub fn value()->u8{1}\n");
+        write(&r.0, "legacy/all_inventory_tests.rs", b"#[test] fn example(){}\n");
+        write(&r.0, "legacy/unrelated.rs", b"pub fn unrelated(){}\n");
+        git(&r.0, &["add", "."]);
+        git(&r.0, &["commit", "--amend", "--no-edit"]);
+        let p = migration_plan(&r.0, &SystemProcessRunner, None);
+        assert_eq!(p.code, 0, "{}", p.stderr);
+        let p = p.receipt.unwrap();
+        assert_eq!(migration_apply(&r.0, &SystemProcessRunner, None, p["fingerprint"].as_str().unwrap(), true).code, 0);
+        let mut old: Value = serde_json::from_slice(&fs::read(r.0.join(CONFIG)).unwrap()).unwrap();
+        old["baseline"]["packages"]["a"]["source_roots"] = if exact_entry_already_recorded { json!(["pkg/", "legacy/lib.rs"]) } else { json!(["pkg/"]) };
+        old["baseline"]["input_hashes"].as_object_mut().unwrap().retain(|path, _| !path.starts_with("legacy/"));
+        write(&r.0, CONFIG, &serde_json::to_vec(&old).unwrap());
+        git(&r.0, &["add", "."]);
+        git(&r.0, &["commit", "-m", "chore: old metadata migration"]);
+
+        for name in ["lib.rs", "all_inventory.rs", "all_inventory_tests.rs"] {
+            fs::rename(r.0.join("legacy").join(name), r.0.join("pkg/src").join(name)).unwrap();
+        }
+        let manifest = fs::read_to_string(r.0.join("pkg/Cargo.toml")).unwrap().replace("../legacy/lib.rs", "src/lib.rs");
+        write(&r.0, "pkg/Cargo.toml", manifest.as_bytes());
+        let config_before = fs::read(r.0.join(CONFIG)).unwrap();
+        let index = fs::read(r.0.join(".git/index")).unwrap();
+        let planned = repair_baseline_plan(&r.0, &SystemProcessRunner);
+        assert_eq!(planned.code, 0, "{}", planned.stderr);
+        let planned = planned.receipt.unwrap();
+        let baseline = &planned["configuration"]["baseline"];
+        assert_eq!(baseline["revision"], old["baseline"]["revision"]);
+        assert!(baseline["packages"]["a"]["source_roots"].as_array().unwrap().contains(&json!("legacy/all_inventory.rs")));
+        assert_eq!(baseline["input_hashes"]["legacy/all_inventory.rs"], json!(digest(b"#[cfg(test)]\n#[path=\"all_inventory_tests.rs\"] mod tests; pub fn value()->u8{1}\n")));
+        assert!(!baseline["packages"]["a"]["source_roots"].as_array().unwrap().contains(&json!("legacy/unrelated.rs")));
+        assert_eq!(fs::read(r.0.join(CONFIG)).unwrap(), config_before);
+        assert_eq!(repair_baseline_apply(&r.0, &SystemProcessRunner, planned["fingerprint"].as_str().unwrap(), true).code, 0);
+        assert_eq!(fs::read(r.0.join(".git/index")).unwrap(), index);
+        assert_eq!(fs::read(r.0.join("VERSION")).unwrap(), b"1.0.0\n");
+        let cfg = load(&r.0).unwrap().unwrap();
+        let captured = capture(&r.0, &cfg, &SystemProcessRunner).unwrap();
+        for path in ["legacy/all_inventory.rs", "pkg/src/all_inventory.rs"] {
+            assert_eq!(captured.changes.iter().find(|c| c.path == path).unwrap().packages, vec!["a"]);
+        }
+    }
+}
 fn analyze(root: &Path, product: &str, package: Option<&str>) -> Request {
     let p = preview(
         root,
@@ -696,6 +936,87 @@ fn schema4_breaking_lifecycle_cannot_disguise_major_as_compatible() {
     assert!(build(&r.0, "feat!: retire", &request, &SystemProcessRunner)
         .unwrap()
         .is_some());
+}
+
+#[test]
+fn schema4_stat_only_index_refresh_keeps_analysis_valid_without_weakening_drift_checks() {
+    let r = fixture("independent", false);
+    git(&r.0, &["config", "core.autocrlf", "false"]);
+    change(&r.0, false);
+    let file = fs::OpenOptions::new().write(true).open(r.0.join("README.md")).unwrap();
+    file.set_times(fs::FileTimes::new().set_modified(
+        std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_000_000),
+    )).unwrap();
+    let candidates = git(&r.0, &["--no-optional-locks", "-c", "diff.autoRefreshIndex=false", "diff", "--name-only", "HEAD", "--"]);
+    assert!(candidates.lines().any(|p| p == "README.md"), "stat-only fixture did not create a false candidate: {candidates}");
+    let cfg = load(&r.0).unwrap().unwrap();
+    let index = fs::read(r.0.join(".git/index")).unwrap();
+    let before = capture(&r.0, &cfg, &SystemProcessRunner).unwrap();
+    let request = analyze(&r.0, "patch", Some("patch"));
+    assert_eq!(fs::read(r.0.join(".git/index")).unwrap(), index, "inspection must remain read-only");
+    git(&r.0, &["diff", "--name-only"]);
+    let after = capture(&r.0, &cfg, &SystemProcessRunner).unwrap();
+    assert_eq!(serde_json::to_value(&before.changes).unwrap(), serde_json::to_value(&after.changes).unwrap());
+    assert_eq!(before.validation_fingerprint, after.validation_fingerprint);
+    assert_eq!(before.fingerprint, after.fingerprint, "stat refresh must not invalidate an unchanged release analysis");
+    assert!(build(&r.0, "fix: release", &request, &SystemProcessRunner).unwrap().is_some());
+
+    write(&r.0, "README.md", b"real product change\n");
+    assert!(build(&r.0, "fix: release", &request, &SystemProcessRunner).err().unwrap().contains("stale"));
+    let request = analyze(&r.0, "patch", Some("patch"));
+    git(&r.0, &["add", "pkg/a.py"]);
+    assert!(build(&r.0, "fix: release", &request, &SystemProcessRunner).err().unwrap().contains("stale"));
+    let request = analyze(&r.0, "patch", Some("patch"));
+    git(&r.0, &["update-index", "--chmod=+x", "README.md"]);
+    assert!(build(&r.0, "fix: release", &request, &SystemProcessRunner).err().unwrap().contains("stale"));
+}
+
+#[test]
+fn schema4_content_diff_retains_binary_empty_mode_and_delimited_paths() {
+    let r = fixture("legacy", false);
+    git(&r.0, &["config", "core.autocrlf", "false"]);
+    let mut paths = vec!["binary.asset", "empty.asset", "spaced name.asset"];
+    if cfg!(unix) {
+        paths.push("tab\tname.asset");
+        paths.push("line\nname.asset");
+    }
+    let mut value: Value = serde_json::from_slice(&fs::read(r.0.join(CONFIG)).unwrap()).unwrap();
+    value["product_inputs"].as_array_mut().unwrap().push(json!("new-empty.asset"));
+    for path in &paths {
+        write(&r.0, path, if *path == "empty.asset" { b"" } else { b"old\0bytes\n" });
+        value["product_inputs"].as_array_mut().unwrap().push(json!(path));
+    }
+    write(&r.0, CONFIG, &serde_json::to_vec(&value).unwrap());
+    git(&r.0, &["add", "."]);
+    git(&r.0, &["commit", "--amend", "--no-edit"]);
+    migrate(&r.0);
+    write(&r.0, "new-empty.asset", b"");
+    git(&r.0, &["add", "new-empty.asset"]);
+    for path in &paths {
+        if *path == "empty.asset" {
+            fs::remove_file(r.0.join(path)).unwrap();
+        } else {
+            write(&r.0, path, b"new\0bytes\n");
+        }
+    }
+    git(&r.0, &["update-index", "--chmod=+x", "README.md"]);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let path = r.0.join("README.md");
+        let mut permissions = fs::metadata(&path).unwrap().permissions();
+        permissions.set_mode(permissions.mode() | 0o111);
+        fs::set_permissions(path, permissions).unwrap();
+    }
+    let captured = capture(&r.0, &load(&r.0).unwrap().unwrap(), &SystemProcessRunner).unwrap();
+    for path in paths {
+        let changed = captured.changes.iter().find(|c| c.path == path).unwrap_or_else(|| panic!("missing content diff: {path:?}"));
+        assert_ne!(changed.before, changed.after);
+    }
+    assert!(captured.changes.iter().find(|c| c.path == "README.md").unwrap().mode_changed);
+    let added = captured.changes.iter().find(|c| c.path == "new-empty.asset").unwrap();
+    assert!(added.before.is_none());
+    assert!(added.after.is_some());
 }
 
 #[test]

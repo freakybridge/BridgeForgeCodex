@@ -12,12 +12,12 @@
             {
               "source": "scripts/bridgeforge_codex_shared_update.ps1",
               "target": "scripts/bridgeforge_codex_shared_update.ps1",
-              "sha256": "sha256:04d5d90203561e80eeea0d0be1b20b3a611dec71460044161ebe3bf3e74c853a"
+              "sha256": "sha256:53a291009df0f059a66c5d60842141bfe1266eb96c8d1c2f271403989169d8e5"
             },
             {
               "source": "skills/bridgeforge-codex/SKILL.md",
               "target": "SKILL.md",
-              "sha256": "sha256:ed5069da6a6f8a5ea727bc751aadb76863d402af586418f63f3bca98a106a799"
+              "sha256": "sha256:aff4758d98c06da6fb8a1902c7200ae7221f612075bf2d4c0db3f27ae522b247"
             },
             {
               "source": "skills/bridgeforge-codex/agents/openai.yaml",
@@ -27,7 +27,7 @@
             {
               "source": "skills/bridgeforge-codex/references/adopt.md",
               "target": "references/adopt.md",
-              "sha256": "sha256:12f12ad3d419f3779a9a71af7982b5890454d68d67fd50be6560c5e25742f683"
+              "sha256": "sha256:6b74040af482db4a7d57c49e6ccbc5a0af9cf0ab789926e6e791d222ffbc0bd3"
             },
             {
               "source": "skills/bridgeforge-codex/references/init.md",
@@ -42,12 +42,12 @@
             {
               "source": "skills/bridgeforge-codex/references/project-asset-migration.md",
               "target": "references/project-asset-migration.md",
-              "sha256": "sha256:23c5f67011e74663d2327f43e7e0ed841195e1ac66d7598aeeb1246dc5732ccd"
+              "sha256": "sha256:f2aba450d9fc3c9657bb75046e71911429d149231d26549661143576379b5799"
             },
             {
               "source": "skills/bridgeforge-codex/references/runtime-preflight.md",
               "target": "references/runtime-preflight.md",
-              "sha256": "sha256:886304b417d7297a9191644c34efbf1e8ec82c73c5bb548c457246c36e8d662c"
+              "sha256": "sha256:5892e92735f2a68d4d6e4040601230249802f2a5546fd88b98fd6b59ebebff5a"
             },
             {
               "source": "skills/bridgeforge-codex/references/project-hook-independence.md",
@@ -227,17 +227,22 @@
             {
               "source": "skills/git-sync/SKILL.md",
               "target": "SKILL.md",
-              "sha256": "sha256:40c2bb6aeca99dbfbc7bb204bbc62eb826461176ef120879d54dce4969fc2293"
+              "sha256": "sha256:2179582664cc4545a88a57dd1b140f53c9c02368ccd14eeefe01028cec6f0ad5"
             },
             {
               "source": "skills/git-sync/references/first-use.md",
               "target": "references/first-use.md",
-              "sha256": "sha256:7ee5b767a3caca6e568d203aef07af5122c2a7d12b04c04871521a52936d0490"
+              "sha256": "sha256:bf26eff54c9f2658441254fbd5416dc365e1e545958bb6165f32f51354bde7d6"
             },
             {
               "source": "skills/git-sync/references/schema4.md",
               "target": "references/schema4.md",
-              "sha256": "sha256:0b2ad94a551948b25301c0560e35297367952e2de34e50e73a22bdf273f673de"
+              "sha256": "sha256:19a4a51a7eeb7c8c5fb30703afabcb8cba5de1312be8613d3c54cc2ee6212774"
+            },
+            {
+              "source": "skills/git-sync/references/runtime-context.md",
+              "target": "references/runtime-context.md",
+              "sha256": "sha256:7d6ba19a8affd12206afb06cd616502177dd36a38386d1fd30fbf41019c878b9"
             }
           ]
         },

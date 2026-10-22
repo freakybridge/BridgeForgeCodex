@@ -280,7 +280,7 @@ pub(super) fn snapshot(
                 } else {
                     rust::load(&rust_cfg, &paths, read)?
                 };
-                rust::from_workspace(workspace)?
+                rust::from_workspace(workspace, read)?
             } else {
                 rust::snapshot(&rust_cfg, &paths, read)?
             };
@@ -459,6 +459,12 @@ pub(super) fn owner(snapshot: &Snapshot, path: &str, cfg: &Config) -> Result<Vec
     if let Some(mapping) = scope.shared_inputs.iter().find(|p| owns(&p.path, path)) {
         return Ok(mapping.packages.clone());
     }
+    // An explicit external target cannot steal a file from its natural package.
+    // Resolve natural roots with the existing longest-root rule, then union
+    // exact target declarations and require shared_inputs for multiple owners.
+    let explicit = snapshot.packages.iter()
+        .filter(|(_, p)| p.language == Language::Rust && p.source_roots.iter().any(|r| r == path))
+        .map(|(id, _)| id.clone()).collect::<BTreeSet<_>>();
     let best = snapshot
         .packages
         .iter()
@@ -468,8 +474,9 @@ pub(super) fn owner(snapshot: &Snapshot, path: &str, cfg: &Config) -> Result<Vec
                 .iter()
                 .filter(|r| {
                     r.is_empty()
-                        || path == r.as_str()
-                        || path.starts_with(&format!("{}/", r.trim_end_matches('/')))
+                        || (path == r.as_str() && (p.language != Language::Rust || explicit.is_empty()))
+                        || ((p.language != Language::Rust || r.ends_with('/'))
+                            && path.starts_with(&format!("{}/", r.trim_end_matches('/'))))
                 })
                 .map(String::len)
                 .max();
@@ -480,12 +487,14 @@ pub(super) fn owner(snapshot: &Snapshot, path: &str, cfg: &Config) -> Result<Vec
             }
         })
         .collect::<Vec<_>>();
-    if let Some(max) = best.iter().map(|(_, size)| *size).max() {
+    let max = best.iter().map(|(_, size)| *size).max();
+    if max.is_some() || !explicit.is_empty() {
         let ids = best
             .into_iter()
-            .filter(|(_, size)| *size == max)
+            .filter(|(_, size)| Some(*size) == max)
             .map(|(id, _)| id.clone())
-            .collect::<Vec<_>>();
+            .chain(explicit)
+            .collect::<BTreeSet<_>>().into_iter().collect::<Vec<_>>();
         if ids.len() == 1 {
             return Ok(ids);
         }

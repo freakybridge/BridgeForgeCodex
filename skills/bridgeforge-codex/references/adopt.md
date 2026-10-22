@@ -5,7 +5,7 @@
 1. 只运行 `bridgeforge project-sync --mode adopt` 生成 latest current-only rebuild 计划。
 2. 仅允许“无合法版本戳但已有骨架资产”的项目进入；双戳、非法戳必须零写阻断，禁止猜测或自动补戳。
 3. 主对话必须只读盘点 rules、hooks、AGENTS 项目区、Skills 与 legacy `.codex/memory/`；Rule / Memory 进入 `project-asset-migration.md` 的逐文件迁移，其他项目资产进入 `PreservationManifest`。
-4. 所有需要用户决定的项目资产必须逐项确认；确认前零写入。最终 apply 传入已确认的迁移 manifest、`PreservationManifest` 与 `--confirmed-preservation-manifest`，但不得在既有逐项确认后追加一次清理确认。
+4. 所有需要用户决定的项目资产逐项展示，与风险动作及迁移包汇总为一次确认；确认前零写入。最终 apply 传入已确认的迁移 manifest、`PreservationManifest` 与 `--confirmed-preservation-manifest`，不得在既有确认后追加清理确认。
 5. 散落 Hook、非 canonical 命令或无法闭合的目录必须零写阻断。主对话只能把整理显式分派给 `implementation-worker`；它只能先在临时副本或受控前置步骤中整理为 `.codex/hooks/project_XXXX/entrypoint.rs` 自包含目录并闭合 `.codex/hooks.json`，然后重新规划和确认。
 6. 准备 apply 时返回根入口并读取 `references/transaction.md`。
 

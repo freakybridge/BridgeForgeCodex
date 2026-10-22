@@ -2,6 +2,9 @@
 [CmdletBinding()]
 param(
     [Parameter(DontShow = $true)]
+    [string]$ResumeSourceCommit,
+
+    [Parameter(DontShow = $true)]
     [string]$SourceRepositoryRoot,
 
     [Parameter(DontShow = $true)]
@@ -1346,6 +1349,16 @@ function New-CanonicalClone {
 
 # Probe before downloading. A matching installed source still passes all source
 # and manifest checks; only the clone/fetch work is skipped. Never fetch in place.
+function Select-ResumeSource {
+    param([Parameter(Mandatory = $true)][string]$UserProfile,
+          [Parameter(Mandatory = $true)][string]$ExpectedCommit)
+    if ($ExpectedCommit -notmatch '^[0-9a-f]{40}$') { throw 'Resume requires the completed receipt source commit.' }
+    $installedSourceRoot = Join-Path $UserProfile $CommandHomeName
+    $commit = Assert-Repository -Root $installedSourceRoot -SkipFetch -ExpectedCommit $ExpectedCommit -InstalledHome $installedSourceRoot
+    $script:BuildCounts.source_reused += 1
+    return [ordered]@{ root=$installedSourceRoot; clone=$null; commit=$commit }
+}
+
 function Select-CanonicalSource {
     param([Parameter(Mandatory = $true)][string]$UserProfile)
     $lines = @(Invoke-Git -Arguments @('ls-remote', '--exit-code', '--refs', $CanonicalRemote, "refs/heads/$CanonicalBranch"))
@@ -1884,7 +1897,13 @@ function Invoke-Main {
         try {
             $phase = [Diagnostics.Stopwatch]::StartNew()
             try {
-            if ([string]::IsNullOrWhiteSpace($SourceRepositoryRoot)) {
+            if (-not [string]::IsNullOrWhiteSpace($ResumeSourceCommit)) {
+                if (-not [string]::IsNullOrWhiteSpace($SourceRepositoryRoot)) { throw 'Resume cannot override the installed product source.' }
+                $selection = Select-ResumeSource -UserProfile $userProfile -ExpectedCommit $ResumeSourceCommit
+                $repositoryRoot = [string]$selection.root
+                $commit = [string]$selection.commit
+            }
+            elseif ([string]::IsNullOrWhiteSpace($SourceRepositoryRoot)) {
                 $selection = Select-CanonicalSource -UserProfile $userProfile
                 $cloneRoot = $selection.clone
                 $repositoryRoot = [string]$selection.root
