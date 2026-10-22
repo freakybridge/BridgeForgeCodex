@@ -168,6 +168,20 @@ pub fn encoding(payloads: &[Value]) -> StepResult {
     }
 }
 
+pub fn artifact_layout(payload: &Value) -> StepResult {
+    let Some(input) = tool_input(payload) else { return StepResult::ok(); };
+    let raw = json_string(input, "file_path");
+    let root = normalize_path(&repo_root(), ".");
+    let path = normalize_path(&root, &raw);
+    if !crate::util::path_is_inside(&root, &path) { return StepResult::ok(); }
+    let relative = crate::util::relative_display(&root, &path);
+    // Deleted patch targets have no final file to inspect.
+    if !path.exists() { return StepResult::ok(); }
+    let report = bridgeforge_core::artifact_layout::edited(&root, &relative);
+    if report.advisories.is_empty() { return StepResult::ok(); }
+    StepResult::output(report.advisories.iter().map(|f| format!("[artifact-layout] WARNING {}: {}: {}", f.code, f.path, f.message)).collect::<Vec<_>>().join("\n"))
+}
+
 pub fn requirements(payload: &Value) -> StepResult {
     let Some(input) = tool_input(payload) else {
         return StepResult::ok();

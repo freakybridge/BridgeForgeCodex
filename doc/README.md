@@ -8,6 +8,8 @@ delivery_layout: flat
 
 ## 从这里开始
 
+实施与验收：[artifact-layout Hook 合并](1_delivery/artifact-layout/requirements_2026-10-23_artifact-layout-merge.md)（TODO-020；2026-10-23 用户已明确验收并授权 release，见第 14 节；workspace 482 项、工厂 fixture 97 项及七项工程检查通过，性能数据与边界见第 12、13 节。真实下游、用户级安装及自然 runtime 未验证）。
+
 当前验收：[git-sync 执行环境一致性与单次确认](1_delivery/git-sync-release-rewrite/requirements_2026-10-22_git-sync-context-and-confirmation.md#用户验收2026-10-22)（2026-10-22 用户按增量结果验收，TODO-019 已完成：核心 234 项、发布场景 18 项、五项基础检查与独立审计通过，隔离 3.0.1 构建成功，受管流程约 29 分 44 秒；原全量配置已恢复，最新全量及真实对话/下游未实测。TODO-018 正式发布保留待执行，用户明确先不发布；VERSION 仍 3.0.0，本轮未提交或推送）。
 
 最近验收：[单次升级与历史 Cargo 归属补正](1_delivery/git-sync-release-rewrite/requirements_2026-10-22_upgrade-and-ownership.md#用户验收与发布授权2026-10-22)（2026-10-22 用户验收，TODO-016、TODO-017 已完成；workspace 456、fixture 96 项、七项工程检查与独立审计通过；发布预览因 analysis stale 中断，后续 TODO-018；未提交推送，用户级安装与真实下游升级未执行）。
@@ -74,6 +76,8 @@ delivery_layout: flat
 | `5_project_knowledgebase/` | 项目自有知识话题与长期资料 | 当前为空 |
 
 ## 架构
+
+- [artifact-layout 布局检查合同](0_architecture/design/artifact-layout.md)：项目配置、A 模式、pre-commit 与 git-sync/release 的分工及性能验收；实施结果见 TODO-020 需求卡。
 
 - 工厂专属[开发收口清单](0_architecture/design/development-completion.md)：质量检查、发布准备与轻量发布的职责边界。
 - 工厂[独立构建产物缓存](0_architecture/design/factory-artifact-cache.md)：编译身份、缓存所有权、有限清理和中断恢复；当前 R04 的结果见交付卡。

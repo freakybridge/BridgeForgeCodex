@@ -286,18 +286,24 @@ fn verify_split_index_disabled(shared_index_path: &str, configured: &str) -> Res
 
 impl RepositoryIdentity {
     fn capture(git: &Git<'_>) -> Result<Self, String> {
-        let git_dir = git.required(
-            &["rev-parse", "--path-format=absolute", "--git-dir"],
+        // Reobserve at every transaction guard, but obtain these related facts
+        // in one Git process. Never cache identity across mutation boundaries.
+        let facts = git.required(
+            &["rev-parse", "--path-format=absolute", "--git-dir", "--git-common-dir", "--git-path", "index", "HEAD"],
             Duration::from_secs(30),
         )?;
-        let common_dir = git.required(
-            &["rev-parse", "--path-format=absolute", "--git-common-dir"],
-            Duration::from_secs(30),
-        )?;
-        let index_path = PathBuf::from(git.required(
-            &["rev-parse", "--path-format=absolute", "--git-path", "index"],
-            Duration::from_secs(30),
-        )?);
+        let fields = facts.lines().collect::<Vec<_>>();
+        if fields.len() != 4
+            || fields[..3].iter().any(|path| !Path::new(path).is_absolute())
+            || !matches!(fields[3].len(), 40 | 64)
+            || !fields[3].bytes().all(|b| b.is_ascii_hexdigit())
+        {
+            return Err("unexpected repository identity output from git rev-parse".into());
+        }
+        let git_dir = fields[0].to_owned();
+        let common_dir = fields[1].to_owned();
+        let index_path = PathBuf::from(fields[2]);
+        let head_oid = fields[3].to_owned();
         let split = git.required(
             &["rev-parse", "--shared-index-path"],
             Duration::from_secs(30),
@@ -320,7 +326,6 @@ impl RepositoryIdentity {
         }
         let symbolic_head =
             git.required(&["symbolic-ref", "-q", "HEAD"], Duration::from_secs(30))?;
-        let head_oid = git.required(&["rev-parse", "HEAD"], Duration::from_secs(30))?;
         let common_config_sha256 = payload_sha(
             &fs::read(Path::new(&common_dir).join("config"))
                 .map_err(|error| format!("cannot read common Git config: {error}"))?,

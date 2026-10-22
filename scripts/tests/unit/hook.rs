@@ -823,3 +823,17 @@ fn expands_apply_patch_move_targets() {
     assert_eq!(values.len(), 2);
     assert_eq!(values[1]["tool_input"]["file_path"], "D:/outside.md");
 }
+
+#[test]
+fn artifact_layout_edit_warnings_keep_completed_action_and_cover_patch_targets() {
+    let fixture = Fixture::new();
+    let target = fixture.root.join("tests/probe.rs");
+    fs::create_dir_all(target.parent().unwrap()).unwrap(); fs::write(&target, b"fn probe() {}\n").unwrap();
+    let payload = json!({"tool_name":"apply_patch","tool_input":{"command":"*** Begin Patch\n*** Add File: tests/probe.rs\n+fn probe() {}\n*** End Patch"}});
+    let values = edits(&payload); assert_eq!(values.len(), 1);
+    let warning = post::artifact_layout(&values[0]);
+    assert_eq!(warning.code, 0); assert!(warning.stdout.contains("legacy-test-root"));
+    assert_eq!(fs::read(&target).unwrap(), b"fn probe() {}\n");
+    fs::remove_file(&target).unwrap();
+    assert!(post::artifact_layout(&values[0]).stdout.is_empty());
+}

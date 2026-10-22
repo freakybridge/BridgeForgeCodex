@@ -1,0 +1,594 @@
+use super::*;
+use crate::ProcessOutput;
+use serde_json::json;
+use std::{
+    cell::Cell,
+    fs,
+    path::PathBuf,
+    time::{SystemTime, UNIX_EPOCH},
+};
+
+struct Repo(PathBuf);
+impl Drop for Repo {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+fn command(root: &Path, args: &[&str]) -> Vec<u8> {
+    git(root, &SystemProcessRunner, args, vec![]).unwrap()
+}
+fn put(root: &Path, path: &str, bytes: &[u8]) {
+    fs::create_dir_all(root.join(path).parent().unwrap()).unwrap();
+    fs::write(root.join(path), bytes).unwrap();
+}
+fn config() -> Vec<u8> {
+    serde_json::to_vec(&json!({"schema":1,"source_roots":["src/"],"python_artifacts":{"enabled":true,"allowed_roots":[".runtime/"]},"forbidden_source_components":["tests","examples","scripts",".runtime"],"cargo_registration":{"manifest_roots":["src/"],"forbidden_target_roots":["scripts/"]}})).unwrap()
+}
+fn repo() -> Repo {
+    let token = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let repo =
+        Repo(std::env::temp_dir().join(format!("bf-layout-unit-{}-{token}", std::process::id())));
+    fs::create_dir_all(&repo.0).unwrap();
+    command(&repo.0, &["init"]);
+    command(&repo.0, &["config", "user.name", "Layout Test"]);
+    command(&repo.0, &["config", "user.email", "layout@example.invalid"]);
+    command(&repo.0, &["config", "core.hooksPath", ".git/hooks"]);
+    put(&repo.0, "seed.txt", b"seed\n");
+    put(&repo.0, CONFIG, &config());
+    commit(&repo.0);
+    repo
+}
+fn commit(root: &Path) {
+    command(root, &["add", "."]);
+    command(root, &["commit", "-m", "fixture seed"]);
+}
+fn report(root: &Path) -> StructureReport {
+    staged(root, &SystemProcessRunner)
+}
+
+#[test]
+fn layout_config_is_strict_and_project_owned() {
+    assert!(parse(&config()).is_ok());
+    for bytes in [
+        br#"{"schema":2}"#.as_slice(),
+        br#"{"schema":1,"schema":1}"#,
+        br#"{"schema":1,"typo":true}"#,
+        br#"{"schema":1,"source_roots":["../src/"]}"#,
+        br#"{"schema":1,"source_roots":["C:\\src"]}"#,
+        br#"{"schema":1,"source_roots":["scripts/"]}"#,
+        br#"{"schema":1,"python_artifacts":{"enabled":true}}"#,
+    ] {
+        assert!(parse(bytes).is_err(), "{bytes:?}");
+    }
+}
+#[test]
+fn layout_rules_have_no_project_name_or_filename_blacklist() {
+    let cfg = parse(&config()).unwrap();
+    let empty = BTreeSet::new();
+    for path in [
+        "src/lib.rs",
+        "src/test_engine.rs",
+        "scripts/tests/unit/a.rs",
+        ".runtime/__pycache__/a.pyc",
+        "src/apps/m2_benchmark/main.rs",
+        "scripts-other/tool.rs",
+    ] {
+        assert!(
+            path_findings(path, false, Some(&cfg), &empty).is_empty(),
+            "{path}"
+        );
+    }
+    for path in [
+        "tests/a.rs",
+        "test/a.rs",
+        "src/examples/a.rs",
+        "src/.runtime/a.json",
+        "src/tests/a.rs",
+        "__pycache__/a.pyc",
+        "scripts/tests/__pycache__/a.pyc",
+        ".coverage.worker",
+        "coverage.xml",
+    ] {
+        assert!(
+            !path_findings(path, false, Some(&cfg), &empty).is_empty(),
+            "{path}"
+        );
+    }
+    assert!(!path_findings(".claude/tests/probe.py", false, Some(&cfg), &empty).is_empty());
+    let managed = [key(".codex/hooks/tests/a.rs")].into_iter().collect();
+    assert!(path_findings(".codex/hooks/tests/a.rs", false, Some(&cfg), &managed).is_empty());
+    assert!(!path_findings(".codex/hooks/tests/b.rs", false, Some(&cfg), &managed).is_empty());
+}
+#[test]
+fn layout_a_ignores_unrelated_history_but_blocks_modified_or_added_bad_paths() {
+    let r = repo();
+    let root = &r.0;
+    put(root, "tests/old.rs", b"old\n");
+    commit(root);
+    put(root, "src/lib.rs", b"pub fn ok() {}\n");
+    command(root, &["add", "src/lib.rs"]);
+    assert!(report(root).errors.is_empty());
+    assert!(
+        worktree(root)
+            .errors
+            .iter()
+            .any(|e| e.code == "legacy-test-root")
+    );
+    put(root, "tests/old.rs", b"changed\n");
+    command(root, &["add", "tests/old.rs"]);
+    assert!(
+        report(root)
+            .errors
+            .iter()
+            .any(|e| e.code == "legacy-test-root")
+    );
+    command(root, &["rm", "-f", "tests/old.rs"]);
+    assert!(report(root).errors.is_empty());
+}
+#[test]
+fn layout_a_reads_staged_config_and_manifest_not_worktree() {
+    let r = repo();
+    let root = &r.0;
+    put(root, "src/Cargo.toml", b"[package]\nname='demo'\nversion='1.0.0'\n[[test]]\nname='probe'\npath='../scripts/tests/probe.rs'\n");
+    command(root, &["add", "src/Cargo.toml"]);
+    put(
+        root,
+        "src/Cargo.toml",
+        b"[package]\nname='demo'\nversion='1.0.0'\n",
+    );
+    assert!(
+        report(root)
+            .errors
+            .iter()
+            .any(|e| e.code == "external-cargo-registration")
+    );
+    command(root, &["add", "src/Cargo.toml"]);
+    put(
+        root,
+        "src/Cargo.toml",
+        b"[[test]]\npath='../scripts/tests/a.rs'\n",
+    );
+    assert!(report(root).errors.is_empty());
+    put(root, CONFIG, br#"{"schema":99}"#);
+    command(root, &["add", CONFIG]);
+    put(root, CONFIG, &config());
+    assert!(
+        report(root)
+            .errors
+            .iter()
+            .any(|e| e.code == "artifact-layout-incomplete")
+    );
+}
+#[test]
+fn layout_config_changes_check_only_newly_affected_history() {
+    let r = repo();
+    let root = &r.0;
+    put(root, "src/examples/old.rs", b"old\n");
+    put(root, "src/benches/old.rs", b"old\n");
+    commit(root);
+    let mut cfg: serde_json::Value = serde_json::from_slice(&config()).unwrap();
+    cfg["forbidden_source_components"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!("benches"));
+    put(root, CONFIG, &serde_json::to_vec(&cfg).unwrap());
+    command(root, &["add", CONFIG]);
+    let errors = report(root).errors;
+    assert!(errors.iter().any(|f| f.path == "src/benches/old.rs"));
+    assert!(
+        !errors.iter().any(|f| f.path == "src/examples/old.rs"),
+        "{errors:?}"
+    );
+    put(
+        root,
+        CONFIG,
+        &serde_json::to_vec_pretty(
+            &serde_json::from_slice::<serde_json::Value>(&config()).unwrap(),
+        )
+        .unwrap(),
+    );
+    command(root, &["add", CONFIG]);
+    assert!(report(root).errors.is_empty());
+    command(root, &["rm", "-f", CONFIG]);
+    assert!(report(root).errors.is_empty());
+}
+#[test]
+fn layout_cargo_checks_new_references_and_affected_targets_not_unrelated_debt() {
+    let r = repo();
+    let root = &r.0;
+    let cargo = b"[workspace]\nmembers=['../scripts/tool']\n[[bin]]\nname='old'\npath='../scripts/tool/main.rs'\n";
+    put(root, "src/Cargo.toml", cargo);
+    commit(root);
+    put(root, "src/lib.rs", b"pub fn ok() {}\n");
+    command(root, &["add", "src/lib.rs"]);
+    assert!(report(root).errors.is_empty());
+    put(root, "scripts/tool/main.rs", b"fn main() {}\n");
+    command(root, &["add", "scripts/tool/main.rs"]);
+    assert!(
+        report(root)
+            .errors
+            .iter()
+            .any(|f| f.code == "external-cargo-registration")
+    );
+    command(root, &["rm", "-f", "scripts/tool/main.rs"]);
+    assert!(
+        report(root).errors.is_empty(),
+        "cancelled addition has no final diff"
+    );
+    put(root, "scripts/tool/main.rs", b"fn main() {}\n");
+    commit(root);
+    command(root, &["rm", "-f", "scripts/tool/main.rs"]);
+    assert!(
+        report(root)
+            .errors
+            .iter()
+            .any(|f| f.code == "external-cargo-registration"),
+        "deleting a tracked target affects its registration"
+    );
+}
+#[test]
+fn layout_root_defaults_work_without_config_and_rename_uses_destination() {
+    let r = repo();
+    let root = &r.0;
+    command(root, &["rm", CONFIG]);
+    commit(root);
+    put(root, "src/a.rs", b"hello\n");
+    commit(root);
+    fs::create_dir_all(root.join("tests")).unwrap();
+    command(root, &["mv", "src/a.rs", "tests/a.rs"]);
+    assert_eq!(
+        report(root)
+            .errors
+            .iter()
+            .filter(|f| f.code == "legacy-test-root")
+            .count(),
+        1
+    );
+    command(root, &["mv", "tests/a.rs", "src/a.rs"]);
+    assert!(report(root).errors.is_empty());
+}
+#[test]
+fn layout_batch_process_count_does_not_grow_with_manifest_count() {
+    struct Count(Cell<usize>);
+    impl ProcessRunner for Count {
+        fn run(&self, request: &ProcessRequest) -> std::io::Result<ProcessOutput> {
+            self.0.set(self.0.get() + 1);
+            SystemProcessRunner.run(request)
+        }
+    }
+    let r = repo();
+    let root = &r.0;
+    for n in 0..40 {
+        put(
+            root,
+            &format!("src/{n}/Cargo.toml"),
+            b"[package]\nname='demo'\nversion='1.0.0'\n",
+        );
+    }
+    command(root, &["add", "."]);
+    let runner = Count(Cell::new(0));
+    assert!(staged(root, &runner).errors.is_empty());
+    assert_eq!(
+        runner.0.get(),
+        4,
+        "diff, index, config blob and manifest batch only"
+    );
+}
+#[test]
+fn layout_git_failure_never_reports_success() {
+    struct Fail;
+    impl ProcessRunner for Fail {
+        fn run(&self, _: &ProcessRequest) -> std::io::Result<ProcessOutput> {
+            Ok(ProcessOutput {
+                code: 1,
+                stdout: vec![],
+                stderr: b"denied".to_vec(),
+                timed_out: false,
+            })
+        }
+    }
+    assert!(!staged(Path::new("."), &Fail).errors.is_empty());
+}
+
+#[test]
+fn layout_literal_git_names_are_not_config_patterns() {
+    let r = repo();
+    let root = &r.0;
+    put(root, "doc/[draft].md", b"old\n");
+    commit(root);
+    put(root, "src/lib.rs", b"pub fn ok() {}\n");
+    command(root, &["add", "src/lib.rs"]);
+    assert!(report(root).errors.is_empty());
+    put(root, "src/[new].rs", b"pub fn ok() {}\n");
+    command(root, &["add", "src/[new].rs"]);
+    assert!(report(root).errors.is_empty());
+    assert!(edited(root, "src/[new].rs").advisories.is_empty());
+    assert!(parse(br#"{"schema":1,"source_roots":["src/[glob]/"]}"#).is_err());
+}
+
+#[test]
+fn layout_unrelated_allowed_root_change_does_not_reclassify_history() {
+    let r = repo();
+    let root = &r.0;
+    put(root, "old/__pycache__/a.pyc", b"old\n");
+    commit(root);
+    let mut cfg: serde_json::Value = serde_json::from_slice(&config()).unwrap();
+    cfg["python_artifacts"]["allowed_roots"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!("other-cache/"));
+    put(root, CONFIG, &serde_json::to_vec(&cfg).unwrap());
+    command(root, &["add", CONFIG]);
+    assert!(
+        report(root).errors.is_empty(),
+        "an already-forbidden cache is still unrelated history"
+    );
+}
+
+#[test]
+fn layout_malformed_historical_policy_can_be_repaired_or_deleted() {
+    let r = repo();
+    let root = &r.0;
+    put(root, CONFIG, b"invalid JSON\n");
+    commit(root);
+    put(root, CONFIG, &config());
+    command(root, &["add", CONFIG]);
+    assert!(report(root).errors.is_empty());
+    put(root, "src/examples/old.rs", b"old\n");
+    command(root, &["add", "src/examples/old.rs"]);
+    assert!(
+        !report(root).errors.is_empty(),
+        "repair still enforces the effective new policy"
+    );
+    command(root, &["rm", "-f", "src/examples/old.rs"]);
+    command(root, &["rm", "-f", CONFIG]);
+    assert!(report(root).errors.is_empty());
+}
+
+#[test]
+fn layout_worktree_managed_test_ancestors_do_not_exempt_siblings_or_caches() {
+    let r = repo();
+    let root = &r.0;
+    put(
+        root,
+        ".codex/managed-skeleton.json",
+        br#"{"assets":[{"target":".codex/hooks/tests/a.rs"}]}"#,
+    );
+    put(root, ".codex/hooks/tests/a.rs", b"test fixture\n");
+    assert!(worktree(root).errors.is_empty());
+    put(root, ".codex/hooks/tests/b.rs", b"unmanaged\n");
+    assert!(
+        worktree(root)
+            .errors
+            .iter()
+            .any(|f| f.path == ".codex/hooks/tests/b.rs")
+    );
+    put(root, ".codex/hooks/tests/__pycache__/a.pyc", b"cache\n");
+    assert!(
+        worktree(root)
+            .errors
+            .iter()
+            .any(|f| f.code == "misplaced-python-artifact")
+    );
+}
+
+#[test]
+fn layout_workspace_member_globs_use_staged_paths_and_detect_target_changes() {
+    let r = repo();
+    let root = &r.0;
+    put(
+        root,
+        "src/Cargo.toml",
+        b"[workspace]\nmembers=['../scr*/tool']\n",
+    );
+    put(
+        root,
+        "scripts/tool/Cargo.toml",
+        b"[package]\nname='probe'\nversion='1.0.0'\n",
+    );
+    command(root, &["add", "."]);
+    assert!(
+        report(root)
+            .errors
+            .iter()
+            .any(|f| f.code == "external-cargo-registration")
+    );
+    commit(root);
+    put(root, "src/lib.rs", b"pub fn ok() {}\n");
+    command(root, &["add", "src/lib.rs"]);
+    assert!(report(root).errors.is_empty());
+    put(root, "scripts/tool/src/lib.rs", b"pub fn probe() {}\n");
+    command(root, &["add", "scripts/tool/src/lib.rs"]);
+    assert!(
+        report(root)
+            .errors
+            .iter()
+            .any(|f| f.code == "external-cargo-registration")
+    );
+    assert!(
+        worktree(root)
+            .errors
+            .iter()
+            .any(|f| f.code == "external-cargo-registration")
+    );
+    for (pattern, path, matches) in [
+        ("scripts/**/tool", "scripts/tool", true),
+        ("scripts/**/tool", "scripts/a/tool", true),
+        ("scripts/[!a]ool", "scripts/tool", true),
+        ("scripts/too?", "scripts/tool", true),
+        ("scripts/*", "scripts/a/tool", false),
+    ] {
+        assert_eq!(
+            glob_regex(pattern).unwrap().is_match(path),
+            matches,
+            "{pattern} -> {path}"
+        );
+    }
+}
+
+#[test]
+fn layout_inline_cargo_targets_and_invalid_member_types_are_checked() {
+    let cfg = parse(&config()).unwrap();
+    let hits = check_manifest(
+        "src/Cargo.toml",
+        b"bin=[{name='tool',path='../scripts/tool/main.rs'}]\n",
+        &cfg,
+        None,
+        &BTreeSet::new(),
+        true,
+        &BTreeSet::new(),
+        None,
+    );
+    assert!(hits.iter().any(|f| f.code == "external-cargo-registration"));
+    let hits = check_manifest(
+        "src/Cargo.toml",
+        b"[workspace]\nmembers='../scripts/tool'\n",
+        &cfg,
+        None,
+        &BTreeSet::new(),
+        true,
+        &BTreeSet::new(),
+        None,
+    );
+    assert!(hits.iter().any(|f| f.code == "invalid-cargo-layout"));
+}
+
+#[cfg(windows)]
+#[test]
+fn layout_config_through_junction_is_not_read() {
+    use std::process::Command;
+    let r = repo();
+    let root = &r.0;
+    let target = root.join("external-policy");
+    fs::create_dir_all(&target).unwrap();
+    fs::write(target.join("artifact-layout.json"), config()).unwrap();
+    // A separate fixture root prevents touching a tracked .codex directory.
+    let linked = root.join("linked-project");
+    fs::create_dir_all(&linked).unwrap();
+    let junction = linked.join(".codex");
+    let output = Command::new("cmd")
+        .args(["/c", "mklink", "/J"])
+        .arg(&junction)
+        .arg(&target)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let result = worktree(&linked);
+    fs::remove_dir(&junction).unwrap();
+    assert!(
+        result
+            .errors
+            .iter()
+            .any(|f| f.code == "artifact-layout-incomplete")
+    );
+}
+
+#[test]
+fn layout_combined_config_and_cargo_changes_preserve_reference_scope() {
+    let r = repo();
+    let root = &r.0;
+    let manifest = b"[workspace]\nmembers=['../scr*/tool']\n";
+    put(root, "src/Cargo.toml", manifest);
+    put(
+        root,
+        "scripts/tool/Cargo.toml",
+        b"[package]\nname='tool'\nversion='1.0.0'\n",
+    );
+    commit(root);
+    let mut cfg: serde_json::Value = serde_json::from_slice(&config()).unwrap();
+    cfg["python_artifacts"]["allowed_roots"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!("other-cache/"));
+    put(root, CONFIG, &serde_json::to_vec(&cfg).unwrap());
+    put(
+        root,
+        "src/Cargo.toml",
+        b"# a comment only\n[workspace]\nmembers=['../scr*/tool']\n",
+    );
+    command(root, &["add", "."]);
+    assert!(
+        report(root).errors.is_empty(),
+        "unrelated policy and comment changes cannot revive historical references"
+    );
+    put(root, "scripts/tool/src/lib.rs", b"pub fn changed() {}\n");
+    command(root, &["add", "scripts/tool/src/lib.rs"]);
+    assert!(
+        report(root)
+            .errors
+            .iter()
+            .any(|f| f.code == "external-cargo-registration"),
+        "glob target changes remain in scope even with a simultaneous policy change"
+    );
+}
+
+#[test]
+fn layout_managed_identity_removal_checks_only_newly_unmanaged_paths() {
+    let r = repo();
+    let root = &r.0;
+    put(root, MANAGED, br#"{"assets":[{"target":".codex/hooks/tests/a.rs"},{"target":".codex/hooks/tests/b.rs"}]}"#);
+    put(root, ".codex/hooks/tests/a.rs", b"managed a\n");
+    put(root, ".codex/hooks/tests/b.rs", b"managed b\n");
+    put(root, "legacy/tests/old.rs", b"old unowned debt\n");
+    commit(root);
+    put(
+        root,
+        MANAGED,
+        br#"{"assets":[{"target":".codex/hooks/tests/b.rs"}]}"#,
+    );
+    command(root, &["add", MANAGED]);
+    let errors = report(root).errors;
+    assert!(errors.iter().any(|f| f.path == ".codex/hooks/tests/a.rs"));
+    assert!(
+        !errors
+            .iter()
+            .any(|f| f.path == ".codex/hooks/tests/b.rs" || f.path == "legacy/tests/old.rs")
+    );
+    // Removing the newly unowned file resolves the actual change.
+    command(root, &["rm", ".codex/hooks/tests/a.rs"]);
+    assert!(report(root).errors.is_empty());
+}
+#[test]
+fn layout_invalid_toml_is_an_error_and_preview_remains_advisory() {
+    let r = repo();
+    let root = &r.0;
+    put(root, "src/Cargo.toml", b"[invalid\n");
+    command(root, &["add", "src/Cargo.toml"]);
+    assert!(
+        report(root)
+            .errors
+            .iter()
+            .any(|f| f.code == "invalid-cargo-layout")
+    );
+    let preview = edited(root, "src/Cargo.toml");
+    assert!(preview.errors.is_empty());
+    assert!(!preview.advisories.is_empty());
+    assert!(
+        crate::project_structure::inspect_documents(root)
+            .errors
+            .is_empty()
+    );
+}
+#[cfg(windows)]
+#[test]
+fn layout_windows_case_and_separator_are_normalized() {
+    let cfg = parse(&config()).unwrap();
+    assert!(
+        !path_findings(
+            "SRC\\EXAMPLES\\probe.rs",
+            false,
+            Some(&cfg),
+            &BTreeSet::new()
+        )
+        .is_empty()
+    );
+    assert!(within("SRC/sub/file.rs", "src/"));
+    assert!(!within("src-other/file.rs", "src/"));
+}

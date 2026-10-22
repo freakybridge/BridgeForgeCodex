@@ -15,6 +15,16 @@
 
 > **追溯说明**：v0.1.0 - v0.7.0 基于 git log 历史回溯标记，**git tag 仅从 v0.8.0 开始打**。早期未启用版本号管理是 setup_agent 自打脸问题（要求下游用但自己没用），v0.8.0 修补。
 
+## [3.1.0] - 2026-10-23
+
+### Added
+
+- [product][repo][meta] 合并 artifact-layout 通用检查并优化同步身份查询
+
+### Release analysis
+
+- Product: Adds project-owned artifact-layout policy, staged impact checks and advisory edit integration; retains the approved A workflow and Git protections, with batched identity queries removing measured synchronization regression.
+
 ## [3.0.1] - 2026-10-22
 
 ### Fixed

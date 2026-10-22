@@ -53,7 +53,7 @@ run_hook config-health --strict
 run_cli check baseline --root .
 run_cli check baseline --root . --index
 run_hook encoding --pre-commit
-run_cli check project-structure --root .
+run_cli check project-structure --root . --pre-commit
 run_cli check skill-metadata --root .
 
 # <<< BRIDGEFORGE_CODEX_MANAGED_END

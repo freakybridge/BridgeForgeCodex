@@ -241,6 +241,21 @@ fn upgrade_keeps_skeleton_ready_and_preserves_project_release_checks() {
 }
 
 #[test]
+fn artifact_layout_policy_remains_project_owned_during_update_and_dry_plan() {
+    let (root, project, factory) = upgrade_fixture("1.8.6", "1.8.7");
+    let path = project.join(".codex/artifact-layout.json");
+    let bytes = b"{\r\n  \"schema\": 1, \"source_roots\": [\"custom-src/\"]\r\n}\r\n";
+    fs::write(&path, bytes).unwrap();
+    let plan = build_plan(&project, &factory, SyncMode::Update).unwrap();
+    assert_eq!(fs::read(&path).unwrap(), bytes, "planning must be zero-write");
+    assert!(!plan.safe.iter().chain(plan.risk.iter()).any(|a| a.target == ".codex/artifact-layout.json"));
+    let fingerprint = plan.aggregate_fingerprint.clone();
+    apply_plan(plan, &fingerprint, false).unwrap();
+    assert_eq!(fs::read(&path).unwrap(), bytes, "upgrade must preserve policy bytes");
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn compatible_update_retires_old_project_map_paths() {
     let (root, project, factory) = upgrade_fixture("1.8.6", "1.8.7");
     for target in [".codex/find-doc.map.md", ".codex/sync-docs.map.md"] {

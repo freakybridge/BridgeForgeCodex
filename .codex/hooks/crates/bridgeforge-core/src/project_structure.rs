@@ -171,7 +171,29 @@ fn dead_references(doc: &Path, root: &Path, report: &mut StructureReport) {
     }
 }
 
+/// Full worktree audit. Submission and record-only callers use explicit modes.
 pub fn inspect(root: &Path) -> StructureReport {
+    let mut report = inspect_documents(root);
+    if root.is_dir() && !is_link(root) {
+        let layout = crate::artifact_layout::worktree(root);
+        report.errors.extend(layout.errors);
+        report.advisories.extend(layout.advisories);
+    }
+    report
+}
+
+pub fn pre_commit(root: &Path) -> StructureReport {
+    let mut report = inspect_documents(root);
+    if root.is_dir() && !is_link(root) {
+        let layout = crate::artifact_layout::pre_commit(root);
+        report.errors.extend(layout.errors);
+        report.advisories.extend(layout.advisories);
+    }
+    report
+}
+
+/// Preserve the lightweight document-only contract used by release preparation.
+pub fn inspect_documents(root: &Path) -> StructureReport {
     let mut report = StructureReport::default();
     if !root.is_dir() || is_link(root) {
         report.errors.push(Finding {
@@ -180,15 +202,6 @@ pub fn inspect(root: &Path) -> StructureReport {
             message: "项目根必须是普通目录，禁止链接".into(),
         });
         return report;
-    }
-    for name in ["test", "tests"] {
-        if root.join(name).exists() {
-            report.errors.push(Finding {
-                code: "legacy-test-root".into(),
-                path: name.into(),
-                message: format!("顶层 {name}/ 已禁止；测试代码必须迁入 scripts/tests/**"),
-            });
-        }
     }
     let doc = root.join("doc");
     if !doc.exists() {

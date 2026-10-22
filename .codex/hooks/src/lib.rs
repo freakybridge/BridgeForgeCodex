@@ -287,7 +287,8 @@ fn post_edit(payload: &Value) -> i32 {
         return output.finish("PostToolUse", step.code);
     }
     for edit in &virtuals {
-        let handlers: [fn(&Value) -> StepResult; 3] = [
+        let handlers: [fn(&Value) -> StepResult; 4] = [
+            post::artifact_layout,
             post::requirements,
             post::cargo_default_run,
             post::fallback_smell,

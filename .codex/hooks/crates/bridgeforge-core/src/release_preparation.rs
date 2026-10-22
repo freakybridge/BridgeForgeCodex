@@ -142,7 +142,7 @@ fn check_records(root: &Path, inputs: &Inputs, cfg: &Config) -> Result<(), Strin
             return Err(format!("record document must be UTF-8 text: {relative}"));
         }
     }
-    let report = crate::project_structure::inspect(root);
+    let report = crate::project_structure::inspect_documents(root);
     if !report.errors.is_empty() {
         return Err(format!("record document structure check failed: {}", serde_json::to_string(&report.errors).map_err(|e| e.to_string())?));
     }

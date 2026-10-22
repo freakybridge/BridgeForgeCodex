@@ -1,4 +1,5 @@
 pub mod archive_scan;
+pub mod artifact_layout;
 mod artifact_cache;
 pub mod asset_migration;
 pub mod audit_user_allow;

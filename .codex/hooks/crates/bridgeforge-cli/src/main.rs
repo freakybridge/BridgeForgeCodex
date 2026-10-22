@@ -144,7 +144,11 @@ fn check(command: &str, args: &[String]) -> CommandOutcome {
             }
         }
         "project-structure" => {
-            let report = bridgeforge_core::project_structure::inspect(context.root());
+            let report = if has(args, "--pre-commit") {
+                bridgeforge_core::project_structure::pre_commit(context.root())
+            } else {
+                bridgeforge_core::project_structure::inspect(context.root())
+            };
             CommandOutcome {
                 code: if report.errors.is_empty() {
                     0

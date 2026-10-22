@@ -1344,6 +1344,56 @@ fn configured_split_index_is_blocked_before_shared_index_exists() {
 }
 
 #[test]
+fn repository_identity_batches_facts_without_caching_later_guards() {
+    struct Counting(std::cell::Cell<usize>);
+    impl ProcessRunner for Counting {
+        fn run(&self, request: &ProcessRequest) -> std::io::Result<ProcessOutput> {
+            if request.args.first().is_some_and(|arg| arg == "rev-parse") {
+                self.0.set(self.0.get() + 1);
+            }
+            SystemProcessRunner.run(request)
+        }
+    }
+    let repo = real_repository("identity-batch");
+    let counter = Counting(std::cell::Cell::new(0));
+    let git = Git { root: &repo.0, runner: &counter };
+    let first = RepositoryIdentity::capture(&git).unwrap();
+    assert_eq!(counter.0.get(), 2); // Batched facts plus independent split-index query.
+    let independent = Git { root: &repo.0, runner: &SystemProcessRunner };
+    for (args, expected) in [
+        (vec!["rev-parse", "--path-format=absolute", "--git-dir"], first.git_dir.as_str()),
+        (vec!["rev-parse", "--path-format=absolute", "--git-common-dir"], first.common_dir.as_str()),
+        (vec!["rev-parse", "--path-format=absolute", "--git-path", "index"], first.index_path.to_str().unwrap()),
+        (vec!["rev-parse", "HEAD"], first.head_oid.as_str()),
+    ] {
+        assert_eq!(independent.required(&args, Duration::from_secs(30)).unwrap(), expected);
+    }
+    fs::write(repo.0.join("tracked.txt"), b"next\n").unwrap();
+    git_ok(&repo.0, &["add", "."]);
+    git_ok(&repo.0, &["commit", "-m", "next identity"]);
+    let second = RepositoryIdentity::capture(&git).unwrap();
+    assert_eq!(counter.0.get(), 4);
+    assert_ne!(first.head_oid, second.head_oid);
+    assert!(first.same_layout_and_config(&second));
+}
+
+#[test]
+fn repository_identity_rejects_malformed_batch_instead_of_using_partial_facts() {
+    let root = std::env::temp_dir();
+    let directory = root.to_string_lossy();
+    for body in [
+        "".to_owned(),
+        format!("{directory}\n{directory}\n{directory}\nnot-an-oid"),
+        format!("relative\n{directory}\n{directory}\n{}", "a".repeat(40)),
+        format!("{directory}\n{directory}\n{directory}\n{}\nextra", "a".repeat(40)),
+    ] {
+        let runner = FakeRunner { outputs: RefCell::new(vec![out(0, &body)]) };
+        let git = Git { root: &root, runner: &runner };
+        assert!(RepositoryIdentity::capture(&git).unwrap_err().contains("unexpected repository identity"));
+    }
+}
+
+#[test]
 fn linked_worktree_uses_its_own_index_and_common_identity() {
     let repo = real_repository("linked-worktree");
     let linked = repo.0.join("linked");

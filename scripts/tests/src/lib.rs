@@ -412,3 +412,5 @@ mod git_sync_runtime;
 #[cfg(test)]
 mod git_sync_polyglot_runtime;
 mod schema4_fixture;
+#[cfg(test)]
+mod artifact_layout_runtime;
