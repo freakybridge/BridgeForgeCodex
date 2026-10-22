@@ -1,6 +1,6 @@
 ---
-lifecycle: active
-validation_status: awaiting_validation
+lifecycle: completed
+validation_status: verified
 ---
 
 # git-sync 执行环境一致性与单次确认
@@ -95,3 +95,53 @@ M：一个 Skill 入口及三个 reference 合同、一个 Rust 发布输入模�
 最终生产源码及当前版本资产已完成：source_tree_sha256=019a8e2b710f66237e1849f21b8a58b05f02c028de64352979cfdde4b927214e。最终独立增量审计通过，工程指纹为 4ad92d44b02ba2f8882dd24bbcbf5c2861dab900dcd32e49e362f5e94109c7c7。新正式 CLI 跨环境旧分析拒绝、新环境完整分析预览通过；源码修复及确认合同已完成，真实自然对话、平台 UI 次数及 Unix 分支未实测。
 
 已通过本轮 baseline、metadata、manifest、structure、mirror-drift 五项（退出码均为 0）；完整 workspace、factory fixture 和最终隔离准备未完成，validation_status 保持 awaiting_validation，不结算 TODO-018/TODO-019。恢复时先核对实际 HEAD、工作区和受管产物；提交会使此前绑定旧 Git 状态的分析与检查缓存失效，不能把本机 `.runtime/` 缓存或旧 prepared 收据当成换机后的成功证据。开发验证按开发收口清单恢复；普通 git-sync 不因此运行全量回归或要求开发验收。
+
+## 恢复完整工程验证（2026-10-22）
+
+用户明确要求继续完成剩余完整测试及隔离发布验证，通过后报告，先不发布。当前基准提交为 `aa9f0f76c786eda2e1e55d2e1f80307ef5c080e0`，恢复前工作区干净、VERSION 为 3.0.0。本轮只恢复验证并补充本记录，不提交、推送、正式发布、安装用户级或修改真实下游。
+
+沿用 `.codex/development-checks.json` 的七项检查及受管隔离准备流程；旧本机准备记录与当前输入不匹配，不作为通过证据。按当前源码独立复核审计结论，再于同一执行宿主重新预览、生成完整分析及运行 prepare-release。历史约 59 分钟 workspace 与约 18 分钟 fixture 只用于估时，本轮实际耗时及结果待记录。
+
+### 本次增量验收授权
+
+用户随后要求缩短测试时间、尽快完成开发，并明确回复“同意开始吧”，同意本次不重复最新全量测试，改为针对最新改动的增量验收。该决定只替代本次完整 workspace/fixture 重跑要求，不永久修改工厂开发收口规则。
+
+本次保留五项基础检查，核心库 `release::` 和 `git_sync::` 测试，以及 factory 的 `factory_version_config::`、`git_sync_runtime::`、`git_sync_polyglot_runtime::`、`build_provenance::` 场景；保留独立审计及受管隔离 3.0.1 目标构建。暂时缩小本轮检查配置，结束后按原字节恢复全量配置；单独保存增量准备收据，不将恢复原配置后的状态宣称为全量 prepared。上一轮 456/96 通过只引用为历史证据，本机不具备对应最终日志，不伪造本轮复用或通过记录。真实用户级/下游、自然对话确认次数及 Unix 分支继续标为未验证。
+
+### 本次增量工程结果（2026-10-22）
+
+以下为用户验收前的工程快照，最终验收决定见文末。用户授权的增量验证已全部通过；当时尚未结算 TODO-018/TODO-019，也未正式发布。生产源码及测试断言未改动。本次受管流程于 22:54:06 至 23:23:50（UTC+8）执行，耗时约 29 分 44 秒，不含前置审查、路径参数恢复和交付记录时间。
+
+| 验证项 | 本次结果 |
+|---|---|
+| 基础检查 | baseline、metadata、manifest、structure、mirror-drift 五项全部退出 0 |
+| 核心增量 | 234 passed / 0 failed / 4 ignored / 190 filtered out；检查耗时 1259.022 秒，测试主体 1235.86 秒 |
+| 发布场景增量 | 18 passed / 0 failed / 3 ignored / 82 filtered out；检查耗时 310.659 秒 |
+| 独立审计 | `/root/validation_audit` 对当前 HEAD 的实际修复、回归断言、确认合同及镜像传播只读复核 passed，未发现确定 P1/P2；认可本次增量范围 |
+| 隔离目标构建 | 3.0.1 的 CLI、Hook 和两份构建收据生成成功；prepare 返回 prepared、checks_passed=7、checks_executed=7、checks_reused=0；同宿主终态再次返回 prepared |
+| 原仓库保护 | HEAD 仍为 aa9f0f76c786eda2e1e55d2e1f80307ef5c080e0，暂存条目不变，VERSION 与实际 CLI 自检仍为 3.0.0；未提交、推送、正式发布或写真实下游 |
+| 配置恢复 | 原 `.codex/development-checks.json` 按字节恢复，SHA-256 为 c2fbd0effbe5b214f765a1e1b3ad6cfb4f0995fd5ada56b0f86bca044d65c490；永久全量规则未修改 |
+
+核心命令：`cargo test --locked --config scripts/tests/factory-cargo.toml --manifest-path .codex/hooks/Cargo.toml -p bridgeforge-core --lib -- --test-threads=4 release:: git_sync::`。
+
+场景命令：`cargo test --locked --manifest-path scripts/tests/Cargo.toml -- --test-threads=4 factory_version_config:: git_sync_runtime:: git_sync_polyglot_runtime:: build_provenance::`。
+
+同宿主受管入口：`git-sync --prepare-release --message "fix: validate sync context and ownership repairs" --audit-file .runtime/git-sync-validation-20261022/audit.json --release-analysis-file .runtime/git-sync-validation-20261022/analysis.json`。执行前先核对实际 changes，与已审阅内容及临时验证配置一致，再重新生成完整分析；没有复用其他宿主的旧 fingerprint。
+
+本次明确覆盖 stat 假脏稳定、索引只读、真实内容/暂存/模式漂移拒绝、二进制与空文件差异、净还原绑定、Rust/Python 发布、三个 Cargo manifest/lock 同步、失败回滚、重复执行以及构建产物来源保护。四项核心 ignored 为指定 PDM/Poetry/uv 工具环境条件项；三项 fixture ignored 为原有显式性能实验。Unix 特殊路径分支、真实自然对话/平台 UI 次数、真实用户级与下游验证未执行；最新全量未重跑，不把增量结果等同全量。
+
+独立保存的准备收据为 `.runtime/git-sync-validation-20261022/incremental-prepared.json`，工程指纹为 `sha256:9fb7a506754d29b8c196ff2d33356719ce9a5a5e618e2b29dbbdd265e03a1911`。同目录的 `final-status.json`、`finished.json`、`config-restored.json` 分别证明临时配置下终态、原仓库状态和原配置恢复。核心日志 hash 为 `7d786c8324ee9768a4d3f5d46cac58de9716d1ce3a695064468bfc5b62d39097`，fixture 日志 hash 为 `74c8448ecf13a2c3464097d6bf6e95e7427b25af7d6d1e3563a9fe7c9dcaa900`，均位于 `.runtime/bridgeforge-codex/release-preparation/blobs/`。
+
+收据绑定本次临时增量配置及执行环境；恢复全量配置后，从当前工具环境读取 development-status 返回 stale（development check environment changed），不代表本次测试失败，也不能称当前全量配置 prepared。后续正式发布须在实际执行环境重新预览并生成分析，不携带本次旧分析直接发布。
+
+编排经验：首次带分析预览拒绝绝对分析路径（release analysis must belong to this project），测试尚未启动且配置自动恢复；改用项目内相对路径后完成本次流程，未修改产品解析器或放宽路径校验。完整核心组日志按组返回，等待期间没有可靠百分比；此次核心增量实测约 21 分钟，不能把其他批次约 59 分钟当作固定耗时，也不能据此宣称同条件性能提升。
+
+## 用户验收2026-10-22
+
+用户明确调用“$summary accept，按这次增量验证结果验收，先不要发布。”，确认本次执行环境一致性修复及全流程单次确认开发符合需求，接受已约定的增量验证范围。该决定不授权提交、推送、正式发布、用户级安装或真实下游写入。
+
+1. TODO-019 按本次增量结果验收为已完成：核心测试 234 passed、发布场景 18 passed、五项基础检查、独立审计及隔离 3.0.1 构建均通过；原全量检查配置已按字节恢复。需求卡状态更新为 completed / verified，该状态仅表示用户接受本次明确约定的验证范围。
+2. TODO-018 保留为待执行的独立后续事项：相关修复、同宿主预览及隔离准备已有通过证据，但正式受管发布尚未执行。用户本次明确要求先不发布；后续须另获发布授权，在实际执行环境重新预览并生成分析，不复用失效分析或绕过漂移保护。
+3. 保留全部未验证边界：最新全量未重跑，7 项既有条件测试/性能实验未执行，Unix 特殊路径、真实对话/平台 UI 确认次数、真实用户级及下游仍未实测；不得把增量验收或临时配置下 prepared 扩大为这些场景通过。
+
+本次只更新既有验收记录、TODO-018/TODO-019 和文档索引，不新增待办、不修改源码/测试/配置/规则/Memory，不自动归档。VERSION 仍为 3.0.0；未提交、未推送、未正式发布。

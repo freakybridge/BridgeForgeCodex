@@ -8,7 +8,7 @@ delivery_layout: flat
 
 ## 从这里开始
 
-当前开发：[git-sync 执行环境一致性与单次确认](1_delivery/git-sync-release-rewrite/requirements_2026-10-22_git-sync-context-and-confirmation.md)（源码修复、当前版本受管构建、定向回归和独立审计完成；用户切换前保存已中断全测，五项基础检查通过，完整 workspace、factory fixture 和隔离准备待恢复，awaiting_validation；TODO-018、TODO-019 未结算，本次仅普通 Git 保存，不升版）。
+当前验收：[git-sync 执行环境一致性与单次确认](1_delivery/git-sync-release-rewrite/requirements_2026-10-22_git-sync-context-and-confirmation.md#用户验收2026-10-22)（2026-10-22 用户按增量结果验收，TODO-019 已完成：核心 234 项、发布场景 18 项、五项基础检查与独立审计通过，隔离 3.0.1 构建成功，受管流程约 29 分 44 秒；原全量配置已恢复，最新全量及真实对话/下游未实测。TODO-018 正式发布保留待执行，用户明确先不发布；VERSION 仍 3.0.0，本轮未提交或推送）。
 
 最近验收：[单次升级与历史 Cargo 归属补正](1_delivery/git-sync-release-rewrite/requirements_2026-10-22_upgrade-and-ownership.md#用户验收与发布授权2026-10-22)（2026-10-22 用户验收，TODO-016、TODO-017 已完成；workspace 456、fixture 96 项、七项工程检查与独立审计通过；发布预览因 analysis stale 中断，后续 TODO-018；未提交推送，用户级安装与真实下游升级未执行）。
 

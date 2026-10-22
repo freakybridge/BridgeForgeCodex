@@ -43,7 +43,7 @@ checksum = "36f64beae40a84da1b4b26ff2761a5b895c12adc41dc25aaee1c4f2bbfe97a6e"
 
 [[package]]
 name = "bridgeforge-core"
-version = "3.0.0"
+version = "3.0.1"
 dependencies = [
  "chrono",
  "libc",
@@ -61,7 +61,7 @@ dependencies = [
 
 [[package]]
 name = "bridgeforge-factory-tests"
-version = "3.0.0"
+version = "3.0.1"
 dependencies = [
  "bridgeforge-core",
  "bridgeforge-hook",
@@ -72,7 +72,7 @@ dependencies = [
 
 [[package]]
 name = "bridgeforge-hook"
-version = "3.0.0"
+version = "3.0.1"
 dependencies = [
  "bridgeforge-core",
  "chrono",

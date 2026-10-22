@@ -1,6 +1,6 @@
 {
   "schema_version": 4,
-  "release_version": "3.0.0",
+  "release_version": "3.0.1",
   "host": "codex",
   "stamp": ".codex/.bridgeforge_codex_version",
   "contract_target": ".codex/managed-skeleton.json",
@@ -427,14 +427,14 @@
       "source": "templates/hooks/Cargo.lock",
       "target": ".codex/hooks/Cargo.lock",
       "strategy": "whole",
-      "current_sha256": "sha256:db537a3f5b20d1eecd813c68c4fe2def94a1d8f5a109dd798d89581e3ddefd26"
+      "current_sha256": "sha256:a031bfae9298c50e9644a206ba40bd0acdb5920cd8dcfe6fe764da7ecff62cca"
     },
     {
       "id": "codex.hooks.cargo-toml",
       "source": "templates/hooks/Cargo.toml",
       "target": ".codex/hooks/Cargo.toml",
       "strategy": "whole",
-      "current_sha256": "sha256:c9d575741922055732ab4f629bba2b9798a6a00d2dd74e647a7d3ff0054dc15c"
+      "current_sha256": "sha256:360875b85071357f576b888e590f8a4917e497e8b1f6dcecbf953c8747312444"
     },
     {
       "id": "codex.hooks.readme-md",
@@ -1068,8 +1068,8 @@
           "status": "ok"
         }
       },
-      "source_tree_sha256": "sha256:019a8e2b710f66237e1849f21b8a58b05f02c028de64352979cfdde4b927214e",
-      "lockfile_sha256": "sha256:db537a3f5b20d1eecd813c68c4fe2def94a1d8f5a109dd798d89581e3ddefd26",
+      "source_tree_sha256": "sha256:453731a19df6023c3fa373ca202f5e463cdea6dc5623853360c6a886281e7d3c",
+      "lockfile_sha256": "sha256:a031bfae9298c50e9644a206ba40bd0acdb5920cd8dcfe6fe764da7ecff62cca",
       "build_recipe_sha256": "sha256:d26d34aa838a1a1f5556ef92f492d2abc7b415c2163e2a4c9ea7e07121dad78a",
       "self_test_sha256": "sha256:74a8b4a4c20ff1f5cc6660697138c151d9ed2172e6d57e75cce671d773e98f5a"
     },
@@ -1113,8 +1113,8 @@
           "status": "ok"
         }
       },
-      "source_tree_sha256": "sha256:019a8e2b710f66237e1849f21b8a58b05f02c028de64352979cfdde4b927214e",
-      "lockfile_sha256": "sha256:db537a3f5b20d1eecd813c68c4fe2def94a1d8f5a109dd798d89581e3ddefd26",
+      "source_tree_sha256": "sha256:453731a19df6023c3fa373ca202f5e463cdea6dc5623853360c6a886281e7d3c",
+      "lockfile_sha256": "sha256:a031bfae9298c50e9644a206ba40bd0acdb5920cd8dcfe6fe764da7ecff62cca",
       "build_recipe_sha256": "sha256:079aefde96a8925913b7b6cd3ee9d8c7086014ad5e4b6e3f74a911b2ce49e537",
       "self_test_sha256": "sha256:6b0426352bb099a61fae52600d4f684c0e11bca644fa767a9b79d224e939b0e0"
     }
