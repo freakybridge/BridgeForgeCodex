@@ -151,6 +151,11 @@ fn rejects_unsafe_target() {
 #[test]
 fn contract_schema_is_exact_and_asset_identities_are_unique() {
     let (mut contract, _) = contract_and_asset("codex.hooks-config");
+    contract["release_model"] = Value::String("product-packages".into());
+    assert!(validate_contract(&contract).is_ok());
+    contract["release_model"] = Value::String("synchronized".into());
+    assert!(validate_contract(&contract).unwrap_err().contains("release_model"));
+    let (mut contract, _) = contract_and_asset("codex.hooks-config");
     contract["unexpected"] = Value::Bool(true);
     assert!(validate_contract(&contract).is_err());
 

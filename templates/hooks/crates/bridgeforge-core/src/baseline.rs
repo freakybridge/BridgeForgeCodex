@@ -129,19 +129,19 @@ fn safe_relative_string(value: &Value) -> bool {
 }
 
 fn validate_contract(value: &Value) -> Result<(), String> {
+    let mut keys = vec![
+        "schema_version", "release_version", "host", "stamp", "contract_target",
+        "assets", "baseline_model", "compatibility_baseline", "generated_assets",
+    ];
+    if value.get("release_model").is_some() {
+        if value["release_model"] != "product-packages" {
+            return Err("unsupported managed release_model".into());
+        }
+        keys.push("release_model");
+    }
     exact_keys(
         value,
-        &[
-            "schema_version",
-            "release_version",
-            "host",
-            "stamp",
-            "contract_target",
-            "assets",
-            "baseline_model",
-            "compatibility_baseline",
-            "generated_assets",
-        ],
+        &keys,
         "current baseline top-level",
     )?;
     if value["schema_version"].as_u64() != Some(4)

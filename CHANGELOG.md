@@ -15,6 +15,16 @@
 
 > **追溯说明**：v0.1.0 - v0.7.0 基于 git log 历史回溯标记，**git tag 仅从 v0.8.0 开始打**。早期未启用版本号管理是 setup_agent 自打脸问题（要求下游用但自己没用），v0.8.0 修补。
 
+## [5.0.0] - 2026-10-23
+
+### Added
+
+- [product][repo][meta] 统一发布模型并接续历史分界 **BREAKING:**
+
+### Release analysis
+
+- Product: Retire synchronized publishing and content-free package bumps; require the product-packages contract and integrate its one-time historical cutover into governed updates.
+
 ## [4.0.2] - 2026-10-23
 
 ### Changed

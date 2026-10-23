@@ -86,6 +86,8 @@ pub struct SyncPlan {
     project_hook_reads: BTreeMap<String, Option<Vec<u8>>>,
     #[serde(skip)]
     public_actions: Vec<SyncAction>,
+    #[serde(skip)]
+    release_upgrade: Option<crate::release::schema4::ReleaseUpgrade>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1438,6 +1440,32 @@ pub fn build_plan_with_inputs(
         )?
     };
     project_hook_reads.extend(target_reads);
+    // A fresh Init may not have a committed VERSION baseline yet. Its first
+    // release setup establishes that proof; existing projects must not skip it.
+    let release_upgrade = if contract["release_model"] == "product-packages" && mode != SyncMode::Init {
+        crate::release::schema4::prepare_project_upgrade(&project_root)?
+    } else { None };
+    if let Some(upgrade) = &release_upgrade {
+        let target = ".codex/bridgeforge-version.json";
+        let path = project_root.join(target);
+        if writes.contains_key(&path) || deletes.contains(&path) {
+            return Err("release cutover overlaps another project update action".into());
+        }
+        let payload = upgrade.payload()?;
+        risk.push(SyncAction {
+            id: "migration.release-model".into(),
+            target: target.into(),
+            operation: "cutover".into(),
+            risk: true,
+            before_sha256: transaction_file_state(&path)?.as_deref().map(sha_raw),
+            after_sha256: sha_raw(&payload),
+        });
+        generated_source_fingerprints.insert("release-cutover".into(), upgrade.fingerprint().into());
+        for (path, bytes) in upgrade.inputs() {
+            project_hook_reads.insert(relative_posix(&project_root, path)?, bytes.clone());
+        }
+        writes.insert(path, payload);
+    }
     // Hook projection can rewrite a migration target. Receipts must describe the
     // final transactional payload, not the pre-projection configuration.
     if let Some(targets) = asset_migration["targets"].as_array_mut() {
@@ -1505,6 +1533,7 @@ pub fn build_plan_with_inputs(
         project_hook_inputs,
         project_hook_reads,
         public_actions: Vec::new(),
+        release_upgrade,
     })
 }
 
@@ -1821,6 +1850,9 @@ fn apply_plan_internal(
         }
     }
     let _lock = ProjectLock::acquire(&plan.project_root)?;
+    if let Some(upgrade) = &plan.release_upgrade {
+        upgrade.verify(&plan.project_root)?;
+    }
     if let Some(expected) = plan.generated_source_fingerprints.get(RETIRED_SYNC_INPUT)
         && sync_role_fingerprint(&sync_role_inputs(&plan.project_root)?)? != *expected
     {

@@ -8,6 +8,8 @@ delivery_layout: flat
 
 ## 从这里开始
 
+最近验收：[唯一发布模型与历史分界](1_delivery/git-sync-release-rewrite/requirements_2026-10-23_single-release-model.md#用户验收与发布授权2026-10-23)（TODO-022 已完成；15 项定向检查、独立审查、受管构建和 Forge 自身接续通过，约 30 分钟收口；2026-10-23 用户验收并授权 release，实际发布以受管收据为准；真实下游未修改、未验证）。
+
 最近验收：[git-sync 历史分析性能](1_delivery/git-sync-performance/requirements_2026-10-23_history-reuse.md#经验沉淀与用户验收2026-10-23)（15 项定向检查、独立审查与真实规模隔离对照通过；2026-10-23 用户验收并授权 release；自然对话与真实远端对照仍未验证，TODO-009 保留待验证）。
 
 最近验收：[历史共享源码归属补正](1_delivery/git-sync-release-rewrite/implementation_2026-10-23_historical-shared-ownership.md#用户验收与发布授权2026-10-23)（TODO-017 增量；11 个定向场景、独立审查、受管构建及基线一致性通过；2026-10-23 用户验收并授权 release，实际发布以受管收据为准；下游未修改、未验证）。

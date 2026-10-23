@@ -13,6 +13,7 @@ pub(super) use configuration::{load, parse, Baseline, Config};
 use inputs::{capture, Capture};
 pub use migration::{configuration_apply, configuration_plan, migration_apply, migration_plan};
 pub use migration::{repair_baseline_apply, repair_baseline_plan};
+pub(crate) use migration::{prepare_project_upgrade, Prepared as ReleaseUpgrade};
 pub use plan::{build, preview};
 pub(super) const CONFIG: &str = ".codex/bridgeforge-version.json";
 
@@ -31,6 +32,20 @@ pub(super) fn prefetch_history(cfg: &Config, head: &str, reader: &history_cache:
 }
 pub(super) fn digest(bytes: &[u8]) -> String {
     format!("sha256:{:x}", Sha256::digest(bytes))
+}
+
+fn product_mapping_inputs(
+    cfg: &Config,
+    packages: &BTreeMap<String, NativePackage>,
+    inventory: &[String],
+    read: &mut impl FnMut(&str) -> Result<Option<Vec<u8>>, String>,
+    product: SemVer,
+) -> Result<BTreeMap<String, Option<Vec<u8>>>, String> {
+    let inputs = rust::product_mapping_inputs(&cfg.product_manifests, inventory, read, product)?;
+    if packages.values().any(|p| inputs.contains_key(&p.manifest)) {
+        return Err("product manifest workspaces must not include independently registered packages".into());
+    }
+    Ok(inputs)
 }
 
 pub(super) fn require_ignored_runtime(
@@ -156,13 +171,16 @@ pub(super) fn verify_historical(
                 ));
             }
         }
+    }
+    if !cfg.product_manifests.is_empty() {
         let inventory = history::paths(&history::git(
             root,
             runner,
             &["ls-tree", "-r", "--name-only", "-z", revision],
         )?);
-        rust::product_mapping_inputs(
-            &cfg.synchronized_manifests,
+        product_mapping_inputs(
+            cfg,
+            &snapshot.packages,
             &inventory,
             &mut |p| revision_payload(root, revision, p, runner),
             version,

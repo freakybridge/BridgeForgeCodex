@@ -74,10 +74,10 @@ pub fn status_with(root:&Path,_runner:&dyn ProcessRunner,reconfigure:bool)->Comm
         let (_,value)=read_config(root)?;
         let confirmed=confirmation(&value)?;
         let strategy=version_strategy(root)?;
-        let mut report=json!({"schema":1,"status":if confirmed{"configured"}else{"configuration-required"},"configuration":CONFIG,"current_strategy":strategy,"migration_required":value["schema_version"]!=4});
+        let mut report=json!({"schema":1,"status":if confirmed{"configured"}else{"configuration-required"},"configuration":CONFIG,"current_strategy":strategy,"release_model":"product-packages","migration_required":value["release_model"]!="product-packages"});
         if reconfigure || !confirmed {
             report["current_configuration"]=value;
-            report["options"]=json!([{"id":"synchronized","label":"Unified project version","available":true},{"id":"independent","label":"Project and independent Rust/Python package versions","available":true,"configuration_proposal_required":true}]);
+            report["options"]=json!([{"id":"independent","label":"Product and changed Rust/Python packages","available":true}]);
         }
         Ok::<_,String>(report)
     })();
@@ -91,10 +91,10 @@ pub fn apply_configuration(root:&Path,runner:&dyn ProcessRunner,path:&str,expect
     schema4::configuration_apply(root,runner,Some(path),None,expected,confirmed)
 }
 pub fn plan(root:&Path,runner:&dyn ProcessRunner,strategy:&str)->CommandOutcome{
-    schema4::configuration_plan(root,runner,None,if strategy=="current"{None}else{Some(strategy)})
+    schema4::configuration_plan(root,runner,None,if strategy=="current" || strategy.is_empty(){None}else{Some(strategy)})
 }
 pub fn apply(root:&Path,runner:&dyn ProcessRunner,strategy:&str,expected:&str,confirmed:bool)->CommandOutcome{
-    schema4::configuration_apply(root,runner,None,if strategy=="current"{None}else{Some(strategy)},expected,confirmed)
+    schema4::configuration_apply(root,runner,None,if strategy=="current" || strategy.is_empty(){None}else{Some(strategy)},expected,confirmed)
 }
 
 #[cfg(all(test, bridgeforge_factory_tests))]

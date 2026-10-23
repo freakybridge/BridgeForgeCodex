@@ -30,12 +30,13 @@ pub(in crate::release) struct LineageState {
 pub(in crate::release) struct Config {
     pub native: polyglot::Config,
     pub strategy: String,
+    pub current_model: bool,
     pub baseline: Baseline,
     pub build_inputs: Vec<String>,
     pub record_inputs: Vec<String>,
     pub required_checks: Vec<String>,
     pub check_scopes: BTreeMap<String, Vec<String>>,
-    pub synchronized_manifests: Vec<String>,
+    pub product_manifests: Vec<String>,
     pub python_environment: Option<PythonEnvironment>,
 }
 
@@ -90,7 +91,7 @@ pub(in crate::release) fn parse(payload: &[u8]) -> Result<Option<Config>, String
         }
     }
     baseline.product_version.parse::<SemVer>()?;
-    if !(1..=3).contains(&baseline.source_schema) {
+    if !(1..=4).contains(&baseline.source_schema) {
         return Err("invalid migration source schema".into());
     }
     let build_inputs = strings(&value, "build_inputs")?;
@@ -114,7 +115,14 @@ pub(in crate::release) fn parse(payload: &[u8]) -> Result<Option<Config>, String
             );
         }
     }
-    let synchronized_manifests = strings(&value, "synchronized_manifests")?;
+    let current_model = value["release_model"] == "product-packages";
+    if value.get("release_model").is_some() && !current_model {
+        return Err("unsupported release_model".into());
+    }
+    if current_model && (strategy != "independent" || value.get("synchronized_manifests").is_some()) {
+        return Err("product-packages requires independent package versions and product_manifests".into());
+    }
+    let product_manifests = strings(&value, if current_model { "product_manifests" } else { "synchronized_manifests" })?;
     let python_environment = value
         .get("python_environment")
         .cloned()
@@ -124,10 +132,10 @@ pub(in crate::release) fn parse(payload: &[u8]) -> Result<Option<Config>, String
     if let Some(environment) = &python_environment {
         environment.validate()?;
     }
-    if strategy == "independent" && !synchronized_manifests.is_empty() {
+    if !current_model && strategy == "independent" && !product_manifests.is_empty() {
         return Err("independent strategy cannot contain synchronized manifests".into());
     }
-    for paths in [&build_inputs, &record_inputs, &synchronized_manifests] {
+    for paths in [&build_inputs, &record_inputs, &product_manifests] {
         let mut unique = BTreeSet::new();
         for p in paths {
             safe_relative(Path::new("."), p.trim_end_matches('/'))?;
@@ -196,6 +204,8 @@ pub(in crate::release) fn parse(payload: &[u8]) -> Result<Option<Config>, String
         "required_checks",
         "check_scopes",
         "synchronized_manifests",
+        "product_manifests",
+        "release_model",
         "python_environment",
     ] {
         object.remove(key);
@@ -237,22 +247,23 @@ pub(in crate::release) fn parse(payload: &[u8]) -> Result<Option<Config>, String
             }
         }
     }
-    for p in &synchronized_manifests {
+    for p in &product_manifests {
         if native.packages.iter().any(|n| n.manifest == *p)
             || Path::new(p).file_name().and_then(|n| n.to_str()) != Some("Cargo.toml")
         {
-            return Err("synchronized_manifests requires unambiguous Cargo product mappings; register language packages via adapters".into());
+            return Err("product_manifests requires unambiguous Cargo product mappings; register language packages via adapters".into());
         }
     }
     Ok(Some(Config {
         native,
         strategy,
+        current_model,
         baseline,
         build_inputs,
         record_inputs,
         required_checks,
         check_scopes,
-        synchronized_manifests,
+        product_manifests,
         python_environment,
     }))
 }

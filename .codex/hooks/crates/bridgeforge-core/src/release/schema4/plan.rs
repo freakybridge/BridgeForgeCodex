@@ -32,21 +32,12 @@ fn render(
             })
             .map(|(p, v)| (p.clone(), v.clone()))
             .collect();
-        let rendered = if cfg.strategy == "synchronized" {
-            rust::render_synchronized_versions(
+        let rendered = rust::render_versions(
                 rust_cfg,
                 &capture.inventory,
                 &mut |p| config::read_current(root, p),
                 &targets,
-            )?
-        } else {
-            rust::render_versions(
-                rust_cfg,
-                &capture.inventory,
-                &mut |p| config::read_current(root, p),
-                &targets,
-            )?
-        };
+            )?;
         polyglot::add_writes(&mut writes, rendered)?;
     }
     if let Some(python_cfg) = &cfg.native.adapters.python {
@@ -241,7 +232,10 @@ fn finish(
         .filter(|c| c.role != "record")
         .cloned()
         .collect::<Vec<_>>();
-    if meaningful.is_empty() && analysis.targets.is_empty() {
+    if meaningful.is_empty() {
+        if !analysis.targets.is_empty() {
+            return Err("version targets require actual release changes".into());
+        }
         return Ok(None);
     }
     for id in analysis.targets.keys() {
@@ -254,34 +248,6 @@ fn finish(
     let mut affected = affected(cfg, &capture);
     interface_impacts(&capture, &analysis, &mut affected, false)?;
     let mut actual = affected.clone();
-    // Retired endpoints are analyzed too; there is no synthetic version for them.
-    let direct = affected.clone();
-    for id in analysis
-        .targets
-        .keys()
-        .filter(|id| id.as_str() != "product")
-    {
-        if !direct.contains(id)
-            && analysis
-                .pure_version_reason
-                .as_ref()
-                .is_none_or(|r| r.trim().is_empty())
-        {
-            return Err(format!(
-                "{id}: a content-free version target requires pure_version_reason"
-            ));
-        }
-        affected.insert(id.clone());
-    }
-    if meaningful.is_empty()
-        && analysis.targets.contains_key("product")
-        && analysis
-            .pure_version_reason
-            .as_ref()
-            .is_none_or(|r| r.trim().is_empty())
-    {
-        return Err("content-free product target requires pure_version_reason".into());
-    }
     let program = analysis
         .product
         .as_ref()
@@ -336,24 +302,7 @@ fn finish(
         )?
         .parse()?;
         versions.clear();
-        if cfg.strategy == "synchronized" {
-            if analysis.targets.keys().any(|id| id != "product") {
-                return Err(
-                    "synchronized strategy accepts a product target; package versions follow it"
-                        .into(),
-                );
-            }
-            for p in capture.current.packages.values() {
-                if p.version != old_version.to_string() {
-                    return Err(format!(
-                        "{}: synchronized package version differs from product; migrate explicitly before release",
-                        p.manifest
-                    ));
-                }
-                versions.insert(p.manifest.clone(), new_version.to_string());
-            }
-        } else {
-            for (id, impact) in &impacts {
+        for (id, impact) in &impacts {
                 if let Some(p) = capture.current.packages.get(id) {
                     versions.insert(
                         p.manifest.clone(),
@@ -365,12 +314,8 @@ fn finish(
                         )?,
                     );
                 }
-            }
         }
         writes = render(root, cfg, &capture, &versions)?;
-        if cfg.strategy == "synchronized" {
-            break;
-        }
         let mut requirement_owners = BTreeSet::new();
         if let Some(rust_cfg) = &cfg.native.adapters.rust {
             requirement_owners.extend(rust::requirement_changes(
@@ -409,6 +354,9 @@ fn finish(
         }
     }
     interface_impacts(&capture, &analysis, &mut actual, true)?;
+    if analysis.targets.keys().any(|id| id != "product" && !affected.contains(id)) {
+        return Err("version targets cannot upgrade an unchanged package".into());
+    }
     if analysis.packages.keys().any(|id| !affected.contains(id)) {
         return Err(
             "analysis attempts to upgrade a package with no final change or explicit target".into(),
@@ -417,11 +365,11 @@ fn finish(
     let mut evidence_scope = affected.clone();
     evidence_scope.insert("product".into());
     analysis::validate_checks(root, cfg, &mut capture, &analysis, &evidence_scope)?;
-    if cfg.strategy == "synchronized" {
+    if !cfg.product_manifests.is_empty() {
         polyglot::add_writes(
             &mut writes,
             rust::render_product_mappings(
-                &cfg.synchronized_manifests,
+                &cfg.product_manifests,
                 &capture.inventory,
                 &mut |p| config::read_current(root, p),
                 old_version,
@@ -461,8 +409,6 @@ fn finish(
                 .get(id)
                 .map(|a| a.reason.as_str())
                 .unwrap_or("first release")
-        } else if cfg.strategy == "synchronized" {
-            "follows_product"
         } else {
             "no_final_package_change"
         };
@@ -498,7 +444,7 @@ fn finish(
         } else {
             "modify"
         };
-        if operation != "modify" || affected.contains(id) || cfg.strategy == "synchronized" {
+        if operation != "modify" || affected.contains(id) {
             let p = after.or(before).unwrap();
             events.push(PackageEvent {
                 id: id.clone(),

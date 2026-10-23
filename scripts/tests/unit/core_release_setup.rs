@@ -64,7 +64,7 @@ fn apply_current(root: &Path) {
 }
 
 #[test]
-fn setup_two_choices_ignore_managed_rust_and_generate_only_schema4() {
+fn setup_single_model_ignores_managed_rust_and_generates_schema4() {
     let root = repo(&[
         ("app.py", "pass\n"),
         (
@@ -76,9 +76,8 @@ fn setup_two_choices_ignore_managed_rust_and_generate_only_schema4() {
     let status = status(&root.0, &SystemProcessRunner);
     assert_eq!(status.code, 0, "{}", status.stderr);
     let v = status.receipt.unwrap();
-    assert_eq!(v["options"].as_array().unwrap().len(), 2);
-    assert_eq!(v["options"][0]["id"], "synchronized");
-    assert_eq!(v["options"][1]["id"], "independent");
+    assert_eq!(v["options"].as_array().unwrap().len(), 1);
+    assert_eq!(v["options"][0]["id"], "independent");
     assert_eq!(fs::read(root.0.join(".git/index")).unwrap(), index);
     assert!(!root.0.join(CONFIG).exists());
     assert!(!root.0.join(".runtime").exists());
@@ -89,7 +88,8 @@ fn setup_two_choices_ignore_managed_rust_and_generate_only_schema4() {
     apply_current(&root.0);
     let cfg: Value = serde_json::from_slice(&fs::read(root.0.join(CONFIG)).unwrap()).unwrap();
     assert_eq!(cfg["schema_version"], 4);
-    assert_eq!(cfg["strategy"], "synchronized");
+    assert_eq!(cfg["strategy"], "independent");
+    assert_eq!(cfg["release_model"], "product-packages");
     assert!(cfg["packages"].as_array().unwrap().is_empty());
     assert!(is_confirmed(&root.0).unwrap());
     assert!(
@@ -113,7 +113,7 @@ fn setup_legacy_rust_manifest_mapping_is_preserved_without_version_writes() {
     let native = fs::read(root.0.join("Cargo.toml")).unwrap();
     apply_current(&root.0);
     let value: Value = serde_json::from_slice(&fs::read(root.0.join(CONFIG)).unwrap()).unwrap();
-    assert_eq!(value["synchronized_manifests"], json!(["Cargo.toml"]));
+    assert_eq!(value["product_manifests"], json!(["Cargo.toml"]));
     assert_eq!(value["baseline"]["source_schema"], 1);
     assert_eq!(fs::read(root.0.join("Cargo.toml")).unwrap(), native);
     assert_eq!(fs::read(root.0.join("VERSION")).unwrap(), b"1.0.0\n");

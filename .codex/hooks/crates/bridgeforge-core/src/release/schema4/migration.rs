@@ -2,7 +2,8 @@
 use super::*;
 use crate::CommandOutcome;
 
-struct Prepared {
+#[derive(Clone, Debug)]
+pub(crate) struct Prepared {
     value: Value,
     fingerprint: String,
     inputs: BTreeMap<PathBuf, Option<Vec<u8>>>,
@@ -10,6 +11,36 @@ struct Prepared {
     status: String,
     head: String,
     shared_additions: Value,
+}
+
+impl Prepared {
+    pub(crate) fn fingerprint(&self) -> &str { &self.fingerprint }
+    pub(crate) fn payload(&self) -> Result<Vec<u8>, String> {
+        let mut bytes = serde_json::to_vec_pretty(&self.value).map_err(|e| e.to_string())?;
+        bytes.push(b'\n');
+        Ok(bytes)
+    }
+    pub(crate) fn inputs(&self) -> &BTreeMap<PathBuf, Option<Vec<u8>>> { &self.inputs }
+    pub(crate) fn verify(&self, root: &Path) -> Result<(), String> {
+        let current = prepare(root, &crate::SystemProcessRunner, None, None, false)?;
+        if current.fingerprint != self.fingerprint {
+            return Err("release cutover inputs drifted; regenerate the project update plan".into());
+        }
+        Ok(())
+    }
+}
+
+/// The project updater owns the write and rollback; this function is read-only.
+pub(crate) fn prepare_project_upgrade(root: &Path) -> Result<Option<Prepared>, String> {
+    if !root.join("VERSION").is_file() { return Ok(None); }
+    if let Some(bytes) = config::read_current(root, CONFIG)? {
+        let value = crate::json::parse_unique_json(&bytes, "release configuration")?;
+        if value["release_model"] == "product-packages" {
+            parse(&bytes)?.ok_or("product-packages requires schema 4")?;
+            return Ok(None);
+        }
+    }
+    prepare(root, &crate::SystemProcessRunner, None, None, false).map(Some)
 }
 
 /// Inferred sharing is migration bookkeeping, but every other configuration
@@ -51,6 +82,9 @@ pub(super) fn verify_baseline(
         let bytes = revision_payload(root, boundary, CONFIG, runner)?
             .ok_or("published schema 4 baseline missing")?;
         let published = parse(&bytes)?.ok_or("published release must use schema 4")?;
+        if cfg.current_model && !published.current_model {
+            return Err("post-cutover published release must use product-packages".into());
+        }
         if serde_json::to_value(&published.baseline).map_err(|e| e.to_string())?
             != serde_json::to_value(&cfg.baseline).map_err(|e| e.to_string())?
         {
@@ -76,6 +110,9 @@ fn reconstruct_baseline(root: &Path, cfg: &Config, runner: &dyn ProcessRunner) -
     seed["baseline"] = serde_json::to_value(&cfg.baseline).map_err(|e| e.to_string())?;
     let seed = parse(&serde_json::to_vec(&seed).map_err(|e| e.to_string())?)?
         .ok_or("migration proof must describe schema 4")?;
+    if cfg.current_model {
+        reject_previous_cutover(root, &cfg.baseline.revision, runner)?;
+    }
     let baseline = polyglot::historical(root, &cfg.baseline.revision, &seed.native, runner)?;
     let scope = baseline.config.as_ref().unwrap_or(&seed.native);
     let mut hashes = baseline
@@ -113,6 +150,9 @@ fn reconstruct_baseline(root: &Path, cfg: &Config, runner: &dyn ProcessRunner) -
     .lines()
     .filter(|s| !s.is_empty())
     {
+        if cfg.current_model {
+            reject_previous_cutover(root, revision, runner)?;
+        }
         lineage.push(configuration::LineageState {
             revision: revision.into(),
             packages: polyglot::historical(root, revision, &seed.native, runner)?.packages,
@@ -129,6 +169,16 @@ fn reconstruct_baseline(root: &Path, cfg: &Config, runner: &dyn ProcessRunner) -
     result.lifecycle = scope.lifecycle.clone();
     result.lineage = lineage;
     Ok(result)
+}
+
+fn reject_previous_cutover(root: &Path, revision: &str, runner: &dyn ProcessRunner) -> Result<(), String> {
+    if let Some(bytes) = revision_payload(root, revision, CONFIG, runner)? {
+        let value = crate::json::parse_unique_json(&bytes, "cutover history")?;
+        if value["release_model"] == "product-packages" {
+            return Err("the one-time release cutover cannot move past an existing product-packages revision".into());
+        }
+    }
+    Ok(())
 }
 
 /// Add proven historical paths/hashes and missing exact shared declarations.
@@ -205,8 +255,12 @@ fn prepare(
     let source_schema = old_value["schema_version"]
         .as_u64()
         .ok_or("migration source schema is missing")? as u32;
-    if source_schema == 4 && proposal.is_none() && strategy.is_none() && !repair {
-        return Err("project already uses schema 4; use an explicit configuration proposal for reconfiguration".into());
+    let already_current = old_value["release_model"] == "product-packages";
+    if repair && !already_current {
+        return Err("legacy baseline requires the one-time product-packages migration".into());
+    }
+    if already_current && proposal.is_none() && strategy.is_none() && !repair {
+        return Err("project already uses product-packages; use an explicit configuration proposal for reconfiguration".into());
     }
     if !(1..=4).contains(&source_schema) {
         return Err("unsupported migration source schema".into());
@@ -260,7 +314,6 @@ fn prepare(
         value["shared_inputs"]=json!(rust_cfg.shared_inputs.iter().map(|s|Ok(json!({"path":s.path,"packages":s.packages.iter().map(|m|manifest_ids.get(m).cloned().ok_or_else(||format!("legacy shared input references unknown package: {m}"))).collect::<Result<Vec<_>,_>>()?}))).collect::<Result<Vec<Value>,String>>()?);
     }
     if source_schema == 1 {
-        value["strategy"] = json!("synchronized");
         let manifests = if config::auto_manifests(&old_value)? {
             ["Cargo.toml", "package.json"]
                 .into_iter()
@@ -307,14 +360,21 @@ fn prepare(
     }
     value["schema_version"] = json!(4);
     value["release_policy"] = json!("explicit_release");
-    if source_schema != 1 && source_schema != 4 && proposal.is_none() {
-        value["strategy"] = json!("independent");
-    }
     if let Some(strategy) = strategy {
-        if !matches!(strategy, "synchronized" | "independent") {
-            return Err("schema 4 supports only synchronized or independent".into());
+        if strategy != "independent" {
+            return Err("release has one model: product-packages; strategy choices are retired".into());
         }
-        value["strategy"] = json!(strategy);
+    }
+    if proposal.is_some() && value["strategy"].as_str().is_some_and(|s| s != "independent") {
+        return Err("configuration proposals must use the product-packages model".into());
+    }
+    value["strategy"] = json!("independent");
+    value["release_model"] = json!("product-packages");
+    if let Some(mappings) = value.as_object_mut().unwrap().remove("synchronized_manifests") {
+        if value.get("product_manifests").is_some() {
+            return Err("ambiguous product manifest mappings".into());
+        }
+        value["product_manifests"] = mappings;
     }
     value["git_sync_setup"] = json!({"schema":1,"confirmed":true,"selection":value["strategy"].as_str().ok_or("migration proposal strategy missing")?});
     // Adapter DTOs are reused; no legacy bump algorithm is invoked during migration.
@@ -328,6 +388,9 @@ fn prepare(
         "record_inputs",
         "required_checks",
         "synchronized_manifests",
+        "product_manifests",
+        "release_model",
+        "check_scopes",
         "python_environment",
     ] {
         obj.remove(key);
@@ -354,6 +417,9 @@ fn prepare(
         ],
     )?;
     for revision in commits.lines().filter(|s| !s.is_empty()) {
+        if !already_current {
+            reject_previous_cutover(root, revision, &reader)?;
+        }
         lineage.push(configuration::LineageState {
             revision: revision.into(),
             packages: polyglot::historical(root, revision, &native, &reader)?.packages,
@@ -417,12 +483,12 @@ fn prepare(
         lineage,
     })
     .map_err(|e| e.to_string())?;
-    if source_schema == 4 {
+    if already_current {
         value["baseline"] = corrected.unwrap_or_else(|| old_value["baseline"].clone());
     }
     // Derive each side from its own snapshot. Do this after saving the immutable
     // migration seed, so current-only discoveries cannot leak into old history.
-    let current_shared = if repair || source_schema != 4 {
+    let current_shared = if repair || !already_current {
         polyglot::proven_shared_inputs(&current, &native)
     } else { Vec::new() };
     if !current_shared.is_empty() {
@@ -430,6 +496,7 @@ fn prepare(
     }
     let cfg = parse(&serde_json::to_vec(&value).map_err(|e| e.to_string())?)?
         .ok_or("migration did not produce schema 4")?;
+    verify_baseline(root, &cfg, &boundary, &reader)?;
     let baseline_additions = cfg.baseline.shared_inputs.iter().filter(|mapping| {
         !old_value["baseline"]["shared_inputs"].as_array().is_some_and(|old| old.iter().any(|entry| entry == &json!(mapping)))
     }).map(|mapping| sharing_evidence(mapping, &baseline)).collect::<Vec<_>>();
@@ -440,14 +507,6 @@ fn prepare(
         .map_err(|e| e.to_string())?
         .trim()
         .to_string();
-    if cfg.strategy == "synchronized"
-        && current
-            .packages
-            .values()
-            .any(|p| p.version != current_product)
-    {
-        return Err("synchronized strategy requires registered packages to already match the product version; review an explicit transition before changing strategy".into());
-    }
     for (id, p) in &current.packages {
         if baseline
             .packages
@@ -460,8 +519,9 @@ fn prepare(
         }
     }
     inputs.extend(
-        rust::product_mapping_inputs(
-            &cfg.synchronized_manifests,
+        super::product_mapping_inputs(
+            &cfg,
+            &current.packages,
             &inventory,
             &mut |p| config::read_current(root, p),
             current_product.parse::<SemVer>()?,

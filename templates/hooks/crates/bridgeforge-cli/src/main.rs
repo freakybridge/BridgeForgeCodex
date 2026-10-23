@@ -55,7 +55,7 @@ fn self_test() -> CommandOutcome {
         "version": env!("CARGO_PKG_VERSION"),
         "capabilities": ["git-sync-explicit-release-v1", "git-sync-prepared-release-v1", "git-sync-release-only-v1", "git-sync-release-readiness-v1", "git-sync-direct-release-v1", "git-sync-timing-v1", "git-sync-setup-v1", "git-sync-analysis-reuse-v1", "git-sync-package-lifecycle-v1", "user-cli-reuse-v1", "project-sync-build-reuse-v1", "git-sync-preflight-v1", "git-sync-phase-timing-v1", "public-artifacts-v1"]
     }));
-    if let Some(capabilities)=outcome.receipt.as_mut().and_then(|r|r["capabilities"].as_array_mut()){capabilities.push(json!("git-sync-schema4-v1"));capabilities.push(json!("git-sync-baseline-repair-v1"));}
+    if let Some(capabilities)=outcome.receipt.as_mut().and_then(|r|r["capabilities"].as_array_mut()){capabilities.push(json!("git-sync-schema4-v1"));capabilities.push(json!("git-sync-product-packages-v1"));capabilities.push(json!("git-sync-baseline-repair-v1"));}
     outcome
 }
 
@@ -514,10 +514,10 @@ fn git_sync(args: &[String]) -> CommandOutcome {
     }
     if has(args, "--setup-plan") {
         if let Some(path) = value(args, "--setup-config-file") {
-            if !matches!(value(args, "--strategy").as_deref(),Some("independent"|"synchronized")) {
+            if value(args, "--strategy").is_some_and(|s| s != "independent") {
                 return blocked(
                     "git-sync",
-                    "--setup-config-file requires --strategy independent or synchronized",
+                    "release uses product-packages; alternative strategies are retired",
                 );
             }
             return bridgeforge_core::release::setup::plan_configuration(
@@ -534,10 +534,10 @@ fn git_sync(args: &[String]) -> CommandOutcome {
     }
     if has(args, "--setup-apply") {
         if let Some(path) = value(args, "--setup-config-file") {
-            if !matches!(value(args, "--strategy").as_deref(),Some("independent"|"synchronized")) {
+            if value(args, "--strategy").is_some_and(|s| s != "independent") {
                 return blocked(
                     "git-sync",
-                    "--setup-config-file requires --strategy independent or synchronized",
+                    "release uses product-packages; alternative strategies are retired",
                 );
             }
             return bridgeforge_core::release::setup::apply_configuration(

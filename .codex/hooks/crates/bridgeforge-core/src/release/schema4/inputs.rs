@@ -174,7 +174,7 @@ fn environment(
     if let Some(guard) = guard {
         values.insert("python:environment".into(), guard.fingerprint.clone());
     }
-    if cfg.native.adapters.rust.is_some() || !cfg.synchronized_manifests.is_empty() {
+    if cfg.native.adapters.rust.is_some() || !cfg.product_manifests.is_empty() {
         for (program, args) in [("rustc", vec!["-vV"]), ("cargo", vec!["-Vv"])] {
             let mut request = ProcessRequest::new(program, root);
             request.args = args.into_iter().map(Into::into).collect();
@@ -211,6 +211,9 @@ pub(super) fn capture(
     cfg: &Config,
     runner: &dyn ProcessRunner,
 ) -> Result<Capture, String> {
+    if !cfg.current_model {
+        return Err("release requires the one-time product-packages cutover; update the skeleton or run --migration-plan".into());
+    }
     let inspection = InspectionRunner(runner);
     let _profile = crate::release_metrics::span("inputs.capture");
     crate::git_sync::verify_readonly_git(root, &inspection)?;
@@ -295,8 +298,9 @@ fn capture_with_reader(
         .trim()
         .parse::<SemVer>()?;
     inputs.extend(
-        rust::product_mapping_inputs(
-            &cfg.synchronized_manifests,
+        super::product_mapping_inputs(
+            cfg,
+            &current.packages,
             &inventory,
             &mut |p| config::read_current(root, p),
             product,
@@ -368,7 +372,7 @@ fn capture_with_reader(
             ("build", vec![])
         } else if path == CONFIG
             || path == "CHANGELOG.md"
-            || cfg.synchronized_manifests.contains(&path)
+            || cfg.product_manifests.contains(&path)
         {
             ("product", vec![])
         } else {
@@ -377,7 +381,7 @@ fn capture_with_reader(
                 match polyglot::owner(&baseline, &path, &cfg.native) {
                     Ok(ids) => owners.extend(ids),
                     Err(e)
-                        if (cfg.strategy == "synchronized" || factory)
+                        if (factory || (baseline.packages.is_empty() && current.packages.is_empty()))
                             && e.starts_with("unattributed release input:") => {}
                     Err(e) => {
                         // New configuration may supply a precise product declaration, never guess a package owner.
@@ -396,7 +400,7 @@ fn capture_with_reader(
                 match polyglot::owner(&current, &path, &cfg.native) {
                     Ok(ids) => owners.extend(ids),
                     Err(e)
-                        if (cfg.strategy == "synchronized" || factory)
+                        if (factory || (baseline.packages.is_empty() && current.packages.is_empty()))
                             && e.starts_with("unattributed release input:") => {}
                     Err(e) => return Err(e),
                 }
@@ -428,7 +432,7 @@ fn capture_with_reader(
     }
     for path in [CONFIG, "VERSION", "CHANGELOG.md"]
         .into_iter()
-        .chain(cfg.synchronized_manifests.iter().map(String::as_str))
+        .chain(cfg.product_manifests.iter().map(String::as_str))
     {
         inputs
             .entry(root.join(path))

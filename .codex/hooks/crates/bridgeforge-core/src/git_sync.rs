@@ -54,7 +54,10 @@ pub fn development_status(root: &Path, runner: &dyn ProcessRunner) -> CommandOut
 }
 
 pub fn release_setup_status(root: &Path) -> serde_json::Value {
-    json!({"status":if root.join("VERSION").exists() { "not-required" } else { "not-applicable" },"development_checks_required":false})
+    let current = fs::read(root.join(".codex/bridgeforge-version.json")).ok()
+        .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
+        .is_some_and(|v| v["release_model"] == "product-packages");
+    json!({"status":if !root.join("VERSION").exists() { "not-applicable" } else if current { "not-required" } else { "migration-required" },"release_model":"product-packages","development_checks_required":false})
 }
 
 pub(crate) fn verify_readonly_git(root:&Path,runner:&dyn ProcessRunner)->Result<(),String>{

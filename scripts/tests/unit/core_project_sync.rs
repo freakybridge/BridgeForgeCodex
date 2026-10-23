@@ -173,6 +173,82 @@ fn upgrade_fixture(previous: &str, release: &str) -> (PathBuf, PathBuf, PathBuf)
 }
 
 #[test]
+fn release_cutover_is_atomic_with_project_update_and_rejects_input_drift() {
+    for scenario in ["success", "file-drift", "head-drift", "rollback"] {
+        let (root, project, factory) = upgrade_fixture("1.8.6", "1.8.7");
+        let contract_path = factory.join("templates/managed-skeleton.json");
+        let mut contract: Value = serde_json::from_slice(&fs::read(&contract_path).unwrap()).unwrap();
+        contract["release_model"] = json!("product-packages");
+        fs::write(&contract_path, serde_json::to_vec(&contract).unwrap()).unwrap();
+        let config_path = project.join(".codex/bridgeforge-version.json");
+        let original = br#"{"schema_version":1,"release_policy":"explicit_release","manifest_policy":"auto"}"#;
+        fs::write(&config_path, original).unwrap();
+        fs::write(project.join("VERSION"), b"1.0.0\n").unwrap();
+        fs::write(project.join("CHANGELOG.md"), b"# Changelog\n").unwrap();
+        fs::write(project.join(".gitignore"), b".runtime/\n").unwrap();
+        fs::write(project.join("app.txt"), b"before\n").unwrap();
+        let git = |args: &[&str]| {
+            let output = std::process::Command::new("git").args(args).current_dir(&project).output().unwrap();
+            assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        };
+        git(&["init"]);
+        git(&["config", "user.name", "Fixture"]);
+        git(&["config", "user.email", "fixture@example.invalid"]);
+        git(&["add", "."]);
+        git(&["commit", "-m", "chore: initial"]);
+        let plan = build_plan(&project, &factory, SyncMode::Update).unwrap();
+        assert!(plan.risk.iter().any(|a| a.id == "migration.release-model"));
+        assert_eq!(fs::read(&config_path).unwrap(), original);
+        assert!(apply_plan(plan.clone(), &plan.aggregate_fingerprint, false).is_err());
+        if scenario == "file-drift" {
+            fs::write(project.join("app.txt"), b"after\n").unwrap();
+        } else if scenario == "head-drift" {
+            git(&["commit", "--allow-empty", "-m", "chore: concurrent commit"]);
+        }
+        let result = if scenario == "rollback" {
+            apply_plan_internal(plan.clone(), &plan.aggregate_fingerprint, true, Some(&|_, _| Err("injected failure".into())))
+        } else {
+            apply_plan(plan.clone(), &plan.aggregate_fingerprint, true)
+        };
+        if scenario == "success" {
+            let receipt = result.unwrap();
+            assert!(receipt.stamp_written_last);
+            let updated = fs::read(&config_path).unwrap();
+            let cfg: Value = serde_json::from_slice(&updated).unwrap();
+            assert_eq!(cfg["release_model"], "product-packages");
+            assert_eq!(fs::read(project.join("VERSION")).unwrap(), b"1.0.0\n");
+            let next = build_plan(&project, &factory, SyncMode::Update).unwrap();
+            assert!(!next.risk.iter().any(|a| a.id == "migration.release-model"));
+            assert_eq!(fs::read(&config_path).unwrap(), updated);
+        } else {
+            assert!(result.is_err(), "{scenario}");
+            assert_eq!(fs::read(&config_path).unwrap(), original);
+            assert_eq!(fs::read(project.join(".codex/.bridgeforge_codex_version")).unwrap(), b"1.8.6\n");
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[test]
+fn release_cutover_fresh_init_defers_until_committed_version_baseline_exists() {
+    let (root, _, factory) = upgrade_fixture("1.8.6", "1.8.7");
+    let fresh = root.join("fresh");
+    fs::create_dir_all(&fresh).unwrap();
+    fs::write(fresh.join("VERSION"), b"1.0.0\n").unwrap();
+    let contract_path = factory.join("templates/managed-skeleton.json");
+    let mut contract: Value = serde_json::from_slice(&fs::read(&contract_path).unwrap()).unwrap();
+    contract["release_model"] = json!("product-packages");
+    fs::write(&contract_path, serde_json::to_vec(&contract).unwrap()).unwrap();
+    let plan = build_plan(&fresh, &factory, SyncMode::Init).unwrap();
+    assert!(plan.release_upgrade.is_none());
+    assert_eq!(plan.release_setup["status"], "migration-required");
+    let receipt = apply_plan(plan.clone(), &plan.aggregate_fingerprint, false).unwrap();
+    assert_eq!(receipt.release_setup["status"], "migration-required");
+    assert!(!fresh.join(".codex/bridgeforge-version.json").exists());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn fixed_baseline_does_not_move_with_the_release() {
     for (previous, release, rebuild) in [
         ("1.0.0", "1.8.6", true),
@@ -1320,6 +1396,7 @@ fn transaction_fixture(valid_asset_hash: bool) -> (PathBuf, SyncPlan) {
         project_hook_inputs: Vec::new(),
         project_hook_reads: BTreeMap::new(),
         public_actions: Vec::new(),
+        release_upgrade: None,
     };
     (root, plan)
 }

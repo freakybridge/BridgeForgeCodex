@@ -71,6 +71,9 @@ pub(super) fn validate(
         let bytes = revision_payload(root, commit, CONFIG, runner)?
             .ok_or("post-migration revision has no release configuration")?;
         let committed = parse(&bytes)?.ok_or("post-migration revision must use schema 4")?;
+        if cfg.current_model && !committed.current_model {
+            return Err("post-cutover revision must use product-packages".into());
+        }
         if serde_json::to_value(&committed.baseline).map_err(|e| e.to_string())?
             != serde_json::to_value(&cfg.baseline).map_err(|e| e.to_string())?
         {

@@ -227,17 +227,17 @@
             {
               "source": "skills/git-sync/SKILL.md",
               "target": "SKILL.md",
-              "sha256": "sha256:2179582664cc4545a88a57dd1b140f53c9c02368ccd14eeefe01028cec6f0ad5"
+              "sha256": "sha256:a724c75097037d01f702c4bd47dd2961b4b423146de8044602ee32d8ccc96197"
             },
             {
               "source": "skills/git-sync/references/first-use.md",
               "target": "references/first-use.md",
-              "sha256": "sha256:81dee270dc9414c842a828fb717d1e669c59bf25c2f01874ca221393ea2ce26f"
+              "sha256": "sha256:84dcc4c16a63ae81421d8196e378a2965dc59ef0b2f0fbaf7b40858fa070aa2a"
             },
             {
               "source": "skills/git-sync/references/schema4.md",
               "target": "references/schema4.md",
-              "sha256": "sha256:19a4a51a7eeb7c8c5fb30703afabcb8cba5de1312be8613d3c54cc2ee6212774"
+              "sha256": "sha256:5cc2474016a513f003fb61a43b40e8322af76ea380e550d5378d888583178fae"
             },
             {
               "source": "skills/git-sync/references/runtime-context.md",

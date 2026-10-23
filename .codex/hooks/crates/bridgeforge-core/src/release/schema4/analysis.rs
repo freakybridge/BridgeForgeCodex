@@ -86,7 +86,9 @@ pub(super) struct Analysis {
     pub packages: BTreeMap<String, ObjectAnalysis>,
     #[serde(default)]
     pub targets: BTreeMap<String, String>,
-    pub pure_version_reason: Option<String>,
+    // Accepted as inert input so an old analysis cannot use it to create impact.
+    #[serde(rename = "pure_version_reason")]
+    pub _retired_pure_version_reason: Option<String>,
     #[serde(default)]
     pub checks: Vec<Check>,
     #[serde(default)]
@@ -253,5 +255,5 @@ pub(super) fn requirements(cfg: &Config, capture: &Capture) -> Value {
     json!({"schema":1,"status":"analysis-required","fingerprint":capture.fingerprint,"validation_fingerprint":capture.validation_fingerprint,"version_strategy":cfg.strategy,
         "version_before":capture.product_version,
         "changes":capture.changes,"affected_packages":affected,"packages":capture.current.packages.iter().map(|(id,p)|json!({"id":id,"language":p.language,"manifest":p.manifest,"version":p.version})).collect::<Vec<_>>(),
-        "required_checks":cfg.required_checks,"check_scopes":cfg.check_scopes,"python_environment_required":cfg.native.adapters.python.is_some() && cfg.python_environment.is_none(),"synchronized_manifests":cfg.synchronized_manifests,"writes":[]})
+        "required_checks":cfg.required_checks,"check_scopes":cfg.check_scopes,"python_environment_required":cfg.native.adapters.python.is_some() && cfg.python_environment.is_none(),"product_manifests":cfg.product_manifests,"release_model":"product-packages","writes":[]})
 }

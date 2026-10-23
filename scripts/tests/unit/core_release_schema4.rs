@@ -116,6 +116,111 @@ fn change(root: &Path, rust: bool) {
     );
 }
 
+#[test]
+fn schema4_cutover_preserves_unreleased_changes_across_legacy_intermediate_commits() {
+    let r = fixture("legacy", true);
+    let original = fs::read(r.0.join(CONFIG)).unwrap();
+    let release = git(&r.0, &["rev-parse", "HEAD"]);
+    let planned = migration_plan(&r.0, &SystemProcessRunner, None);
+    assert_eq!(planned.code, 0, "{}", planned.stderr);
+    let mut old = planned.receipt.unwrap()["configuration"].clone();
+    old.as_object_mut().unwrap().remove("release_model");
+    old["baseline"]["initial_configuration"].as_object_mut().unwrap().remove("release_model");
+    old["baseline"]["initial_configuration_hash"] = json!(configuration::configuration_hash(&old["baseline"]["initial_configuration"]).unwrap());
+    write(&r.0, CONFIG, &serde_json::to_vec(&old).unwrap());
+    git(&r.0, &["add", "."]);
+    git(&r.0, &["commit", "-m", "chore: old schema4 migration"]);
+    write(&r.0, CONFIG, &original);
+    change(&r.0, true);
+    git(&r.0, &["add", "."]);
+    git(&r.0, &["commit", "-m", "fix: unpublished legacy change"]);
+    write(&r.0, CONFIG, &serde_json::to_vec(&old).unwrap());
+    git(&r.0, &["add", "."]);
+    git(&r.0, &["commit", "-m", "chore: restore old schema4"]);
+    let head = git(&r.0, &["rev-parse", "HEAD"]);
+    let before = fs::read(r.0.join(CONFIG)).unwrap();
+    let upgrade = prepare_project_upgrade(&r.0).unwrap().unwrap();
+    let payload = upgrade.payload().unwrap();
+    let value: Value = serde_json::from_slice(&payload).unwrap();
+    assert_eq!(value["baseline"]["revision"], release);
+    assert_eq!(value["baseline"]["migration_head"], head);
+    assert_eq!(value["baseline"]["source_schema"], 4);
+    assert_eq!(fs::read(r.0.join(CONFIG)).unwrap(), before);
+    upgrade.verify(&r.0).unwrap();
+    write(&r.0, "pkg/src/lib.rs", b"pub fn value()->u8{3}\n");
+    assert!(upgrade.verify(&r.0).unwrap_err().contains("drifted"));
+    change(&r.0, true);
+    write(&r.0, CONFIG, &payload);
+    let request = analyze(&r.0, "patch", Some("patch"));
+    let plan = build(&r.0, "fix: preserved change", &request, &SystemProcessRunner).unwrap().unwrap();
+    assert_eq!(plan.new_version.to_string(), "1.0.1");
+    assert_eq!(plan.package_changes[0].version_after, "1.0.1");
+    assert_eq!(fs::read(r.0.join("VERSION")).unwrap(), b"1.0.0\n");
+    git(&r.0, &["add", "."]);
+    git(&r.0, &["commit", "-m", "chore: one-time cutover"]);
+    assert!(prepare_project_upgrade(&r.0).unwrap().is_none());
+    // Reintroducing an old contract cannot obtain another automatic cutover.
+    write(&r.0, CONFIG, &original);
+    git(&r.0, &["add", "."]);
+    git(&r.0, &["commit", "-m", "chore: invalid legacy reintroduction"]);
+    assert!(prepare_project_upgrade(&r.0).unwrap_err().contains("cannot move"));
+    write(&r.0, CONFIG, &payload);
+    assert!(build(&r.0, "fix: no bypass", &Request::default(), &SystemProcessRunner).unwrap_err().contains("post-migration"));
+}
+
+#[test]
+fn schema4_cutover_rejects_retired_strategy_and_manual_package_versions() {
+    let r = fixture("legacy", true);
+    assert!(configuration_plan(&r.0, &SystemProcessRunner, None, Some("synchronized")).stderr.contains("one model"));
+    let before = fs::read(r.0.join(CONFIG)).unwrap();
+    write(&r.0, "pkg/Cargo.toml", b"[package]\nname='a'\nversion='2.0.0'\nedition='2021'\n[workspace]\n");
+    assert!(prepare_project_upgrade(&r.0).is_err());
+    assert_eq!(fs::read(r.0.join(CONFIG)).unwrap(), before);
+}
+
+#[test]
+fn schema4_product_mapping_cannot_implicitly_upgrade_registered_workspace_members() {
+    let r = fixture("legacy", true);
+    write(&r.0, "Cargo.toml", b"[workspace]\nmembers=['pkg']\nresolver='2'\n");
+    write(&r.0, "pkg/Cargo.toml", b"[package]\nname='a'\nversion='1.0.0'\nedition='2021'\n");
+    fs::rename(r.0.join("pkg/Cargo.lock"), r.0.join("Cargo.lock")).unwrap();
+    let mut cfg: Value = serde_json::from_slice(&fs::read(r.0.join(CONFIG)).unwrap()).unwrap();
+    cfg["adapters"]["rust"]["workspaces"] = json!(["Cargo.toml"]);
+    cfg["product_inputs"] = json!(["Cargo.toml", "Cargo.lock", "README.md", ".gitignore"]);
+    write(&r.0, CONFIG, &serde_json::to_vec(&cfg).unwrap());
+    git(&r.0, &["add", "."]);
+    git(&r.0, &["commit", "--amend", "--no-edit"]);
+    migrate(&r.0);
+    let mut cfg: Value = serde_json::from_slice(&fs::read(r.0.join(CONFIG)).unwrap()).unwrap();
+    cfg["product_manifests"] = json!(["Cargo.toml"]);
+    write(&r.0, CONFIG, &serde_json::to_vec(&cfg).unwrap());
+    write(&r.0, "README.md", b"product-only change\n");
+    let error = build(&r.0, "fix: product only", &Request::default(), &SystemProcessRunner).unwrap_err();
+    assert!(error.contains("must not include independently registered packages"), "{error}");
+    cfg.as_object_mut().unwrap().remove("baseline");
+    write(&r.0, ".runtime/overlap.json", &serde_json::to_vec(&cfg).unwrap());
+    let plan = configuration_plan(&r.0, &SystemProcessRunner, Some(".runtime/overlap.json"), None);
+    assert!(plan.stderr.contains("must not include independently registered packages"), "{}", plan.stderr);
+}
+
+#[test]
+fn schema4_formal_boundary_cannot_reintroduce_old_release_model() {
+    let r = fixture("independent", true);
+    let payload = fs::read(r.0.join(CONFIG)).unwrap();
+    git(&r.0, &["add", "."]);
+    git(&r.0, &["commit", "-m", "chore: cutover"]);
+    let mut legacy: Value = serde_json::from_slice(&payload).unwrap();
+    legacy.as_object_mut().unwrap().remove("release_model");
+    write(&r.0, CONFIG, &serde_json::to_vec(&legacy).unwrap());
+    write(&r.0, "VERSION", b"1.0.1\n");
+    write(&r.0, "CHANGELOG.md", b"# Changelog\n\n## [1.0.1]\n\n- invalid old-model release\n");
+    git(&r.0, &["add", "."]);
+    git(&r.0, &["commit", "-m", "chore: invalid release"]);
+    write(&r.0, CONFIG, &payload);
+    let error = build(&r.0, "fix: next", &Request::default(), &SystemProcessRunner).unwrap_err();
+    assert!(error.contains("post-cutover published release"), "{error}");
+}
+
 fn external_cargo_fixture() -> Repo {
     let r = fixture("legacy", true);
     write(&r.0, "pkg/Cargo.toml", b"[package]\nname='a'\nversion='1.0.0'\nedition='2021'\nbuild='../external/build.rs'\n[workspace]\n[lib]\npath='../external/lib.rs'\n[[bin]]\nname='inventory'\npath='../external/all_inventory.rs'\n[[test]]\nname='check'\npath='../external/check.rs'\n[[bench]]\nname='bench'\npath='../external/bench.rs'\n[[example]]\nname='example'\npath='../external/example.rs'\n");
@@ -581,8 +686,8 @@ fn analyze(root: &Path, product: &str, package: Option<&str>) -> Request {
     }
 }
 #[test]
-fn schema4_two_strategies_share_both_language_adapters() {
-    for strategy in ["synchronized", "independent"] {
+fn schema4_single_model_uses_both_language_adapters() {
+    for strategy in ["independent"] {
         for rust in [false, true] {
             let r = fixture(strategy, rust);
             let before = fs::read(r.0.join(".git/index")).unwrap();
@@ -599,11 +704,7 @@ fn schema4_two_strategies_share_both_language_adapters() {
             assert_eq!(p.new_version.to_string(), "1.1.0");
             assert_eq!(
                 p.package_changes[0].version_after,
-                if strategy == "synchronized" {
-                    "1.1.0"
-                } else {
-                    "1.0.1"
-                }
+                "1.0.1"
             );
             assert_eq!(fs::read(r.0.join(".git/index")).unwrap(), before);
             assert_eq!(fs::read(r.0.join("VERSION")).unwrap(), b"1.0.0\n");
@@ -685,7 +786,7 @@ fn schema4_analysis_binds_final_bytes_and_missing_package_is_rejected() {
         .contains("stale"));
 }
 #[test]
-fn schema4_explicit_targets_reject_lower_and_allow_documented_pure_bump() {
+fn schema4_explicit_targets_reject_lower_and_unchanged_package_bumps() {
     let r = fixture("independent", false);
     change(&r.0, false);
     let request = analyze(&r.0, "minor", Some("minor"));
@@ -713,15 +814,19 @@ fn schema4_explicit_targets_reject_lower_and_allow_documented_pure_bump() {
         ".runtime/analysis.json",
         &serde_json::to_vec(&v).unwrap(),
     );
-    let p = build(
+    let error = build(
         &r.0,
         "chore: maintenance release",
         &request,
         &SystemProcessRunner,
     )
-    .unwrap()
-    .unwrap();
-    assert_eq!(p.package_changes[0].version_after, "1.0.1");
+    .unwrap_err();
+    assert!(error.contains("actual release changes"), "{error}");
+    write(&r.0, "README.md", b"product-only change\n");
+    v["fingerprint"] = json!(capture(&r.0, &cfg, &SystemProcessRunner).unwrap().fingerprint);
+    write(&r.0, ".runtime/analysis.json", &serde_json::to_vec(&v).unwrap());
+    let error = build(&r.0, "fix: product only", &request, &SystemProcessRunner).unwrap_err();
+    assert!(error.contains("cannot upgrade an unchanged package"), "{error}");
 }
 
 fn migrate(root: &Path) {
@@ -799,6 +904,7 @@ fn schema4_dependency_upgrade_only_bumps_owner_when_requirement_changes() {
             assert!(plan.unwrap_err().contains("b: package analysis missing"));
             let mut v = analysis_value(&r.0);
             v["packages"]["b"] = json!({"level":"patch","reason":"effective local dependency requirement changes","compatibility":"compatible"});
+            v["targets"] = json!({"b":"1.0.1"});
             save_analysis(&r.0, &v);
             let p = build(&r.0, "fix: a", &request, &SystemProcessRunner)
                 .unwrap()
@@ -1053,7 +1159,7 @@ fn schema4_retirement_survives_release_and_cannot_reuse_identity() {
 }
 
 #[test]
-fn schema4_synchronized_rust_keeps_workspace_inheritance() {
+fn schema4_single_model_splits_rust_workspace_version_for_changed_package() {
     let r = fixture("legacy", true);
     write(
         &r.0,
@@ -1073,7 +1179,7 @@ fn schema4_synchronized_rust_keeps_workspace_inheritance() {
     git(&r.0, &["add", "."]);
     git(&r.0, &["commit", "--amend", "--no-edit"]);
     cfg["schema_version"] = json!(4);
-    cfg["strategy"] = json!("synchronized");
+    cfg["strategy"] = json!("independent");
     write(
         &r.0,
         ".runtime/proposal.json",
@@ -1104,10 +1210,10 @@ fn schema4_synchronized_rust_keeps_workspace_inheritance() {
         .parse::<toml_edit::DocumentMut>()
         .unwrap();
     assert_eq!(
-        manifest["package"]["version"]["workspace"].as_bool(),
-        Some(true)
+        manifest["package"]["version"].as_str(),
+        Some("1.0.1")
     );
-    assert!(String::from_utf8_lossy(&p.writes[&r.0.join("Cargo.toml")]).contains("1.1.0"));
+    assert!(!p.writes.contains_key(&r.0.join("Cargo.toml")));
 }
 
 #[test]
@@ -1273,7 +1379,7 @@ fn schema4_real_configuration_changes_after_migration_are_product_changes() {
 }
 
 #[test]
-fn schema4_synchronized_rejects_ambiguous_shared_package_source() {
+fn schema4_single_model_rejects_ambiguous_shared_package_source() {
     let r = fixture("legacy", false);
     let mut cfg: Value = serde_json::from_slice(&fs::read(r.0.join(CONFIG)).unwrap()).unwrap();
     cfg["adapters"]["python"]["projects"] = json!(["pkg/pyproject.toml", "b/pyproject.toml"]);
@@ -1292,13 +1398,13 @@ fn schema4_synchronized_rejects_ambiguous_shared_package_source() {
     write(&r.0, "shared/data.py", b"VALUE=1\n");
     git(&r.0, &["add", "."]);
     git(&r.0, &["commit", "--amend", "--no-edit"]);
-    let p = configuration_plan(&r.0, &SystemProcessRunner, None, Some("synchronized"));
+    let p = configuration_plan(&r.0, &SystemProcessRunner, None, Some("independent"));
     assert_eq!(p.code, 0, "{}", p.stderr);
     let p = configuration_apply(
         &r.0,
         &SystemProcessRunner,
         None,
-        Some("synchronized"),
+        Some("independent"),
         p.receipt.unwrap()["fingerprint"].as_str().unwrap(),
         true,
     );
