@@ -25,8 +25,8 @@
    - 用户级命令与通用 skill 写入 `skills/`；
    - bridgeforge-codex 自身说明写入 `doc/`；
    - 通用 hook/settings 同轮镜像到 `.codex/` dogfood。
-5. 更新 schema 4 current-only ownership/projection、manifest、VERSION 与 `[product]` CHANGELOG；禁止只改模板正文而遗漏派生哈希。
-6. 运行定向测试、完整 fixture、manifest `--check`、mirror drift、结构检查和独立审计。
+5. 更新受影响的 schema 4 current-only ownership/projection、manifest 与自身镜像；禁止只改模板正文而遗漏派生哈希。VERSION 与 `[product]` CHANGELOG 仅在明确授权的 release 事务中更新，不因回灌实施提前升版。
+6. 按[开发收口清单](development-completion.md)选择相关定向、传播/镜像、结构检查及必要审计；仅在具体风险要求时扩大到完整回归。回灌不自动触发发布候选准备。
 
 ## 3. 仲裁原则
 

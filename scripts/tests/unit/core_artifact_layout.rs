@@ -65,6 +65,238 @@ fn layout_config_is_strict_and_project_owned() {
     }
 }
 #[test]
+fn layout_effective_defaults_and_partial_configuration_are_equivalent() {
+    let defaults = effective_config(None).unwrap();
+    assert_eq!(defaults, parse(br#"{"schema":1}"#).unwrap());
+    assert_eq!(
+        defaults,
+        parse(&serde_json::to_vec(&defaults).unwrap()).unwrap()
+    );
+    let partial = parse(br#"{"schema":1,"source_roots":["src/"],"python_artifacts":{"allowed_roots":[".runtime/"]}}"#).unwrap();
+    assert_eq!(partial.tests_root, defaults.tests_root);
+    assert!(!partial.python_artifacts.enabled);
+    assert!(effective_config(Some(b"invalid")).is_err());
+    assert!(parse(br#"{"schema":1,"tests_root":"tests/"}"#).is_err());
+}
+
+#[test]
+fn layout_defaults_cover_all_entrypoints_and_keep_managed_identity() {
+    let r = repo();
+    let root = &r.0;
+    command(root, &["rm", CONFIG]);
+    commit(root);
+    put(
+        root,
+        MANAGED,
+        br#"{"assets":[{"target":".codex/hooks/tests/a.rs"}]}"#,
+    );
+    for path in [
+        "scripts/tests/unit/a.rs",
+        ".codex/hooks/tests/a.rs",
+        "src/test_engine.rs",
+    ] {
+        put(root, path, b"#[cfg(test)] mod unit {}\n");
+        assert!(edited(root, path).advisories.is_empty());
+    }
+    command(root, &["add", "."]);
+    assert!(report(root).errors.is_empty());
+    assert!(worktree(root).errors.is_empty());
+    for path in ["src/tests/a.rs", ".codex/hooks/tests/b.rs"] {
+        put(root, path, b"test\n");
+        assert!(
+            edited(root, path)
+                .advisories
+                .iter()
+                .any(|f| f.code == "misplaced-test-directory")
+        );
+    }
+    command(root, &["add", "."]);
+    assert_eq!(report(root).errors.len(), 2);
+    assert!(
+        worktree(root)
+            .errors
+            .iter()
+            .any(|f| f.path == "src/tests/a.rs")
+    );
+    assert!(!root.join(CONFIG).exists());
+}
+
+#[test]
+fn layout_default_policy_changes_do_not_expand_unrelated_history() {
+    let r = repo();
+    let root = &r.0;
+    command(root, &["rm", CONFIG]);
+    put(root, "src/tests/old.rs", b"historical\n");
+    commit(root);
+    put(root, CONFIG, br#"{"schema":1}"#);
+    command(root, &["add", CONFIG]);
+    assert!(
+        report(root).errors.is_empty(),
+        "adding equivalent defaults is not a policy change"
+    );
+    commit(root);
+    command(root, &["rm", CONFIG]);
+    assert!(
+        report(root).errors.is_empty(),
+        "deleting equivalent defaults preserves A mode"
+    );
+    put(root, "src/tests/new.rs", b"new\n");
+    command(root, &["add", "src/tests/new.rs"]);
+    assert_eq!(
+        report(root).errors.len(),
+        1,
+        "deletion does not disable defaults"
+    );
+    assert_eq!(report(root).errors[0].path, "src/tests/new.rs");
+}
+
+#[test]
+fn layout_unknown_historical_policy_is_not_an_absent_policy() {
+    let r = repo();
+    let root = &r.0;
+    put(root, CONFIG, b"invalid\n");
+    put(root, "src/tests/old.rs", b"historical\n");
+    commit(root);
+    command(root, &["rm", CONFIG]);
+    assert!(
+        report(root)
+            .errors
+            .iter()
+            .any(|f| f.path == "src/tests/old.rs")
+    );
+    command(root, &["rm", "src/tests/old.rs"]);
+    assert!(report(root).errors.is_empty());
+}
+
+#[test]
+fn layout_default_audit_prunes_runtime_but_staged_paths_are_checked() {
+    let r = repo();
+    let root = &r.0;
+    command(root, &["rm", CONFIG]);
+    commit(root);
+    for path in [
+        ".runtime/fixture/tests/a.rs",
+        "target/fixture/tests/a.rs",
+        ".venv/pkg/tests/a.py",
+    ] {
+        put(root, path, b"derived\n");
+    }
+    let audit = worktree(root);
+    assert!(audit.errors.is_empty(), "{:?}", audit.errors);
+    assert!(
+        audit
+            .advisories
+            .iter()
+            .any(|f| f.path == ".runtime" && f.code == "layout-excluded-tree")
+    );
+    command(root, &["add", ".runtime/fixture/tests/a.rs"]);
+    assert!(
+        report(root)
+            .errors
+            .iter()
+            .any(|f| f.path == ".runtime/fixture/tests/a.rs")
+    );
+    put(
+        root,
+        "src/.runtime/tests/a.rs",
+        b"not a root runtime directory\n",
+    );
+    assert!(!worktree(root).errors.is_empty());
+}
+
+#[test]
+fn layout_narrow_test_root_allows_only_ancestor_directories() {
+    let r = repo();
+    let root = &r.0;
+    put(
+        root,
+        CONFIG,
+        br#"{"schema":1,"tests_root":"scripts/tests/unit/"}"#,
+    );
+    put(root, "scripts/tests/unit/a.rs", b"test\n");
+    command(root, &["add", "."]);
+    assert!(report(root).errors.is_empty());
+    assert!(
+        edited(root, "scripts/tests/unit/a.rs")
+            .advisories
+            .is_empty()
+    );
+    assert!(worktree(root).errors.is_empty());
+    for path in ["scripts/tests/other/a.rs", "scripts/tests/helper.rs"] {
+        put(root, path, b"outside narrowed root\n");
+        assert!(
+            edited(root, path)
+                .advisories
+                .iter()
+                .any(|f| f.code == "misplaced-test-directory")
+        );
+    }
+    command(root, &["add", "."]);
+    assert_eq!(report(root).errors.len(), 2);
+    let audit = worktree(root);
+    assert!(!audit.errors.iter().any(|f| f.path == "scripts/tests"));
+    assert!(
+        audit
+            .errors
+            .iter()
+            .any(|f| f.path == "scripts/tests/helper.rs")
+    );
+    assert!(
+        audit
+            .errors
+            .iter()
+            .any(|f| f.path == "scripts/tests/other/a.rs")
+    );
+}
+
+#[test]
+fn layout_empty_nonroot_test_directories_do_not_hide_explicit_rules_or_files() {
+    let r = repo();
+    let root = &r.0;
+    command(root, &["rm", CONFIG]);
+    commit(root);
+    fs::create_dir_all(root.join("src/tests")).unwrap();
+    assert!(worktree(root).errors.is_empty());
+    put(root, "src/tests/.hidden", b"not empty\n");
+    assert!(
+        worktree(root)
+            .errors
+            .iter()
+            .any(|f| f.code == "misplaced-test-directory")
+    );
+    command(root, &["add", "src/tests/.hidden"]);
+    assert!(
+        report(root)
+            .errors
+            .iter()
+            .any(|f| f.path == "src/tests/.hidden")
+    );
+    command(root, &["rm", "-f", "src/tests/.hidden"]);
+    fs::create_dir_all(root.join("src/tests")).unwrap();
+    put(
+        root,
+        CONFIG,
+        br#"{"schema":1,"source_roots":["src/"],"forbidden_source_components":["tests"]}"#,
+    );
+    assert!(
+        worktree(root)
+            .errors
+            .iter()
+            .any(|f| f.code == "forbidden-source-directory")
+    );
+    for path in ["test", "tests"] {
+        fs::create_dir_all(root.join(path)).unwrap();
+    }
+    assert_eq!(
+        worktree(root)
+            .errors
+            .iter()
+            .filter(|f| f.code == "legacy-test-root")
+            .count(),
+        2
+    );
+}
+#[test]
 fn layout_rules_have_no_project_name_or_filename_blacklist() {
     let cfg = parse(&config()).unwrap();
     let empty = BTreeSet::new();
@@ -277,6 +509,62 @@ fn layout_batch_process_count_does_not_grow_with_manifest_count() {
         "diff, index, config blob and manifest batch only"
     );
 }
+
+#[test]
+fn layout_defaults_read_managed_identities_only_when_relevant() {
+    struct Count(Cell<usize>);
+    impl ProcessRunner for Count {
+        fn run(&self, request: &ProcessRequest) -> std::io::Result<ProcessOutput> {
+            self.0.set(self.0.get() + 1);
+            SystemProcessRunner.run(request)
+        }
+    }
+    let r = repo();
+    let root = &r.0;
+    command(root, &["rm", CONFIG]);
+    put(
+        root,
+        MANAGED,
+        br#"{"assets":[{"target":".codex/hooks/tests/a.rs"}]}"#,
+    );
+    commit(root);
+    put(root, "src/normal.rs", b"pub fn normal() {}\n");
+    command(root, &["add", "."]);
+    let runner = Count(Cell::new(0));
+    assert!(staged(root, &runner).errors.is_empty());
+    assert_eq!(
+        runner.0.get(),
+        2,
+        "ordinary default path needs only diff and index"
+    );
+    put(root, ".codex/hooks/tests/a.rs", b"managed\n");
+    command(root, &["add", "."]);
+    let runner = Count(Cell::new(0));
+    assert!(staged(root, &runner).errors.is_empty());
+    assert_eq!(
+        runner.0.get(),
+        3,
+        "a candidate exception must read actual managed identities"
+    );
+    commit(root);
+    put(root, MANAGED, br#"{"assets":[]}"#);
+    command(root, &["add", MANAGED]);
+    assert!(
+        report(root)
+            .errors
+            .iter()
+            .any(|f| f.path == ".codex/hooks/tests/a.rs" && f.code == "misplaced-test-directory"),
+        "identity revocation must select the unchanged file"
+    );
+    put(root, MANAGED, b"invalid\n");
+    command(root, &["add", MANAGED]);
+    assert!(
+        report(root)
+            .errors
+            .iter()
+            .any(|f| f.code == "artifact-layout-incomplete")
+    );
+}
 #[test]
 fn layout_git_failure_never_reports_success() {
     struct Fail;
@@ -454,6 +742,39 @@ fn layout_inline_cargo_targets_and_invalid_member_types_are_checked() {
         None,
     );
     assert!(hits.iter().any(|f| f.code == "invalid-cargo-layout"));
+}
+
+#[cfg(windows)]
+#[test]
+fn layout_empty_junction_is_reported_as_excluded_not_an_empty_directory() {
+    let r = repo();
+    let root = &r.0;
+    let target = root.join("empty-target");
+    let project = root.join("audit-project");
+    fs::create_dir_all(&target).unwrap();
+    fs::create_dir_all(project.join("src")).unwrap();
+    let junction = project.join("src").join("tests");
+    let output = std::process::Command::new("cmd")
+        .args(["/c", "mklink", "/J"])
+        .arg(&junction)
+        .arg(&target)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stdout: {}; stderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report = worktree(&project);
+    fs::remove_dir(&junction).unwrap();
+    assert!(
+        report
+            .advisories
+            .iter()
+            .any(|f| f.path == "src/tests" && f.code == "layout-excluded-link")
+    );
+    assert!(target.exists(), "audit must leave the link target intact");
 }
 
 #[cfg(windows)]

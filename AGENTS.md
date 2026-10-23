@@ -59,7 +59,8 @@
 - 项目文档使用 doc/0_architecture、1_delivery、2_bugs、3_reference、4_archive、5_project_knowledgebase 六层结构，不擅自新增、删除、改名或合并同级层。
 - doc/README.md 是文档唯一索引，delivery_layout 决定交付路径。新增、删除、移动或重命名文档时同步索引。
 - 项目知识资料归项目所有；骨架升级不覆盖或删除正文，不因日期或完成状态自动归档。
-- 测试代码放在 scripts/tests/**。
+- 独立测试、基准及其专用辅助文件统一放在 `scripts/tests/**`；语言原生的内联单元测试可随被测模块保留。独立工具归 `scripts/`，生产运行链不得依赖测试集。
+- 测试运行产物写入项目指定目录。Forge 默认执行通用布局检查，项目仅在 `.codex/artifact-layout.json` 中声明必要差异；特有约束和执行入口保留在项目 AGENTS。迁移测试时同步调整引用和执行入口，保留覆盖。
 - 下游业务版本以根 VERSION 为事实源，相关原生 manifest 由项目发布流程同步。
 - 骨架版本只记录在 .codex/.bridgeforge_codex_version，由统一项目同步器维护，不作为业务版本。
 - Codex 原生 Memory 保留官方生成和注入机制。BridgeForge 对其内容只读；根 `MEMORY.md`、`memory_summary.md`、`raw_memories.md` 固定留在本机，其余文件按不透明字节快照跨电脑同步，不依赖内部语义。
@@ -105,7 +106,7 @@
 - Skill 或 Agent 增删改名必须同步分发登记、dogfood 与引用校验；禁止维护第二份角色路由表。
 - `--check` / `--dry-run` 必须零写入；`init/adopt/update` 必须只经受管 `bridgeforge project-sync` apply。
 - Bug 关闭必须分别记录源码、产品传播、dogfood、fixture、真实下游与 runtime 六类证据；缺失项必须标为未验证。
-- 工厂开发收口遵循 [开发收口清单](doc/0_architecture/design/development-completion.md)，由 develop 完成工程检查和独立审计。`git-sync` 与可选 `release` 不依赖开发清单或验收收据；必要时自动构建受管产物并复用缓存，保留轻量提交检查，不组织业务测试、全量回归或验收。
+- 工厂开发收口遵循 [开发收口清单](doc/0_architecture/design/development-completion.md)，按改动范围选择必要验证与审计，复用仍有效的证据；完整回归须有具体风险依据，发布准备不作为开发完成前置。`git-sync` 与可选 `release` 保持独立，必要时构建受管产物并复用缓存，保留轻量提交检查，不组织业务测试、全量回归或验收。
 - 未执行真实下游或 runtime smoke 时，禁止宣称对应验证已通过。
 
 ### 项目业务与安全红线

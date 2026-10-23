@@ -836,4 +836,14 @@ fn artifact_layout_edit_warnings_keep_completed_action_and_cover_patch_targets()
     assert_eq!(fs::read(&target).unwrap(), b"fn probe() {}\n");
     fs::remove_file(&target).unwrap();
     assert!(post::artifact_layout(&values[0]).stdout.is_empty());
+    let nested = fixture.root.join("src/tests/probe.rs");
+    fs::create_dir_all(nested.parent().unwrap()).unwrap();
+    fs::write(&nested, b"fn probe() {}\n").unwrap();
+    let payload = json!({"tool_name":"apply_patch","tool_input":{"command":"*** Begin Patch\n*** Add File: src/tests/probe.rs\n+fn probe() {}\n*** End Patch"}});
+    let values = edits(&payload);
+    let warning = post::artifact_layout(&values[0]);
+    assert_eq!(warning.code, 0);
+    assert!(warning.stdout.contains("misplaced-test-directory"));
+    assert_eq!(fs::read(&nested).unwrap(), b"fn probe() {}\n");
+    assert!(!fixture.root.join(".codex/artifact-layout.json").exists());
 }

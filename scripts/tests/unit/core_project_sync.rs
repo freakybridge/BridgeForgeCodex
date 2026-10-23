@@ -252,6 +252,12 @@ fn artifact_layout_policy_remains_project_owned_during_update_and_dry_plan() {
     let fingerprint = plan.aggregate_fingerprint.clone();
     apply_plan(plan, &fingerprint, false).unwrap();
     assert_eq!(fs::read(&path).unwrap(), bytes, "upgrade must preserve policy bytes");
+    fs::remove_file(&path).unwrap();
+    let plan = build_plan(&project, &factory, SyncMode::Update).unwrap();
+    let fingerprint = plan.aggregate_fingerprint.clone();
+    assert!(!path.exists(), "planning must not seed default policy files");
+    apply_plan(plan, &fingerprint, false).unwrap();
+    assert!(!path.exists(), "defaults must work without creating project policy");
     fs::remove_dir_all(root).unwrap();
 }
 

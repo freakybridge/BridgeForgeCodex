@@ -30,6 +30,22 @@ pub struct Config {
     #[serde(default)]
     pub cargo_registration: CargoRegistration,
 }
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            schema: 1,
+            source_roots: Vec::new(),
+            tests_root: tests_root(),
+            tools_root: tools_root(),
+            python_artifacts: PythonArtifacts::default(),
+            forbidden_source_components: Vec::new(),
+            cargo_registration: CargoRegistration::default(),
+        }
+    }
+}
+fn effective_config(bytes: Option<&[u8]>) -> Result<Config, String> {
+    bytes.map(parse).transpose().map(Option::unwrap_or_default)
+}
 fn tests_root() -> String {
     "scripts/tests/".into()
 }
@@ -206,8 +222,13 @@ pub fn path_findings(
             "root test/tests is forbidden; use scripts/tests/",
         )];
     }
-    let Some(cfg) = cfg else {
-        return vec![];
+    let defaults;
+    let cfg = match cfg {
+        Some(cfg) => cfg,
+        None => {
+            defaults = Config::default();
+            &defaults
+        }
     };
     let mut errors = vec![];
     if cfg.python_artifacts.enabled
@@ -234,7 +255,11 @@ pub fn path_findings(
     };
     let managed_location =
         managed.contains(&path) || (is_dir && managed.iter().any(|asset| within(asset, &path)));
-    if directories.contains(&"tests") && !within(&path, &cfg.tests_root) && !managed_location {
+    if directories.contains(&"tests")
+        && !within(&path, &cfg.tests_root)
+        && !(is_dir && within(&cfg.tests_root, &path))
+        && !managed_location
+    {
         errors.push(finding(
             "misplaced-test-directory",
             &path,
@@ -492,21 +517,11 @@ fn safe_file(root: &Path, relative: &str) -> Result<Option<Vec<u8>>, String> {
 }
 pub fn worktree(root: &Path) -> StructureReport {
     let result = (|| -> Result<StructureReport, String> {
-        let cfg = safe_file(root, CONFIG)?.as_deref().map(parse).transpose()?;
+        let cfg = effective_config(safe_file(root, CONFIG)?.as_deref())?;
         let mut report = StructureReport::default();
-        if cfg.is_none() {
-            for name in ["test", "tests"] {
-                if root.join(name).exists() {
-                    report
-                        .errors
-                        .extend(path_findings(name, true, None, &BTreeSet::new()));
-                }
-            }
-            return Ok(report);
-        }
         let managed = managed_paths(safe_file(root, MANAGED)?.as_deref())?;
         let skipped = [".git", ".venv", "node_modules", "target"];
-        let cfg = cfg.as_ref().unwrap();
+        let cfg = &cfg;
         let mut tree = BTreeSet::new();
         let mut manifests = Vec::new();
         let mut iterator = WalkDir::new(root).follow_links(false).into_iter();
@@ -536,20 +551,46 @@ pub fn worktree(root: &Path) -> StructureReport {
             if !directory {
                 tree.insert(path.clone());
             }
+            let linked = entry.file_type().is_symlink()
+                || (directory
+                    && crate::persistence::is_link_or_reparse(entry.path())
+                        .map_err(|e| format!("cannot inspect layout directory {path}: {e}"))?);
+            // Empty non-root test directories have no file-layout counterpart in
+            // Git. Do not suppress explicit project rules, cache rules or roots.
+            let mut findings = path_findings(&path, directory, Some(cfg), &managed);
+            if directory
+                && !linked
+                && findings
+                    .iter()
+                    .any(|f| f.code == "misplaced-test-directory")
+            {
+                let mut children = std::fs::read_dir(entry.path())
+                    .map_err(|e| format!("cannot read layout directory {path}: {e}"))?;
+                if children
+                    .next()
+                    .transpose()
+                    .map_err(|e| format!("cannot read layout directory {path}: {e}"))?
+                    .is_none()
+                {
+                    findings.retain(|f| f.code != "misplaced-test-directory");
+                }
+            }
             // Check the directory itself before pruning its contents.
-            report
-                .errors
-                .extend(path_findings(&path, directory, Some(cfg), &managed));
-            if entry.file_type().is_symlink() {
+            report.errors.extend(findings);
+            if linked {
                 report.advisories.push(finding(
                     "layout-excluded-link",
                     &path,
                     "link contents not inspected",
                 ));
+                if directory {
+                    iterator.skip_current_dir();
+                }
                 continue;
             }
             if directory
                 && (skipped.contains(&entry.file_name().to_string_lossy().as_ref())
+                    || key(&path) == ".runtime"
                     || cfg
                         .python_artifacts
                         .allowed_roots
@@ -559,7 +600,7 @@ pub fn worktree(root: &Path) -> StructureReport {
                 report.advisories.push(finding(
                     "layout-excluded-tree",
                     &path,
-                    "dependency/build/allowed-cache contents not inspected",
+                    "dependency/build/runtime/allowed-cache contents not inspected",
                 ));
                 iterator.skip_current_dir();
             } else if entry.file_type().is_file() && manifest_path(&path, cfg) {
@@ -746,17 +787,19 @@ fn staged_inner(root: &Path, runner: &dyn ProcessRunner) -> Result<StructureRepo
         wanted.insert(entry.oid.clone());
     }
     let initial = batch(root, runner, &wanted)?;
-    let cfg = config_entry.map(|e| parse(&initial[&e.oid])).transpose()?;
+    let cfg = effective_config(config_entry.map(|e| initial[&e.oid].as_slice()))?;
     let previous_cfg = if config_touched {
         // A malformed historical policy is not a reason to forbid its repair
         // or explicit deletion. An unknown baseline expands the new-rule audit.
-        old_config_entry
-            .filter(|e| e.mode.starts_with("100"))
-            .and_then(|e| parse(&initial[&e.oid]).ok())
+        match old_config_entry {
+            None => Some(Config::default()),
+            Some(entry) if entry.mode.starts_with("100") => parse(&initial[&entry.oid]).ok(),
+            Some(_) => None,
+        }
     } else {
-        cfg.clone()
+        Some(cfg.clone())
     };
-    let config_changed = cfg != previous_cfg;
+    let config_changed = previous_cfg.as_ref() != Some(&cfg);
     let mut report = StructureReport::default();
     let mut selected = current.keys().cloned().collect::<BTreeSet<_>>();
     if config_changed {
@@ -771,33 +814,41 @@ fn staged_inner(root: &Path, runner: &dyn ProcessRunner) -> Result<StructureRepo
         .iter()
         .find(|(path, _)| key(path) == key(MANAGED))
         .map(|(_, entry)| entry);
-    let cargo_affected = cfg.as_ref().is_some_and(|cfg| {
-        config_changed
+    let cargo_affected = !cfg.cargo_registration.manifest_roots.is_empty()
+        && (config_changed
             || changed.iter().any(|p| {
-                manifest_path(p, cfg)
+                manifest_path(p, &cfg)
                     || cfg
                         .cargo_registration
                         .forbidden_target_roots
                         .iter()
                         .any(|r| within(p, r))
-            })
-    });
+            }));
+    // Defaults need managed identities only for paths that could use an asset
+    // exception, or when identity changes themselves affect the staged tree.
+    // Keep the existing configured-project path unchanged.
+    let needs_managed = config_entry.is_some()
+        || managed_touched
+        || selected.iter().any(|path| {
+            path_findings(path, false, Some(&cfg), &BTreeSet::new())
+                .iter()
+                .any(|finding| finding.code == "misplaced-test-directory")
+        });
     let mut blobs = BTreeSet::new();
-    if cfg.is_some() {
-        if managed_touched {
+    {
+        if needs_managed && managed_touched {
             if let Some(entry) = old_managed_entry.filter(|e| e.mode.starts_with("100")) {
                 blobs.insert(entry.oid.clone());
             }
         }
-        if let Some(entry) = managed_entry {
+        if let Some(entry) = managed_entry.filter(|_| needs_managed) {
             if !entry.mode.starts_with("100") {
                 return Err("managed layout identities must be a regular staged file".into());
             }
             blobs.insert(entry.oid.clone());
         }
-        let cfg = cfg.as_ref().unwrap();
         for (path, entry) in &index {
-            if cargo_affected && manifest_path(path, cfg) {
+            if cargo_affected && manifest_path(path, &cfg) {
                 if !entry.mode.starts_with("100") {
                     return Err(format!("Cargo layout manifest must be regular: {path}"));
                 }
@@ -809,12 +860,12 @@ fn staged_inner(root: &Path, runner: &dyn ProcessRunner) -> Result<StructureRepo
         }
     }
     let data = batch(root, runner, &blobs)?;
-    let managed = if cfg.is_some() {
-        managed_paths(managed_entry.map(|e| data[&e.oid].as_slice()))?
-    } else {
-        BTreeSet::new()
-    };
-    let previous_managed = if cfg.is_some() && managed_touched {
+    let managed = managed_paths(
+        managed_entry
+            .filter(|_| needs_managed)
+            .map(|e| data[&e.oid].as_slice()),
+    )?;
+    let previous_managed = if managed_touched {
         managed_paths(
             old_managed_entry
                 .filter(|e| e.mode.starts_with("100"))
@@ -833,9 +884,11 @@ fn staged_inner(root: &Path, runner: &dyn ProcessRunner) -> Result<StructureRepo
         if !index.contains_key(path) {
             continue;
         }
-        let mut findings = path_findings(path, false, cfg.as_ref(), &managed);
-        if !current.contains_key(path) {
-            let previous = path_findings(path, false, previous_cfg.as_ref(), &previous_managed);
+        let mut findings = path_findings(path, false, Some(&cfg), &managed);
+        if !current.contains_key(path)
+            && let Some(previous_cfg) = &previous_cfg
+        {
+            let previous = path_findings(path, false, Some(previous_cfg), &previous_managed);
             findings.retain(|f| {
                 !previous
                     .iter()
@@ -844,7 +897,8 @@ fn staged_inner(root: &Path, runner: &dyn ProcessRunner) -> Result<StructureRepo
         }
         report.errors.extend(findings);
     }
-    if let Some(cfg) = &cfg {
+    {
+        let cfg = &cfg;
         for (path, entry) in &index {
             if !cargo_affected || !manifest_path(path, cfg) {
                 continue;
@@ -880,24 +934,20 @@ pub fn pre_commit(root: &Path) -> StructureReport {
 pub fn edited(root: &Path, path: &str) -> StructureReport {
     let result = (|| -> Result<StructureReport, String> {
         let path = repository_relative(path)?;
-        let cfg = safe_file(root, CONFIG)?.as_deref().map(parse).transpose()?;
-        let managed = if cfg.is_some() {
-            managed_paths(safe_file(root, MANAGED)?.as_deref())?
-        } else {
-            BTreeSet::new()
-        };
+        let cfg = effective_config(safe_file(root, CONFIG)?.as_deref())?;
+        let managed = managed_paths(safe_file(root, MANAGED)?.as_deref())?;
         let mut report = StructureReport::default();
         report
             .advisories
-            .extend(path_findings(&path, false, cfg.as_ref(), &managed));
-        if let Some(cfg) = cfg.as_ref().filter(|cfg| manifest_path(&path, cfg)) {
+            .extend(path_findings(&path, false, Some(&cfg), &managed));
+        if manifest_path(&path, &cfg) {
             if let Some(bytes) = safe_file(root, &path)? {
                 // Editing remains local: globs are fully checked against the
                 // staged tree at submission and the worktree at manual audit.
                 report.advisories.extend(check_manifest(
                     &path,
                     &bytes,
-                    cfg,
+                    &cfg,
                     None,
                     &BTreeSet::new(),
                     true,

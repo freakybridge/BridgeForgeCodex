@@ -215,6 +215,44 @@ fn artifact_layout_real_git_sync_blocks_only_new_violations_and_keeps_remote() {
 }
 
 #[test]
+fn artifact_layout_defaults_block_nested_tests_without_project_configuration() {
+    let source = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .ancestors()
+        .nth(2)
+        .unwrap();
+    let cli = source.join(if cfg!(windows) {
+        ".codex/bin/bridgeforge.exe"
+    } else {
+        ".codex/bin/bridgeforge"
+    });
+    let fixture = setup(&cli, "defaults", false, true);
+    let root = fixture.0.join("project");
+    let original = git(&root, &["rev-parse", "HEAD"]);
+    write(&root, "src/tests/new.rs", b"fn probe() {}\n");
+    let mut request = ProcessRequest::new(cli.as_os_str(), &root);
+    request.args = ["git-sync", "--message", "fix: rejected nested test"]
+        .iter()
+        .map(Into::into)
+        .collect();
+    request.timeout = Duration::from_secs(180);
+    let output = SystemProcessRunner.run(&request).unwrap();
+    assert_ne!(output.code, 0);
+    assert!(String::from_utf8_lossy(&output.stderr).contains("misplaced-test-directory"));
+    assert_eq!(git(&root, &["rev-parse", "HEAD"]), original);
+    assert_eq!(git(&root, &["rev-parse", "@{push}"]), original);
+    fs::remove_file(root.join("src/tests/new.rs")).unwrap();
+    write(&root, "scripts/tests/new.rs", b"fn probe() {}\n");
+    let receipt = super::schema4_fixture::invoke(
+        &cli,
+        &root,
+        &["git-sync", "--message", "fix: valid nested test"],
+        &[],
+    );
+    assert_eq!(receipt["status"], "synced");
+    assert!(!root.join(".codex/artifact-layout.json").exists());
+}
+
+#[test]
 #[ignore = "explicit artifact-layout offline performance baseline/comparison"]
 fn artifact_layout_performance() {
     use sha2::{Digest, Sha256};
@@ -222,7 +260,13 @@ fn artifact_layout_performance() {
         .ancestors()
         .nth(2)
         .unwrap();
-    let baseline = source.join(".runtime/artifact-layout/baseline/bridgeforge.exe");
+    let defaults_comparison =
+        std::env::var("BRIDGEFORGE_LAYOUT_PERF_DEFAULTS").as_deref() == Ok("1");
+    let baseline = source.join(if defaults_comparison {
+        ".runtime/artifact-layout-defaults/baseline/bridgeforge.exe"
+    } else {
+        ".runtime/artifact-layout/baseline/bridgeforge.exe"
+    });
     let current = source.join(".codex/bin/bridgeforge.exe");
     let baseline_only = std::env::var("BRIDGEFORGE_LAYOUT_PERF_PHASE").as_deref() == Ok("baseline");
     let focused = std::env::var("BRIDGEFORGE_LAYOUT_PERF_SCENARIOS").ok();
@@ -236,12 +280,22 @@ fn artifact_layout_performance() {
         "release-preview",
         "release",
         "configuration",
+        "minimal-configuration",
+        "deleted-configuration",
     ];
     if let Some(selected) = &focused {
         assert!(selected.split(',').all(|item| scenarios.contains(&item)));
     }
     for scenario in scenarios {
-        if focused.as_ref().is_some_and(|selected| !selected.split(',').any(|item| item == scenario)) {
+        if !defaults_comparison
+            && ["minimal-configuration", "deleted-configuration"].contains(&scenario)
+        {
+            continue;
+        }
+        if focused
+            .as_ref()
+            .is_some_and(|selected| !selected.split(',').any(|item| item == scenario))
+        {
             continue;
         }
         for sample in 0..5 {
@@ -255,7 +309,8 @@ fn artifact_layout_performance() {
                 }
                 let cli = if modern { &current } else { &baseline };
                 let configured = !["documents", "unconfigured"].contains(&scenario);
-                let fixture = setup(cli, scenario, configured, modern);
+                // Both candidates already use the staged entry point in a defaults comparison.
+                let fixture = setup(cli, scenario, configured, modern || defaults_comparison);
                 let root = fixture.0.join("project");
                 match scenario {
                     "clean" => (),
@@ -274,6 +329,12 @@ fn artifact_layout_performance() {
                         cfg["forbidden_source_components"] =
                             json!(["tests", "benches", "examples", "scripts"]);
                         fs::write(path, serde_json::to_vec(&cfg).unwrap()).unwrap();
+                    }
+                    "minimal-configuration" => {
+                        write(&root, ".codex/artifact-layout.json", br#"{"schema":1}"#)
+                    }
+                    "deleted-configuration" => {
+                        fs::remove_file(root.join(".codex/artifact-layout.json")).unwrap()
                     }
                     _ => write(&root, "src/lib.rs", b"pub fn sample() { let _ = 1; }\n"),
                 }
@@ -306,7 +367,11 @@ fn artifact_layout_performance() {
         println!("performance scenario completed: {scenario}");
     }
     let result = json!({"scope":"offline_cli_local_bare_remote_not_chat_end_to_end","samples_per_variant":5,"baseline_sha256":format!("{:x}",Sha256::digest(fs::read(&baseline).unwrap())),"current_sha256":format!("{:x}",Sha256::digest(fs::read(&current).unwrap())),"measurements":measurements});
-    let file = source.join(if focused.is_some() {
+    let file = source.join(if defaults_comparison && focused.is_some() {
+        ".runtime/artifact-layout-defaults/performance-focused.json"
+    } else if defaults_comparison {
+        ".runtime/artifact-layout-defaults/performance-comparison.json"
+    } else if focused.is_some() {
         ".runtime/artifact-layout/performance-focused.json"
     } else if baseline_only {
         ".runtime/artifact-layout/performance-baseline.json"

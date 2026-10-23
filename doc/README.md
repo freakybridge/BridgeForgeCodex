@@ -8,7 +8,7 @@ delivery_layout: flat
 
 ## 从这里开始
 
-实施与验收：[artifact-layout Hook 合并](1_delivery/artifact-layout/requirements_2026-10-23_artifact-layout-merge.md)（TODO-020；2026-10-23 用户已明确验收并授权 release，见第 14 节；workspace 482 项、工厂 fixture 97 项及七项工程检查通过，性能数据与边界见第 12、13 节。真实下游、用户级安装及自然 runtime 未验证）。
+实施与验收：[artifact-layout Hook 合并](1_delivery/artifact-layout/requirements_2026-10-23_artifact-layout-merge.md)及[公共默认规则增量](1_delivery/artifact-layout/requirements_2026-10-23_artifact-layout-defaults.md#用户验收2026-10-23)（TODO-020）已验收；后者按用户确认的定向验证范围收口，全量中止与下游未验证边界保留。2026-10-23 已授权 release，实际发布以受管收据为准。
 
 当前验收：[git-sync 执行环境一致性与单次确认](1_delivery/git-sync-release-rewrite/requirements_2026-10-22_git-sync-context-and-confirmation.md#用户验收2026-10-22)（2026-10-22 用户按增量结果验收，TODO-019 已完成：核心 234 项、发布场景 18 项、五项基础检查与独立审计通过，隔离 3.0.1 构建成功，受管流程约 29 分 44 秒；原全量配置已恢复，最新全量及真实对话/下游未实测。TODO-018 正式发布保留待执行，用户明确先不发布；VERSION 仍 3.0.0，本轮未提交或推送）。
 
@@ -77,9 +77,9 @@ delivery_layout: flat
 
 ## 架构
 
-- [artifact-layout 布局检查合同](0_architecture/design/artifact-layout.md)：项目配置、A 模式、pre-commit 与 git-sync/release 的分工及性能验收；实施结果见 TODO-020 需求卡。
+- [artifact-layout 布局检查合同](0_architecture/design/artifact-layout.md)：公共默认规则、项目差异配置、A 模式、pre-commit 与 git-sync/release 的分工及性能验收；本批实施见公共默认规则增量卡。
 
-- 工厂专属[开发收口清单](0_architecture/design/development-completion.md)：质量检查、发布准备与轻量发布的职责边界。
+- 工厂专属[开发收口清单](0_architecture/design/development-completion.md)：按影响范围分层验证、证据复用与独立可选的发布候选准备；[流程精简验收](1_delivery/git-sync-performance/requirements_2026-10-23_scoped-development.md#用户验收2026-10-23)（TODO-021，2026-10-23 已验收）。
 - 工厂[独立构建产物缓存](0_architecture/design/factory-artifact-cache.md)：编译身份、缓存所有权、有限清理和中断恢复；当前 R04 的结果见交付卡。
 - 设计资料：[`0_architecture/design/`](0_architecture/design/)，包括 [`codex-project-sync.md`](0_architecture/design/codex-project-sync.md)、[`codex-native-instruction-architecture.md`](0_architecture/design/codex-native-instruction-architecture.md)、[`codex-native-memory-sync.md`](0_architecture/design/codex-native-memory-sync.md)、[`user-facing-result-contract.md`](0_architecture/design/user-facing-result-contract.md)、`design-rationale.md` 与上游同步 playbook。
 - 操作参考：[`codex-project-operating-guide.md`](3_reference/codex-project-operating-guide.md)、[项目自有 Rust Hook](3_reference/project-rust-hooks.md) 与主动澄清参考 [`codex-hook-signals.md`](3_reference/codex-hook-signals.md)；自动 Clarify / Focus Hook 已退役。
