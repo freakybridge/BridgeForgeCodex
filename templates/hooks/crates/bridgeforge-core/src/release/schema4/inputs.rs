@@ -315,6 +315,8 @@ fn capture_with_reader(
     let factory = root.join("templates/managed-skeleton.json").is_file();
     // Construct only when a path actually needs classification. Keep the first
     // contract bytes separately so later path reads cannot overwrite the guard.
+    // Use the formal release boundary for both ownership and payloads: paths
+    // include committed, unreleased changes that are already identical to HEAD.
     let mut classifier: Option<(PayloadClassifier, Vec<u8>)> = None;
     let mut changes = Vec::new();
     for path in paths {
@@ -343,11 +345,11 @@ fn capture_with_reader(
             if classifier.is_none() {
                 let bytes = config::read_current(root, ".codex/managed-skeleton.json")?
                     .ok_or("current-only baseline is missing")?;
-                let parsed = PayloadClassifier::new(&bytes, |p| revision_payload(root, &head, p, runner))?;
+                let parsed = PayloadClassifier::new(&bytes, |p| revision_payload(root, &boundary, p, runner))?;
                 classifier = Some((parsed, bytes));
             }
             if classifier.as_ref().unwrap().0.classify(std::slice::from_ref(&path),
-                |p| revision_payload(root, &head, p, runner),
+                |p| revision_payload(root, &boundary, p, runner),
                 |p| release_input(&root.join(p)))? == ReleaseKind::SkeletonOnly {
                 continue;
             }

@@ -116,6 +116,91 @@ fn change(root: &Path, rust: bool) {
     );
 }
 
+const MANAGED_CARGO: &str = ".codex/hooks/crates/bridgeforge-core/Cargo.toml";
+
+fn cumulative_skeleton(root: &Path, generation: u8, project: &str) {
+    let cargo = format!("[package]\nname='managed-tool'\nversion='1.0.{generation}'\n");
+    let public = format!("BEGIN\npublic {generation}\nEND\n");
+    write(root, MANAGED_CARGO, cargo.as_bytes());
+    write(root, "README.md", format!("{public}{project}\n").as_bytes());
+    let contract = json!({"contract_target":".codex/managed-skeleton.json","assets":[
+        {"id":"managed.cargo","target":MANAGED_CARGO,"strategy":"whole","current_sha256":digest(cargo.as_bytes())},
+        {"id":"managed.readme","target":"README.md","strategy":"region",
+         "region":{"begin":"BEGIN","end":"END","current_sha256":digest(public.as_bytes())}}
+    ]});
+    write(root, ".codex/managed-skeleton.json", &serde_json::to_vec(&contract).unwrap());
+}
+
+fn cumulative_skeleton_fixture() -> Repo {
+    let r = fixture("legacy", true);
+    cumulative_skeleton(&r.0, 0, "project original");
+    git(&r.0, &["add", "."]);
+    git(&r.0, &["commit", "--amend", "--no-edit"]);
+    migrate(&r.0);
+    r
+}
+
+#[test]
+fn schema4_cumulative_skeleton_committed_update_is_not_business_release() {
+    let r = cumulative_skeleton_fixture();
+    cumulative_skeleton(&r.0, 1, "project original");
+    for committed in [false, true] {
+        if committed {
+            git(&r.0, &["add", "."]);
+            git(&r.0, &["commit", "-m", "chore: skeleton update without release"]);
+        }
+        let index = fs::read(r.0.join(".git/index")).unwrap();
+        let cfg = load(&r.0).unwrap().unwrap();
+        let captured = capture(&r.0, &cfg, &SystemProcessRunner).unwrap();
+        assert!(captured.changes.is_empty(), "{:?}", captured.changes);
+        assert!(build(&r.0, "chore: skeleton", &Request::default(), &SystemProcessRunner).unwrap().is_none());
+        assert_eq!(fs::read(r.0.join(".git/index")).unwrap(), index);
+        assert_eq!(fs::read(r.0.join("VERSION")).unwrap(), b"1.0.0\n");
+    }
+    // Cumulative skeleton changes must not block or absorb a real package change.
+    change(&r.0, true);
+    let request = analyze(&r.0, "patch", Some("patch"));
+    let plan = build(&r.0, "fix: business", &request, &SystemProcessRunner).unwrap().unwrap();
+    assert_eq!(plan.new_version.to_string(), "1.0.1");
+    assert_eq!(plan.package_changes.len(), 1);
+    assert_eq!(plan.package_changes[0].version_after, "1.0.1");
+}
+
+#[test]
+fn schema4_cumulative_skeleton_preserves_committed_project_region_changes() {
+    let r = cumulative_skeleton_fixture();
+    cumulative_skeleton(&r.0, 1, "project changed");
+    git(&r.0, &["add", "."]);
+    git(&r.0, &["commit", "-m", "fix: project customization with skeleton"]);
+    // HEAD-to-worktree sees only the new public region; the release also owes
+    // the already committed project customization since the formal boundary.
+    cumulative_skeleton(&r.0, 2, "project changed");
+    let captured = capture(&r.0, &load(&r.0).unwrap().unwrap(), &SystemProcessRunner).unwrap();
+    assert_eq!(captured.changes.len(), 1);
+    assert_eq!(captured.changes[0].path, "README.md");
+    assert_eq!(captured.changes[0].role, "product");
+    let request = analyze(&r.0, "patch", None);
+    let plan = build(&r.0, "fix: customization", &request, &SystemProcessRunner).unwrap().unwrap();
+    assert_eq!(plan.new_version.to_string(), "1.0.1");
+    assert!(plan.package_changes.is_empty());
+}
+
+#[test]
+fn schema4_cumulative_skeleton_rejects_tampering_and_unknown_inputs() {
+    let r = cumulative_skeleton_fixture();
+    cumulative_skeleton(&r.0, 1, "project original");
+    git(&r.0, &["add", "."]);
+    git(&r.0, &["commit", "-m", "chore: skeleton"]);
+    write(&r.0, MANAGED_CARGO, b"unverified payload\n");
+    let cfg = load(&r.0).unwrap().unwrap();
+    let error = capture(&r.0, &cfg, &SystemProcessRunner).err().unwrap();
+    assert!(error.contains("current ownership baseline is invalid"), "{error}");
+    cumulative_skeleton(&r.0, 1, "project original");
+    write(&r.0, ".codex/hooks/unknown.rs", b"fn unknown() {}\n");
+    let error = capture(&r.0, &cfg, &SystemProcessRunner).err().unwrap();
+    assert!(error.contains("unattributed release input: .codex/hooks/unknown.rs"), "{error}");
+}
+
 #[test]
 fn schema4_cutover_preserves_unreleased_changes_across_legacy_intermediate_commits() {
     let r = fixture("legacy", true);
@@ -395,14 +480,17 @@ fn schema4_reused_classifier_rejects_contract_drift_before_its_path_is_captured(
         }
     }
     let r=fixture("independent", false);
+    let boundary=git(&r.0,&["rev-parse","HEAD"]);
+    git(&r.0,&["add","."]);
+    git(&r.0,&["commit","-m","chore: commit migration before drift probe"]);
     // An empty graft file preserves history but deliberately disables the
-    // object cache, making the classifier's HEAD read an observable barrier.
+    // object cache, making the classifier's release-boundary read observable.
     write(&r.0,".git/info/grafts",b"");
     let mut value:Value=serde_json::from_slice(&fs::read(r.0.join(CONFIG)).unwrap()).unwrap();
     value["build_inputs"]=json!(["recipe.json"]);
     write(&r.0,CONFIG,&serde_json::to_vec(&value).unwrap());
     write(&r.0,".codex/managed-skeleton.json",br#"{"schema_version":1,"assets":[],"note":"A"}"#);
-    let runner=ChangeContract { spec:format!("{}:.codex/managed-skeleton.json",git(&r.0,&["rev-parse","HEAD"])),changed:std::cell::Cell::new(false) };
+    let runner=ChangeContract { spec:format!("{boundary}:.codex/managed-skeleton.json"),changed:std::cell::Cell::new(false) };
     let error=capture(&r.0,&load(&r.0).unwrap().unwrap(),&runner).err().unwrap();
     assert!(runner.changed.get());
     assert!(error.contains("ownership contract changed"),"{error}");

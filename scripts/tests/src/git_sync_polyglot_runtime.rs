@@ -115,6 +115,21 @@ fn real_cli_python_lock_preview_release_rollback_and_repeat() {
     assert_eq!(fs::read(root.join(".git/index")).unwrap(),legacy_index);
     assert_eq!(fs::read(root.join(".codex/bridgeforge-version.json")).unwrap(),legacy_config);
     super::schema4_fixture::migrate(&cli,&root);
+    // A skeleton update can already be committed while still being part of
+    // the cumulative diff since the last formal business release.
+    let mut updated_contract = contract.clone();
+    updated_contract["assets"][0]["current_sha256"] =
+        json!(format!("sha256:{:x}", Sha256::digest(b"managed update\n")));
+    write(&root, "managed.txt", b"managed update\n");
+    write(&root, ".codex/managed-skeleton.json", &serde_json::to_vec(&updated_contract).unwrap());
+    git(&root, &["add", "."]);
+    git(&root, &["commit", "-m", "chore: committed skeleton update"]);
+    let skeleton_index = fs::read(root.join(".git/index")).unwrap();
+    let skeleton_preview = call(&cli, &root,
+        &["git-sync", "--release-preview", "--message", "chore: skeleton only"], true);
+    assert_eq!(skeleton_preview["status"], "nothing-to-release");
+    assert_eq!(fs::read(root.join(".git/index")).unwrap(), skeleton_index);
+    assert_eq!(fs::read(root.join("VERSION")).unwrap(), b"1.0.0\n");
     write(&root, "app.py", b"VALUE=2\n");
     super::schema4_fixture::analyze(&cli,&root,"fix: adjust app","patch",&[],&[]);
     let status = git(&root, &["status", "--porcelain=v1"]);

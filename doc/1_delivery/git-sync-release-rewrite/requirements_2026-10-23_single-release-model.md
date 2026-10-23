@@ -98,3 +98,47 @@ Update/Adopt 将切换配置、输入指纹、读集合和回滚快照纳入既�
 3. 先复用已有发布路径，再按风险选择定向测试。预算上限应有范围依据，不能把保守估算当必需工时；耗时测试筛选过宽时及时收窄，保留中断和失败事实。本轮约 30 分钟完成，不以重跑全量或发布准备作为开发完成前置。
 
 已复用本会话读过的 Native Memory 中历史 Cargo 归属约束，并与现行源码和本次证据核对；没有新增 Rule/Hook/AGENTS 建议，现有分层收口与证据规则已覆盖这些风险。未修改 Memory。当前 topic 同时承载发布接入合同和其他关联事项，本轮不提出整目录归档候选，不移动文档。
+
+## 累计骨架差异修复与验收2026-10-23
+
+TODO-022 增量修复。用户先授权“在工厂里修复这个 bug，补上对应验证，先不要提交和发布”，完成后明确调用 `$summary accept` 和 `$git-sync release`，验收本次工厂修复并另行授权受管提交、升版和推送。此授权不包括修改真实下游或安装用户级入口。
+
+### 现场与原因
+
+Stratus 对话 `01a167fd-1f6c-7a82-8fb4-2c665120fc6e` 中，5.0.0 更新收据为 applied/ready，后续 release 预览却报 `unattributed release input: .codex/hooks/crates/bridgeforge-core/Cargo.toml; configure ownership`。只读核验表明：该文件相对正式发布 `f7d21877` 增加一行依赖，相对 HEAD `496937eb` 无变化；HEAD 清单、当前清单和实际文件的 hash 一致。
+
+原因是累计差异按正式发布边界收集，而 PayloadClassifier 的历史合同及历史内容取自 HEAD。已经提交但未发布的骨架变化在分类时变成“无变化”，落入 Business 分支；已经提交的项目定制也可能被后续公共区更新掩盖。工厂自身跳过下游骨架分类分支，所以工厂 release 成功不能覆盖此场景。
+
+修复位于 `templates/hooks/crates/bridgeforge-core/src/release/schema4/inputs.rs`：分类器的历史合同与历史内容均改用同一个正式发布 boundary。保留原有 hash 校验、项目区投影、未知输入拒绝和合同漂移保护；不按 `.codex/` 目录整体忽略，也不把骨架文件登记为业务包。
+
+传播四问：本次为通用产品层修复，源在 templates；同步自身 dogfood 和受管 manifest；兼容性为 compatible，正式发布按 patch 处理，由受管事务更新 VERSION/CHANGELOG，开发阶段没有预写版本。
+
+### 验证证据
+
+测试实体位于 `scripts/tests/unit/core_release_schema4.rs` 与 `scripts/tests/src/git_sync_polyglot_runtime.rs`。单元和 Git 夹具命令基式为 `cargo test --locked --config scripts/tests/factory-cargo.toml --manifest-path .codex/hooks/Cargo.toml -p bridgeforge-core <filter> -- --test-threads=3`，既有检查实际使用 2 个线程。
+
+| 检查 / filter | 结果与断言 |
+|---|---|
+| `schema4_cumulative_skeleton` | 修改前 3 项失败，包含同型 Cargo.toml 归属报错及项目定制遗漏；修复后 3/3 通过，覆盖未提交/已提交骨架 no-op、叠加业务包升版、已提交项目区变化、篡改和未知输入阻断、预览不改 index/VERSION |
+| `schema4_reused_classifier` | 2/2 通过；合同字节绑定及读取期间漂移仍阻断；漂移夹具明确使 HEAD 与正式发布边界不同 |
+| `region_projection_distinguishes_public_and_project_changes` | 1/1 通过；公共区与项目区继续分别归属 |
+| `schema4_final_difference_cancels_unpublished_commits` | 1/1 通过；累计净撤销不制造发布 |
+| `schema4_cutover_preserves_unreleased_changes_across_legacy_intermediate_commits` | 1/1 通过；规则切换不吞掉未发布业务修改 |
+| `cargo test --locked --manifest-path scripts/tests/Cargo.toml real_cli_python_lock_preview_release_rollback_and_repeat -- --test-threads=1` | 1/1 通过，103.28 秒；真实受管 CLI 在临时本地仓库验证已提交骨架返回 nothing-to-release，后续业务修改的预览、发布、失败回滚和重复运行保持有效；仅临时本地 bare 远端 |
+| `manifest --root . --check` / `check factory-version --root .` / `git diff --check` | changed=false、healthy=true、无空白错误；开发版本仍 5.0.0 |
+| `build-assets --project-root D:/Quant/BridgeForgeCodex`、实际 CLI self-test、`check baseline --root .` | CLI/Hook 构建成功，self-test status=ok，baseline state=clean；两份构建收据共同 source_tree_sha256 为 `sha256:cd3f424bc852d5ce7c914b2d677a3698aac947916a47daf1b828edaeaaa51d0d` |
+
+首轮受管 build-assets 直接从待替换 CLI 执行，在 Windows 替换阶段报 os error 5 并回滚。核对已有 Windows 可执行文件占用经验后，复制同一 CLI 到临时路径、校验 hash，再调用相同受管 build-assets，成功后删除该临时副本。没有手工替换产物、改 ACL 或改环境变量。Cargo/属性检查的沙箱写权限失败以原命令在获准权限环境重试；没有将环境失败记为测试通过。此次总结只复用这些已取得证据，没有重新组织构建、测试或审计。
+
+| 证据类别 | 当前结论 |
+|---|---|
+| 源码 | 比较起点已统一，回归先失败后通过 |
+| 产品传播 | templates 源和受管清单已更新；发布另走受管 release，不以本节代替发布收据 |
+| dogfood | 镜像 hash 一致，工厂 baseline clean |
+| fixture | 8 项源码/Git 夹具及 1 项真实 CLI 集成通过 |
+| 真实下游 | 未更新 Stratus，实际下游 release 未复验 |
+| runtime | 工厂新 CLI/Hook 构建、自检和隔离 CLI 运行通过；下游自然 Hook/业务 runtime 未验证 |
+
+用户验收范围为上述工厂修复及对应验证，TODO-022 保持已完成并补充本次验收链接；没有把真实下游未验证改写为通过，也没有新增已知独立 blocker。累计发布的文件集合、归属判断和内容对比必须使用同一个正式发布起点；合同“已登记”与当前文件相符不足以证明历史分类正确，这是本次应保留的经验。
+
+已复用本轮实际读取的 Native Memory 中 Windows CLI 占用与临时副本构建经验，并用本次失败、回滚和成功收据复核。现有开发收口合同已要求避免运行中目标镜像占用，无新增 Rule/Hook/AGENTS 建议；未写 Memory。当前 topic 仍承载其他发布接入事项，无整目录归档候选。
