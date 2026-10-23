@@ -451,14 +451,7 @@ pub(super) fn validate_current(root:&Path,boundary:&str,cfg:&Config,runner:&dyn 
     Ok(())
 }
 
-pub(super) fn owner(snapshot: &Snapshot, path: &str, cfg: &Config) -> Result<Vec<String>, String> {
-    let scope = snapshot.config.as_ref().unwrap_or(cfg);
-    if scope.product_inputs.iter().any(|p| owns(p, path)) {
-        return Ok(vec![]);
-    }
-    if let Some(mapping) = scope.shared_inputs.iter().find(|p| owns(&p.path, path)) {
-        return Ok(mapping.packages.clone());
-    }
+fn natural_owners(snapshot: &Snapshot, path: &str) -> Vec<String> {
     // An explicit external target cannot steal a file from its natural package.
     // Resolve natural roots with the existing longest-root rule, then union
     // exact target declarations and require shared_inputs for multiple owners.
@@ -488,16 +481,49 @@ pub(super) fn owner(snapshot: &Snapshot, path: &str, cfg: &Config) -> Result<Vec
         })
         .collect::<Vec<_>>();
     let max = best.iter().map(|(_, size)| *size).max();
-    if max.is_some() || !explicit.is_empty() {
-        let ids = best
+    best
             .into_iter()
             .filter(|(_, size)| Some(*size) == max)
             .map(|(id, _)| id.clone())
             .chain(explicit)
-            .collect::<BTreeSet<_>>().into_iter().collect::<Vec<_>>();
-        if ids.len() == 1 {
-            return Ok(ids);
+            .collect::<BTreeSet<_>>().into_iter().collect()
+}
+
+/// Only snapshots rebuilt by the adapters supply this proof. A directory root
+/// alone, a missing target or an opaque macro is not evidence of sharing.
+/// Existing explicit roles always win and are never widened or replaced.
+pub(super) fn proven_shared_inputs(snapshot: &Snapshot, cfg: &Config) -> Vec<SharedInput> {
+    let scope = snapshot.config.as_ref().unwrap_or(cfg);
+    let candidates = snapshot.packages.values()
+        .filter(|p| p.language == Language::Rust)
+        .flat_map(|p| p.source_roots.iter())
+        .filter(|p| !p.is_empty() && !p.ends_with('/'))
+        .collect::<BTreeSet<_>>();
+    candidates.into_iter().filter_map(|path| {
+        if scope.product_inputs.iter().any(|p| owns(p, path))
+            || scope.shared_inputs.iter().any(|p| owns(&p.path, path))
+            || !snapshot.inputs.get(path).is_some_and(Option::is_some) {
+            return None;
         }
+        let packages = natural_owners(snapshot, path);
+        (packages.len() > 1 && packages.iter().all(|id| snapshot.packages[id].language == Language::Rust))
+            .then(|| SharedInput { path: path.clone(), packages })
+    }).collect()
+}
+
+pub(super) fn owner(snapshot: &Snapshot, path: &str, cfg: &Config) -> Result<Vec<String>, String> {
+    let scope = snapshot.config.as_ref().unwrap_or(cfg);
+    if scope.product_inputs.iter().any(|p| owns(p, path)) {
+        return Ok(vec![]);
+    }
+    if let Some(mapping) = scope.shared_inputs.iter().find(|p| owns(&p.path, path)) {
+        return Ok(mapping.packages.clone());
+    }
+    let ids = natural_owners(snapshot, path);
+    if ids.len() == 1 {
+        return Ok(ids);
+    }
+    if ids.len() > 1 {
         return Err(format!("ambiguous package ownership: {path}; configure shared_inputs"));
     }
     if snapshot.inputs.contains_key(path) {

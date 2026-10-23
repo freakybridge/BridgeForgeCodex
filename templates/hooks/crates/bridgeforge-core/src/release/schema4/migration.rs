@@ -9,6 +9,27 @@ struct Prepared {
     inventory: Vec<String>,
     status: String,
     head: String,
+    shared_additions: Value,
+}
+
+/// Inferred sharing is migration bookkeeping, but every other configuration
+/// change must remain visible. Recompute additions; never trust the edited list.
+pub(super) fn is_initial_configuration(value: &Value, cfg: &Config, current: &polyglot::Snapshot) -> Result<bool, String> {
+    if configuration::configuration_hash(value)? == cfg.baseline.initial_configuration_hash {
+        return Ok(true);
+    }
+    let mut expected = cfg.baseline.initial_configuration.clone();
+    expected["baseline"] = serde_json::to_value(&cfg.baseline).map_err(|e| e.to_string())?;
+    let seed = parse(&serde_json::to_vec(&expected).map_err(|e| e.to_string())?)?
+        .ok_or("migration proof must describe schema 4")?;
+    let mut snapshot = current.clone();
+    snapshot.config = Some(seed.native.clone());
+    let additions = polyglot::proven_shared_inputs(&snapshot, &seed.native);
+    if additions.is_empty() { return Ok(false); }
+    let mut shared = seed.native.shared_inputs;
+    shared.extend(additions);
+    expected["shared_inputs"] = serde_json::to_value(shared).map_err(|e| e.to_string())?;
+    Ok(configuration::configuration_hash(value)? == configuration::configuration_hash(&expected)?)
 }
 
 /// During the handover window the new baseline has not yet become a formal
@@ -103,13 +124,14 @@ fn reconstruct_baseline(root: &Path, cfg: &Config, runner: &dyn ProcessRunner) -
     result.input_hashes = hashes;
     result.product_inputs = scope.product_inputs.clone();
     result.shared_inputs = scope.shared_inputs.clone();
+    result.shared_inputs.extend(polyglot::proven_shared_inputs(&baseline, &seed.native));
     result.lifecycle = scope.lifecycle.clone();
     result.lineage = lineage;
     Ok(result)
 }
 
-/// A correction can only add native, historical target paths. Everything else
-/// (including identity, versions, scope, hashes and history boundaries) is frozen.
+/// Add proven historical paths/hashes and missing exact shared declarations.
+/// Existing roles, identities, versions, hashes and history boundaries are frozen.
 fn ownership_enrichment(old: &Baseline, new: &Baseline) -> Result<(), String> {
     fn packages(old: &BTreeMap<String, NativePackage>, new: &mut BTreeMap<String, NativePackage>) -> Result<(), String> {
         for (id, prior) in old {
@@ -127,6 +149,12 @@ fn ownership_enrichment(old: &Baseline, new: &Baseline) -> Result<(), String> {
         Ok(())
     }
     let mut normalized = new.clone();
+    if new.shared_inputs.len() < old.shared_inputs.len()
+        || serde_json::to_value(&new.shared_inputs[..old.shared_inputs.len()]).map_err(|e| e.to_string())?
+            != serde_json::to_value(&old.shared_inputs).map_err(|e| e.to_string())? {
+        return Err("baseline repair cannot change existing shared ownership".into());
+    }
+    normalized.shared_inputs = old.shared_inputs.clone();
     for (path, hash) in &new.input_hashes {
         if !old.input_hashes.contains_key(path) {
             if hash.is_none() || !new.packages.values().any(|p| p.language == Language::Rust && p.source_roots.contains(path)) {
@@ -143,7 +171,7 @@ fn ownership_enrichment(old: &Baseline, new: &Baseline) -> Result<(), String> {
         packages(&prior.packages, &mut next.packages)?;
     }
     if serde_json::to_value(old).map_err(|e| e.to_string())? != serde_json::to_value(normalized).map_err(|e| e.to_string())? {
-        return Err("baseline repair is limited to proven additive Cargo source ownership".into());
+        return Err("baseline repair is limited to proven additive Cargo source ownership and sharing".into());
     }
     Ok(())
 }
@@ -358,6 +386,7 @@ fn prepare(
         );
     }
     let baseline_scope = baseline.config.as_ref().unwrap_or(&native);
+    let historical_shared = polyglot::proven_shared_inputs(&baseline, &native);
     value["baseline"] = serde_json::to_value(Baseline {
         revision: boundary.clone(),
         migration_head: head.clone(),
@@ -380,7 +409,7 @@ fn prepare(
         retired_ids,
         input_hashes,
         product_inputs: baseline_scope.product_inputs.clone(),
-        shared_inputs: baseline_scope.shared_inputs.clone(),
+        shared_inputs: baseline_scope.shared_inputs.iter().cloned().chain(historical_shared.iter().cloned()).collect(),
         lifecycle: baseline_scope.lifecycle.clone(),
         lineage,
     })
@@ -388,8 +417,21 @@ fn prepare(
     if source_schema == 4 {
         value["baseline"] = corrected.unwrap_or_else(|| old_value["baseline"].clone());
     }
+    // Derive each side from its own snapshot. Do this after saving the immutable
+    // migration seed, so current-only discoveries cannot leak into old history.
+    let current_shared = if repair || source_schema != 4 {
+        polyglot::proven_shared_inputs(&current, &native)
+    } else { Vec::new() };
+    if !current_shared.is_empty() {
+        value["shared_inputs"] = json!(native.shared_inputs.iter().cloned().chain(current_shared.iter().cloned()).collect::<Vec<_>>());
+    }
     let cfg = parse(&serde_json::to_vec(&value).map_err(|e| e.to_string())?)?
         .ok_or("migration did not produce schema 4")?;
+    let baseline_additions = cfg.baseline.shared_inputs.iter().filter(|mapping| {
+        !old_value["baseline"]["shared_inputs"].as_array().is_some_and(|old| old.iter().any(|entry| entry == &json!(mapping)))
+    }).map(|mapping| sharing_evidence(mapping, &baseline)).collect::<Vec<_>>();
+    let current_additions = current_shared.iter().map(|mapping| sharing_evidence(mapping, &current)).collect::<Vec<_>>();
+    let shared_additions = json!({"historical_revision":cfg.baseline.revision,"historical":baseline_additions,"current":current_additions});
     super::lineage::validate(root, &cfg, &baseline, &current, &head, &boundary, &reader)?;
     let current_product = fs::read_to_string(root.join("VERSION"))
         .map_err(|e| e.to_string())?
@@ -442,7 +484,17 @@ fn prepare(
         inventory,
         status,
         head,
+        shared_additions,
     })
+}
+
+fn sharing_evidence(mapping: &polyglot::SharedInput, snapshot: &polyglot::Snapshot) -> Value {
+    json!({"path":mapping.path,"packages":mapping.packages,
+        "content_sha256":snapshot.inputs.get(&mapping.path).and_then(|bytes| bytes.as_deref()).map(digest),
+        "evidence":mapping.packages.iter().filter_map(|id| snapshot.packages.get(id).map(|p| json!({
+            "package":id,"manifest":p.manifest,
+            "source_roots":p.source_roots.iter().filter(|root| root.as_str() == mapping.path || (root.ends_with('/') && mapping.path.starts_with(root.as_str())) || root.is_empty()).collect::<Vec<_>>()
+        }))).collect::<Vec<_>>()})
 }
 
 pub fn migration_plan(
@@ -469,7 +521,7 @@ pub fn repair_baseline_plan(root: &Path, runner: &dyn ProcessRunner) -> CommandO
 fn plan_mode(root: &Path, runner: &dyn ProcessRunner, proposal: Option<&str>, strategy: Option<&str>, repair: bool) -> CommandOutcome {
     match prepare(root, runner, proposal, strategy, repair) {
         Ok(p) => CommandOutcome::with_receipt(
-            json!({"schema":1,"status":if repair {"baseline-repair-planned"} else {"migration-planned"},"fingerprint":p.fingerprint,"configuration":p.value,"writes":[CONFIG],"version_changes":false,"ownership_analysis":{"mode":"static","dynamic_macros_expanded":false,"dynamic_shared_sources":"explicit shared_inputs required"}}),
+            json!({"schema":1,"status":if repair {"baseline-repair-planned"} else {"migration-planned"},"fingerprint":p.fingerprint,"configuration":p.value,"writes":[CONFIG],"version_changes":false,"ownership_analysis":{"mode":"static","dynamic_macros_expanded":false,"dynamic_shared_sources":"explicit shared_inputs required","shared_input_additions":p.shared_additions}}),
         ),
         Err(e) => CommandOutcome::blocked(format!("[schema4-migration] {e}\n")),
     }

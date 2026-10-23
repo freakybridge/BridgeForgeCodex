@@ -333,7 +333,7 @@ fn capture_with_reader(
                 new.as_deref().ok_or("release config removed")?,
                 "release config",
             )?;
-            if configuration::configuration_hash(&value)? == cfg.baseline.initial_configuration_hash
+            if migration::is_initial_configuration(&value, cfg, &current)?
             {
                 continue;
             }

@@ -8,6 +8,8 @@ delivery_layout: flat
 
 ## 从这里开始
 
+最近验收：[历史共享源码归属补正](1_delivery/git-sync-release-rewrite/implementation_2026-10-23_historical-shared-ownership.md#用户验收与发布授权2026-10-23)（TODO-017 增量；11 个定向场景、独立审查、受管构建及基线一致性通过；2026-10-23 用户验收并授权 release，实际发布以受管收据为准；下游未修改、未验证）。
+
 实施与验收：[artifact-layout Hook 合并](1_delivery/artifact-layout/requirements_2026-10-23_artifact-layout-merge.md)及[公共默认规则增量](1_delivery/artifact-layout/requirements_2026-10-23_artifact-layout-defaults.md#用户验收2026-10-23)（TODO-020）已验收；后者按用户确认的定向验证范围收口，全量中止与下游未验证边界保留。2026-10-23 已授权 release，实际发布以受管收据为准。
 
 当前验收：[git-sync 执行环境一致性与单次确认](1_delivery/git-sync-release-rewrite/requirements_2026-10-22_git-sync-context-and-confirmation.md#用户验收2026-10-22)（2026-10-22 用户按增量结果验收，TODO-019 已完成：核心 234 项、发布场景 18 项、五项基础检查与独立审计通过，隔离 3.0.1 构建成功，受管流程约 29 分 44 秒；原全量配置已恢复，最新全量及真实对话/下游未实测。TODO-018 正式发布保留待执行，用户明确先不发布；VERSION 仍 3.0.0，本轮未提交或推送）。

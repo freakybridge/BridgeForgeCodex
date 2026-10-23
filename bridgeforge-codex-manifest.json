@@ -232,7 +232,7 @@
             {
               "source": "skills/git-sync/references/first-use.md",
               "target": "references/first-use.md",
-              "sha256": "sha256:bf26eff54c9f2658441254fbd5416dc365e1e545958bb6165f32f51354bde7d6"
+              "sha256": "sha256:81dee270dc9414c842a828fb717d1e669c59bf25c2f01874ca221393ea2ce26f"
             },
             {
               "source": "skills/git-sync/references/schema4.md",

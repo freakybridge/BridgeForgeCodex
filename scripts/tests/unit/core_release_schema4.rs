@@ -140,6 +140,140 @@ fn legacy_source_roots(root: &Path) -> Value {
     v
 }
 
+fn historical_sharing_fixture() -> Repo {
+    let r = fixture("legacy", true);
+    write(&r.0, "pkg/src/gui.rs", b"pub fn gui() {}\n");
+    write(&r.0, "pkg/src/helper.rs", b"pub fn helper() {}\n");
+    write(&r.0, "tools/Cargo.toml", b"[package]\nname='b'\nversion='1.0.0'\nedition='2021'\n[workspace]\n[[test]]\nname='shared'\npath='../checks/main.rs'\n");
+    write(&r.0, "tools/Cargo.lock", b"version=4\n[[package]]\nname='b'\nversion='1.0.0'\n");
+    write(&r.0, "checks/main.rs", b"#[path=\"../pkg/src/gui.rs\"] mod gui;\n#[path=\"../pkg/src/helper.rs\"] mod helper;\n");
+    let mut cfg: Value = serde_json::from_slice(&fs::read(r.0.join(CONFIG)).unwrap()).unwrap();
+    cfg["adapters"]["rust"]["workspaces"].as_array_mut().unwrap().push(json!("tools/Cargo.toml"));
+    cfg["packages"].as_array_mut().unwrap().push(json!({"id":"b","name":"b","language":"rust","manifest":"tools/Cargo.toml"}));
+    cfg["product_inputs"].as_array_mut().unwrap().push(json!("tools/Cargo.lock"));
+    write(&r.0, CONFIG, &serde_json::to_vec(&cfg).unwrap());
+    git(&r.0, &["add", "."]);
+    git(&r.0, &["commit", "--amend", "--no-edit"]);
+    let p = migration_plan(&r.0, &SystemProcessRunner, None);
+    assert_eq!(p.code, 0, "{}", p.stderr);
+    let v = p.receipt.unwrap();
+    assert_eq!(v["ownership_analysis"]["shared_input_additions"]["historical"].as_array().unwrap().len(), 2);
+    assert_eq!(migration_apply(&r.0, &SystemProcessRunner, None, v["fingerprint"].as_str().unwrap(), true).code, 0);
+    let migrated = load(&r.0).unwrap().unwrap();
+    let captured = capture(&r.0, &migrated, &SystemProcessRunner).unwrap();
+    assert!(!captured.changes.iter().any(|c| c.path == CONFIG), "inferred sharing alone is migration bookkeeping");
+    let mut changed: Value = serde_json::from_slice(&fs::read(r.0.join(CONFIG)).unwrap()).unwrap();
+    changed["build_inputs"] = json!(["scripts/recipe.json"]);
+    assert!(!migration::is_initial_configuration(&changed, &migrated, &captured.current).unwrap(), "sharing must not conceal other configuration changes");
+    // Simulate an existing schema-4 migration that already repaired file roots,
+    // but predates the shared-source correction (the reported downstream case).
+    let mut v: Value = serde_json::from_slice(&fs::read(r.0.join(CONFIG)).unwrap()).unwrap();
+    v["baseline"]["shared_inputs"] = json!([]);
+    v["shared_inputs"] = json!([]);
+    write(&r.0, CONFIG, &serde_json::to_vec(&v).unwrap());
+    git(&r.0, &["add", "."]);
+    git(&r.0, &["commit", "-m", "chore: old schema4 sharing gap"]);
+    r
+}
+
+#[test]
+fn schema4_baseline_repair_sharing_is_snapshot_bound_atomic_and_release_ready() {
+    let r = historical_sharing_fixture();
+    let root = &r.0;
+    let before = fs::read(root.join(CONFIG)).unwrap();
+    let original: Value = serde_json::from_slice(&before).unwrap();
+    let index = fs::read(root.join(".git/index")).unwrap();
+    let head = git(root, &["rev-parse", "HEAD"]);
+    // The current tool no longer consumes helper.rs. History must still show it.
+    write(root, "checks/main.rs", b"#[path=\"../pkg/src/gui.rs\"] mod gui;\n");
+    let p = repair_baseline_plan(root, &SystemProcessRunner);
+    assert_eq!(p.code, 0, "{}", p.stderr);
+    let p = p.receipt.unwrap();
+    let additions = &p["ownership_analysis"]["shared_input_additions"];
+    assert_eq!(additions["historical"].as_array().unwrap().len(), 2);
+    assert_eq!(additions["current"].as_array().unwrap().len(), 1);
+    assert_eq!(additions["current"][0]["path"], "pkg/src/gui.rs");
+    assert_eq!(additions["historical"][0]["packages"], json!(["a", "b"]));
+    assert!(additions["historical"][0]["content_sha256"].as_str().unwrap().starts_with("sha256:"));
+    assert_eq!(additions["historical"][0]["evidence"].as_array().unwrap().len(), 2);
+    assert_eq!(fs::read(root.join(CONFIG)).unwrap(), before);
+    let fp = p["fingerprint"].as_str().unwrap();
+    assert_ne!(repair_baseline_apply(root, &SystemProcessRunner, fp, false).code, 0);
+    write(root, "pkg/src/gui.rs", b"pub fn changed_after_plan() {}\n");
+    assert_ne!(repair_baseline_apply(root, &SystemProcessRunner, fp, true).code, 0);
+    assert_eq!(fs::read(root.join(CONFIG)).unwrap(), before);
+    let p = repair_baseline_plan(root, &SystemProcessRunner).receipt.unwrap();
+    let applied = repair_baseline_apply(root, &SystemProcessRunner, p["fingerprint"].as_str().unwrap(), true);
+    assert_eq!(applied.code, 0, "{}", applied.stderr);
+    let repaired: Value = serde_json::from_slice(&fs::read(root.join(CONFIG)).unwrap()).unwrap();
+    let mut normalized = repaired.clone();
+    normalized["baseline"]["shared_inputs"] = original["baseline"]["shared_inputs"].clone();
+    normalized["shared_inputs"] = original["shared_inputs"].clone();
+    assert_eq!(normalized, original, "only missing shared declarations may change");
+    assert_eq!(fs::read(root.join(".git/index")).unwrap(), index);
+    assert_eq!(git(root, &["rev-parse", "HEAD"]), head);
+    assert_eq!(fs::read(root.join("VERSION")).unwrap(), b"1.0.0\n");
+    let cfg = load(root).unwrap().unwrap();
+    let c = capture(root, &cfg, &SystemProcessRunner).unwrap();
+    assert_eq!(polyglot::owner(&c.baseline, "pkg/src/helper.rs", &cfg.native).unwrap(), vec!["a", "b"]);
+    assert_eq!(polyglot::owner(&c.current, "pkg/src/helper.rs", &cfg.native).unwrap(), vec!["a"]);
+    assert_eq!(c.changes.iter().find(|c| c.path == "pkg/src/gui.rs").unwrap().packages, vec!["a", "b"]);
+    let request = analyze(root, "patch", Some("patch"));
+    let mut analysis: Value = serde_json::from_slice(&fs::read(root.join(".runtime/analysis.json")).unwrap()).unwrap();
+    analysis["packages"]["b"] = json!({"level":"patch","reason":"changed shared test source","compatibility":"compatible"});
+    write(root, ".runtime/analysis.json", &serde_json::to_vec(&analysis).unwrap());
+    let release = build(root, "fix: shared sources", &request, &SystemProcessRunner).unwrap().unwrap();
+    assert_eq!(release.old_version.to_string(), "1.0.0");
+    let second = repair_baseline_plan(root, &SystemProcessRunner).receipt.unwrap();
+    assert_eq!(second["configuration"], repaired, "repair must be idempotent");
+    apply_file_release_plan(&release).unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "fix: fixture release"]);
+    let published = fs::read(root.join(CONFIG)).unwrap();
+    assert!(repair_baseline_plan(root, &SystemProcessRunner).stderr.contains("published migration baseline cannot be repaired"));
+    assert_eq!(fs::read(root.join(CONFIG)).unwrap(), published);
+}
+
+#[test]
+fn schema4_baseline_repair_sharing_rejects_forged_and_broad_declarations() {
+    let r = historical_sharing_fixture();
+    let original: Value = serde_json::from_slice(&fs::read(r.0.join(CONFIG)).unwrap()).unwrap();
+    for mapping in [
+        json!({"path":"pkg/src/gui.rs","packages":["a"]}),
+        json!({"path":"pkg/src/","packages":["a","b"]}),
+        json!({"path":"pkg/src/missing.rs","packages":["a","b"]}),
+    ] {
+        let mut forged = original.clone();
+        forged["baseline"]["shared_inputs"] = json!([mapping]);
+        let bytes = serde_json::to_vec(&forged).unwrap();
+        write(&r.0, CONFIG, &bytes);
+        assert_ne!(repair_baseline_plan(&r.0, &SystemProcessRunner).code, 0);
+        assert_eq!(fs::read(r.0.join(CONFIG)).unwrap(), bytes);
+    }
+}
+
+#[test]
+fn schema4_baseline_repair_sharing_preserves_explicit_roles_and_opaque_boundaries() {
+    let r = historical_sharing_fixture();
+    let cfg = load(&r.0).unwrap().unwrap();
+    let mut snapshot = polyglot::historical(&r.0, &cfg.baseline.revision, &cfg.native, &SystemProcessRunner).unwrap();
+    let additions = polyglot::proven_shared_inputs(&snapshot, &cfg.native);
+    assert_eq!(additions.len(), 2);
+    snapshot.config.as_mut().unwrap().shared_inputs.push(polyglot::SharedInput { path:"pkg/src/".into(), packages:vec!["a".into()] });
+    assert!(polyglot::proven_shared_inputs(&snapshot, &cfg.native).is_empty());
+    snapshot.config.as_mut().unwrap().shared_inputs.clear();
+    snapshot.config.as_mut().unwrap().product_inputs.push("pkg/src/".into());
+    assert!(polyglot::proven_shared_inputs(&snapshot, &cfg.native).is_empty());
+    snapshot.config.as_mut().unwrap().product_inputs.retain(|p| p != "pkg/src/");
+    snapshot.inputs.remove("pkg/src/gui.rs");
+    assert!(!polyglot::proven_shared_inputs(&snapshot, &cfg.native).iter().any(|m| m.path == "pkg/src/gui.rs"));
+    snapshot.packages.get_mut("a").unwrap().language = Language::Python;
+    assert!(polyglot::proven_shared_inputs(&snapshot, &cfg.native).is_empty());
+    write(&r.0, "checks/main.rs", b"include!(env!(\"SHARED_SOURCE\"));\n");
+    let current = polyglot::snapshot(&cfg.native, independent::inventory(&r.0, &SystemProcessRunner).unwrap(), false, &mut |p| config::read_current(&r.0, p)).unwrap();
+    assert!(polyglot::proven_shared_inputs(&current, &cfg.native).is_empty(), "opaque includes must not invent consumers");
+}
+
 #[test]
 fn schema4_external_cargo_targets_survive_moves_without_claiming_siblings() {
     let r = external_cargo_fixture();

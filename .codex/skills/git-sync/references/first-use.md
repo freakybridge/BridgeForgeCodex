@@ -25,7 +25,7 @@
 
 ## 迁移及接入边界
 
-已有 schema 4 在首次正式发布前出现历史 Cargo 外置源码归属缺口时，先确认 self-test 包含 `git-sync-baseline-repair-v1`，运行 `git-sync --repair-baseline-plan`。它从固定 Git 历史重建归属，返回完整配置和指纹；核对只增加显式外置 lib/bin/test/bench/example/build 入口及其静态 mod/path/include 可达文件和内容 hash，不改变包身份、版本、历史边界、已有 hash 键值、既有归属或输入角色。计划通过后复用本次修复授权，以 `--repair-baseline-apply --repair-baseline-fingerprint <值> --confirmed-choice` 原子补正，再继续 release 输入分析。不手改 baseline，不用 product_inputs 掩盖包源码；归属不明仍停止。已正式发布的迁移基线禁止改写。动态宏路径不猜测、不执行；未被静态图证明的源码仍需真实 shared_inputs 证据，不能把入口的父目录整体归包。
+已有 schema 4 在首次正式发布前出现历史 Cargo 外置源码归属缺口时，先确认 self-test 包含 `git-sync-baseline-repair-v1`，运行 `git-sync --repair-baseline-plan`。它从固定 Git 历史重建归属，返回完整配置和指纹；核对只增加显式外置 lib/bin/test/bench/example/build 入口及其静态 mod/path/include 可达文件、内容 hash，以及静态图证明缺失的精确文件 `shared_inputs`。历史与当前消费者分别取证，不相互照抄；`ownership_analysis.shared_input_additions` 分列路径、包 id、hash 和各包 manifest/source_roots 证据。既有显式 product/shared 角色优先，不替换或扩大声明，不改变包身份、版本、历史边界或已有 hash 键值。计划通过后复用本次修复授权，以 `--repair-baseline-apply --repair-baseline-fingerprint <值> --confirmed-choice` 原子补正，再继续 release 输入分析。不手改 baseline，不用 product_inputs 掩盖包源码；归属不明仍停止。已正式发布的迁移基线禁止改写。动态宏路径不猜测、不执行；缺失文件、跨语言歧义和未被静态图证明的消费者不自动补共享声明，不能把入口的父目录整体归包。
 
 基线补正缺少适用授权时，只能与其他缺失决定合并为根 Skill 的唯一确认。已经用掉确认机会且出现新的授权缺口时停止，不能再为补正询问；既有维护授权也不能推定为接受任意基线改写或不兼容发布。
 
