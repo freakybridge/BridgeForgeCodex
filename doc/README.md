@@ -8,6 +8,8 @@ delivery_layout: flat
 
 ## 从这里开始
 
+最近验收：[git-sync 历史分析性能](1_delivery/git-sync-performance/requirements_2026-10-23_history-reuse.md#经验沉淀与用户验收2026-10-23)（15 项定向检查、独立审查与真实规模隔离对照通过；2026-10-23 用户验收并授权 release；自然对话与真实远端对照仍未验证，TODO-009 保留待验证）。
+
 最近验收：[历史共享源码归属补正](1_delivery/git-sync-release-rewrite/implementation_2026-10-23_historical-shared-ownership.md#用户验收与发布授权2026-10-23)（TODO-017 增量；11 个定向场景、独立审查、受管构建及基线一致性通过；2026-10-23 用户验收并授权 release，实际发布以受管收据为准；下游未修改、未验证）。
 
 实施与验收：[artifact-layout Hook 合并](1_delivery/artifact-layout/requirements_2026-10-23_artifact-layout-merge.md)及[公共默认规则增量](1_delivery/artifact-layout/requirements_2026-10-23_artifact-layout-defaults.md#用户验收2026-10-23)（TODO-020）已验收；后者按用户确认的定向验证范围收口，全量中止与下游未验证边界保留。2026-10-23 已授权 release，实际发布以受管收据为准。

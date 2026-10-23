@@ -54,6 +54,7 @@ fn canonical(value: &Value) -> Value {
 }
 
 pub(crate) fn canonical_sha(value: &Value) -> Result<String, String> {
+    let _profile = crate::release_metrics::span("serialization.canonical_hash");
     serde_json::to_vec(&canonical(value))
         .map(|payload| sha_raw(&payload))
         .map_err(|error| error.to_string())

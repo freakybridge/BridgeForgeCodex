@@ -68,6 +68,7 @@ pub(super) fn verify_baseline(
 }
 
 fn reconstruct_baseline(root: &Path, cfg: &Config, runner: &dyn ProcessRunner) -> Result<Baseline, String> {
+    let _profile = crate::release_metrics::span("baseline.reconstruct");
     if configuration::configuration_hash(&cfg.baseline.initial_configuration)? != cfg.baseline.initial_configuration_hash {
         return Err("migration initial configuration proof changed".into());
     }
@@ -192,6 +193,7 @@ fn prepare(
     strategy: Option<&str>,
     repair: bool,
 ) -> Result<Prepared, String> {
+    let _profile = crate::release_metrics::span("migration.prepare");
     let inspection = InspectionRunner(runner);
     crate::git_sync::verify_readonly_git(root, &inspection)?;
     require_ignored_runtime(root, &inspection)?;
@@ -224,6 +226,7 @@ fn prepare(
         if boundary != cfg.baseline.revision {
             return Err("published migration baseline cannot be repaired".into());
         }
+        super::prefetch_history(&cfg, &head, &reader)?;
         let corrected = reconstruct_baseline(root, &cfg, &reader)?;
         ownership_enrichment(&cfg.baseline, &corrected)?;
         Some(serde_json::to_value(corrected).map_err(|e| e.to_string())?)

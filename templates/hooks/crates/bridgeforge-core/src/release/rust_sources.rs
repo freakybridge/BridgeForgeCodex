@@ -9,6 +9,7 @@ pub(super) fn reachable(
     inputs: &mut BTreeMap<String, Option<Vec<u8>>>,
     read: &mut impl FnMut(&str) -> Result<Option<Vec<u8>>, String>,
 ) -> Result<BTreeSet<String>, String> {
+    let _profile = crate::release_metrics::span("source_graph.traversal");
     let mut graph = Graph { inventory, inputs, read, files: BTreeSet::new(), visited: BTreeSet::new(), active: BTreeSet::new() };
     for entry in entries {
         if inventory.contains(entry) { graph.source(entry, directory(entry), false)?; }
@@ -44,7 +45,10 @@ impl<F: FnMut(&str) -> Result<Option<Vec<u8>>, String>> Graph<'_, F> {
         let bytes = self.bytes(path)?;
         let text = std::str::from_utf8(&bytes).map_err(|e| format!("Rust source is not UTF-8: {path}: {e}"))?;
         let mut visitor = Walker { graph: self, file: path.into(), module_dir: module_dir.into(), path_dir: directory(path).into(), conditional, error: None };
-        if let Ok(file) = syn::parse_file(text) {
+        let parse_span = crate::release_metrics::span("source_graph.parse");
+        let parsed = syn::parse_file(text);
+        drop(parse_span);
+        if let Ok(file) = parsed {
             visitor.conditional |= file.attrs.iter().any(|a| a.path().is_ident("cfg") || a.path().is_ident("cfg_attr"));
             visitor.visit_file(&file);
         } else if let Ok(expression) = syn::parse_str::<syn::Expr>(text) {

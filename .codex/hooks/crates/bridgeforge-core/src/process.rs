@@ -61,6 +61,9 @@ impl ProcessRunner for SystemProcessRunner {
         true
     }
     fn run(&self, request: &ProcessRequest) -> std::io::Result<ProcessOutput> {
+        let program = std::path::Path::new(&request.program).file_stem().and_then(|p| p.to_str()).unwrap_or("other");
+        let verb = request.args.iter().filter_map(|v| v.to_str()).find(|v| matches!(*v,"show"|"ls-tree"|"cat-file"|"rev-list"|"log"|"diff"|"ls-files"|"status"|"fetch"|"pull"|"push"|"commit"|"build"));
+        let _profile = crate::release_metrics::span(format!("process.{program}.{}", verb.unwrap_or("other")));
         // The deadline includes setup, stdin delivery and draining both output pipes.
         let started = Instant::now();
         let mut command = std::process::Command::new(&request.program);

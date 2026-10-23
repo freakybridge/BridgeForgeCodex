@@ -15,6 +15,20 @@ pub use migration::{configuration_apply, configuration_plan, migration_apply, mi
 pub use migration::{repair_baseline_apply, repair_baseline_plan};
 pub use plan::{build, preview};
 pub(super) const CONFIG: &str = ".codex/bridgeforge-version.json";
+
+/// Prefetch only inputs already declared by the migration proof and registered
+/// native manifests. Never load all repository blobs or guess source ownership.
+/// A hint is not evidence: all existing reconstruction and hash checks still run.
+pub(super) fn prefetch_history(cfg: &Config, head: &str, reader: &history_cache::Reader<'_>) -> Result<(), String> {
+    let paths = cfg.baseline.input_hashes.keys().cloned()
+        .chain(cfg.native.packages.iter().map(|p| p.manifest.clone()))
+        .collect::<BTreeSet<_>>().into_iter().collect::<Vec<_>>();
+    let revisions = std::iter::once(cfg.baseline.revision.as_str())
+        .chain(cfg.baseline.lineage.iter().map(|s| s.revision.as_str()))
+        .chain(std::iter::once(head)).collect::<BTreeSet<_>>();
+    reader.prefetch_hints(&revisions, &paths);
+    Ok(())
+}
 pub(super) fn digest(bytes: &[u8]) -> String {
     format!("sha256:{:x}", Sha256::digest(bytes))
 }

@@ -25,6 +25,7 @@ pub(super) struct Reader<'a> {
     runner: &'a dyn ProcessRunner,
     trees: RefCell<BTreeMap<String, Rc<Tree>>>,
     payloads: RefCell<BTreeMap<(String, String), Option<Vec<u8>>>>,
+    blobs: RefCell<BTreeMap<String, Vec<u8>>>,
     initial_state: Option<String>,
     enabled: bool,
 }
@@ -36,7 +37,7 @@ fn immutable(revision: &str) -> bool {
 impl<'a> Reader<'a> {
     pub(super) fn new(root: &'a Path, runner: &'a dyn ProcessRunner) -> Self {
         let state = state(root, runner).ok();
-        Self { root, runner, trees: RefCell::new(BTreeMap::new()), payloads: RefCell::new(BTreeMap::new()), initial_state:state.as_ref().map(|(state, _)| state.clone()), enabled:state.is_some_and(|(_, enabled)| enabled) }
+        Self { root, runner, trees: RefCell::new(BTreeMap::new()), payloads: RefCell::new(BTreeMap::new()), blobs: RefCell::new(BTreeMap::new()), initial_state:state.as_ref().map(|(state, _)| state.clone()), enabled:state.is_some_and(|(_, enabled)| enabled) }
     }
 
     pub(super) fn verify_unchanged(&self) -> Result<(), String> {
@@ -44,6 +45,19 @@ impl<'a> Reader<'a> {
             return Err("Git history interpretation changed during release planning; no apply".into());
         }
         Ok(())
+    }
+
+    /// Speculation must not add failures or trigger a partial clone's lazy fetch.
+    /// Required reads still use prefetch/payload and propagate their own errors.
+    pub(super) fn prefetch_hints(&self, revisions: &BTreeSet<&str>, paths: &[String]) {
+        if !self.enabled { return; }
+        let mut request = ProcessRequest::new("git", self.root);
+        request.args = ["config", "--get-regexp", "^(extensions\\.partialclone|remote\\..*\\.promisor)$"].iter().map(Into::into).collect();
+        let Ok(output) = self.runner.run(&request) else { return; };
+        // Exit 1 with no output means no promisor configuration. Unknown state
+        // conservatively disables the optimization, not ordinary verification.
+        if output.timed_out || output.code != 1 || !output.stdout.is_empty() { return; }
+        for revision in revisions { let _ = self.prefetch(revision, paths); }
     }
 
     fn tree(&self, revision: &str) -> Result<Rc<Tree>, String> {
@@ -69,14 +83,18 @@ impl<'a> Reader<'a> {
     pub(super) fn prefetch(&self, revision: &str, paths: &[String]) -> Result<(), String> {
         if !self.enabled || !immutable(revision) { return Ok(()); }
         let tree = self.tree(revision)?;
-        let mut pending = Vec::new();
+        let mut pending = BTreeMap::<String, Vec<(String, String)>>::new();
         for path in paths.iter().collect::<BTreeSet<_>>() {
             let key = (revision.to_string(), path.clone());
             if self.payloads.borrow().contains_key(&key) { continue; }
             match tree.get(path.as_bytes()) {
                 Some((header, oid)) => {
                     if !header.split(|b| *b == b' ').any(|part| part == b"blob") { continue; }
-                    pending.push((key, oid.clone()));
+                    if let Some(bytes) = self.blobs.borrow().get(oid) {
+                        self.payloads.borrow_mut().insert(key, Some(bytes.clone()));
+                    } else {
+                        pending.entry(oid.clone()).or_default().push(key);
+                    }
                 }
                 None => { self.payloads.borrow_mut().insert(key, None); }
             }
@@ -84,23 +102,27 @@ impl<'a> Reader<'a> {
         if pending.is_empty() { return Ok(()); }
         let mut request = ProcessRequest::new("git", self.root);
         request.args = vec!["cat-file".into(), "--batch".into()];
-        request.stdin = pending.iter().map(|(_, oid)| format!("{oid}\n")).collect::<String>().into_bytes();
+        request.stdin = pending.keys().map(|oid| format!("{oid}\n")).collect::<String>().into_bytes();
         let output = self.runner.run(&request).map_err(|e| e.to_string())?;
         if output.timed_out || output.code != 0 { return Err("cannot read immutable history blobs".into()); }
         let mut rest = output.stdout.as_slice();
         let mut loaded = Vec::new();
-        for (key, oid) in pending {
+        let mut blobs = Vec::new();
+        for (oid, keys) in pending {
             let newline = rest.iter().position(|b| *b == b'\n').ok_or("truncated history batch header")?;
             let header = std::str::from_utf8(&rest[..newline]).map_err(|e| e.to_string())?.split_whitespace().collect::<Vec<_>>();
             if header.len() != 3 || header[0] != oid || header[1] != "blob" { return Err("invalid history batch identity".into()); }
             let size = header[2].parse::<usize>().map_err(|e| e.to_string())?;
             rest = &rest[newline+1..];
             if size >= rest.len() || rest[size] != b'\n' { return Err("truncated history batch payload".into()); }
-            loaded.push((key, Some(rest[..size].to_vec())));
+            let bytes = rest[..size].to_vec();
+            for key in keys { loaded.push((key, Some(bytes.clone()))); }
+            blobs.push((oid, bytes));
             rest = &rest[size+1..];
         }
         if !rest.is_empty() { return Err("unexpected history batch trailer".into()); }
         self.payloads.borrow_mut().extend(loaded);
+        self.blobs.borrow_mut().extend(blobs);
         Ok(())
     }
 

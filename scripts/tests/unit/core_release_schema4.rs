@@ -235,6 +235,75 @@ fn schema4_baseline_repair_sharing_is_snapshot_bound_atomic_and_release_ready() 
 }
 
 #[test]
+fn schema4_history_prefetch_does_not_load_unregistered_business_blobs() {
+    use std::cell::RefCell;
+    struct Counting(RefCell<Vec<Vec<u8>>>);
+    impl ProcessRunner for Counting {
+        fn run(&self, request: &ProcessRequest) -> std::io::Result<crate::ProcessOutput> {
+            if request.args.iter().any(|arg| arg == "cat-file") { self.0.borrow_mut().push(request.stdin.clone()); }
+            SystemProcessRunner.run(request)
+        }
+    }
+    let r = fixture("independent", true);
+    write(&r.0, "business.bin", &[42; 65536]);
+    git(&r.0, &["add", "."]);
+    git(&r.0, &["commit", "-m", "chore: unrelated business resource"]);
+    let head = git(&r.0, &["rev-parse", "HEAD"]);
+    let blob = git(&r.0, &["rev-parse", "HEAD:business.bin"]);
+    let cfg = load(&r.0).unwrap().unwrap();
+    let runner = Counting(RefCell::new(Vec::new()));
+    let reader = history_cache::Reader::new(&r.0, &runner);
+    prefetch_history(&cfg, &head, &reader).unwrap();
+    assert!(!runner.0.borrow().iter().any(|bytes| String::from_utf8_lossy(bytes).lines().any(|oid| oid == blob)));
+    let count = runner.0.borrow().len();
+    prefetch_history(&cfg, &head, &reader).unwrap();
+    assert_eq!(runner.0.borrow().len(), count);
+    reader.verify_unchanged().unwrap();
+}
+
+#[test]
+fn schema4_reused_classifier_binds_current_contract_bytes() {
+    let r = fixture("independent", false);
+    let cfg = load(&r.0).unwrap().unwrap();
+    let bookkeeping = capture(&r.0, &cfg, &SystemProcessRunner).unwrap();
+    assert!(!bookkeeping.inputs.contains_key(&r.0.join(".codex/managed-skeleton.json")), "pure migration bookkeeping does not construct a classifier");
+    change(&r.0, false);
+    let captured = capture(&r.0, &cfg, &SystemProcessRunner).unwrap();
+    let contract = r.0.join(".codex/managed-skeleton.json");
+    assert!(captured.inputs.contains_key(&contract));
+    write(&r.0, ".codex/managed-skeleton.json", br#"{"schema_version":1,"assets":[],"changed":true}"#);
+    assert!(verify_release_inputs(&captured.inputs).is_err());
+}
+
+#[test]
+fn schema4_reused_classifier_rejects_contract_drift_before_its_path_is_captured() {
+    struct ChangeContract { spec:String, changed:std::cell::Cell<bool> }
+    impl ProcessRunner for ChangeContract {
+        fn run(&self, request:&ProcessRequest) -> std::io::Result<crate::ProcessOutput> {
+            let output=SystemProcessRunner.run(request)?;
+            if !self.changed.get() && request.args.iter().any(|a| a == "show")
+                && request.args.iter().any(|a| a.to_string_lossy() == self.spec) {
+                fs::write(request.cwd.join(".codex/managed-skeleton.json"), br#"{"schema_version":1,"assets":[],"note":"B"}"#)?;
+                self.changed.set(true);
+            }
+            Ok(output)
+        }
+    }
+    let r=fixture("independent", false);
+    // An empty graft file preserves history but deliberately disables the
+    // object cache, making the classifier's HEAD read an observable barrier.
+    write(&r.0,".git/info/grafts",b"");
+    let mut value:Value=serde_json::from_slice(&fs::read(r.0.join(CONFIG)).unwrap()).unwrap();
+    value["build_inputs"]=json!(["recipe.json"]);
+    write(&r.0,CONFIG,&serde_json::to_vec(&value).unwrap());
+    write(&r.0,".codex/managed-skeleton.json",br#"{"schema_version":1,"assets":[],"note":"A"}"#);
+    let runner=ChangeContract { spec:format!("{}:.codex/managed-skeleton.json",git(&r.0,&["rev-parse","HEAD"])),changed:std::cell::Cell::new(false) };
+    let error=capture(&r.0,&load(&r.0).unwrap().unwrap(),&runner).err().unwrap();
+    assert!(runner.changed.get());
+    assert!(error.contains("ownership contract changed"),"{error}");
+}
+
+#[test]
 fn schema4_baseline_repair_sharing_rejects_forged_and_broad_declarations() {
     let r = historical_sharing_fixture();
     let original: Value = serde_json::from_slice(&fs::read(r.0.join(CONFIG)).unwrap()).unwrap();

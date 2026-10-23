@@ -113,6 +113,70 @@ fn immutable_history_reader_rejects_failed_or_malformed_batches() {
 }
 
 #[test]
+fn immutable_history_reader_reuses_blob_identity_across_paths_and_commits() {
+    use std::cell::RefCell;
+    struct Counting(RefCell<Vec<Vec<u8>>>);
+    impl ProcessRunner for Counting {
+        fn run(&self, request: &ProcessRequest) -> std::io::Result<ProcessOutput> {
+            if request.args.iter().any(|arg| arg == "cat-file") { self.0.borrow_mut().push(request.stdin.clone()); }
+            SystemProcessRunner.run(request)
+        }
+    }
+    let repo = release_repository("blob-identity-reuse", &json!({"assets":[]}), &[("first.txt", b"same\n"), ("alias.txt", b"same\n")]);
+    let old = history::git(&repo.0, &SystemProcessRunner, &["rev-parse", "HEAD"]).unwrap().trim().to_string();
+    fs::write(repo.0.join("changed.txt"), b"different\n").unwrap();
+    git_ok(&repo.0, &["add", "."]);
+    git_ok(&repo.0, &["commit", "-m", "fix: distinct object"]);
+    let next = history::git(&repo.0, &SystemProcessRunner, &["rev-parse", "HEAD"]).unwrap().trim().to_string();
+    let runner = Counting(RefCell::new(Vec::new()));
+    let reader = history_cache::Reader::new(&repo.0, &runner);
+    reader.prefetch(&old, &["first.txt".into(), "alias.txt".into()]).unwrap();
+    assert_eq!(runner.0.borrow().len(), 1);
+    assert_eq!(runner.0.borrow()[0].iter().filter(|b| **b == b'\n').count(), 1, "one request per object, not per path");
+    reader.prefetch(&next, &["first.txt".into(), "alias.txt".into()]).unwrap();
+    assert_eq!(runner.0.borrow().len(), 1, "unchanged object reused across fixed revisions");
+    assert_eq!(revision_payload(&repo.0, &next, "changed.txt", &reader).unwrap().unwrap(), b"different\n");
+    assert_eq!(runner.0.borrow().len(), 2, "new object must be fetched");
+    assert_eq!(revision_payload(&repo.0, &old, "first.txt", &reader).unwrap().unwrap(), b"same\n");
+    reader.verify_unchanged().unwrap();
+    git_ok(&repo.0, &["replace", &old, &next]);
+    assert!(reader.verify_unchanged().is_err(), "history interpretation drift must still block apply");
+    let replaced = history_cache::Reader::new(&repo.0, &runner);
+    assert_eq!(revision_payload(&repo.0, &old, "changed.txt", &replaced).unwrap().unwrap(), b"different\n");
+    assert_eq!(runner.0.borrow().len(), 2, "replacement histories bypass the object cache");
+}
+
+#[test]
+fn immutable_history_hints_never_add_failures_or_lazy_fetches() {
+    struct FailBlob { oid: String, promisor: bool, batches: std::cell::Cell<usize> }
+    impl ProcessRunner for FailBlob {
+        fn run(&self, request: &ProcessRequest) -> std::io::Result<ProcessOutput> {
+            if self.promisor && request.args.iter().any(|a| a == "--get-regexp") {
+                return Ok(ProcessOutput { code:0, stdout:b"remote.origin.promisor true\n".to_vec(), stderr:vec![], timed_out:false });
+            }
+            if request.args.iter().any(|a| a == "cat-file") { self.batches.set(self.batches.get()+1); }
+            if request.args.iter().any(|a| a == "cat-file") && String::from_utf8_lossy(&request.stdin).lines().any(|oid| oid == self.oid) {
+                return Ok(ProcessOutput { code:1, stdout:vec![], stderr:b"unavailable object".to_vec(), timed_out:false });
+            }
+            SystemProcessRunner.run(request)
+        }
+    }
+    let repo = release_repository("optional-prefetch", &json!({"assets":[]}), &[("needed.txt", b"required\n"), ("hint.txt", b"not consumed\n")]);
+    let oid = history::git(&repo.0, &SystemProcessRunner, &["rev-parse", "HEAD"]).unwrap().trim().to_string();
+    let unavailable = history::git(&repo.0, &SystemProcessRunner, &["rev-parse", "HEAD:hint.txt"]).unwrap().trim().to_string();
+    let runner = FailBlob { oid:unavailable, promisor:false, batches:std::cell::Cell::new(0) };
+    let reader = history_cache::Reader::new(&repo.0, &runner);
+    reader.prefetch_hints(&BTreeSet::from([oid.as_str()]), &["needed.txt".into(),"hint.txt".into()]);
+    assert_eq!(revision_payload(&repo.0, &oid, "needed.txt", &reader).unwrap().unwrap(), b"required\n");
+    assert!(revision_payload(&repo.0, &oid, "hint.txt", &reader).is_err(), "required failed reads cannot be masked by a speculative failure");
+    let runner = FailBlob { oid:history::git(&repo.0, &SystemProcessRunner, &["rev-parse","HEAD:needed.txt"]).unwrap().trim().into(), promisor:true, batches:std::cell::Cell::new(0) };
+    let reader = history_cache::Reader::new(&repo.0, &runner);
+    reader.prefetch_hints(&BTreeSet::from([oid.as_str()]), &["needed.txt".into()]);
+    assert_eq!(runner.batches.get(), 0, "partial clone hints must not request objects");
+    assert!(revision_payload(&repo.0, &oid, "needed.txt", &reader).is_err(), "promisor hints must not supply invented success");
+}
+
+#[test]
 fn synchronized_history_skips_unowned_gitlinks_and_large_business_blobs() {
     use std::cell::RefCell;
     struct Counting(RefCell<Vec<Vec<u8>>>);

@@ -27,6 +27,7 @@ pub mod project_sync;
 pub mod proposal_contract;
 pub mod public_artifacts;
 pub mod release;
+pub mod release_metrics;
 pub mod runtime;
 pub mod skill_metadata;
 pub mod todo;

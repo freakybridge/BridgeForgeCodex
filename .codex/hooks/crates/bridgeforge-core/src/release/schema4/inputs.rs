@@ -212,6 +212,7 @@ pub(super) fn capture(
     runner: &dyn ProcessRunner,
 ) -> Result<Capture, String> {
     let inspection = InspectionRunner(runner);
+    let _profile = crate::release_metrics::span("inputs.capture");
     crate::git_sync::verify_readonly_git(root, &inspection)?;
     let reader = history_cache::Reader::new(root, &inspection);
     let result = capture_with_reader(root, cfg, &reader)?;
@@ -225,14 +226,7 @@ fn capture_with_reader(
     runner: &history_cache::Reader<'_>,
 ) -> Result<Capture, String> {
     let (head, boundary) = history::validate_baseline(root, runner, None, false)?;
-    runner.prefetch(
-        &cfg.baseline.revision,
-        &cfg.baseline
-            .input_hashes
-            .keys()
-            .cloned()
-            .collect::<Vec<_>>(),
-    )?;
+    super::prefetch_history(cfg, &head, runner)?;
     let inventory = independent::inventory(root, runner)?;
     let status = independent::status(root, runner)?;
     let current = polyglot::snapshot(&cfg.native, inventory.clone(), false, &mut |p| {
@@ -315,6 +309,9 @@ fn capture_with_reader(
         inputs.insert(root.join(&path), config::read_current(root, &path)?);
     }
     let factory = root.join("templates/managed-skeleton.json").is_file();
+    // Construct only when a path actually needs classification. Keep the first
+    // contract bytes separately so later path reads cannot overwrite the guard.
+    let mut classifier: Option<(PayloadClassifier, Vec<u8>)> = None;
     let mut changes = Vec::new();
     for path in paths {
         if path == "VERSION" {
@@ -338,10 +335,18 @@ fn capture_with_reader(
                 continue;
             }
         }
-        if !factory
-            && classify(root, std::slice::from_ref(&path), runner)? == ReleaseKind::SkeletonOnly
-        {
-            continue;
+        if !factory {
+            if classifier.is_none() {
+                let bytes = config::read_current(root, ".codex/managed-skeleton.json")?
+                    .ok_or("current-only baseline is missing")?;
+                let parsed = PayloadClassifier::new(&bytes, |p| revision_payload(root, &head, p, runner))?;
+                classifier = Some((parsed, bytes));
+            }
+            if classifier.as_ref().unwrap().0.classify(std::slice::from_ref(&path),
+                |p| revision_payload(root, &head, p, runner),
+                |p| release_input(&root.join(p)))? == ReleaseKind::SkeletonOnly {
+                continue;
+            }
         }
         let build_role = cfg.build_inputs.iter().any(|p| polyglot::owns(p, &path));
         if build_role
@@ -413,6 +418,13 @@ fn capture_with_reader(
             after: new.as_deref().map(digest),
             mode_changed,
         });
+    }
+    if let Some((_, bytes)) = classifier {
+        let path = root.join(".codex/managed-skeleton.json");
+        if inputs.get(&path).is_some_and(|previous| previous.as_ref() != Some(&bytes)) {
+            return Err("ownership contract changed during schema 4 input capture".into());
+        }
+        inputs.insert(path, Some(bytes));
     }
     for path in [CONFIG, "VERSION", "CHANGELOG.md"]
         .into_iter()

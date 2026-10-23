@@ -220,6 +220,7 @@ pub(super) fn snapshot(
     read: &mut impl FnMut(&str) -> Result<Option<Vec<u8>>, String>,
 ) -> Result<Snapshot, String> {
     let payload = read(CONFIG)?;
+    let _profile = crate::release_metrics::span(if historical {"snapshot.historical"} else {"snapshot.current"});
     let at = payload.as_deref().map(parse).transpose()?.flatten();
     let mut adapters = if historical {
         at.as_ref()
@@ -425,6 +426,7 @@ pub(super) fn historical(
     cfg: &Config,
     runner: &dyn ProcessRunner,
 ) -> Result<Snapshot, String> {
+    let _profile = crate::release_metrics::span(format!("history.snapshot.{revision}"));
     let paths = history::paths(&history::git(
         root,
         runner,

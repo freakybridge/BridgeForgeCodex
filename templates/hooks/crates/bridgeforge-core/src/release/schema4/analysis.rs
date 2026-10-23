@@ -98,6 +98,7 @@ pub(super) fn read(
     request: &Request,
     capture: &mut Capture,
 ) -> Result<Option<Analysis>, String> {
+    let _profile = crate::release_metrics::span("analysis.read_validate");
     let Some(path) = &request.analysis_file else {
         return Ok(None);
     };
