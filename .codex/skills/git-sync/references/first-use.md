@@ -1,18 +1,22 @@
 # 唯一发布模型与一次性分界
 
+> 下述迁移保留正式发布基线，配置项目检查但不认证开发完成。新分工需核验 `package-development-v1`、`package-stability-v1`、`git-sync-development-closure-v1`；详细字段与操作见[版本生命周期合同](schema4.md)。
+
 普通 git-sync 不要求先选择发布策略，不自动迁移或升版。显式 release 才处理以下流程；已确认决定直接继承，不重复访谈。
 
 ## 唯一模型
 
-唯一模型是主程序＋多语言包。根 VERSION 表达整体发布，各注册包保留自己的版本；只更新实际受影响的包。支持已有 Rust/Python 适配，不按文件扩展名把普通目录、第三方 SDK 或骨架工具登记为业务包。`release_model=product-packages` 标识新合同，`strategy=independent` 只是固定机器字段，不能作为日常选择。`product_manifests` 只表达主程序原生版本载体，不是包统一升版模式。
+唯一模型是主程序＋多语言包。根 VERSION 表达整体发布，各注册包由 develop 收口维护自身版本，release 只升主程序并汇总累计包版本变化。项目自有子包须登记唯一版本来源；不按文件扩展名把普通目录、第三方 SDK 或骨架工具登记为业务包。已有 Rust/Python 适配继续复用。`release_model=product-packages` 与固定 `strategy=independent` 是当前机器字段，不是新分工的能力证明；`product_manifests` 只表达主程序原生版本载体，不是包统一升版模式。
 
-## 受管迁移
+受管衔接保留可信的最后正式发布基线，以 `.codex/package-closures.json` 单独管理逐包开发收口历史。既有发布只作为历史事实，不伪造新验证；尚未发布的实际包改动必须补齐 develop 收口，不在迁移时默认通过。不能因为切换配置而改业务版本、倒退版本或吞掉未发布变化。
 
-1. 确认 self-test 包含 git-sync-product-packages-v1；缺能力先升级受管工具，不试跑未知参数。
-2. 已有 product-packages 合同时直接继续发布输入分析。新版骨架更新会把一次性分界纳入同一 plan/apply 事务；单独初始化使用 --migration-plan，返回配置、最后正式发布基线和 fingerprint，不写文件。规则分界设在切换时的固定 HEAD，正式发布基线保持独立，累计未发布变化继续参与发布。
+## 受管迁移与检查配置
+
+1. 确认 self-test 包含上述三个新能力；缺能力先升级受管工具，不试跑未知参数。
+2. 已有 product-packages 合同保持原 baseline，通过显式配置提案补充项目 `development` 检查；没有包变化无需补造收口。旧合同单独初始化使用 --migration-plan，返回配置、最后正式发布基线和 fingerprint，不写文件。规则分界设在切换时的固定 HEAD，正式发布基线保持独立，累计未发布变化继续参与发布。
 3. 写配置前，依据 plan、配置提案与真实 diff 核对策略、身份、已发布版本、未发布变化、输入角色、Hook 适配及后续必须的兼容性决定，汇总缺失决定后才使用唯一确认。CLI 尚不能直接对未落盘迁移配置执行完整 release 预览；无法提前查明必要风险时停止，不先应用配置再逐轮询问，也不承诺任意项目一次确认必定完成。迁移不跳过未发布改动，不把项目构建缓存复制到公共工具。
 4. 复用已明确的全部适用决定，使用 --migration-apply --migration-fingerprint <值> --confirmed-choice 应用；flag 不代表新增一次用户询问。它只原子保存配置，不修改版本/锁、不暂存、不提交推送。fingerprint 漂移则重算计划并复核授权范围，不能手改 JSON；发现实质新风险且确认已用掉时停止，不再问第二次。
-5. 按 [发布分析合同](schema4.md) 检查最终差异、提供逐对象分析与证据；在根 Skill 已确定的同一实际执行环境完成预览与发布，不再确认提交或推送。
+5. 配置迁移成功不等于开发收口完成。按[版本生命周期合同](schema4.md)在 develop 完成受影响包收口，再在根 Skill 已确定的同一实际执行环境完成主程序预览与发布；复用已有提交推送授权，不重复确认。
 
 需要登记包或改变归属时，准备项目忽略目录内的 schema 4 提案，通过 --setup-config-file 提交给 plan/apply；baseline 由工具从历史产生，不能由 Agent 伪造。--setup-plan/--setup-apply 使用 --setup-fingerprint；不需要 --strategy，旧 synchronized 选择会被拒绝。
 

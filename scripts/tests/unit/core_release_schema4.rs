@@ -2,6 +2,9 @@ use super::*;
 use crate::SystemProcessRunner;
 use std::process::Command;
 
+#[path = "core_package_development.rs"]
+mod development_tests;
+
 struct Repo(PathBuf);
 impl Drop for Repo {
     fn drop(&mut self) {
@@ -33,9 +36,11 @@ fn write(root: &Path, path: &str, bytes: &[u8]) {
     fs::write(root.join(path), bytes).unwrap();
 }
 fn fixture(strategy: &str, rust: bool) -> Repo {
+    static NEXT: std::sync::atomic::AtomicU64=std::sync::atomic::AtomicU64::new(0);
     let root = std::env::temp_dir().join(format!(
-        "bf-schema4-{}-{}",
+        "bf-schema4-{}-{}-{}",
         std::process::id(),
+        NEXT.fetch_add(1,std::sync::atomic::Ordering::Relaxed),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
@@ -409,13 +414,10 @@ fn schema4_baseline_repair_sharing_is_snapshot_bound_atomic_and_release_ready() 
     assert_eq!(polyglot::owner(&c.current, "pkg/src/helper.rs", &cfg.native).unwrap(), vec!["a"]);
     assert_eq!(c.changes.iter().find(|c| c.path == "pkg/src/gui.rs").unwrap().packages, vec!["a", "b"]);
     let request = analyze(root, "patch", Some("patch"));
-    let mut analysis: Value = serde_json::from_slice(&fs::read(root.join(".runtime/analysis.json")).unwrap()).unwrap();
-    analysis["packages"]["b"] = json!({"level":"patch","reason":"changed shared test source","compatibility":"compatible"});
-    write(root, ".runtime/analysis.json", &serde_json::to_vec(&analysis).unwrap());
     let release = build(root, "fix: shared sources", &request, &SystemProcessRunner).unwrap().unwrap();
     assert_eq!(release.old_version.to_string(), "1.0.0");
     let second = repair_baseline_plan(root, &SystemProcessRunner).receipt.unwrap();
-    assert_eq!(second["configuration"], repaired, "repair must be idempotent");
+    assert_eq!(second["configuration"]["baseline"], repaired["baseline"], "repair must preserve the baseline after development policy configuration");
     apply_file_release_plan(&release).unwrap();
     git(root, &["add", "."]);
     git(root, &["commit", "-m", "fix: fixture release"]);
@@ -752,23 +754,12 @@ fn schema4_external_lib_module_history_is_repaired_before_module_move_release() 
     }
 }
 fn analyze(root: &Path, product: &str, package: Option<&str>) -> Request {
-    let p = preview(
-        root,
-        "fix: release",
-        &Request::default(),
-        &SystemProcessRunner,
-    );
-    assert_eq!(p.code, 0, "{}", p.stderr);
-    let v = p.receipt.unwrap();
-    assert_eq!(v["status"], "analysis-required");
-    let mut entries = serde_json::Map::new();
-    if let Some(level) = package {
-        entries.insert(
-            "a".into(),
-            json!({"level":level,"reason":"changed own source","compatibility":"compatible"}),
-        );
+    if let Some(level)=package {
+        fixture::close_packages(root,&SystemProcessRunner,&[("a",level)]).unwrap();
     }
-    write(root,".runtime/analysis.json",&serde_json::to_vec(&json!({"schema":1,"fingerprint":v["fingerprint"],"product":{"level":product,"reason":"actual final release changes","compatibility":"compatible"},"packages":entries})).unwrap());
+    let cfg=load(root).unwrap().unwrap();
+    let captured=capture(root,&cfg,&SystemProcessRunner).unwrap();
+    write(root,".runtime/analysis.json",&serde_json::to_vec(&json!({"schema":1,"fingerprint":captured.fingerprint,"product":{"level":product,"reason":"actual final release changes","compatibility":"compatible"}})).unwrap());
     Request {
         analysis_file: Some(PathBuf::from(".runtime/analysis.json")),
     }
@@ -862,59 +853,24 @@ fn schema4_nested_cargo_lock_only_changes_product() {
 }
 #[test]
 fn schema4_analysis_binds_final_bytes_and_missing_package_is_rejected() {
-    let r = fixture("independent", false);
-    change(&r.0, false);
-    let request = analyze(&r.0, "patch", None);
-    assert!(build(&r.0, "fix: change", &request, &SystemProcessRunner)
-        .unwrap_err()
-        .contains("analysis missing"));
-    write(&r.0, "pkg/a.py", b"VALUE=3\n");
-    assert!(build(&r.0, "fix: change", &request, &SystemProcessRunner)
-        .unwrap_err()
-        .contains("stale"));
+    let r=fixture("independent",false); change(&r.0,false);
+    let request=analyze(&r.0,"patch",None);
+    assert!(build(&r.0,"fix: change",&request,&SystemProcessRunner).unwrap_err().contains("development closure required"));
+    let request=analyze(&r.0,"patch",Some("patch"));
+    write(&r.0,"README.md",b"new product bytes\n");
+    assert!(build(&r.0,"fix: change",&request,&SystemProcessRunner).unwrap_err().contains("stale"));
 }
+
 #[test]
 fn schema4_explicit_targets_reject_lower_and_unchanged_package_bumps() {
-    let r = fixture("independent", false);
-    change(&r.0, false);
-    let request = analyze(&r.0, "minor", Some("minor"));
-    let mut v: Value =
-        serde_json::from_slice(&fs::read(r.0.join(".runtime/analysis.json")).unwrap()).unwrap();
-    v["targets"] = json!({"a":"1.0.1"});
-    write(
-        &r.0,
-        ".runtime/analysis.json",
-        &serde_json::to_vec(&v).unwrap(),
-    );
-    assert!(build(&r.0, "feat: change", &request, &SystemProcessRunner)
-        .unwrap_err()
-        .contains("below suggested"));
-    write(&r.0, "pkg/a.py", b"VALUE=1\n");
-    let cfg = load(&r.0).unwrap().unwrap();
-    let c = capture(&r.0, &cfg, &SystemProcessRunner).unwrap();
-    v["fingerprint"] = json!(c.fingerprint);
-    v["product"]["level"] = json!("patch");
-    v["packages"]["a"]["level"] = json!("patch");
-    v["pure_version_reason"] = json!("explicit maintenance release");
-    v["targets"] = json!({"a":"1.0.1"});
-    write(
-        &r.0,
-        ".runtime/analysis.json",
-        &serde_json::to_vec(&v).unwrap(),
-    );
-    let error = build(
-        &r.0,
-        "chore: maintenance release",
-        &request,
-        &SystemProcessRunner,
-    )
-    .unwrap_err();
-    assert!(error.contains("actual release changes"), "{error}");
-    write(&r.0, "README.md", b"product-only change\n");
-    v["fingerprint"] = json!(capture(&r.0, &cfg, &SystemProcessRunner).unwrap().fingerprint);
-    write(&r.0, ".runtime/analysis.json", &serde_json::to_vec(&v).unwrap());
-    let error = build(&r.0, "fix: product only", &request, &SystemProcessRunner).unwrap_err();
-    assert!(error.contains("cannot upgrade an unchanged package"), "{error}");
+    let r=fixture("independent",false); change(&r.0,false);
+    let request=analyze(&r.0,"minor",Some("minor"));
+    let mut v=analysis_value(&r.0); v["targets"]=json!({"product":"1.0.1"});save_analysis(&r.0,&v);
+    assert!(build(&r.0,"feat: change",&request,&SystemProcessRunner).unwrap_err().contains("below suggested"));
+    v["targets"]=json!({"a":"1.2.0"});save_analysis(&r.0,&v);
+    assert!(build(&r.0,"feat: change",&request,&SystemProcessRunner).unwrap_err().contains("release only analyzes product"));
+    write(&r.0,"pkg/a.py",b"VALUE=1\n");
+    assert!(build(&r.0,"fix: reverted after closure",&request,&SystemProcessRunner).unwrap_err().contains("development closure required"));
 }
 
 fn migrate(root: &Path) {
@@ -986,30 +942,14 @@ fn schema4_dependency_upgrade_only_bumps_owner_when_requirement_changes() {
         git(&r.0, &["commit", "--amend", "--no-edit"]);
         migrate(&r.0);
         change(&r.0, false);
-        let request = analyze(&r.0, "patch", Some("patch"));
-        let plan = build(&r.0, "fix: a", &request, &SystemProcessRunner);
-        if pinned {
-            assert!(plan.unwrap_err().contains("b: package analysis missing"));
-            let mut v = analysis_value(&r.0);
-            v["packages"]["b"] = json!({"level":"patch","reason":"effective local dependency requirement changes","compatibility":"compatible"});
-            v["targets"] = json!({"b":"1.0.1"});
-            save_analysis(&r.0, &v);
-            let p = build(&r.0, "fix: a", &request, &SystemProcessRunner)
-                .unwrap()
-                .unwrap();
-            assert_eq!(p.package_changes.len(), 2);
-            assert!(
-                String::from_utf8_lossy(&p.writes[&r.0.join("consumer/pyproject.toml")])
-                    .contains("1.0.1")
-            );
-        } else {
-            let p = plan.unwrap().unwrap();
-            assert_eq!(p.package_changes.len(), 1);
-            assert_eq!(
-                p.details.unwrap()["packages"][1]["reason"],
-                "no_final_package_change"
-            );
-        }
+        let overrides=if pinned {vec![("a","patch"),("b","patch")]}else{vec![("a","patch")]};
+        fixture::close_packages(&r.0,&SystemProcessRunner,&overrides).unwrap();
+        let request=analyze(&r.0,"patch",None);
+        let p=build(&r.0,"fix: a",&request,&SystemProcessRunner).unwrap().unwrap();
+        assert_eq!(p.package_changes.len(),if pinned{2}else{1});
+        assert!(!p.writes.contains_key(&r.0.join("consumer/pyproject.toml")));
+        let native=fs::read_to_string(r.0.join("consumer/pyproject.toml")).unwrap();
+        if pinned {assert!(native.contains("1.0.1"));}else{assert_eq!(p.details.unwrap()["packages"][1]["reason"],"no_package_version_change");}
     }
 }
 
@@ -1034,11 +974,8 @@ fn schema4_mixed_languages_keep_per_package_impact() {
     migrate(&r.0);
     change(&r.0, true);
     write(&r.0, "py/p.py", b"VALUE=2\n");
-    let request = analyze(&r.0, "minor", Some("patch"));
-    let mut v = analysis_value(&r.0);
-    v["packages"]["p"] =
-        json!({"level":"minor","reason":"compatible Python feature","compatibility":"compatible"});
-    save_analysis(&r.0, &v);
+    fixture::close_packages(&r.0,&SystemProcessRunner,&[("a","patch"),("p","minor")]).unwrap();
+    let request = analyze(&r.0, "minor", None);
     let p = build(&r.0, "feat: mixed release", &request, &SystemProcessRunner)
         .unwrap()
         .unwrap();
@@ -1099,25 +1036,17 @@ fn schema4_stratus_style_build_recipe_and_ledger_do_not_bump_package() {
 
 #[test]
 fn schema4_breaking_and_unknown_changes_block_until_bound_user_acceptance() {
-    let r = fixture("independent", false);
-    change(&r.0, false);
-    let request = analyze(&r.0, "major", Some("major"));
-    let mut v = analysis_value(&r.0);
-    v["packages"]["a"]["compatibility"] = json!("breaking");
-    save_analysis(&r.0, &v);
-    assert!(build(&r.0, "feat!: change", &request, &SystemProcessRunner)
-        .unwrap_err()
-        .contains("explicit user acceptance"));
-    v["packages"]["a"]["acceptance"] = json!({"fingerprint":v["fingerprint"],"scope":["a"],"reason":"user accepts public API migration","source":"explicit fixture user decision"});
-    save_analysis(&r.0, &v);
-    assert!(build(&r.0, "feat!: change", &request, &SystemProcessRunner)
-        .unwrap()
-        .is_some());
-    v["packages"]["a"]["compatibility"] = json!("unknown");
-    save_analysis(&r.0, &v);
-    assert!(build(&r.0, "feat!: change", &request, &SystemProcessRunner)
-        .unwrap_err()
-        .contains("unknown"));
+    let r=fixture("independent",true);change(&r.0,true);development_tests::configure(&r.0,false);
+    let runner=development_tests::Checks::new();
+    let request=development_tests::request(&r.0,"major",false,&runner);
+    let path=r.0.join(".runtime/develop.json");
+    let mut v:Value=serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    v["packages"]["a"]["compatibility"]=json!("breaking");fs::write(&path,serde_json::to_vec(&v).unwrap()).unwrap();
+    assert!(development::preview(&r.0,&request,&runner).stderr.contains("explicit user acceptance"));
+    v["packages"]["a"]["acceptance"]=json!({"fingerprint":v["fingerprint"],"scope":["a"],"reason":"accept migration","source":"fixture user decision"});
+    fs::write(&path,serde_json::to_vec(&v).unwrap()).unwrap();assert_eq!(development::preview(&r.0,&request,&runner).code,0);
+    v["packages"]["a"]["compatibility"]=json!("unknown");fs::write(&path,serde_json::to_vec(&v).unwrap()).unwrap();
+    assert!(development::preview(&r.0,&request,&runner).stderr.contains("unknown"));
 }
 
 #[test]
@@ -1294,7 +1223,8 @@ fn schema4_single_model_splits_rust_workspace_version_for_changed_package() {
     let p = build(&r.0, "feat: uniform", &request, &SystemProcessRunner)
         .unwrap()
         .unwrap();
-    let manifest = String::from_utf8_lossy(&p.writes[&r.0.join("pkg/Cargo.toml")])
+    assert!(!p.writes.contains_key(&r.0.join("pkg/Cargo.toml")));
+    let manifest = fs::read_to_string(r.0.join("pkg/Cargo.toml")).unwrap()
         .parse::<toml_edit::DocumentMut>()
         .unwrap();
     assert_eq!(
@@ -1306,33 +1236,21 @@ fn schema4_single_model_splits_rust_workspace_version_for_changed_package() {
 
 #[test]
 fn schema4_breaking_lifecycle_cannot_disguise_major_as_compatible() {
-    let r = fixture("independent", false);
-    let mut cfg: Value = serde_json::from_slice(&fs::read(r.0.join(CONFIG)).unwrap()).unwrap();
-    let base = cfg["baseline"]["revision"].clone();
-    fs::remove_dir_all(r.0.join("pkg")).unwrap();
-    cfg["adapters"]["python"]["projects"] = json!([]);
-    cfg["packages"] = json!([]);
-    cfg["lifecycle"] = json!([{"id":"remove-a","base":base,"operation":"remove","compatibility":"breaking","from":[{"id":"a","language":"python","manifest":"pkg/pyproject.toml","name":"a"}],"to":[]}]);
-    write(&r.0, CONFIG, &serde_json::to_vec(&cfg).unwrap());
-    let request = analyze(&r.0, "major", Some("major"));
-    assert!(build(&r.0, "feat!: retire", &request, &SystemProcessRunner)
-        .unwrap_err()
-        .contains("breaking lifecycle"));
-    let mut v = analysis_value(&r.0);
-    let acceptance = json!({"fingerprint":v["fingerprint"],"scope":["product","a"],"reason":"user accepts removal and migration scope","source":"explicit fixture user decision"});
-    for id in ["product", "a"] {
-        let object = if id == "product" {
-            &mut v["product"]
-        } else {
-            &mut v["packages"][id]
-        };
-        object["compatibility"] = json!("breaking");
-        object["acceptance"] = acceptance.clone();
-    }
-    save_analysis(&r.0, &v);
-    assert!(build(&r.0, "feat!: retire", &request, &SystemProcessRunner)
-        .unwrap()
-        .is_some());
+    let r=fixture("independent",false);
+    let mut cfg:Value=serde_json::from_slice(&fs::read(r.0.join(CONFIG)).unwrap()).unwrap();
+    let base=cfg["baseline"]["revision"].clone();fs::remove_dir_all(r.0.join("pkg")).unwrap();
+    cfg["adapters"]["python"]["projects"]=json!([]);cfg["packages"]=json!([]);
+    cfg["development"]=json!({"a":development_tests::policy(false)});cfg["python_environment"]=python_environment_fixture(&r.0);
+    cfg["lifecycle"]=json!([{"id":"remove-a","base":base,"operation":"remove","compatibility":"breaking","from":[{"id":"a","language":"python","manifest":"pkg/pyproject.toml","name":"a"}],"to":[]}]);
+    write(&r.0,CONFIG,&serde_json::to_vec(&cfg).unwrap());
+    let runner=development_tests::Checks::new();let q=development_tests::request(&r.0,"major",false,&runner);
+    assert!(development::preview(&r.0,&q,&runner).stderr.contains("breaking lifecycle"));
+    let q=development_tests::request(&r.0,"major",true,&runner);let result=development_tests::close(&r.0,&q,&runner);assert_eq!(result.code,0,"{}",result.stderr);
+    let q=analyze(&r.0,"major",None);
+    assert!(build(&r.0,"feat!: retire",&q,&runner).unwrap_err().contains("breaking"));
+    let mut v=analysis_value(&r.0);v["product"]["compatibility"]=json!("breaking");
+    v["product"]["acceptance"]=json!({"fingerprint":v["fingerprint"],"scope":["product"],"reason":"accepted product migration","source":"existing fixture decision"});save_analysis(&r.0,&v);
+    assert!(build(&r.0,"feat!: retire",&q,&runner).unwrap().is_some());
 }
 
 #[test]
@@ -1346,10 +1264,10 @@ fn schema4_stat_only_index_refresh_keeps_analysis_valid_without_weakening_drift_
     )).unwrap();
     let candidates = git(&r.0, &["--no-optional-locks", "-c", "diff.autoRefreshIndex=false", "diff", "--name-only", "HEAD", "--"]);
     assert!(candidates.lines().any(|p| p == "README.md"), "stat-only fixture did not create a false candidate: {candidates}");
+    let request = analyze(&r.0, "patch", Some("patch"));
     let cfg = load(&r.0).unwrap().unwrap();
     let index = fs::read(r.0.join(".git/index")).unwrap();
     let before = capture(&r.0, &cfg, &SystemProcessRunner).unwrap();
-    let request = analyze(&r.0, "patch", Some("patch"));
     assert_eq!(fs::read(r.0.join(".git/index")).unwrap(), index, "inspection must remain read-only");
     git(&r.0, &["diff", "--name-only"]);
     let after = capture(&r.0, &cfg, &SystemProcessRunner).unwrap();
@@ -1604,7 +1522,7 @@ fn schema4_python_environment_bytes_invalidate_evidence_and_apply_at_same_paths(
     assert!(
         build(&r.0, "fix: stale evidence", &request, &SystemProcessRunner)
             .unwrap_err()
-            .contains("stale")
+            .contains("development closure required")
     );
     let request = analyze(&r.0, "patch", Some("patch"));
     let plan = build(&r.0, "fix: native change", &request, &SystemProcessRunner)
@@ -1641,10 +1559,9 @@ fn schema4_rust_patch_overflow_fails_without_touching_versions() {
     git(&r.0, &["commit", "--amend", "--no-edit"]);
     migrate(&r.0);
     change(&r.0, true);
-    let request = analyze(&r.0, "patch", Some("patch"));
-    assert!(build(&r.0, "fix: overflow", &request, &SystemProcessRunner)
-        .unwrap_err()
-        .contains("overflow"));
+    development_tests::configure(&r.0,false);let runner=development_tests::Checks::new();
+    let request=development_tests::request(&r.0,"patch",false,&runner);
+    assert!(development::preview(&r.0,&request,&runner).stderr.contains("overflow"));
     assert_eq!(fs::read(r.0.join("VERSION")).unwrap(), b"1.0.0\n");
 }
 
@@ -1672,97 +1589,21 @@ fn schema4_runtime_guard_and_record_roles_fail_closed_without_writes() {
 
 #[test]
 fn schema4_forwarded_public_interface_changes_are_explicit_and_do_not_propagate_automatically() {
-    let r = fixture("legacy", false);
-    let mut cfg: Value = serde_json::from_slice(&fs::read(r.0.join(CONFIG)).unwrap()).unwrap();
-    cfg["adapters"]["python"]["projects"] =
-        json!(["pkg/pyproject.toml", "consumer/pyproject.toml"]);
-    cfg["adapters"]["python"]["local_sources"] =
-        json!({"consumer/pyproject.toml":{"a":"pkg/pyproject.toml"}});
-    cfg["packages"].as_array_mut().unwrap().push(
-        json!({"id":"b","language":"python","manifest":"consumer/pyproject.toml","name":"b"}),
-    );
-    write(&r.0, CONFIG, &serde_json::to_vec(&cfg).unwrap());
-    write(
-        &r.0,
-        "consumer/pyproject.toml",
-        b"[project]\nname='b'\nversion='1.0.0'\ndependencies=['a>=1.0.0']\n",
-    );
-    write(&r.0, "consumer/b.py", b"from a import PublicType\n");
-    write(&r.0, "pkg/a.py", b"class PublicType: pass\n");
-    git(&r.0, &["add", "."]);
-    git(&r.0, &["commit", "--amend", "--no-edit"]);
-    migrate(&r.0);
-    write(
-        &r.0,
-        "pkg/a.py",
-        b"class PublicType:\n    def new_method(self): pass\n",
-    );
-    let request = analyze(&r.0, "minor", Some("minor"));
-    let single = build(&r.0, "feat: public API", &request, &SystemProcessRunner)
-        .unwrap()
-        .unwrap();
-    assert_eq!(single.package_changes.len(), 1);
-    let mut analysis = analysis_value(&r.0);
-    analysis["packages"]["b"] = json!({"level":"minor","reason":"re-exported PublicType gains new_method","compatibility":"compatible"});
-    save_analysis(&r.0, &analysis);
-    assert!(
-        build(&r.0, "feat: forwarded API", &request, &SystemProcessRunner)
-            .unwrap_err()
-            .contains("no final change")
-    );
-    analysis["interface_impacts"] =
-        json!({"b":{"dependencies":["a"],"reason":"consumer.b re-exports the changed PublicType"}});
-    save_analysis(&r.0, &analysis);
-    let both = build(&r.0, "feat: forwarded API", &request, &SystemProcessRunner)
-        .unwrap()
-        .unwrap();
-    assert_eq!(both.package_changes.len(), 2);
-    assert!(both
-        .package_changes
-        .iter()
-        .all(|p| p.version_after == "1.1.0"));
-    analysis["interface_impacts"]["b"]["reason"] = json!("");
-    save_analysis(&r.0, &analysis);
-    assert!(
-        build(&r.0, "feat: unexplained", &request, &SystemProcessRunner)
-            .unwrap_err()
-            .contains("reason")
-    );
-    analysis["interface_impacts"]["b"] =
-        json!({"dependencies":["product"],"reason":"not a package dependency"});
-    save_analysis(&r.0, &analysis);
-    assert!(
-        build(&r.0, "feat: unrelated", &request, &SystemProcessRunner)
-            .unwrap_err()
-            .contains("no declared dependency")
-    );
-    analysis["interface_impacts"]["a"] = json!({"dependencies":["b"],"reason":"invalid cycle"});
-    save_analysis(&r.0, &analysis);
-    assert!(build(
-        &r.0,
-        "feat: invalid dependency",
-        &request,
-        &SystemProcessRunner
-    )
-    .unwrap_err()
-    .contains("no declared dependency"));
-    write(&r.0, "pkg/a.py", b"class PublicType: pass\n");
-    write(&r.0, "README.md", b"only program documentation changed\n");
-    let request = analyze(&r.0, "minor", None);
-    let mut analysis = analysis_value(&r.0);
-    analysis["packages"]["b"] =
-        json!({"level":"minor","reason":"claimed forwarding change","compatibility":"compatible"});
-    analysis["interface_impacts"] =
-        json!({"b":{"dependencies":["a"],"reason":"unchanged dependency cannot seed this claim"}});
-    save_analysis(&r.0, &analysis);
-    assert!(build(
-        &r.0,
-        "feat: unrooted interface claim",
-        &request,
-        &SystemProcessRunner
-    )
-    .unwrap_err()
-    .contains("not rooted"));
+    let r=development_tests::python_pair(false);let runner=development_tests::Checks::new();change(&r.0,false);
+    let q=development_tests::request(&r.0,"minor",false,&runner);
+    let path=r.0.join(".runtime/develop.json");let mut v:Value=serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    let single=development::preview(&r.0,&q,&runner);assert_eq!(single.code,0,"{}",single.stderr);
+    assert_eq!(single.receipt.unwrap()["versions"].as_object().unwrap().len(),1);
+    v["packages"]["b"]=json!({"level":"minor","reason":"re-exported API","compatibility":"compatible"});fs::write(&path,serde_json::to_vec(&v).unwrap()).unwrap();
+    assert!(development::preview(&r.0,&q,&runner).stderr.contains("unchanged or unknown"));
+    v["interface_impacts"]=json!({"b":{"dependencies":["a"],"reason":"public re-export"}});fs::write(&path,serde_json::to_vec(&v).unwrap()).unwrap();
+    let both=development::preview(&r.0,&q,&runner);assert_eq!(both.code,0,"{}",both.stderr);
+    assert!(both.receipt.unwrap()["versions"].as_object().unwrap().values().all(|v|v=="1.1.0"));
+    v["interface_impacts"]["b"]["reason"]=json!("");fs::write(&path,serde_json::to_vec(&v).unwrap()).unwrap();assert!(development::preview(&r.0,&q,&runner).stderr.contains("reason"));
+    v["interface_impacts"]["b"]=json!({"dependencies":["product"],"reason":"invalid dependency"});fs::write(&path,serde_json::to_vec(&v).unwrap()).unwrap();assert!(development::preview(&r.0,&q,&runner).stderr.contains("no declared dependency"));
+    v["interface_impacts"]=json!({"a":{"dependencies":["b"],"reason":"invalid cycle"}});fs::write(&path,serde_json::to_vec(&v).unwrap()).unwrap();assert!(development::preview(&r.0,&q,&runner).stderr.contains("no declared dependency"));
+    write(&r.0,"pkg/a.py",b"VALUE=1\n");
+    let no_change=development::preview(&r.0,&Request::default(),&runner);assert_eq!(no_change.code,0,"{}",no_change.stderr);assert_eq!(no_change.receipt.unwrap()["status"],"nothing-to-close");
 }
 
 #[test]
@@ -1809,8 +1650,6 @@ fn schema4_required_checks_combine_their_declared_object_scopes() {
         claims.push(claim);
     }
     let mut analysis = analysis_value(&r.0);
-    analysis["packages"]["b"] =
-        json!({"level":"patch","reason":"own changed source","compatibility":"compatible"});
     analysis["checks"] = json!(claims);
     save_analysis(&r.0, &analysis);
     assert!(
@@ -1818,6 +1657,12 @@ fn schema4_required_checks_combine_their_declared_object_scopes() {
             .unwrap()
             .is_some()
     );
+    let complete = analysis.clone();
+    analysis["checks"].as_array_mut().unwrap().remove(0);
+    save_analysis(&r.0, &analysis);
+    assert!(build(&r.0,"fix: missing package evidence",&request,&SystemProcessRunner)
+        .unwrap_err().contains("required release evidence missing"));
+    analysis = complete;
     analysis["checks"].as_array_mut().unwrap().pop();
     save_analysis(&r.0, &analysis);
     assert!(build(

@@ -5,6 +5,9 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+#[path = "hook_hardening.rs"]
+mod hardening;
+
 #[test]
 fn archive_reminder_uses_the_same_candidates_and_propagates_invalid_todo() {
     let fixture = Fixture::new();
@@ -460,11 +463,11 @@ fn hook_topic4_batch_scans_once_and_checks_later_files() {
         } else {
             payload.clone()
         };
-        post::ENCODING_SCANS.store(0, Relaxed);
+        post::ENCODING_FILES_READ.store(0, Relaxed);
         post::INSTRUCTION_SCANS.store(0, Relaxed);
         assert_eq!(post_edit(&input), 0);
-        assert_eq!(post::ENCODING_SCANS.load(Relaxed), 1);
-        assert_eq!(post::INSTRUCTION_SCANS.load(Relaxed), 1);
+        assert_eq!(post::ENCODING_FILES_READ.load(Relaxed), count);
+        assert_eq!(post::INSTRUCTION_SCANS.load(Relaxed), 0);
     }
     fs::write(fixture.root.join("doc/note-9.md"), b"\xef\xbb\xbfblocked").unwrap();
     post::INSTRUCTION_SCANS.store(0, Relaxed);
@@ -484,7 +487,7 @@ fn hook_topic4_map_failures_propagate_without_skipping_other_work() {
     assert_eq!(post_edit(&payload), 1);
     assert_eq!(
         post::INSTRUCTION_SCANS.load(std::sync::atomic::Ordering::Relaxed),
-        1
+        0
     );
     assert_eq!(
         fs::read_to_string(fixture.root.join("src/domain/mod.rs")).unwrap(),

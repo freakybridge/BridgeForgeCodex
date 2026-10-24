@@ -49,8 +49,12 @@ pub(super) fn validate(
         .map(|(id, p)| (id.clone(), p.version.clone()))
         .collect::<BTreeMap<_, _>>();
     let mut steps = Vec::new();
+    let mut closure_history = development::Ledger::parse(revision_payload(root, boundary, development::RECORD, runner)?.as_deref())?;
     let start = if boundary == cfg.baseline.revision {
-        steps.extend(cfg.baseline.lineage.iter().map(|s| s.packages.clone()));
+        for state in &cfg.baseline.lineage {
+            let ledger = development::Ledger::parse(revision_payload(root, &state.revision, development::RECORD, runner)?.as_deref())?;
+            steps.push((state.packages.clone(), ledger));
+        }
         cfg.baseline.migration_head.as_str()
     } else {
         boundary
@@ -82,11 +86,19 @@ pub(super) fn validate(
             }
             migration::verify_correction(root, &committed, cfg, runner)?;
         }
-        steps.push(polyglot::historical(root, commit, &cfg.native, runner)?.packages);
+        let ledger = development::Ledger::parse(revision_payload(root, commit, development::RECORD, runner)?.as_deref())?;
+        steps.push((polyglot::historical(root, commit, &cfg.native, runner)?.packages, ledger));
     }
-    steps.push(current.packages.clone());
-    for next in steps {
-        lifecycle::validate_step(&previous, &next, &transitions, &mut consumed)?;
+    steps.push((current.packages.clone(), development::Ledger::load(root)?));
+    for (next, ledger) in steps {
+        ledger.extends(&closure_history)?;
+        // Identity transitions retain the original lifecycle validator. Version
+        // continuity is checked separately against the append-only closure chain.
+        let mut identities = next.clone();
+        for (id,p) in &mut identities {
+            if let Some(old)=previous.get(id) { p.version=old.version.clone(); }
+        }
+        lifecycle::validate_step(&previous, &identities, &transitions, &mut consumed)?;
         for id in previous.keys().filter(|id| !next.contains_key(*id)) {
             retired.insert(id.clone());
         }
@@ -96,15 +108,19 @@ pub(super) fn validate(
             }
             if let Some(version) = versions.get(id) {
                 if version != &p.version {
-                    return Err(format!(
-                        "{id}: native version changed outside a formal release"
-                    ));
+                    let entries = ledger.entries[closure_history.entries.len()..].iter().filter(|e| &e.id == id).collect::<Vec<_>>();
+                    if entries.first().and_then(|e|e.before.as_ref()) != Some(version)
+                        || entries.last().and_then(|e|e.after.as_ref()) != Some(&p.version) {
+                        return Err(format!("{id}: native version changed outside managed development closure"));
+                    }
                 }
             } else {
                 versions.insert(id.clone(), p.version.clone());
             }
+            versions.insert(id.clone(), p.version.clone());
         }
         previous = next;
+        closure_history = ledger;
     }
     if transitions.iter().any(|t| !consumed.contains(&t.id)) {
         return Err("lifecycle declaration has no matching observed transition".into());

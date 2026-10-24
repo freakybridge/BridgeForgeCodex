@@ -673,6 +673,10 @@ fn independent_release_rates_each_final_package_and_is_idempotent(){
     assert_eq!(p.new_version.to_string(),"1.1.0");assert_eq!(p.package_changes.len(),2);
     assert!(p.package_changes.iter().any(|p|p.name=="core"&&p.version_after=="1.1.0"));
     assert!(p.package_changes.iter().any(|p|p.name=="app"&&p.version_after=="1.0.1"));
+    let ledger:Value=serde_json::from_slice(&fs::read(repo.0.join(".codex/package-closures.json")).unwrap()).unwrap();
+    let idle=ledger["entries"].as_array().unwrap().iter().find(|e|e["id"]=="idle").unwrap();
+    assert_eq!(idle["level"],0);
+    assert_eq!(idle["after"],"1.0.0");
     assert_eq!(fs::read(repo.0.join(".git/index")).unwrap(),index);apply_file_release_plan(&p).unwrap();
     let output=Command::new("cargo").args(["metadata","--locked","--offline","--format-version","1"]).current_dir(&repo.0).output().unwrap();assert!(output.status.success(),"{}",String::from_utf8_lossy(&output.stderr));
     git_ok(&repo.0,&["add","."]);git_ok(&repo.0,&["commit","-m","chore: release"]);
@@ -692,7 +696,7 @@ fn independent_migration_preserves_versions_unpublished_changes_and_initial_pack
     git_ok(&repo.0,&["add","."]);git_ok(&repo.0,&["commit","-m","unclassified ordinary commit"]);
     let version=fs::read(repo.0.join("VERSION")).unwrap();migrate_fixture(&repo);assert_eq!(fs::read(repo.0.join("VERSION")).unwrap(),version);
     let p=fixture_plan(&repo,"patch",&[]).unwrap().unwrap();assert_eq!(p.package_changes.len(),2);
-    assert!(p.package_changes.iter().any(|p|p.name=="new"&&p.version_before=="0.3.7"&&p.version_after=="0.3.7"));
+    assert!(p.package_changes.iter().any(|p|p.name=="new"&&p.version_before=="unreleased"&&p.version_after=="0.3.7"));
     assert!(p.package_changes.iter().any(|p|p.name=="app"&&p.version_after=="1.0.1"));
 }
 

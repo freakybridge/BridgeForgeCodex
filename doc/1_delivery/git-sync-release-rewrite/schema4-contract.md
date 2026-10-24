@@ -5,7 +5,9 @@ validation_status: verified
 
 # schema 4 发布接入合同
 
-原 schema 4 合同的验收见 [TODO-015 记录](requirements_2026-10-21_schema4.md#用户验收2026-10-22)。本文当前规则已按 [TODO-022 唯一发布模型](requirements_2026-10-23_single-release-model.md) 更新；本次实现、验证及发布状态以该需求卡为准，不能沿用旧验收证明新行为。
+> 历史适用边界：下文保留 TODO-015 / TODO-022 对应的既有实现与接口，包含 release 同时升主程序和子包、breaking 一律 major 的旧行为，不作为新模型执行指令。2026-10-24 已确认的替代分工见[版本生命周期设计](../../0_architecture/design/package-version-lifecycle.md)及[需求卡](../package-version-lifecycle/requirements_2026-10-24_package-version-lifecycle.md)。新模型为 develop 验证后升子包并自动判定 1.0.0，release 核验收口后只升主程序、公告累计包变化；实际实施与验证状态以需求卡为准。本文既有 verified 状态仅对应原验收，不证明新流程通过。
+
+原 schema 4 合同的验收见 [TODO-015 记录](requirements_2026-10-21_schema4.md#用户验收2026-10-22)。本文所保留实现已按 [TODO-022 唯一发布模型](requirements_2026-10-23_single-release-model.md) 更新；相应实现、验证及发布状态以该历史需求卡为准，不能沿用旧验收证明新行为。
 
 ## 入口与职责
 

@@ -18,7 +18,7 @@ pub(super) struct ObjectAnalysis {
     pub acceptance: Option<Acceptance>,
 }
 impl ObjectAnalysis {
-    pub(super) fn level(&self, id: &str, fingerprint: &str) -> Result<u8, String> {
+    pub(super) fn version_level(&self, id: &str, fingerprint: &str, unstable: bool) -> Result<u8, String> {
         let level = match self.level.as_str() {
             "patch" => 1,
             "minor" => 2,
@@ -31,8 +31,8 @@ impl ObjectAnalysis {
         match self.compatibility.as_str() {
             "compatible" => {}
             "breaking" => {
-                if level != 3 {
-                    return Err(format!("{id}: breaking changes require major"));
+                if level != if unstable { 2 } else { 3 } {
+                    return Err(format!("{id}: breaking changes require {}", if unstable { "minor during 0.x" } else { "major" }));
                 }
                 let accepted = self.acceptance.as_ref().ok_or_else(|| {
                     format!("{id}: incompatible changes require explicit user acceptance")

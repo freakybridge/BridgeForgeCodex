@@ -17,7 +17,7 @@
             {
               "source": "skills/bridgeforge-codex/SKILL.md",
               "target": "SKILL.md",
-              "sha256": "sha256:aff4758d98c06da6fb8a1902c7200ae7221f612075bf2d4c0db3f27ae522b247"
+              "sha256": "sha256:3aa0240e6aa58f41891a8db78adfd46d91fd5a37a2239d65a666e4c217ce33f8"
             },
             {
               "source": "skills/bridgeforge-codex/agents/openai.yaml",
@@ -172,12 +172,12 @@
             {
               "source": "skills/develop/references/completion-release.md",
               "target": "references/completion-release.md",
-              "sha256": "sha256:930268f5793ba4d4f3457390422a33e2ca4991c9e8db61b14065462d58b8e33f"
+              "sha256": "sha256:1e85029ac43237bf46dce82c05b349b02d7de9b81bb7e1c005d1d489ee69ec53"
             },
             {
               "source": "skills/develop/SKILL.md",
               "target": "SKILL.md",
-              "sha256": "sha256:c965d5bc475cdff4f5ffbe5a832300f465764995dc1fdaa5037d803934e2dc59"
+              "sha256": "sha256:9d3720065f674d9751959552e85c52c41a7ab26e3c8b087f9384d22047e6f55b"
             }
           ]
         },
@@ -227,22 +227,22 @@
             {
               "source": "skills/git-sync/SKILL.md",
               "target": "SKILL.md",
-              "sha256": "sha256:a724c75097037d01f702c4bd47dd2961b4b423146de8044602ee32d8ccc96197"
+              "sha256": "sha256:c47b45dcf6419e54a11c399bfd9af9fbb9a3fb9610998a66db90fadcedfe3912"
             },
             {
               "source": "skills/git-sync/references/first-use.md",
               "target": "references/first-use.md",
-              "sha256": "sha256:84dcc4c16a63ae81421d8196e378a2965dc59ef0b2f0fbaf7b40858fa070aa2a"
+              "sha256": "sha256:18972b335d072d79da35dd576034d5f165d3bd7efe658ae5ef7c7c7327b5ecaa"
             },
             {
               "source": "skills/git-sync/references/schema4.md",
               "target": "references/schema4.md",
-              "sha256": "sha256:5cc2474016a513f003fb61a43b40e8322af76ea380e550d5378d888583178fae"
+              "sha256": "sha256:5e80a326e8100aeb69101188794af0d70dc376f3793193d862c0b3728706ad94"
             },
             {
               "source": "skills/git-sync/references/runtime-context.md",
               "target": "references/runtime-context.md",
-              "sha256": "sha256:7d6ba19a8affd12206afb06cd616502177dd36a38386d1fd30fbf41019c878b9"
+              "sha256": "sha256:554bec8549c47e8342101a01cb371967b512a5d3ef8c770d1b1dbf422b13a87b"
             }
           ]
         },

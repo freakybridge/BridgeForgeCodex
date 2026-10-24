@@ -21,10 +21,13 @@ const TEXT_SUFFIXES: &[&str] = &[
 
 // Factory-test counters only; no production telemetry or persisted state.
 #[cfg(all(test, bridgeforge_factory_tests))]
-pub(crate) static ENCODING_SCANS: std::sync::atomic::AtomicUsize =
+pub(crate) static ENCODING_FILES_READ: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(0);
 #[cfg(all(test, bridgeforge_factory_tests))]
 pub(crate) static INSTRUCTION_SCANS: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+#[cfg(all(test, bridgeforge_factory_tests))]
+pub(crate) static INSTRUCTION_ENTRIES: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(0);
 const TEXT_NAMES: &[&str] = &[
     "AGENTS.md",
@@ -61,42 +64,14 @@ fn is_text(path: &Path) -> bool {
             .is_some_and(|value| TEXT_NAMES.contains(&value))
 }
 
-fn all_text_paths(root: &Path) -> Vec<PathBuf> {
-    #[cfg(all(test, bridgeforge_factory_tests))]
-    ENCODING_SCANS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let mut result = BTreeSet::new();
-    for selected in TEXT_ROOTS {
-        let path = root.join(selected);
-        if path.is_file() && is_text(&path) {
-            result.insert(path);
-            continue;
-        }
-        if !path.is_dir() {
-            continue;
-        }
-        for entry in WalkDir::new(path)
-            .follow_links(false)
-            .into_iter()
-            .filter_map(Result::ok)
-        {
-            if entry.file_type().is_file() && is_text(entry.path()) {
-                result.insert(entry.path().to_path_buf());
-            }
-        }
-    }
-    result.into_iter().collect()
-}
 
-fn garble_hits(root: &Path, paths: &[PathBuf]) -> Vec<String> {
-    let re = Regex::new(r"\?{3,}|\u{fffd}").unwrap();
+fn garble_hits(root: &Path, files: &[(PathBuf, Vec<u8>)]) -> Vec<String> {
+    static RE: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| Regex::new(r"\?{3,}|\u{fffd}").unwrap());
     let mut hits = Vec::new();
-    for path in paths {
-        let Ok(bytes) = fs::read(path) else {
-            continue;
-        };
-        let text = String::from_utf8_lossy(&bytes);
+    for (path, bytes) in files {
+        let text = String::from_utf8_lossy(bytes);
         for (index, line) in text.lines().enumerate() {
-            if !re.is_match(line) {
+            if !RE.is_match(line) {
                 continue;
             }
             let mut snippet = line.trim().to_string();
@@ -116,25 +91,6 @@ fn garble_hits(root: &Path, paths: &[PathBuf]) -> Vec<String> {
 
 pub fn encoding(payloads: &[Value]) -> StepResult {
     let root = repo_root();
-    let all = all_text_paths(&root);
-    let bom: Vec<String> = all
-        .iter()
-        .filter_map(|path| {
-            fs::read(path)
-                .ok()
-                .filter(|bytes| bytes.starts_with(&[0xef, 0xbb, 0xbf]))
-                .map(|_| relative_display(&root, path))
-        })
-        .collect();
-    if !bom.is_empty() {
-        return StepResult::blocked(format!(
-            "[encoding] hard gate: UTF-8 BOM is forbidden\n{}\n[encoding] Fix: save these files as UTF-8 without BOM.\n",
-            bom.into_iter()
-                .map(|item| format!("[encoding]   {item}"))
-                .collect::<Vec<_>>()
-                .join("\n")
-        ));
-    }
     let mut edited = BTreeSet::new();
     for payload in payloads {
         if let Some(input) = tool_input(payload) {
@@ -150,7 +106,23 @@ pub fn encoding(payloads: &[Value]) -> StepResult {
             }
         }
     }
-    let hits = garble_hits(&root, &edited.into_iter().collect::<Vec<_>>());
+    // Every target in a multi-file patch is checked once. The same bytes serve
+    // both BOM and replacement-text checks; unrelated files stay for pre-commit.
+    let mut files = Vec::new();
+    for path in edited {
+        #[cfg(all(test, bridgeforge_factory_tests))]
+        ENCODING_FILES_READ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        match fs::read(&path) {
+            Ok(bytes) => files.push((path, bytes)),
+            Err(error) => return StepResult::failed("encoding", error),
+        }
+    }
+    let bom: Vec<_> = files.iter().filter(|(_, bytes)| bytes.starts_with(&[0xef,0xbb,0xbf]))
+        .map(|(path,_)| format!("[encoding]   {}", relative_display(&root,path))).collect();
+    if !bom.is_empty() {
+        return StepResult::blocked(format!("[encoding] hard gate: UTF-8 BOM is forbidden\n{}\n[encoding] Fix: save these files as UTF-8 without BOM.\n",bom.join("\n")));
+    }
+    let hits = garble_hits(&root, &files);
     if hits.is_empty() {
         StepResult::ok()
     } else {
@@ -539,6 +511,20 @@ fn instruction_text_issues(path: &Path, root: &Path, nested: bool) -> Vec<String
     if nested { issues } else { Vec::new() }
 }
 
+pub(crate) fn edit_requires_instruction_check(payloads: &[Value]) -> bool {
+    let root = normalize_path(&repo_root(), ".");
+    payloads.iter().any(|payload| {
+        let Some(input) = tool_input(payload) else { return false; };
+        let target = normalize_path(&root, &json_string(input, "file_path"));
+        let relative = relative_display(&root, &target).to_ascii_lowercase();
+        target.file_name().is_some_and(|name| name.to_string_lossy().eq_ignore_ascii_case("AGENTS.md"))
+            || matches!(relative.as_str(), ".codex/managed-skeleton.json" | "templates/managed-skeleton.json"
+                | ".codex/hooks.json" | "templates/hooks.json" | ".codex/config.toml" | ".codex/settings.json"
+                | "doc/readme.md" | "doc/3_reference/codex-hook-signals.md")
+            || relative.starts_with(".codex/rules/") || relative.starts_with("templates/rules/")
+    })
+}
+
 pub fn instruction_source(_payload: &Value) -> StepResult {
     #[cfg(all(test, bridgeforge_factory_tests))]
     INSTRUCTION_SCANS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -645,8 +631,15 @@ pub fn instruction_source(_payload: &Value) -> StepResult {
     for entry in WalkDir::new(&root)
         .follow_links(false)
         .into_iter()
+        .filter_entry(|entry| {
+            if entry.depth() == 0 { return true; }
+            if matches!(entry.file_name().to_str(), Some(".git" | ".runtime")) { return false; }
+            entry.path().strip_prefix(&root).ok().is_none_or(|path| path != Path::new("doc/4_archive"))
+        })
         .filter_map(Result::ok)
     {
+        #[cfg(all(test, bridgeforge_factory_tests))]
+        INSTRUCTION_ENTRIES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         if !entry.file_type().is_file() || entry.file_name() != "AGENTS.md" || entry.path() == path
         {
             continue;
@@ -726,10 +719,7 @@ pub fn test_receipt(payload: &Value) -> StepResult {
         return StepResult::ok();
     };
     let command = json_string(input, "command");
-    let matcher =
-        Regex::new(r"(?i)\b(pytest|cargo\s+test|npm\s+(?:run\s+)?test|go\s+test|tsc|make)\b")
-            .unwrap();
-    let Some(found) = matcher.find(&command) else {
+    let Some((kind, attributable)) = crate::shell::test_command(&command, crate::shell::dialect(payload)) else {
         return StepResult::ok();
     };
     let response = payload.get("tool_response").unwrap_or(&Value::Null);
@@ -770,27 +760,15 @@ pub fn test_receipt(payload: &Value) -> StepResult {
             .is_some_and(|status| matches!(status, "running" | "pending"))
         || response_output.contains("Process running with session ID")
         || response_output.contains("Script running with cell ID");
-    if running {
+    if running || interrupted || !attributable {
         exit = None;
         source = "unknown";
-    }
-    if exit.is_none() && !running {
-        let text = response_text(response);
-        if let Some(number) = Regex::new(r"(?i)\bexit\s+(?:code|status)\s+(\d+)")
-            .unwrap()
-            .captures(&text)
-            .and_then(|item| item.get(1))
-            .and_then(|item| item.as_str().parse::<i64>().ok())
-        {
-            exit = Some(number);
-            source = "text";
-        }
     }
     let timestamp = Local::now().format("%Y-%m-%dT%H:%M:%S").to_string();
     let mut hasher = Sha1::new();
     hasher.update(command.as_bytes());
     let sha1 = format!("{:x}", hasher.finalize());
-    let receipt = json!({"ts":timestamp,"kind":found.as_str().split_whitespace().next().unwrap_or("test"),"cmd":command.chars().take(200).collect::<String>(),"sha1":&sha1[..12],"exit_code":exit,"source":source,"interrupted":interrupted});
+    let receipt = json!({"ts":timestamp,"kind":kind,"cmd":command.chars().take(200).collect::<String>(),"sha1":&sha1[..12],"exit_code":exit,"source":source,"interrupted":interrupted,"attributable":attributable});
     let root = repo_root();
     let directory = root.join(".runtime/test_receipts");
     if let Err(error) = fs::create_dir_all(&directory) {
@@ -835,7 +813,7 @@ pub fn test_receipt(payload: &Value) -> StepResult {
     }
     StepResult::output(format!(
         "[test-receipt] {} exit={} source={} sha1={} -> .runtime/test_receipts/receipts.jsonl",
-        found.as_str().split_whitespace().next().unwrap_or("test"),
+        kind,
         exit.map(|value| value.to_string())
             .unwrap_or_else(|| "None".into()),
         source,

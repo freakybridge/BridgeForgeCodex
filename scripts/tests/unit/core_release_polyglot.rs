@@ -173,7 +173,7 @@ fn polyglot_explicit_target_cannot_bypass_a_business_impact_floor() {
     .unwrap();
     let path = r.0.join(request.analysis_file.as_ref().unwrap());
     let mut value: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
-    value["targets"] = json!({"a":"1.2.4"});
+    value["targets"] = json!({"product":"1.0.1"});
     fs::write(path, serde_json::to_vec(&value).unwrap()).unwrap();
     assert!(
         super::super::schema4::build(&r.0, "feat: fixture", &request, &SystemProcessRunner)

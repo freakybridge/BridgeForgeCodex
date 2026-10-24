@@ -8,6 +8,10 @@ delivery_layout: flat
 
 ## 从这里开始
 
+已验收：[子包开发收口与累计版本公告](1_delivery/package-version-lifecycle/requirements_2026-10-24_package-version-lifecycle.md)（TODO-025；develop 升子包、程序自动判断 1.0.0、release 只升主程序并公告累计变化；已授权 release，实际发布结果以受管收据为准；未修改真实下游）。
+
+已验收：[工厂运行时准备与 Hook 正确性、性能](1_delivery/runtime-hook-hardening/requirements_2026-10-24_runtime-hook-hardening.md#用户验收与发布授权2026-10-24)（TODO-023、TODO-024；定向验证、实际产物及独立审计完成，普通编辑基准中位数降低 79.11%；2026-10-24 用户验收并授权 release，实际发布以受管收据为准；真实下游和自然生命周期全链路未验证）。
+
 最近验收：[累计骨架差异归属修复](1_delivery/git-sync-release-rewrite/requirements_2026-10-23_single-release-model.md#累计骨架差异修复与验收2026-10-23)（TODO-022 增量；9 项定向验证、受管构建及工厂一致性通过；用户已验收并授权 release，真实下游 release 尚未复验）。
 
 最近验收：[唯一发布模型与历史分界](1_delivery/git-sync-release-rewrite/requirements_2026-10-23_single-release-model.md#用户验收与发布授权2026-10-23)（TODO-022 已完成；15 项定向检查、独立审查、受管构建和 Forge 自身接续通过，约 30 分钟收口；2026-10-23 用户验收并授权 release，实际发布以受管收据为准；真实下游未修改、未验证）。
@@ -85,6 +89,8 @@ delivery_layout: flat
 
 ## 架构
 
+- [子包开发版本与主程序发布](0_architecture/design/package-version-lifecycle.md)：开发与正式发布的两个基线、规则事实源及新旧衔接。
+
 - [artifact-layout 布局检查合同](0_architecture/design/artifact-layout.md)：公共默认规则、项目差异配置、A 模式、pre-commit 与 git-sync/release 的分工及性能验收；本批实施见公共默认规则增量卡。
 
 - 工厂专属[开发收口清单](0_architecture/design/development-completion.md)：按影响范围分层验证、证据复用与独立可选的发布候选准备；[流程精简验收](1_delivery/git-sync-performance/requirements_2026-10-23_scoped-development.md#用户验收2026-10-23)（TODO-021，2026-10-23 已验收）。
@@ -119,6 +125,7 @@ R07：[TODO 管理与归档收口一致性](1_delivery/todo-lifecycle/requiremen
 
 | Topic | 主要记录 |
 |---|---|
+| `package-version-lifecycle` | [需求与实施验证记录](1_delivery/package-version-lifecycle/requirements_2026-10-24_package-version-lifecycle.md)：TODO-025，开发收口升子包、自动稳定判定及主程序发布累计公告 |
 | `git-sync-release-rewrite` | [schema4 两种策略确认卡与工程结果](1_delivery/git-sync-release-rewrite/requirements_2026-10-21_schema4.md)、[用户验收：TODO-015](1_delivery/git-sync-release-rewrite/requirements_2026-10-21_schema4.md#用户验收2026-10-22)、[接入合同](1_delivery/git-sync-release-rewrite/schema4-contract.md)、[autopilot 交接](1_delivery/git-sync-release-rewrite/handoff_2026-10-22_schema4.md)：2026-10-22 用户已验收，TODO-015 已完成；两种策略共用 Rust/Python、复用 Stratus；7/7 检查、538 tests passed、33 项 CLI 补验及目标 3.0.0 隔离准备通过；条件项与真实下游未验证，未提交推送发布 |
 | `refactor-scan` | [Skill 开发验收](1_delivery/refactor-scan/requirements_2026-10-09_refactor-scan.md)已完成；[工厂重构候选与经验](1_delivery/refactor-scan/scan_2026-10-09_factory-refactor.md)记录扫描时事实；[R01 清理](1_delivery/refactor-scan/requirements_2026-10-09_r01-cleanup.md)、[R02 公共持久化](1_delivery/refactor-scan/requirements_2026-10-09_r02-persistence.md)、[R03 Memory CLI](1_delivery/refactor-scan/requirements_2026-10-09_r03-memory-cli.md)及 [R04 独立缓存](1_delivery/refactor-scan/requirements_2026-10-10_r04-artifact-cache.md)均工程验证通过并于 2026-10-10 获用户验收；累计收据与验收边界见 R04；[扫描换机交接](1_delivery/refactor-scan/handoff_2026-10-09_factory-refactor.md)为历史记录；真实项目试用见 TODO-004 |
 | `summary-workflow` | [Summary 三模式与会话状态快照退役](1_delivery/summary-workflow/requirements_2026-10-08_summary-workflow.md)；[本轮经验教训](1_delivery/summary-workflow/lessons_2026-10-08.md) |

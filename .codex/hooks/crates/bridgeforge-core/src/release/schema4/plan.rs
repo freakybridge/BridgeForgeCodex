@@ -13,7 +13,7 @@ fn product(version: SemVer) -> NativePackage {
     }
 }
 
-fn render(
+pub(super) fn render(
     root: &Path,
     cfg: &Config,
     capture: &Capture,
@@ -65,11 +65,7 @@ fn render(
     Ok(writes)
 }
 
-fn level(analysis: &Analysis, id: &str, fingerprint: &str) -> Result<u8, String> {
-    analysis.packages.get(id).ok_or_else(||format!("{id}: package analysis missing (including any effective dependency requirement changes)"))?.level(id,fingerprint)
-}
-
-fn choose(
+pub(super) fn choose(
     package: &NativePackage,
     impact: u8,
     target: Option<&String>,
@@ -153,7 +149,7 @@ pub(super) fn affected(cfg: &Config, capture: &Capture) -> BTreeSet<String> {
     affected
 }
 
-fn interface_impacts(
+pub(super) fn interface_impacts(
     capture: &Capture,
     analysis: &Analysis,
     affected: &mut BTreeSet<String>,
@@ -245,126 +241,33 @@ fn finish(
             ));
         }
     }
+    let ledger = development::release_gate(root, cfg, &mut capture)?;
+    if !analysis.packages.is_empty() || analysis.targets.keys().any(|id| id != "product") || !analysis.interface_impacts.is_empty() {
+        return Err("release only analyzes product; close package analysis with develop first".into());
+    }
+    let published = development::Ledger::parse(revision_payload(root, &capture.boundary, development::RECORD, runner)?.as_deref())?;
+    ledger.extends(&published)?;
+    let cumulative = &ledger.entries[published.entries.len()..];
     let mut affected = affected(cfg, &capture);
-    interface_impacts(&capture, &analysis, &mut affected, false)?;
-    let mut actual = affected.clone();
-    let program = analysis
-        .product
-        .as_ref()
-        .ok_or("product analysis is required for a release")?;
-    let breaking_ids = cfg
-        .native
-        .lifecycle
-        .iter()
-        .filter(|t| t.base == capture.boundary && t.compatibility == "breaking")
-        .flat_map(|t| t.from.iter().chain(&t.to).map(|p| p.id.clone()))
-        .collect::<BTreeSet<_>>();
-    if !breaking_ids.is_empty() && program.compatibility != "breaking" {
+    affected.extend(cumulative.iter().map(|e|e.id.clone()));
+    let program = analysis.product.as_ref().ok_or("product analysis is required for a release")?;
+    let old_version: SemVer = capture.product_version.parse()?;
+    let program_level = program.version_level("product", &capture.fingerprint, old_version.major == 0)?;
+    if cumulative.iter().any(|e|e.compatibility=="breaking") && program.compatibility!="breaking" {
+        return Err("product: cumulative breaking package changes require explicit breaking analysis and bound acceptance".into());
+    }
+    let maximum = cumulative.iter().map(|e| if e.compatibility=="breaking" { if old_version.major==0 {2} else {3} } else {e.level}).max().unwrap_or(1);
+    if program_level < maximum { return Err("product analysis must cover cumulative package impact since last release".into()); }
+    if cfg.native.lifecycle.iter().any(|t|t.base==capture.boundary && t.compatibility=="breaking") && program.compatibility!="breaking" {
         return Err("product: breaking lifecycle transition requires breaking analysis and explicit user acceptance".into());
     }
-    let program_level = program.level("product", &capture.fingerprint)?;
-    let old = capture
-        .inputs
-        .get(&root.join("VERSION"))
-        .and_then(Option::as_ref)
-        .ok_or("root VERSION missing")?;
-    let old_version = std::str::from_utf8(old)
-        .map_err(|e| e.to_string())?
-        .trim()
-        .parse::<SemVer>()?;
-    let mut versions = BTreeMap::new();
-    let mut impacts = BTreeMap::new();
-    let mut new_version = old_version;
-    let mut suggested = old_version;
+    let suggested: SemVer = polyglot::bump_native(&product(old_version), program_level)?.parse()?;
+    let new_version: SemVer = choose(&product(old_version),program_level,analysis.targets.get("product"),false)?.parse()?;
+    let versions = BTreeMap::<String,String>::new();
     let mut writes = BTreeMap::new();
-    for round in 0..=capture.current.packages.len() + 1 {
-        impacts.clear();
-        let mut maximum = program_level;
-        for id in &affected {
-            let impact = level(&analysis, id, &capture.fingerprint)?;
-            if breaking_ids.contains(id) && analysis.packages[id].compatibility != "breaking" {
-                return Err(format!(
-                    "{id}: breaking lifecycle transition requires breaking analysis and explicit user acceptance"
-                ));
-            }
-            impacts.insert(id.clone(), impact);
-            maximum = maximum.max(impact);
-        }
-        if program_level < maximum {
-            return Err("product analysis must cover the highest actual package impact".into());
-        }
-        suggested = polyglot::bump_native(&product(old_version), maximum)?.parse()?;
-        new_version = choose(
-            &product(old_version),
-            maximum,
-            analysis.targets.get("product"),
-            false,
-        )?
-        .parse()?;
-        versions.clear();
-        for (id, impact) in &impacts {
-                if let Some(p) = capture.current.packages.get(id) {
-                    versions.insert(
-                        p.manifest.clone(),
-                        choose(
-                            p,
-                            *impact,
-                            analysis.targets.get(id),
-                            !capture.baseline.packages.contains_key(id),
-                        )?,
-                    );
-                }
-        }
-        writes = render(root, cfg, &capture, &versions)?;
-        let mut requirement_owners = BTreeSet::new();
-        if let Some(rust_cfg) = &cfg.native.adapters.rust {
-            requirement_owners.extend(rust::requirement_changes(
-                rust_cfg,
-                &capture.inventory,
-                &mut |p| config::read_current(root, p),
-                &writes,
-            )?);
-        }
-        for p in capture.current.packages.values().filter(|p| {
-            p.language == Language::Python
-                && writes.contains_key(&p.manifest)
-                && !versions.contains_key(&p.manifest)
-        }) {
-            requirement_owners.insert(p.manifest.clone());
-        }
-        let mut changed = false;
-        for manifest in requirement_owners {
-            let id = capture
-                .current
-                .packages
-                .iter()
-                .find(|(_, p)| p.manifest == manifest)
-                .map(|(id, _)| id.clone())
-                .ok_or("dependency owner is not registered")?;
-            actual.insert(id.clone());
-            changed |= affected.insert(id);
-        }
-        changed |= interface_impacts(&capture, &analysis, &mut actual, false)?;
-        affected.extend(actual.iter().cloned());
-        if !changed {
-            break;
-        }
-        if round == capture.current.packages.len() + 1 {
-            return Err("effective dependency requirement closure did not converge".into());
-        }
-    }
-    interface_impacts(&capture, &analysis, &mut actual, true)?;
-    if analysis.targets.keys().any(|id| id != "product" && !affected.contains(id)) {
-        return Err("version targets cannot upgrade an unchanged package".into());
-    }
-    if analysis.packages.keys().any(|id| !affected.contains(id)) {
-        return Err(
-            "analysis attempts to upgrade a package with no final change or explicit target".into(),
-        );
-    }
     let mut evidence_scope = affected.clone();
     evidence_scope.insert("product".into());
-    analysis::validate_checks(root, cfg, &mut capture, &analysis, &evidence_scope)?;
+    analysis::validate_checks(root,cfg,&mut capture,&analysis,&evidence_scope)?;
     if !cfg.product_manifests.is_empty() {
         polyglot::add_writes(
             &mut writes,
@@ -387,7 +290,7 @@ fn finish(
         .map(|c| c.path.clone())
         .collect::<Vec<_>>();
     let mut info = parse_commit_message(message)?;
-    info.breaking = program_level == 3;
+    info.breaking = program.compatibility == "breaking";
     info.kind = if program_level == 2 {
         "feat"
     } else if program_level == 3 {
@@ -403,24 +306,14 @@ fn finish(
     let mut all_packages = Vec::new();
     for (id, p) in &capture.current.packages {
         let after = versions.get(&p.manifest).unwrap_or(&p.version);
-        let reason = if affected.contains(id) {
-            analysis
-                .packages
-                .get(id)
-                .map(|a| a.reason.as_str())
-                .unwrap_or("first release")
-        } else {
-            "no_final_package_change"
-        };
-        all_packages.push(json!({"id":id,"language":p.language,"manifest":p.manifest,"version_before":p.version,"version_after":after,"reason":reason}));
-        if versions.contains_key(&p.manifest) {
+        let before = capture.baseline.packages.get(id).map(|p|p.version.as_str());
+        let reasons = cumulative.iter().filter(|e| &e.id==id).map(|e|e.reason.as_str()).collect::<Vec<_>>();
+        let reason = if reasons.is_empty() { "no_package_version_change".into() } else { reasons.join("; ") };
+        all_packages.push(json!({"id":id,"language":p.language,"manifest":p.manifest,"version_before":before,"version_after":after,"reason":reason}));
+        if before != Some(after.as_str()) {
             changes.push(PackageChange {
-                manifest: p.manifest.clone(),
-                name: p.name.clone(),
-                version_before: p.version.clone(),
-                version_after: after.clone(),
-                reason: reason.into(),
-                dependencies: vec![],
+                manifest:p.manifest.clone(),name:p.name.clone(),version_before:before.unwrap_or("unreleased").into(),
+                version_after:after.clone(),reason,dependencies:vec![],
             });
         }
     }
@@ -486,7 +379,7 @@ fn finish(
         section.push_str(&format!(
             "- `{}`: {} -> {} ({})\n",
             p["id"].as_str().unwrap(),
-            p["version_before"].as_str().unwrap(),
+            p["version_before"].as_str().unwrap_or("unreleased"),
             p["version_after"].as_str().unwrap(),
             p["reason"].as_str().unwrap()
         ));
@@ -515,7 +408,7 @@ fn finish(
     {
         return Err("repository changed before release plan completion".into());
     }
-    let details = json!({"schema_version":4,"fingerprint":capture.fingerprint,"validation_fingerprint":capture.validation_fingerprint,"python_environment_fingerprint":capture.environment_guard.as_ref().map(|e|e.fingerprint.clone()),"strategy":cfg.strategy,"suggested_version":suggested.to_string(),"version_after":new_version.to_string(),"packages":all_packages,"required_checks":cfg.required_checks,"check_scopes":cfg.check_scopes,"interface_impacts":analysis.interface_impacts.iter().map(|(id,impact)|json!({"id":id,"dependencies":impact.dependencies,"reason":impact.reason})).collect::<Vec<_>>(),"compatibility_validation":"agent_evidence_verified_not_automatically_proven"});
+    let details = json!({"schema_version":4,"fingerprint":capture.fingerprint,"validation_fingerprint":capture.validation_fingerprint,"python_environment_fingerprint":capture.environment_guard.as_ref().map(|e|e.fingerprint.clone()),"strategy":cfg.strategy,"suggested_version":suggested.to_string(),"version_after":new_version.to_string(),"product_reason":program.reason,"package_version_baseline":capture.boundary,"packages":all_packages,"required_checks":cfg.required_checks,"check_scopes":cfg.check_scopes,"compatibility_validation":"agent_evidence_verified_not_automatically_proven"});
     Ok(Some(FileReleasePlan {
         inputs: capture.inputs,
         old_version,
@@ -547,6 +440,7 @@ pub fn build(
 ) -> Result<Option<FileReleasePlan>, String> {
     let cfg = load(root)?.ok_or("release requires schema 4 migration; run --migration-plan")?;
     let mut capture = capture(root, &cfg, runner)?;
+        development::release_gate(root, &cfg, &mut capture)?;
     let analysis = analysis::read(root, request, &mut capture)?;
     if capture.changes.iter().all(|c| c.role == "record")
         && analysis.as_ref().is_none_or(|a| a.targets.is_empty())
@@ -566,6 +460,7 @@ pub fn preview(
     let result = (|| {
         let cfg = load(root)?.ok_or("release requires schema 4 migration; run --migration-plan")?;
         let mut capture = capture(root, &cfg, runner)?;
+        development::release_gate(root, &cfg, &mut capture)?;
         let analysis = analysis::read(root, request, &mut capture)?;
         if capture.changes.iter().all(|c| c.role == "record")
             && analysis.as_ref().is_none_or(|a| a.targets.is_empty())

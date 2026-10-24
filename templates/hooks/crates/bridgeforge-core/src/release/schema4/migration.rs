@@ -392,6 +392,7 @@ fn prepare(
         "release_model",
         "check_scopes",
         "python_environment",
+        "development",
     ] {
         obj.remove(key);
     }
@@ -512,6 +513,7 @@ fn prepare(
             .packages
             .get(id)
             .is_some_and(|b| b.version != p.version)
+            && !development::version_recorded(root, id, &p.version)?
         {
             return Err(format!(
                 "{id}: migration must not conceal manual package version changes"

@@ -5,6 +5,8 @@ mod factory_version_config;
 #[cfg(test)]
 mod hook_guards;
 #[cfg(test)]
+mod hook_hardening_performance;
+#[cfg(test)]
 mod high_cost_native;
 #[cfg(test)]
 mod memory_sync;

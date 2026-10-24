@@ -92,6 +92,15 @@ pub fn json_string(map: &Map<String, Value>, key: &str) -> String {
         .to_string()
 }
 
+pub(crate) fn command_directory(payload: &Value, root: &Path) -> PathBuf {
+    let raw = tool_input(payload)
+        .and_then(|input| input.get("workdir").or_else(|| input.get("cwd")))
+        .or_else(|| payload.get("cwd"))
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty());
+    raw.map(|value| normalize_path(root, value)).unwrap_or_else(|| root.to_path_buf())
+}
+
 pub fn normalize_path(root: &Path, raw: &str) -> PathBuf {
     let stripped = raw.trim().trim_matches(['\'', '"']);
     let path = PathBuf::from(stripped);

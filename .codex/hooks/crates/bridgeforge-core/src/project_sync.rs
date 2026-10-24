@@ -1789,7 +1789,7 @@ fn validate_transaction_path(path: &Path) -> Result<(), String> {
     Ok(())
 }
 
-fn transaction_file_state(path: &Path) -> Result<Option<Vec<u8>>, String> {
+pub(crate) fn transaction_file_state(path: &Path) -> Result<Option<Vec<u8>>, String> {
     validate_transaction_path(path)?;
     match fs::read(path) {
         Ok(payload) => Ok(Some(payload)),
@@ -2475,11 +2475,8 @@ pub fn build_generated_assets(
     let snapshots = writes
         .keys()
         .map(|path| transaction_file_state(path).map(|state| (path.clone(), state)))
-        .collect::<Result<Vec<_>, _>>()?;
-    let result = (|| {
-        for (path, payload) in &writes {
-            atomic_write(path, payload)?;
-        }
+        .collect::<Result<BTreeMap<_, _>, _>>()?;
+    install_generated_transaction(project_root, &writes, &snapshots, &BTreeSet::new(), || {
         if !independent_hooks {
             crate::project_hooks::verify(project_root, contract, true)?;
         }
@@ -2490,10 +2487,42 @@ pub fn build_generated_assets(
             fs::remove_file(path).map_err(|error| error.to_string())?;
         }
         Ok::<(), String>(())
+    })?;
+    Ok(receipts)
+}
+
+/// Shared generated-asset install/rollback. The caller holds the project lock,
+/// captures targets before expensive work and verifies its source identity.
+pub(crate) fn install_generated_transaction(
+    root: &Path,
+    writes: &BTreeMap<PathBuf, Vec<u8>>,
+    snapshots: &BTreeMap<PathBuf, Option<Vec<u8>>>,
+    binaries: &BTreeSet<PathBuf>,
+    verify_after: impl FnOnce() -> Result<(), String>,
+) -> Result<(), String> {
+    for path in writes.keys() {
+        let before = snapshots.get(path).ok_or("missing generated target snapshot")?;
+        if &transaction_file_state(path)? != before {
+            return Err(format!("generated target changed before installation: {}", path.display()));
+        }
+    }
+    let write = |path: &Path, payload: &[u8]| {
+        if binaries.contains(path) { crate::runtime::write_binary(root, path, payload) }
+        else { atomic_write(path, payload) }
+    };
+    let result = (|| {
+        for (path, payload) in writes {
+            if &transaction_file_state(path)? != snapshots.get(path).ok_or("missing target snapshot")? {
+                return Err(format!("generated target changed during installation: {}", path.display()));
+            }
+            // A healthy or byte-identical target must retain its timestamp.
+            if snapshots[path].as_deref() != Some(payload) { write(path, payload)?; }
+        }
+        verify_after()
     })();
     if let Err(error) = result {
         let mut failures = Vec::new();
-        for (target, before) in snapshots.into_iter().rev() {
+        for (target, before) in snapshots.iter().rev().filter(|(target, _)| writes.contains_key(*target)) {
             let current = match transaction_file_state(&target) {
                 Ok(state) => state,
                 Err(error) => {
@@ -2504,10 +2533,10 @@ pub fn build_generated_assets(
                     continue;
                 }
             };
-            if current == before {
+            if &current == before {
                 continue;
             }
-            if current.as_deref() != writes.get(&target).map(Vec::as_slice) {
+            if current.as_deref() != writes.get(target).map(Vec::as_slice) {
                 failures.push(format!(
                     "{}: external change preserved during rollback",
                     target.display()
@@ -2515,7 +2544,7 @@ pub fn build_generated_assets(
                 continue;
             }
             let restored = match before {
-                Some(value) => atomic_write(&target, &value),
+                Some(value) => write(target, value),
                 None if target.exists() => {
                     fs::remove_file(&target).map_err(|error| error.to_string())
                 }
@@ -2534,7 +2563,7 @@ pub fn build_generated_assets(
             )
         });
     }
-    Ok(receipts)
+    Ok(())
 }
 
 #[cfg(all(test, bridgeforge_factory_tests))]

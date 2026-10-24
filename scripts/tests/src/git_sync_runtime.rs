@@ -154,10 +154,16 @@ fn real_cli_check_reuse_ignores_invocation_trace_but_binds_business_environment(
 
 #[test]
 fn real_cli_explicit_release_preview_and_execution() {
-    for policy in ["missing-file", "missing-field", "per_commit", "explicit_release", "rust-independent", "rust-additions"] {
+    for policy in ["missing-file", "missing-field", "per_commit", "explicit_release"] {
         real_cli_release_flow(policy);
     }
 }
+
+#[test]
+fn real_cli_explicit_release_rust_independent() { real_cli_release_flow("rust-independent"); }
+
+#[test]
+fn real_cli_explicit_release_rust_additions() { real_cli_release_flow("rust-additions"); }
 
 fn real_cli_release_flow(policy: &str) {
     let additions = policy == "rust-additions";
@@ -188,7 +194,8 @@ fn real_cli_release_flow(policy: &str) {
         let elapsed_ms = started.elapsed().as_millis();
         assert!(
             !output.timed_out && output.code == 0,
-            "{}",
+            "policy={policy}, command={args:?}, root={}: {}",
+            root.display(),
             String::from_utf8_lossy(&output.stderr)
         );
         let receipt = serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap();
@@ -218,6 +225,8 @@ fn real_cli_release_flow(policy: &str) {
         assert!(!root.join(".runtime").exists());
     }
     fs::write(root.join("VERSION"), b"1.0.0\n").unwrap();
+    fs::create_dir_all(root.join("src")).unwrap();
+    fs::write(root.join("src/lib.rs"), b"pub fn value() -> u32 { 1 }\n#[test] fn smoke(){assert_eq!(value(),1);}\n").unwrap();
     fs::write(
         root.join("Cargo.toml"),
         if policy == "rust-independent" {
@@ -315,7 +324,7 @@ fn real_cli_release_flow(policy: &str) {
     fs::write(root.join("business.txt"), b"feature\n").unwrap();
     let ordinary = call(&["git-sync", "--message", "feat: new capability"]);
     assert_eq!(ordinary["version_bumped"], false);
-    assert_eq!(ordinary["version_strategy"],if policy == "rust-independent" {"independent"} else {"synchronized"});
+    assert_eq!(ordinary["version_strategy"],"independent");
     assert_eq!(ordinary["release_requested"], false);
     assert_eq!(ordinary["release_policy"], "explicit_release");
     assert_eq!(ordinary["version_before"], "1.0.0");
@@ -339,6 +348,7 @@ fn real_cli_release_flow(policy: &str) {
     let index = fs::read(root.join(".git/index")).unwrap();
     let fetch = fs::read(root.join(".git/FETCH_HEAD")).unwrap();
     super::schema4_fixture::analyze(&cli,&root,"fix: release","minor",&[],&[]);
+    let policy_bytes = fs::read(&policy_path).ok();
     let preview = call(&["git-sync", "--release-preview", "--message", "fix: release", "--release-analysis-file", ".runtime/schema4-analysis.json"]);
     assert_eq!(preview["version_after"], "1.1.0");
     if policy == "rust-independent" {
@@ -378,7 +388,7 @@ fn real_cli_release_flow(policy: &str) {
     assert_eq!(fs::read(&record).ok(), record_bytes);
     let repeated = call(&["git-sync", "--release", "--message", "feat!: ignored"]);
     assert_eq!(repeated["version_bumped"], false);
-    assert_eq!(repeated["version_strategy"],if policy == "rust-independent" {"independent"} else {"synchronized"});
+    assert_eq!(repeated["version_strategy"],"independent");
     assert_eq!(repeated["commit"], released["commit"]);
     if additions {
         fs::write(root.join("new/src/lib.rs"), b"pub fn value() -> u32 { 8 }\n").unwrap();

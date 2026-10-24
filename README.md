@@ -36,11 +36,9 @@ $bridgeforge-codex
 
 ## 文档入口
 
-普通 `$git-sync` 只提交和同步；只有 `$git-sync release` 才自动升级版本并更新发布记录。
-旧项目缺少版本策略或保留 `per_commit` 时也遵守这条规则，先通过受管骨架升级取得新工具。
-用法与工具能力检查见 [git-sync Skill](skills/git-sync/SKILL.md)。
+普通 `$git-sync` 只提交和同步，不主动升版。已确认的新分工是：develop 完成且验证通过后升级受影响子包，程序自动判断是否进入 `1.0.0`；`$git-sync release` 核验子包均已收口，只升级主程序，并完整公告上次正式发布以来的子包版本变化。
 
-发布统一采用“主程序＋多语言包”：整体发布一次，只给实际受影响的包升版，未变包保留版本。复用 Rust/Python 适配器，骨架更新将旧配置的一次性历史分界纳入受管事务；普通同步不自动升版。配置、最终差异分析与证据接入见 [发布合同](doc/1_delivery/git-sync-release-rewrite/schema4-contract.md)。
+使用前核验受管 CLI 的开发收口、自动稳定与发布硬闸能力；旧能力标识不能证明支持新分工。`develop --preview/--apply` 管子包，`git-sync --release` 管主程序。规则与验证状态见[版本生命周期设计](doc/0_architecture/design/package-version-lifecycle.md)，配置和实际入口见[版本生命周期合同](skills/git-sync/references/schema4.md)；[旧 schema4 接入合同](doc/1_delivery/git-sync-release-rewrite/schema4-contract.md)仅保留历史参考。
 
 单项目长任务或多个已讨论任务需要托管时，在该项目的新对话中输入：
 
@@ -82,7 +80,7 @@ $refactor-scan 扫描当前项目，允许现有定向测试和离线性能基�
 
 - 根 `AGENTS.md`：公共区由产品更新；项目级专区逐字保留。
 - `.codex/hooks/`、`.codex/bin/bridgeforge-hook.exe` 与 `.codex/bin/bridgeforge.exe`：受管 Rust
-  源码与编译产物；`init`、`adopt`、`update` 及工厂 `$git-sync` 维护提交时构建，日常入口不启动脚本解释器。项目自有 Hook 继续使用
+  源码与编译产物；`init`、`adopt`、`update` 按需构建，工厂先按 [运行时准备](INSTALL.md#工厂本地运行时准备)维护当前产物，再检查能力或执行获授权的 `$git-sync`。日常入口不启动脚本解释器。项目自有 Hook 继续使用
   `.codex/hooks/project_*/` 扩展目录，不与受管 Rust 源码混写。
 - `.githooks/pre-commit`：执行提交前机器检查。
 - `doc/`：以 `doc/README.md` 为索引的六层文档结构，包含项目自有知识库。

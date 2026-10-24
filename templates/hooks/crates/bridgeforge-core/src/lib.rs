@@ -9,6 +9,7 @@ mod build_inputs;
 pub mod build_metrics;
 mod document_metadata;
 pub mod factory_version;
+pub mod factory_runtime;
 mod file_lock;
 mod generated_assets;
 pub mod git_sync;

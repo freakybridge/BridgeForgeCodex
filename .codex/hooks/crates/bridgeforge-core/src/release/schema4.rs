@@ -9,6 +9,7 @@ pub use environment::{EnvironmentGuard, PythonEnvironment};
 mod lineage;
 mod migration;
 mod plan;
+pub mod development;
 pub(super) use configuration::{load, parse, Baseline, Config};
 use inputs::{capture, Capture};
 pub use migration::{configuration_apply, configuration_plan, migration_apply, migration_plan};

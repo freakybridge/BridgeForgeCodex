@@ -443,7 +443,7 @@ fn hook_topic4_batch_probe() {
             diagnostics = String::from_utf8_lossy(&result.stderr)
                 .matches("cannot read AGENTS.md")
                 .count();
-            assert!(diagnostics > 0);
+            assert_eq!(diagnostics, 0);
         }
         elapsed.sort();
         println!(
@@ -464,7 +464,7 @@ fn hook_topic4_native_patch_reports_smell_once_and_map_failure_without_rollback(
     assert_eq!(result.code, 1);
     let err = String::from_utf8_lossy(&result.stderr);
     assert!(err.contains("project-map dirty marker"));
-    assert_eq!(err.matches("cannot read AGENTS.md").count(), 1);
+    assert_eq!(err.matches("cannot read AGENTS.md").count(), 0);
     let out: Value = serde_json::from_slice(&result.stdout).unwrap();
     let context = out["hookSpecificOutput"]["additionalContext"]
         .as_str()

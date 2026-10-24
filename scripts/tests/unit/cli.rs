@@ -2,6 +2,21 @@ use super::*;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[test]
+fn development_capabilities_and_mutation_flags_are_explicit() {
+    let identity=self_test().receipt.unwrap();
+    for capability in ["package-development-v1","package-stability-v1","git-sync-development-closure-v1"] {
+        assert!(identity["capabilities"].as_array().unwrap().iter().any(|v|v==capability));
+    }
+    for flags in [vec!["--apply","--dry-run"],vec!["--recover","--check"],vec!["--preview","--apply"],vec![]] {
+        let mut args=vec!["develop".into()];
+        args.extend(flags.into_iter().map(String::from));
+        let result=run(&args);
+        assert_eq!(result.code,EXIT_BLOCKED);
+        assert!(result.stderr.contains("choose exactly one"),"{}",result.stderr);
+    }
+}
+
+#[test]
 fn todo_contract_query_is_read_only_and_invalid_table_blocks_archive() {
     let root = std::env::temp_dir().join(format!(
         "bf-cli-todo-{}-{}",

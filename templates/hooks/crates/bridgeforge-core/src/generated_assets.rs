@@ -30,6 +30,22 @@ fn json_contains(actual: &Value, expected: &Value) -> bool {
     }
 }
 
+/// Receipt, bytes and live self-test must all agree before an installed hit.
+pub(crate) fn installed_current(root: &Path, asset: &Value, binary: &Path, runner: &dyn ProcessRunner) -> bool {
+    if crate::baseline::verify_generated(root, asset).is_err() { return false; }
+    let Some(args) = asset["self_test"]["args"].as_array().and_then(|args| args.iter()
+        .map(|arg| arg.as_str().map(OsString::from)).collect::<Option<Vec<_>>>()) else { return false; };
+    let mut request = ProcessRequest::new(binary.as_os_str(), root);
+    request.args = args;
+    request.timeout = Duration::from_secs(60);
+    let Ok(output) = runner.run(&request) else { return false; };
+    let Ok(actual) = serde_json::from_slice::<Value>(&output.stdout) else { return false; };
+    !output.timed_out && output.code == 0
+        && asset["self_test"]["expected_json"].is_object()
+        && json_contains(&actual, &asset["self_test"]["expected_json"])
+        && crate::baseline::verify_generated(root, asset).is_ok()
+}
+
 pub(crate) fn generated_writes(
     source_base: &Path,
     source_key: &str,

@@ -10,25 +10,6 @@ use crate::util::{
     tool_name,
 };
 
-const WRITE_VERBS: &[&str] = &[
-    "set-content",
-    "add-content",
-    "out-file",
-    "tee-object",
-    "tee",
-    "new-item",
-    "copy-item",
-    "move-item",
-    "rename-item",
-    "remove-item",
-    "del",
-    "erase",
-    "rm",
-    "mv",
-    "move",
-    "cp",
-    "copy",
-];
 
 fn command(payload: &Value) -> String {
     tool_input(payload)
@@ -36,13 +17,6 @@ fn command(payload: &Value) -> String {
         .unwrap_or_default()
 }
 
-fn command_has_write_verb(command: &str) -> bool {
-    let lower = command.to_lowercase();
-    WRITE_VERBS.iter().any(|verb| {
-        let pattern = format!(r"(?i)(^|[\s|;&]){}(?:\.exe)?\b", regex::escape(verb));
-        Regex::new(&pattern).is_ok_and(|re| re.is_match(&lower))
-    })
-}
 
 fn contains_single_pipe(command: &str) -> bool {
     let bytes = command.as_bytes();
@@ -53,30 +27,6 @@ fn contains_single_pipe(command: &str) -> bool {
     })
 }
 
-fn absolute_paths(command: &str) -> Vec<String> {
-    let re = Regex::new(
-        r#"(?i)(?:['\"](?P<quoted>[A-Z]:[\\/][^'\"]+)['\"]|(?P<bare>[A-Z]:[\\/][^\s|;&<>]+))"#,
-    )
-    .unwrap();
-    let mut result = Vec::new();
-    for captures in re.captures_iter(command) {
-        if let Some(value) = captures.name("quoted").or_else(|| captures.name("bare")) {
-            if !result.iter().any(|item| item == value.as_str()) {
-                result.push(value.as_str().to_string());
-            }
-        }
-    }
-    result
-}
-
-fn redirection_paths(command: &str) -> Vec<String> {
-    let re =
-        Regex::new(r#"(?i)(?:^|[^<>=])>{1,2}\s*['\"]?(?P<path>[A-Z]:[\\/][^'\"\s|;&<>]+)['\"]?"#)
-            .unwrap();
-    re.captures_iter(command)
-        .filter_map(|item| item.name("path").map(|value| value.as_str().to_string()))
-        .collect()
-}
 
 pub fn git_add_all(payload: &Value) -> StepResult {
     git_add_all_with_runner(payload, &repo_root(), &SystemProcessRunner)
@@ -88,8 +38,8 @@ pub fn git_add_all_with_runner(
     runner: &dyn ProcessRunner,
 ) -> StepResult {
     let command = command(payload);
-    let git_add = Regex::new(r"(?i)\bgit\b[^&|;]*\sadd\b(?P<args>[^&|;]*)").unwrap();
-    let bulk = git_add.captures_iter(&command).any(|capture| {
+    static GIT_ADD: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| Regex::new(r"(?i)\bgit\b[^&|;]*\sadd\b(?P<args>[^&|;]*)").unwrap());
+    let bulk = GIT_ADD.captures_iter(&command).any(|capture| {
         capture.name("args").is_some_and(|args| {
             args.as_str().split_whitespace().any(|part| {
                 let part = part.trim_matches(['\'', '"']).replace('\\', "/");
@@ -245,30 +195,17 @@ pub fn cross_project_write(payload: &Value) -> StepResult {
         outside(&root, &raw).map(|path| (format!("{name} outside project root"), path))
     } else if tool_kind(&name) == Some(ToolKind::Shell) {
         let command = command(payload);
-        let dangerous_git = Regex::new(r#"(?i)\bgit\b(?P<opts>[^&|;]*?-C\s+(?P<path>"[^"]+"|'[^']+'|\S+)[^&|;]*?)\s+(?P<sub>add|commit|restore|reset|push|checkout|merge|cherry-pick|clean|branch|tag|update-ref|stash)\b"#).unwrap();
-        if let Some(captures) = dangerous_git.captures(&command) {
-            let raw = captures.name("path").unwrap().as_str();
-            outside(&root, raw).map(|path| {
-                (
-                    format!(
-                        "external git {}",
-                        captures.name("sub").unwrap().as_str().to_lowercase()
-                    ),
-                    path,
-                )
-            })
-        } else if let Some(raw) = redirection_paths(&command)
-            .into_iter()
-            .find_map(|raw| outside(&root, &raw))
-        {
-            Some(("external shell redirection".into(), raw))
-        } else if command_has_write_verb(&command) {
-            absolute_paths(&command)
-                .into_iter()
-                .find_map(|raw| outside(&root, &raw))
-                .map(|path| ("external shell write/delete/move".into(), path))
-        } else {
-            None
+        let cwd = crate::util::command_directory(payload, &root);
+        match crate::shell::write_targets(&command, &cwd, crate::shell::dialect(payload)) {
+            Ok(targets) => targets.into_iter().find(|path| !path_is_inside(&root, path))
+                .map(|path| ("external shell write/delete/move".into(), path)),
+            Err(error) => {
+                let protected = user_config_write(payload);
+                if protected.code != 0 { return protected; }
+                return StepResult::blocked(format!(
+                    "[cross-project-write-guard] BLOCKED: cannot resolve supported write command: {error}. Split the operation into direct commands with literal paths and an explicit tool working directory.\n"
+                ));
+            },
         }
     } else {
         None
@@ -308,13 +245,12 @@ pub fn user_config_write(payload: &Value) -> StepResult {
         !target.is_empty() && is_target(&target)
     } else if tool_kind(&name) == Some(ToolKind::Shell) {
         let command = command(payload);
-        let symbolic = Regex::new(r"(?i)(?:~|\$HOME|\$\{HOME\}|\$env:(?:USERPROFILE|HOME)|%(?:USERPROFILE|HOME)%)[\\/]\.codex[\\/]config\.toml").unwrap().is_match(&command);
-        (symbolic
-            || absolute_paths(&command).iter().any(|item| is_target(item))
-            || redirection_paths(&command)
-                .iter()
-                .any(|item| is_target(item)))
-            && (command_has_write_verb(&command) || command.contains('>'))
+        let cwd = crate::util::command_directory(payload, &repo_root());
+        match crate::shell::write_targets(&command, &cwd, crate::shell::dialect(payload)) {
+            Ok(targets) => targets.iter().any(|path| is_target(&path.to_string_lossy())),
+            // The preceding cross-project guard reports opaque write operands.
+            Err(error) => error.strip_prefix("unresolved path operand: ").is_some_and(is_target),
+        }
     } else {
         false
     };

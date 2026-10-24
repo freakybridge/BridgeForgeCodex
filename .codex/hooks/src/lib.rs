@@ -2,6 +2,7 @@ mod guards;
 mod post;
 mod project_map;
 mod session;
+mod shell;
 mod util;
 
 pub use guards::git_add_all_with_runner;
@@ -281,10 +282,12 @@ fn post_edit(payload: &Value) -> i32 {
             first = step.code;
         }
     }
-    let step = post::instruction_source(payload);
-    output.absorb(&step);
-    if step.code != 0 {
-        return output.finish("PostToolUse", step.code);
+    if post::edit_requires_instruction_check(&virtuals) {
+        let step = post::instruction_source(payload);
+        output.absorb(&step);
+        if step.code != 0 {
+            return output.finish("PostToolUse", step.code);
+        }
     }
     for edit in &virtuals {
         let handlers: [fn(&Value) -> StepResult; 4] = [

@@ -56,6 +56,12 @@ fn self_test() -> CommandOutcome {
         "capabilities": ["git-sync-explicit-release-v1", "git-sync-prepared-release-v1", "git-sync-release-only-v1", "git-sync-release-readiness-v1", "git-sync-direct-release-v1", "git-sync-timing-v1", "git-sync-setup-v1", "git-sync-analysis-reuse-v1", "git-sync-package-lifecycle-v1", "user-cli-reuse-v1", "project-sync-build-reuse-v1", "git-sync-preflight-v1", "git-sync-phase-timing-v1", "public-artifacts-v1"]
     }));
     if let Some(capabilities)=outcome.receipt.as_mut().and_then(|r|r["capabilities"].as_array_mut()){capabilities.push(json!("git-sync-schema4-v1"));capabilities.push(json!("git-sync-product-packages-v1"));capabilities.push(json!("git-sync-baseline-repair-v1"));}
+    if let Some(capabilities) = outcome.receipt.as_mut().and_then(|r| r["capabilities"].as_array_mut()) {
+        capabilities.push(json!("factory-runtime-prepare-v1"));
+        capabilities.push(json!("package-development-v1"));
+        capabilities.push(json!("package-stability-v1"));
+        capabilities.push(json!("git-sync-development-closure-v1"));
+    }
     outcome
 }
 
@@ -814,6 +820,18 @@ fn run(args: &[String]) -> CommandOutcome {
             }
         }
         "git-sync" => git_sync(args),
+        "develop" => {
+            let root=value(args,"--root").map(PathBuf::from);
+            let context=match ProjectContext::discover(root.as_deref()) { Ok(c)=>c,Err(e)=>return blocked("develop",e) };
+            if ["--preview","--apply","--recover"].iter().filter(|f|has(args,f)).count()!=1
+                || ((has(args,"--apply") || has(args,"--recover")) && (has(args,"--check") || has(args,"--dry-run"))) {
+                return blocked("develop","choose exactly one of --preview, --apply, --recover; preview flags cannot authorize writes");
+            }
+            let request=bridgeforge_core::release::schema4::Request{analysis_file:value(args,"--analysis-file").map(PathBuf::from)};
+            if has(args,"--recover") { bridgeforge_core::release::schema4::development::recover(context.root()) }
+            else if has(args,"--apply") { bridgeforge_core::release::schema4::development::apply(context.root(),&request,&value(args,"--fingerprint").unwrap_or_default(),&SystemProcessRunner) }
+            else { bridgeforge_core::release::schema4::development::preview(context.root(),&request,&SystemProcessRunner) }
+        }
         "memory-sync" => memory_commands::memory_sync(&args[1..]),
         "manifest" => match ProjectContext::discover(value(args, "--root").as_deref().map(Path::new)) {
             Ok(context) => match bridgeforge_core::manifest::rebuild(context.root(), has(args, "--check")) {
@@ -828,6 +846,13 @@ fn run(args: &[String]) -> CommandOutcome {
                 Ok(value) => value,
                 Err(error) => return blocked("build-assets", error),
             };
+            if has(args, "--factory") {
+                return bridgeforge_core::factory_runtime::prepare(&project,
+                    has(args, "--check") || has(args, "--dry-run"), &SystemProcessRunner);
+            }
+            if has(args, "--check") || has(args, "--dry-run") {
+                return blocked("build-assets", "read-only inspection requires --factory; no build performed");
+            }
             let contract_path = project.join(".codex/managed-skeleton.json");
             let contract: Value = match fs::read(&contract_path)
                 .map_err(|error| error.to_string())
@@ -848,7 +873,7 @@ fn run(args: &[String]) -> CommandOutcome {
         "batch" => batch(&args[1..]),
         _ => CommandOutcome {
             code: EXIT_BLOCKED,
-            stderr: "usage: bridgeforge <self-test|doctor|check|archive-scan|audit-user-allow|project-sync|public-artifacts|project-hook-migration|git-sync|memory-sync|manifest|build-assets|batch>\n".into(),
+            stderr: "usage: bridgeforge <self-test|doctor|check|archive-scan|audit-user-allow|project-sync|public-artifacts|project-hook-migration|develop|git-sync|memory-sync|manifest|build-assets|batch>\n".into(),
             ..CommandOutcome::default()
         },
     }

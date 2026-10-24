@@ -470,6 +470,8 @@ fn explicit_release_rejected_hook_restores_native_versions_log_and_index() {
         fs::write(cfg_path, serde_json::to_vec(&cfg).unwrap()).unwrap();
     }
     fs::write(repo.0.join("tracked.txt"), b"uncommitted feature\n").unwrap();
+    // Package closure is a completed development transaction, outside release rollback.
+    let release_request = crate::release::schema4::fixture::analysis(&repo.0,&SystemProcessRunner,"patch",&[]).unwrap();
     fs::write(repo.0.join(".git/hooks/pre-commit"), b"#!/bin/sh\nexit 1\n").unwrap();
     git_ok(&repo.0, &["status", "--porcelain=v1"]);
     let index = fs::read(repo.0.join(".git/index")).unwrap();
@@ -481,6 +483,7 @@ fn explicit_release_rejected_hook_restores_native_versions_log_and_index() {
         &SystemProcessRunner,
         GitSyncOptions {
             release: true,
+            release_request,
             message: Some("feat: new feature".into()),
             ..Default::default()
         },

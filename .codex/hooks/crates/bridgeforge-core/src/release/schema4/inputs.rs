@@ -23,6 +23,22 @@ pub(super) struct Capture {
     pub validation_fingerprint: String,
     pub product_version: String,
     pub environment_guard: Option<EnvironmentGuard>,
+    pub environment: String,
+    pub modes: BTreeMap<String,String>,
+}
+
+pub(super) fn modes(root: &Path,runner: &dyn ProcessRunner) -> Result<BTreeMap<String,String>,String> {
+    let mut result=BTreeMap::new();
+    for entry in history::git(root,runner,&["ls-tree","-r","-z","HEAD"])?.split('\0').filter(|s|!s.is_empty()) {
+        let (metadata,path)=entry.split_once('\t').ok_or("malformed file mode tree")?;
+        result.insert(path.into(),metadata.split_whitespace().next().ok_or("missing file mode")?.into());
+    }
+    let raw=history::git(root,runner,&["diff","--raw","--no-renames","-z","HEAD","--"])?;
+    let entries=raw.split('\0').filter(|s|!s.is_empty()).collect::<Vec<_>>();
+    if entries.len()%2!=0 { return Err("malformed file mode diff".into()); }
+    for entry in entries.chunks_exact(2) { result.insert(entry[1].into(),entry[0].split_whitespace().nth(1).ok_or("missing diff mode")?.into()); }
+    result.remove(development::RECORD);
+    Ok(result)
 }
 
 // --name-only can report stat-only candidates when inspection disables index
@@ -115,7 +131,7 @@ fn validation_fingerprint(
             tree.remove(&relative);
             continue;
         };
-        if cfg.record_inputs.contains(&relative)
+        if relative == development::RECORD || cfg.record_inputs.contains(&relative)
             || matches!(relative.as_str(), "VERSION" | "CHANGELOG.md")
         {
             continue;
@@ -143,10 +159,10 @@ fn validation_fingerprint(
         tree.insert(relative, (mode, oid));
     }
     tree.retain(|path, _| {
-        !cfg.record_inputs.contains(path) && !matches!(path.as_str(), "VERSION" | "CHANGELOG.md")
+        path != development::RECORD && !cfg.record_inputs.contains(path) && !matches!(path.as_str(), "VERSION" | "CHANGELOG.md")
     });
     extras.retain(|path, _| {
-        !cfg.record_inputs.contains(path) && !matches!(path.as_str(), "VERSION" | "CHANGELOG.md")
+        path != development::RECORD && !cfg.record_inputs.contains(path) && !matches!(path.as_str(), "VERSION" | "CHANGELOG.md")
     });
     Ok(digest(
         &serde_json::to_vec(
@@ -156,7 +172,7 @@ fn validation_fingerprint(
     ))
 }
 
-fn environment(
+pub(super) fn environment(
     root: &Path,
     cfg: &Config,
     guard: Option<&EnvironmentGuard>,
@@ -242,7 +258,7 @@ fn capture_with_reader(
             return Err(format!("{id}: retired identity cannot be reused"));
         }
         if let Some(old) = baseline.packages.get(id) {
-            if old.version != p.version {
+            if old.version != p.version && !development::version_recorded(root, id, &p.version)? {
                 return Err(format!("{id}: version changed outside managed release"));
             }
         } else if revision_payload(root, &boundary, &p.manifest, runner)?.is_some()
@@ -368,7 +384,7 @@ fn capture_with_reader(
                 "global build role cannot suppress package source/manifest change: {path}"
             ));
         }
-        let (role, owners) = if cfg.record_inputs.contains(&path) {
+        let (role, owners) = if path == development::RECORD || cfg.record_inputs.contains(&path) {
             ("record", vec![])
         } else if lock(cfg, &path) || build_role {
             ("build", vec![])
@@ -432,7 +448,7 @@ fn capture_with_reader(
         }
         inputs.insert(path, Some(bytes));
     }
-    for path in [CONFIG, "VERSION", "CHANGELOG.md"]
+    for path in [CONFIG, "VERSION", "CHANGELOG.md", development::RECORD]
         .into_iter()
         .chain(cfg.product_manifests.iter().map(String::as_str))
     {
@@ -469,6 +485,7 @@ fn capture_with_reader(
         return Err("repository changed during schema 4 input capture".into());
     }
     Ok(Capture {
+        modes: if current.packages.is_empty() && baseline.packages.is_empty() { BTreeMap::new() } else { self::modes(root,runner)? },
         product_version: fs::read_to_string(root.join("VERSION"))
             .map_err(|e| e.to_string())?
             .trim()
@@ -484,5 +501,6 @@ fn capture_with_reader(
         fingerprint,
         validation_fingerprint,
         environment_guard,
+        environment,
     })
 }

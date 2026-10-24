@@ -352,8 +352,12 @@ impl RepositoryIdentity {
     }
 }
 
-struct SyncLock {
+pub(crate) struct SyncLock {
     _guard: crate::file_lock::FileLock,
+}
+
+pub(crate) fn lock_factory_runtime(root: &Path, runner: &dyn ProcessRunner) -> Result<SyncLock, String> {
+    SyncLock::acquire(&Git { root, runner })
 }
 
 impl SyncLock {
@@ -504,6 +508,9 @@ fn sync_impl(
         Ok(value) => value,
         Err(error) => return blocked(error),
     };
+    if let Err(error) = crate::release::schema4::development::require_completed_transaction(root) {
+        return blocked(error);
+    }
     if let Err(error) = check_release_commit_guard(&git) {
         return blocked(error);
     }

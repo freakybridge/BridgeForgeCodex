@@ -1,4 +1,4 @@
-use crate::{ProcessRequest, ProcessRunner};
+use crate::ProcessRunner;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Component, Path, PathBuf};
@@ -187,7 +187,7 @@ impl WritePlan {
             plan.before.insert(binary.clone(), read_optional(&binary)?);
             plan.before
                 .insert(receipt.clone(), read_optional(&receipt)?);
-            if reusable_generated(root, asset, &binary, runner) {
+            if crate::generated_assets::installed_current(root, asset, &binary, runner) {
                 plan.generated_reused += 1;
             } else {
                 if !cache_attempted {
@@ -305,47 +305,6 @@ impl WritePlan {
         }
         Ok(())
     }
-}
-
-fn reusable_generated(
-    root: &Path,
-    asset: &serde_json::Value,
-    binary: &Path,
-    runner: &dyn ProcessRunner,
-) -> bool {
-    // The prospective contract binds the exact source tree, lock, recipe and
-    // self-test. A receipt alone never establishes a hit without the binary hash.
-    if crate::baseline::verify_generated(root, asset).is_err() {
-        return false;
-    }
-    let Some(args) = asset["self_test"]["args"].as_array() else {
-        return false;
-    };
-    let Some(args) = args
-        .iter()
-        .map(|arg| arg.as_str().map(std::ffi::OsString::from))
-        .collect::<Option<Vec<_>>>()
-    else {
-        return false;
-    };
-    let mut request = ProcessRequest::new(binary.as_os_str(), root);
-    request.args = args;
-    request.timeout = std::time::Duration::from_secs(60);
-    let Ok(output) = runner.run(&request) else {
-        return false;
-    };
-    let Ok(actual) = serde_json::from_slice::<serde_json::Value>(&output.stdout) else {
-        return false;
-    };
-    let Some(expected) = asset["self_test"]["expected_json"].as_object() else {
-        return false;
-    };
-    !output.timed_out
-        && output.code == 0
-        && expected
-            .iter()
-            .all(|(key, value)| actual.get(key) == Some(value))
-        && crate::baseline::verify_generated(root, asset).is_ok()
 }
 
 fn read_optional(path: &Path) -> Result<Option<Vec<u8>>, String> {

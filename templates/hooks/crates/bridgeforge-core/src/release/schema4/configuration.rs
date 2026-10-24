@@ -38,6 +38,7 @@ pub(in crate::release) struct Config {
     pub check_scopes: BTreeMap<String, Vec<String>>,
     pub product_manifests: Vec<String>,
     pub python_environment: Option<PythonEnvironment>,
+    pub development: BTreeMap<String, development::Policy>,
 }
 
 pub(super) fn configuration_hash(value: &Value) -> Result<String, String> {
@@ -116,6 +117,10 @@ pub(in crate::release) fn parse(payload: &[u8]) -> Result<Option<Config>, String
         }
     }
     let current_model = value["release_model"] == "product-packages";
+    let development = value.get("development").cloned()
+        .map(serde_json::from_value::<BTreeMap<String, development::Policy>>)
+        .transpose().map_err(|e| format!("invalid development policy: {e}"))?.unwrap_or_default();
+    for (id, policy) in &development { policy.validate(id)?; }
     if value.get("release_model").is_some() && !current_model {
         return Err("unsupported release_model".into());
     }
@@ -207,6 +212,7 @@ pub(in crate::release) fn parse(payload: &[u8]) -> Result<Option<Config>, String
         "product_manifests",
         "release_model",
         "python_environment",
+        "development",
     ] {
         object.remove(key);
     }
@@ -265,6 +271,7 @@ pub(in crate::release) fn parse(payload: &[u8]) -> Result<Option<Config>, String
         check_scopes,
         product_manifests,
         python_environment,
+        development,
     }))
 }
 

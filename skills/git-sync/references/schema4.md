@@ -1,54 +1,103 @@
-# schema 4 发布分析
+# 子包开发收口与主程序发布合同
 
-## 输入与分析
+> 运行前检查 CLI `self-test --json`：开发需要 `package-development-v1` / `package-stability-v1`，发布需要 `git-sync-development-closure-v1`。仅有旧 `git-sync-product-packages-v1` 不足以支持本合同。实现与验证状态见项目需求卡；禁止手写认证记录或用旧发布流程冒充。
 
-先运行不带分析的 `--release-preview`，读取 fingerprint、changes、affected_packages、各包现版本和 required_checks。按最后正式发布与当前最终内容审阅实际差异；Git 标题只用于提交说明，不作为全包统一判级依据。
+本文是 develop / git-sync 共用的版本判级、稳定条件和证据规则事实源；Skill 只负责各自阶段的编排。普通同步始终不主动升版。
 
-本 reference 继承根 Skill 的调用级一次确认上限和执行环境合同，不重新开启确认轮次。最终无分析预览、完整分析生成、带分析预览与实际发布在同一宿主进程、最终权限/沙箱、账户、环境及工具链上下文中连续完成；跨进程的前置调查仅供语义审阅，最终段须核对当前实际差异与已审阅事实一致。若中途提权、进程中断或环境变化，旧分析作废，整段重新预览并生成完整分析。不得只改旧 fingerprint、复用失效验证声明或通过修改 TEMP/TMP/LOCALAPPDATA 等变量伪装环境。
+## 1. 版本对象与来源
 
-在项目忽略的 `.runtime/release-analysis.json` 保存：
+- 根 `VERSION` 表达主程序整体发布；`product_manifests` 是它的原生载体，不是独立子包。
+- 所有项目自有子包须登记稳定 id、原生包名、语言、输入归属和唯一版本来源；普通目录不自动视为包，第三方依赖和骨架工具不登记为项目业务子包。不新增全仓库漏登记扫描硬闸，已有归属检查不放宽。
+- 子包允许版本不同。已有 Rust/Python 适配边界保留，其他语言不能仅靠文档宣称自动支持。
+- 语义版本采用 MAJOR.MINOR.PATCH，高位递增时低位归零；已发布版本不得覆盖、复用、倒退。Python 特殊版本保留 PEP 440 原生语义；不支持自动计算的格式必须由适配器明确处理，不猜测转换。
+- 无既有历史的新包可从 `0.1.0` 开始；既有包保留自身合法版本，不统一重置。根 VERSION 的稳定阶段策略沿用项目主程序合同，本轮新增自动转稳定版只针对子包。
+
+## 2. 两个比较基线
+
+| 阶段 | 比较范围 | 写入责任 |
+|---|---|---|
+| develop 收口 | 每个包上次有效开发收口与当前最终内容；首次接入以可证明的已发布基线衔接 | 受影响子包版本、相关原生依赖/锁、受管收口记录 |
+| release | 最后正式发布与当前最终状态，包含已提交、暂存、未暂存和未忽略新文件 | 主程序 VERSION 及原生载体、主程序相关锁、正式发布记录与基线 |
+
+同一内容重复收口不重复升版；有新改动才重新判级。无包变化不为凑流程升版，达到稳定条件也不绕过重复收口保护。收口比较和正式发布比较不能共用一个不断前移的基线，以免吞掉尚未发布的累计变化。
+
+例如行情包在两次 develop 中由 `0.3.0 → 0.3.1 → 0.4.0`，release 保持 `0.4.0`，公告累计 `0.3.0 → 0.4.0`；中间子包版本不等同于一次正式产品发布。移除包记录退役，不制造新版本；新增包明确“新增 → 当前版本”。
+
+## 3. 子包判级与自动稳定
+
+| 实际变化 | 0.x 子包 | 1.0.0 及以上子包 |
+|---|---|---|
+| 兼容修复，或确需收口的内部调整 | patch | patch |
+| 兼容新增功能或公开接口弃用 | minor | minor |
+| 不兼容的接口、数据、配置或使用要求变化 | minor | major |
+| 无实际变化 | 不升版 | 不升版 |
+
+按实际公开合同逐包判断，不从提交标题统一判级。依赖包升版不自动带升调用方；调用方有效依赖要求、源码或转发的公开合同确有变化时才纳入自身分析。兼容性未知时停止依赖该结论的收口，不伪造 compatible。数字级别与兼容性分别记录：0.x 的 minor 也可能 breaking，不得据此省略影响说明和适用的不兼容接受。
+
+程序在有实际子包改动的 develop 收口中检查以下条件，全部成立才自动选择 `1.0.0`，不逐包索取转稳定版批准：
+
+1. 对外接口、配置或数据合同有明确可核对的基线。
+2. 已配置非空稳定验收清单，覆盖核心功能以及真实调用方或使用场景的集成检查。
+3. 清单中的必需证据全部有效通过，并对应当前源码、依赖、配置及必要运行环境；缺失、失败、跳过、未知或过期均不算通过。
+4. 本次相对该包上次有效收口没有不兼容变化。
+
+条件不足则按 0.x 规则收口，并报告未满足的稳定条件；其中“稳定检查未满足”不能伪装成“普通开发必需验证已通过”。若普通开发必需检查失败，仍不得完成子包收口。程序执行明确的验收标准，不声称有限检查能证明软件没有 Bug，不用开发时长、发布次数或版本到了 0.9 代替证据。
+
+## 4. develop 收口与证据
+
+已授权的开发按影响范围完成必要验证后，由受管入口完成子包升版；不修改主程序 VERSION，不暂存、提交或推送。验证记录必须来自真实执行，字段、指纹、范围、产物路径和内容摘要可核对；不能用 Agent 的 passed 声明或旧 prepared 记录代替真实证据。
+
+相关源码、依赖、配置或必要环境改变时，只失效受影响的证据。普通暂存、提交或与该包无关的文档变化不应使所有包无条件重测；如何证明仍适用由机器合同实现，不手改旧指纹。
+
+版本、原生依赖/锁与收口记录须一致提交到本地事务；中断或失败不得留下半套已认证状态。版本写入若影响编译产物、依赖解析或测试结果，须按实际影响构建并核验最终候选；交付产物必须对应最终版本。不得把升版前的二进制直接标记为最终交付。
+
+包改名、移动、移除、拆分、合并保留显式身份与历史，不复用退役 id。稳定基线、收口状态和版本生命周期须一起校验，不能通过改名重置约束。
+
+## 5. release 核验与公告
+
+release 不替代 develop。对本次受影响的注册包核验：当前版本和相关输入已被有效收口覆盖；收口后再改源码、依赖或相关配置，须回到 develop 补验和收口。缺口时停止发布，列出包、原因和完成验证/升版的动作，不在发布中自动补做开发，也不降级成普通同步掩盖失败。
+
+release 依据正式发布以来的累计实际影响判定主程序目标；不能只看最后一次 develop 或只比较版本数字。主程序遵守自身版本合同，所选级别须反映累计兼容性影响。已明确接受且仍适用的不兼容决定直接复用，不反复逐包询问。
+
+发布事务只升主程序和对应原生载体，不再次修改独立子包版本。依赖/锁同步不得引入未经开发收口覆盖的独立包变化；若发现这种变化，报告缺口并停止。无正式发布变化为 no-op。
+
+成功后完整展示“对象 / 旧版本 / 新版本 / 原因”：主程序以及自上次正式发布以来所有发生版本变化的子包，不能受代码效果摘要的三条上限限制。未变包可只汇总数量；新增、退役分别说明。失败只能展示计划或实际中间状态，不能宣布计划版本已发布。
+
+普通 git-sync 不因缺少子包收口记录而阻断，不主动升版；仍保留既有 Git、编码、配置等安全检查。若 develop 中断留下未完成写事务，必须先 `develop --recover`，以免同步半完成版本；普通同步不自动恢复事务。
+
+## 6. 机器入口与配置
+
+schema 4 保留 `release_model=product-packages`、原生适配和不可移动的发布基线。通过已有 `git-sync --migration-plan/--migration-apply --setup-config-file ...` 配置提案登记 `development`，不在提案中填写 `baseline`。已有 schema 4 只补项目自己的检查合同，不重新切分历史，不认证未发布内容。配置提案必须按项目实际入口填写；骨架升级不猜造业务检查。
+
+`development` 以包的稳定 id 为键；每包必须有非空 `checks`。检查使用 `program`、`args`、可选 `timeout_seconds`（默认 300，范围 1–14400）、`inputs`（包输入之外的验证脚本、夹具或验收数据）和 `artifacts`（需核验的最终产物路径）。必要验证输入必须纳入包归属或 checks.inputs；受 Git 跟踪的产物须声明为 build_inputs。`stability` 可选，包含非空 `contracts` 文件列表与 `checks`；稳定检查至少分别声明 `kind=core` 和 `kind=integration`，后者必须是实际调用方或使用场景。命令从项目根执行，退出码 0 且未超时才通过，缺失输入或产物不算通过。Python 仍须配置 `python_environment` 的解释器、运行时及依赖目录。
 
 ```json
 {
-  "schema": 1,
-  "fingerprint": "<输入预览返回的完整值>",
-  "product": {"level": "minor", "reason": "本次程序新增兼容功能", "compatibility": "compatible"},
-  "packages": {
-    "stable-package-id": {"level": "patch", "reason": "该包仅修复自身行为", "compatibility": "compatible"}
-  },
-  "targets": {},
-  "checks": []
+  "development": {
+    "example": {
+      "checks": [{"id":"unit","program":"cargo","args":["test","--locked","-p","example"]}],
+      "stability": {
+        "contracts": ["doc/0_architecture/example-api.md"],
+        "checks": [
+          {"id":"core","kind":"core","program":"cargo","args":["test","--locked","-p","example","--test","core"]},
+          {"id":"caller","kind":"integration","program":"cargo","args":["test","--locked","-p","example-caller","--test","integration"]}
+        ]
+      }
+    }
+  }
 }
 ```
 
-仅列实际受影响的包；移除包仍须分析影响，但不生成虚假新版本。若带分析预览指出调用方有效依赖要求必须改变，审阅该实际变化并补上调用方分析。不能仅因存在依赖边就主动带升所有包。
+1. 运行 `.codex/bin/bridgeforge develop --preview`，读取 `affected_packages` 与 `fingerprint`；`nothing-to-close` 不写入。
+2. 核对实际 diff、接口与用户决定，在忽略的 `.runtime/develop-analysis.json` 保存 `{schema:1,fingerprint,packages:{id:{level,reason,compatibility,acceptance?}},targets?,interface_impacts?}`。开发分析不含 product。breaking 的 acceptance 绑定本次 fingerprint、scope、reason、source；复用已有适用授权，不重问。
+3. 运行 `develop --preview --analysis-file .runtime/develop-analysis.json`，取得 `development-planned`。计划展示候选版本及稳定缺口；候选 1.0.0 尚须最终版本检查。
+4. 运行 `develop --apply --analysis-file .runtime/develop-analysis.json --fingerprint <计划指纹>`。工具写入候选原生版本/依赖/锁并执行配置检查，再写受管 `.codex/package-closures.json`。稳定检查失败只让相应包回到 0.x 候选，并重新验证最终依赖图；普通必需检查失败回滚版本写入。实际结果以 `development-closed` 的 `package_changes` 为准。
+5. 中断遗留 `.runtime/bridgeforge-codex/develop-transaction.json` 时使用 `develop --recover`。恢复绑定当前 checkout 和 HEAD，遇到外部修改保留冲突并停止；不覆盖外部编辑。开发与 Git 同步共用互斥锁。
 
-调用方文件及依赖要求没改，但转发接口确有变化时，另提供 `interface_impacts`，例如 `{"caller-id":{"dependencies":["changed-dependency-id"],"reason":"转发的公开类型新增方法"}}`。同时提供调用方自己的 packages 判级；CLI 核对基线/当前依赖和本次实际变化，允许已说明的转发链，不自动传播。无相关变化、无依赖或无理由的声明拒绝；纯版本目标不能充当接口变化的起因。语义影响仍须 Agent 根据真实公开合同判断。
+收口记录是随代码保存的追加历史，含版本、内容/环境/依赖指纹、检查命令和输出摘要、最终产物摘要及接受依据。纯证据失效只重新验证，不重复升版。正式发布仍用 `--release-preview` / `--release-analysis-file` / `--release`；分析只含 product 和可选 `targets.product`，子包级别与理由从收口历史累计读取。已有 `required_checks` / `check_scopes` 继续校验主程序及受影响子包的必需证据，不替代 develop 的实际检查，也不在 release 自动执行 develop。
 
-level 为 patch/minor/major；程序级别覆盖最高实际影响。修复、重构、注释、格式、文档一般 patch，兼容功能 minor，不兼容接口/数据/使用要求 major；说明必须与事实一致。源码差异不能自动证明语义兼容；不确定使用 unknown 并停止，不伪造 compatible。
+Cargo.lock、已声明 Python lock、明确全局构建输入和自动记录不因单独变化直接升包；业务生成源码与资源不属于自动记录。不得执行任意 setup.py、SCM 后端、安装脚本或动态宏来猜测元数据。未知格式、歧义归属或不支持的证据应报告缺口。
 
-## 显式版本及不兼容
+配置迁移只写配置，不改变业务版本或锁。无变化的既有包无需补造收口；存在未发布内容、未知版本变化或不可证明历史时必须先处理缺口。本合同不授权真实下游写入。
 
-`targets.product` 指定程序目标，其他键使用实际受影响的稳定包 id。程序和包可同时指定多个目标；低于建议、未知目标、非递增或复用旧版本直接拒绝。不得通过显式目标或 `pure_version_reason` 给未变包制造新版本；无发布变化为 no-op。
-
-Python 保留 PEP 440 原生版本语义；非规范稳定三段版本需要明确目标，不猜测升版。兼容性为 breaking 时 level 必须 major，并在对应对象记录 acceptance：本次 fingerprint、scope（含该对象 id，程序为 product）、用户接受的 reason 及可核对的 source。只复用适用的用户明确接受，不以 major 或发布命令代替不兼容接受。
-
-所有 breaking 对象与策略、迁移/补正及其他必要决定合并为一次确认，不逐包轮流问。环境或 Git 状态变化后，只有实际影响、scope 和接受理由仍被原用户决定完整覆盖，才可把该决定及原来源记录到新分析对应的 acceptance；这不代表旧验证证据适用于新环境。出现新的实质风险或决定不完整时停止，不能以一次确认上限为由自动接受，也不能在已确认后追加第二问。
-
-## 项目验证证据
-
-`record_inputs` 首期只接受明确的 JSON/JSONL 自动记录文件；登记不代表可以把实际参与业务的 JSON 资源排除。源码、版本声明、锁、构建产物和业务生成资源继续按实际职责归属。
-
-只核对项目显式 required_checks 及实际已提供证据，不组织全量测试、不要求工厂 prepared/审计 JSON。每项证据包括 id、status、fingerprint、scope、reason、artifact（项目 `.runtime/` 相对路径）、sha256（`sha256:` 前缀）。这里 check.fingerprint 使用预览的 validation_fingerprint：绑定最终源码、依赖、构建输入及环境，排除 VERSION、CHANGELOG 和声明的自动记录，不因暂存或普通提交本身变化。分析顶层与不兼容 acceptance 仍使用完整 fingerprint，防止 Git 事务漂移。artifact 是实际项目验证输出的结构化记录，id/status/fingerprint/scope/reason 必须与声明一致，摘要匹配真实字节。Agent 不得补造 passed 记录。
-
-passed 必须覆盖适用范围；failed、未知或新失败阻断。historical-unrelated 必须有实际依据，scope 不得覆盖本次影响对象，也不能替代必需检查的通过结果。证据失效时停止依赖它的发布，复用仍有效部分。
-
-配置可用 `check_scopes` 指定各 required_checks 的适用对象，例如 `{"unit-a":["a"],"unit-b":["b"],"integration":["product"]}`。未指定的检查保持全局范围；没有受影响对象的局部检查无需重跑。每项适用的必需检查必须通过并覆盖自身范围，通过证据合计覆盖本次影响对象；不能把单包测试虚报成全项目证据。
-
-Python 项目提供验证证据时，还须在配置明确 `python_environment`：`interpreter` 为实际解释器文件，`runtime_roots` 为实际运行时/标准库目录列表，`dependency_roots` 为验证使用的依赖目录列表。路径可为项目相对路径或绝对路径；必须覆盖虚拟环境、基础运行时，以及 editable/local 依赖的外部实际目录。Forge 只读计算这些文件的内容身份，不执行 Python、安装脚本或 backend；新增/删除/修改文件、原路径替换解释器或更新依赖都会使旧证据失效，应用前再次核对。目录内字节码也参与身份，遇到未声明实际目录的嵌套链接则停止。未配置环境时可查看包分析，但不得把 Python 的 passed 记录当作有效发布证据。
-
-## 原生格式边界
-
-Rust 使用显式 Cargo 包/workspace、依赖约束和锁；Python 支持现有静态 PEP 621、setup.cfg、传统 Poetry、明确 text/TOML/静态字符串版本来源及 local_sources。不得执行任意 setup.py、SCM 动态版本后端或安装脚本。Cargo 3/4、uv、Poetry、PDM、pylock 和 requirements-export 沿用适配器明确支持边界；未知格式、无法证明的条件或制品阻断，不升级第三方依赖来凑通过。
-
-所有 Cargo.lock 和已声明 Python lock 不直接升包；全局 build_inputs 不能覆盖包源码/原生声明；record_inputs 只用于明确自动记录，业务生成源码/资源不能排除。包改名、移动、移除、拆分/合并保留稳定身份、显式生命周期和历史，退役身份不复用。
+发布准备 `development-checks.json` / `prepared` 仍是原有可选重路径，不自动成为普通开发或 release 的前置；新子包收口是独立职责，不能复活全量测试门槛。
