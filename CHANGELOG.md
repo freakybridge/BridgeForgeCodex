@@ -15,6 +15,23 @@
 
 > **追溯说明**：v0.1.0 - v0.7.0 基于 git log 历史回溯标记，**git tag 仅从 v0.8.0 开始打**。早期未启用版本号管理是 setup_agent 自打脸问题（要求下游用但自己没用），v0.8.0 修补。
 
+## [7.0.1] - 2026-10-25
+
+### Fixed
+
+- [product][repo][meta] 修复骨架路径迁移后的发布分类
+
+### Release analysis
+
+- Product: 修复同一受管资产路径迁移被误判为业务发布输入，保留 seed、项目区域及未知文件的归属检查；补齐实际 project-sync 到 release-preview 的累计迁移回归并修正固定版本测试。属于兼容修复，lifecycle 已完成 0.1.0 到 0.1.1 的开发收口。
+- `checks`: 0.1.0 -> 0.1.0 (no_package_version_change)
+- `core`: 7.0.1 -> 7.0.1 (Revalidate existing package evidence after managed projection/build input changes; no package source or public contract change.)
+- `factory`: 0.1.1 -> 0.1.1 (Revalidate existing package evidence after managed projection/build input changes; no package source or public contract change.)
+- `lifecycle`: 0.1.0 -> 0.1.1 (Compatible repair of verified managed-asset relocation classification; preserves project ownership and release closure checks.)
+- `memory`: 0.1.0 -> 0.1.0 (no_package_version_change)
+- `skeleton`: 0.1.0 -> 0.1.0 (Revalidate existing package evidence after managed projection/build input changes; no package source or public contract change.)
+- `workflow`: 0.1.0 -> 0.1.0 (Revalidate existing package evidence after managed projection/build input changes; no package source or public contract change.)
+
 ## [7.0.0] - 2026-10-25
 
 ### Changed

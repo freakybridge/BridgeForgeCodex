@@ -977,7 +977,14 @@ impl PayloadClassifier {
             }
             let current_target = current_asset["target"].as_str().unwrap().replace('\\', "/");
             let head_target = head_asset["target"].as_str().unwrap().replace('\\', "/");
-            let current_payload = after(&current_target)?.unwrap_or_default();
+            let relocated = current_target != head_target;
+            let current_payload = after(&current_target)?;
+            if relocated && current_payload.is_none() {
+                return Err(format!(
+                    "current ownership baseline is invalid: relocated asset is missing: {current_target}"
+                ));
+            }
+            let current_payload = current_payload.unwrap_or_default();
             let Some(before_payload) = before(&head_target)? else {
                 public_changed = true;
                 project_changed = true;
@@ -998,8 +1005,23 @@ impl PayloadClassifier {
                 ownership_projection(current_asset, &current_payload),
             ) {
                 (Ok((old_public, old_project)), Ok((new_public, new_project))) => {
-                    public_changed |= old_public != new_public;
+                    // schema 4 classifies one changed path at a time. A verified
+                    // asset relocation is a public change even with identical
+                    // bytes; the contract path may not be in this invocation.
+                    public_changed |= relocated || old_public != new_public;
                     project_changed |= old_project != new_project;
+                    if relocated {
+                        // Seed files belong to the project after initialization;
+                        // moving one changes project ownership even if its bytes
+                        // happen to match. Its payload is not contract-verified.
+                        project_changed |= head_asset["strategy"].as_str() == Some("seed")
+                            || current_asset["strategy"].as_str() == Some("seed");
+                        // Do not let stable identity hide a retained old file or
+                        // overwrite an unrelated file at the destination. Both
+                        // physical paths must prove an unambiguous relocation.
+                        project_changed |=
+                            after(&head_target)?.is_some() || before(&current_target)?.is_some();
+                    }
                 }
                 _ if contract_transition => {
                     public_changed = true;

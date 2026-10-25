@@ -236,6 +236,83 @@ fn schema4_cumulative_skeleton_rejects_tampering_and_unknown_inputs() {
 }
 
 #[test]
+fn schema4_relocated_skeleton_uses_formal_boundary_and_requires_business_closure() {
+    const OLD: &str = ".codex/hooks/crates/bridgeforge-core/src/memory/ownership.rs";
+    const NEW: &str = ".codex/hooks/source/memory/src/ownership.rs";
+    let contract = |target: &str, bytes: &[u8]| {
+        json!({"assets":[{
+            "id":"managed.memory", "target":target, "strategy":"whole", "current_sha256":digest(bytes)
+        }]})
+    };
+    for updated in [false, true] {
+        let r = fixture("legacy", true);
+        write(&r.0, OLD, b"original\n");
+        write(
+            &r.0,
+            ".codex/managed-skeleton.json",
+            &serde_json::to_vec(&contract(OLD, b"original\n")).unwrap(),
+        );
+        git(&r.0, &["add", "."]);
+        git(&r.0, &["commit", "--amend", "--no-edit"]);
+        migrate(&r.0);
+        let bytes = if updated {
+            b"updated!\n"
+        } else {
+            b"original\n"
+        };
+        fs::remove_file(r.0.join(OLD)).unwrap();
+        write(&r.0, NEW, bytes);
+        write(
+            &r.0,
+            ".codex/managed-skeleton.json",
+            &serde_json::to_vec(&contract(NEW, bytes)).unwrap(),
+        );
+        for committed in [false, true] {
+            if committed {
+                git(&r.0, &["add", "."]);
+                git(&r.0, &["commit", "-m", "chore: skeleton path migration"]);
+            }
+            let index = fs::read(r.0.join(".git/index")).unwrap();
+            let config = fs::read(r.0.join(CONFIG)).unwrap();
+            let p = preview(
+                &r.0,
+                "chore: skeleton migration",
+                &Request::default(),
+                &SystemProcessRunner,
+            );
+            assert_eq!(p.code, 0, "{}", p.stderr);
+            assert_eq!(p.receipt.unwrap()["status"], "nothing-to-release");
+            assert_eq!(fs::read(r.0.join(".git/index")).unwrap(), index);
+            assert_eq!(fs::read(r.0.join(CONFIG)).unwrap(), config);
+            assert_eq!(fs::read(r.0.join("VERSION")).unwrap(), b"1.0.0\n");
+        }
+        // A committed migration stays excluded, but real unpublished package
+        // changes still require develop; release cannot certify them implicitly.
+        change(&r.0, true);
+        let request = analyze(&r.0, "patch", None);
+        let error = build(&r.0, "fix: business", &request, &SystemProcessRunner).unwrap_err();
+        assert!(
+            error.contains("closure") || error.contains("develop"),
+            "{error}"
+        );
+        let request = analyze(&r.0, "patch", Some("patch"));
+        let plan = build(&r.0, "fix: business", &request, &SystemProcessRunner)
+            .unwrap()
+            .unwrap();
+        assert_eq!(plan.new_version.to_string(), "1.0.1");
+        assert_eq!(plan.package_changes.len(), 1);
+        assert_eq!(plan.package_changes[0].version_after, "1.0.1");
+        write(&r.0, ".codex/hooks/unknown.rs", b"project owned\n");
+        let cfg = load(&r.0).unwrap().unwrap();
+        let error = capture(&r.0, &cfg, &SystemProcessRunner).err().unwrap();
+        assert!(
+            error.contains("unattributed release input: .codex/hooks/unknown.rs"),
+            "{error}"
+        );
+    }
+}
+
+#[test]
 fn schema4_cutover_preserves_unreleased_changes_across_legacy_intermediate_commits() {
     let r = fixture("legacy", true);
     let original = fs::read(r.0.join(CONFIG)).unwrap();

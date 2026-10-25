@@ -84,8 +84,15 @@ fn mixed_product_release_materializer_updates_consumer_lock_without_bumping_harn
         .unwrap()
         .parse::<toml_edit::DocumentMut>()
         .unwrap();
-    let next = "7.0.0";
-    cargo["workspace"]["package"]["version"] = toml_edit::value(next);
+    // Always exercise an actual product-version change, including after the
+    // factory itself has released the version used by an earlier fixture.
+    let current = cargo["workspace"]["package"]["version"]
+        .as_str()
+        .unwrap()
+        .parse::<bridgeforge_core::SemVer>()
+        .unwrap();
+    let next = format!("{}.{}.{}", current.major, current.minor, current.patch + 1);
+    cargo["workspace"]["package"]["version"] = toml_edit::value(next.as_str());
     let mut lock = fs::read_to_string(root.join("Cargo.lock"))
         .unwrap()
         .parse::<toml_edit::DocumentMut>()
@@ -95,7 +102,7 @@ fn mixed_product_release_materializer_updates_consumer_lock_without_bumping_harn
             package["name"].as_str(),
             Some("bridgeforge-cli" | "bridgeforge-hook")
         ) {
-            package["version"] = toml_edit::value(next);
+            package["version"] = toml_edit::value(next.as_str());
         }
     }
     let writes = BTreeMap::from([

@@ -8,6 +8,8 @@ delivery_layout: flat
 
 ## 从这里开始
 
+已验收：[骨架路径迁移后的发布分类](1_delivery/source-workspace-refactor/requirements_2026-10-25_migration-release-classification.md#用户验收2026-10-25)（TODO-034；2026-10-25 用户验收，隔离下游回归及五组必需检查通过，lifecycle 0.1.0→0.1.1 已受管收口；主程序仍为 7.0.0，未提交推送发布，未修改真实下游或用户级安装）。[TODO-035：开发收口失败诊断](1_delivery/source-workspace-refactor/requirements_2026-10-25_migration-release-classification.md#验收核对新增事项-todo-035) 单独登记为待确认，尚未实施。
+
 - [Rust 源码与公共投影结构](0_architecture/design/source-workspace.md)
 
 已验收：[源码子包、Skills 与分发结构重构](1_delivery/source-workspace-refactor/requirements_2026-10-24_source-workspace.md#用户验收2026-10-25)（TODO-032；2026-10-25 用户验收 `source/` 九包、版本收口、Skills 迁移、公共投影与 dogfood，以及忽略模板路径调整；未提交推送发布、未修改真实下游。TODO-033 单独跟踪非阻断的 TODO 参考导航旧路径，待确认）。

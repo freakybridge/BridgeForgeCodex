@@ -808,6 +808,161 @@ fn canonical_json(value: &Value) -> Value {
     }
 }
 
+#[test]
+fn relocated_asset_classification_checks_identity_payloads_and_both_paths() {
+    const OLD: &str = ".codex/hooks/crates/bridgeforge-core/src/memory/ownership.rs";
+    const NEW: &str = ".codex/hooks/source/memory/src/ownership.rs";
+    const CONTRACT: &str = ".codex/managed-skeleton.json";
+    let asset = |target: &str, payload: &[u8]| {
+        json!({
+            "id":"managed.memory", "target":target, "strategy":"whole",
+            "current_sha256":digest(payload)
+        })
+    };
+    // Each path is classified individually by schema 4. Including the contract
+    // path in this call would hide the unchanged-content migration regression.
+    for payload in [
+        b"original\n".as_slice(),
+        b"updated\n".as_slice(),
+        b"".as_slice(),
+    ] {
+        let old = json!({"assets":[asset(OLD, b"original\n")]});
+        let current = json!({"assets":[asset(NEW, payload)]});
+        let baseline = BTreeMap::from([
+            (CONTRACT, serde_json::to_vec(&old).unwrap()),
+            (OLD, b"original\n".to_vec()),
+        ]);
+        let final_files = BTreeMap::from([(NEW, payload.to_vec())]);
+        let classify_maps = |before: &BTreeMap<&str, Vec<u8>>,
+                             after: &BTreeMap<&str, Vec<u8>>,
+                             contract: &Value,
+                             path: &str| {
+            classify_payloads(
+                &[path.into()],
+                &serde_json::to_vec(contract).unwrap(),
+                |p| Ok(before.get(p).cloned()),
+                |p| Ok(after.get(p).cloned()),
+            )
+        };
+        for path in [OLD, NEW] {
+            assert_eq!(
+                classify_maps(&baseline, &final_files, &current, path).unwrap(),
+                ReleaseKind::SkeletonOnly,
+                "{path}: {payload:?}"
+            );
+            let mut leftover = final_files.clone();
+            leftover.insert(OLD, b"user retained or modified file\n".to_vec());
+            assert_eq!(
+                classify_maps(&baseline, &leftover, &current, path).unwrap(),
+                ReleaseKind::Business
+            );
+            let mut occupied = baseline.clone();
+            occupied.insert(NEW, b"preexisting project file\n".to_vec());
+            assert_eq!(
+                classify_maps(&occupied, &final_files, &current, path).unwrap(),
+                ReleaseKind::Business
+            );
+            let mut edited_old = baseline.clone();
+            edited_old.insert(OLD, b"unverified old payload\n".to_vec());
+            assert_eq!(
+                classify_maps(&edited_old, &final_files, &current, path).unwrap(),
+                ReleaseKind::Business
+            );
+            let mut missing_old = baseline.clone();
+            missing_old.remove(OLD);
+            assert_eq!(
+                classify_maps(&missing_old, &final_files, &current, path).unwrap(),
+                ReleaseKind::Business
+            );
+            assert!(classify_maps(&baseline, &BTreeMap::new(), &current, path).is_err());
+            let tampered = BTreeMap::from([(NEW, b"unverified new payload\n".to_vec())]);
+            assert!(classify_maps(&baseline, &tampered, &current, path).is_err());
+        }
+        assert_eq!(
+            classify_maps(&baseline, &final_files, &current, ".codex/unknown.rs").unwrap(),
+            ReleaseKind::Business
+        );
+        let conflict = json!({"assets":[asset(NEW, payload), asset(OLD, b"original\n")]});
+        assert!(
+            classify_maps(&baseline, &final_files, &conflict, OLD)
+                .unwrap_err()
+                .contains("duplicated")
+        );
+        let mut conflict = current.clone();
+        let mut other = asset(OLD, b"original\n");
+        other["id"] = json!("different.identity");
+        conflict["assets"].as_array_mut().unwrap().push(other);
+        assert!(
+            classify_maps(&baseline, &final_files, &conflict, OLD)
+                .unwrap_err()
+                .contains("identities disagree")
+        );
+    }
+}
+
+#[test]
+fn relocated_region_keeps_project_content_in_release() {
+    let asset = |target: &str| {
+        json!({"id":"region", "target":target, "strategy":"region",
+        "region":{"begin":"BEGIN", "end":"END", "current_sha256":digest(b"BEGIN\npublic\nEND\n")}})
+    };
+    let old = serde_json::to_vec(&json!({"assets":[asset("old.md")]})).unwrap();
+    let current = serde_json::to_vec(&json!({"assets":[asset("new.md")]})).unwrap();
+    for (content, expected) in [
+        (
+            b"BEGIN\npublic\nEND\nproject\n".as_slice(),
+            ReleaseKind::SkeletonOnly,
+        ),
+        (
+            b"BEGIN\npublic\nEND\nchanged\n".as_slice(),
+            ReleaseKind::Business,
+        ),
+    ] {
+        let result = classify_payloads(
+            &["old.md".into()],
+            &current,
+            |p| {
+                Ok(match p {
+                    ".codex/managed-skeleton.json" => Some(old.clone()),
+                    "old.md" => Some(b"BEGIN\npublic\nEND\nproject\n".to_vec()),
+                    _ => None,
+                })
+            },
+            |p| Ok((p == "new.md").then(|| content.to_vec())),
+        )
+        .unwrap();
+        assert_eq!(result, expected);
+    }
+}
+
+#[test]
+fn relocated_seed_remains_project_owned() {
+    let old = serde_json::to_vec(&json!({"assets":[{
+        "id":"seed", "target":"old.md", "strategy":"seed"
+    }]}))
+    .unwrap();
+    let current = serde_json::to_vec(&json!({"assets":[{
+        "id":"seed", "target":"new.md", "strategy":"seed"
+    }]}))
+    .unwrap();
+    for path in ["old.md", "new.md"] {
+        let result = classify_payloads(
+            &[path.into()],
+            &current,
+            |p| {
+                Ok(match p {
+                    ".codex/managed-skeleton.json" => Some(old.clone()),
+                    "old.md" => Some(b"project\n".to_vec()),
+                    _ => None,
+                })
+            },
+            |p| Ok((p == "new.md").then(|| b"project\n".to_vec())),
+        )
+        .unwrap();
+        assert_eq!(result, ReleaseKind::Business);
+    }
+}
+
 fn canonical_digest(value: &Value) -> Result<String, String> {
     serde_json::to_vec(&canonical_json(value))
         .map(|payload| digest(&payload))
