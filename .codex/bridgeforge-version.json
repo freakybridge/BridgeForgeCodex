@@ -155,6 +155,7 @@
             "source/lifecycle/src/release/schema4/analysis.rs",
             "source/lifecycle/src/release/schema4/configuration.rs",
             "source/lifecycle/src/release/schema4/development.rs",
+            "source/lifecycle/src/release/schema4/development_inputs.rs",
             "source/lifecycle/src/release/schema4/environment.rs",
             "source/lifecycle/src/release/schema4/inputs.rs",
             "source/lifecycle/src/release/schema4/lineage.rs",

@@ -86,6 +86,7 @@ pub struct ReleasePlan {
 #[derive(Clone, Debug)]
 pub struct FileReleasePlan {
     pub inputs: BTreeMap<PathBuf, Option<Vec<u8>>>,
+    pub build_directories: schema4::BuildDirectoryGuard,
     pub old_version: SemVer,
     pub new_version: SemVer,
     pub kind: ReleaseKind,
@@ -1125,6 +1126,13 @@ pub fn build_file_release_plan(
 }
 
 pub fn apply_file_release_plan(plan: &FileReleasePlan) -> Result<(), String> {
+    let root = plan
+        .writes
+        .keys()
+        .find(|p| p.file_name().is_some_and(|n| n == "VERSION"))
+        .and_then(|p| p.parent())
+        .ok_or("release root missing")?;
+    plan.build_directories.verify(root)?;
     if let Some(environment) = &plan.environment {
         let root = plan
             .writes

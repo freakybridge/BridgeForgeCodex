@@ -821,6 +821,7 @@ fn sync_impl(
                                 == Some(&previous_inputs)
                             && plan.as_ref().is_none_or(|plan| {
                                 crate::release::verify_release_inputs(&plan.inputs).is_ok()
+                                    && plan.build_directories.verify(root).is_ok()
                             }) =>
                     {
                         release_plan_reused = true;
@@ -881,6 +882,7 @@ fn sync_impl(
             }
         }
         let release_inventory = release.as_ref().and_then(|p| p.release_inventory.clone());
+        let release_directories = release.as_ref().map(|p| p.build_directories.clone());
         let release_environment = release.as_ref().and_then(|p| p.environment.clone());
         let release_status = release.as_ref().and_then(|p| p.release_status.clone());
         let (mut release_inputs, release_writes) =
@@ -907,6 +909,11 @@ fn sync_impl(
         }
         if let Err(error) = plan.verify_unchanged(root) {
             return blocked(error);
+        }
+        if let Some(directories) = &release_directories {
+            if let Err(error) = directories.verify(root) {
+                return blocked(error);
+            }
         }
         if let Some(environment) = &release_environment {
             if let Err(error) = environment.verify(root) {

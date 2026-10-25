@@ -8,6 +8,8 @@ mod environment;
 mod inputs;
 pub use environment::{EnvironmentGuard, PythonEnvironment};
 pub mod development;
+mod development_inputs;
+pub use development_inputs::BuildDirectoryGuard;
 mod lineage;
 mod migration;
 mod plan;

@@ -589,10 +589,12 @@ pub(super) fn prepare(
         }
         // Persist only after both the input and Git guards passed. An interrupted
         // later check cannot erase earlier successful, hash-verified evidence.
+        release.build_directories.verify(root)?;
         progress.save(root, &checks)?;
     }
     let factory = root.join("templates/managed-skeleton.json").is_file();
     let release_environment = release.environment.clone();
+    let release_directories = release.build_directories;
     let plan =
         write_plan::WritePlan::prepare(root, release.writes, release.inputs, factory, runner)?;
     if let Some(environment) = &release_environment {
@@ -662,6 +664,7 @@ pub(super) fn prepare(
     };
     let check_count = record.checks.len();
     let reuse_available = record.check_environment.is_some();
+    release_directories.verify(root)?;
     crate::persistence::atomic_write_json(
         &current,
         &serde_json::to_value(record).map_err(|e| e.to_string())?,

@@ -474,6 +474,7 @@ fn finish(
             .or_insert(config::read_current(root, path)?);
     }
     verify_release_inputs(&capture.inputs)?;
+    development_inputs::verify(root, &capture, &capture.inputs)?;
     if let Some(environment) = &capture.environment_guard {
         environment.verify(root)?;
     }
@@ -486,6 +487,7 @@ fn finish(
     let details = json!({"schema_version":4,"fingerprint":capture.fingerprint,"validation_fingerprint":capture.validation_fingerprint,"python_environment_fingerprint":capture.environment_guard.as_ref().map(|e|e.fingerprint.clone()),"strategy":cfg.strategy,"suggested_version":suggested.to_string(),"version_after":new_version.to_string(),"product_reason":program.reason,"package_version_baseline":capture.boundary,"packages":all_packages,"required_checks":cfg.required_checks,"check_scopes":cfg.check_scopes,"compatibility_validation":"agent_evidence_verified_not_automatically_proven"});
     Ok(Some(FileReleasePlan {
         inputs: capture.inputs,
+        build_directories: BuildDirectoryGuard::new(capture.build_directories),
         old_version,
         new_version,
         kind,
@@ -536,7 +538,7 @@ pub fn preview(
         let cfg = load(root)?.ok_or("release requires schema 4 migration; run --migration-plan")?;
         let mut capture = capture(root, &cfg, runner)?;
         development::release_gate(root, &cfg, &mut capture, runner)?;
-        let analysis = analysis::read(root, request, &mut capture)?;
+        let analysis = analysis::read_preview(root, request, &mut capture)?;
         if capture.changes.iter().all(|c| c.role == "record")
             && analysis.as_ref().is_none_or(|a| a.targets.is_empty())
         {

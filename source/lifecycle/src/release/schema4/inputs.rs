@@ -27,6 +27,8 @@ pub(super) struct Capture {
     pub product_version: String,
     pub environment_guard: Option<EnvironmentGuard>,
     pub environment: String,
+    pub development_environment: String,
+    pub build_directories: BTreeMap<String, BTreeSet<String>>,
     pub modes: BTreeMap<String, String>,
 }
 
@@ -217,6 +219,44 @@ pub(super) fn environment(
     guard: Option<&EnvironmentGuard>,
     runner: &dyn ProcessRunner,
 ) -> Result<String, String> {
+    Ok(environment_snapshot(root, cfg, guard, runner)?.planning)
+}
+
+pub(super) struct EnvironmentSnapshot {
+    pub planning: String,
+    pub development: String,
+}
+
+// These are transport/correlation identifiers, not build inputs. Keep every
+// other variable (including unknown ones) and all tool/runtime probes. Plans
+// retain the original strict host identity; only durable evidence is portable.
+pub(super) fn environment_fingerprints(
+    values: &BTreeMap<String, String>,
+) -> Result<EnvironmentSnapshot, String> {
+    let portable = values
+        .iter()
+        .filter(|(key, _)| {
+            !matches!(
+                key.to_ascii_uppercase().as_str(),
+                "CODEX_TOOL_CALL_ID"
+                    | "CODEX_THREAD_ID"
+                    | "CODEX_SESSION_ID"
+                    | "CODEX_APP_TOOLS_PIPE_PATH"
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    Ok(EnvironmentSnapshot {
+        planning: digest(&serde_json::to_vec(values).map_err(|e| e.to_string())?),
+        development: digest(&serde_json::to_vec(&portable).map_err(|e| e.to_string())?),
+    })
+}
+
+fn environment_snapshot(
+    root: &Path,
+    cfg: &Config,
+    guard: Option<&EnvironmentGuard>,
+    runner: &dyn ProcessRunner,
+) -> Result<EnvironmentSnapshot, String> {
     let mut values = std::env::vars_os()
         .filter(|(key, _)| key != "CODEX_TOOL_CALL_ID")
         .map(|(k, v)| {
@@ -246,9 +286,7 @@ pub(super) fn environment(
             );
         }
     }
-    Ok(digest(
-        &serde_json::to_vec(&values).map_err(|e| e.to_string())?,
-    ))
+    environment_fingerprints(&values)
 }
 
 fn lock(cfg: &Config, path: &str) -> bool {
@@ -522,7 +560,8 @@ fn capture_with_reader(
         .as_ref()
         .map(|environment| environment.capture(root))
         .transpose()?;
-    let environment = environment(root, cfg, environment_guard.as_ref(), runner)?;
+    let environment_snapshot = environment_snapshot(root, cfg, environment_guard.as_ref(), runner)?;
+    let environment = environment_snapshot.planning;
     let validation_fingerprint =
         validation_fingerprint(root, cfg, &head, &inventory, &inputs, &environment, runner)?;
     let fingerprint=digest(&serde_json::to_vec(&json!({"root":root.canonicalize().map_err(|e|e.to_string())?.to_string_lossy(),"head":head,"boundary":boundary,"history":planning_history_state(root,runner)?,"status":status,"inventory":inventory,"inputs":hashes,"changes":changes,"environment":environment,"validation_fingerprint":validation_fingerprint})).map_err(|e|e.to_string())?);
@@ -557,5 +596,7 @@ fn capture_with_reader(
         validation_fingerprint,
         environment_guard,
         environment,
+        development_environment: environment_snapshot.development,
+        build_directories: BTreeMap::new(),
     })
 }

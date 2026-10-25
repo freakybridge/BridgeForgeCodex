@@ -232,7 +232,7 @@
             {
               "source": "templates/skills/git-sync/references/schema4.md",
               "target": "references/schema4.md",
-              "sha256": "sha256:8429b25149166f86e76dc74a5f88836a4eb35a2b2bd9e24d191869f311bdba88"
+              "sha256": "sha256:722e4bef833da676c3c6846559a5d30e3c4c8b885cc3d67c43ae0ea8b4d135b1"
             },
             {
               "source": "templates/skills/git-sync/references/runtime-context.md",

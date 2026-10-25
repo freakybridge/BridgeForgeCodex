@@ -21,6 +21,76 @@ fn use_legacy_closure(root: &Path, runner: &dyn ProcessRunner) {
     });
     entry.evidence = digest(&serde_json::to_vec(&evidence).unwrap());
     entry.evidence_schema = None;
+    entry.evidence_components = None;
+    entry.hash.clear();
+    entry.hash = digest(&serde_json::to_vec(entry).unwrap());
+    write(
+        root,
+        development::RECORD,
+        &serde_json::to_vec(&ledger).unwrap(),
+    );
+}
+
+// Independently reconstruct the 7.0.x host-bound serializer for these
+// single-registered-package fixtures; do not derive it from new components.
+fn use_host_closure(root: &Path, runner: &dyn ProcessRunner, unmarked: bool) {
+    let cfg = load(root).unwrap().unwrap();
+    let current = capture(root, &cfg, runner).unwrap();
+    assert!(current.current.dependencies.is_empty());
+    let mut ledger = development::Ledger::load(root).unwrap();
+    let entry = ledger.entries.last_mut().unwrap();
+    let package = &current.current.packages[&entry.id];
+    let mut workspace = fs::read_to_string(root.join(&package.workspace))
+        .unwrap()
+        .parse::<toml_edit::DocumentMut>()
+        .unwrap();
+    if !cfg.native.product_packages.is_empty() {
+        workspace["workspace"]["package"]
+            .as_table_like_mut()
+            .unwrap()
+            .remove("version");
+    }
+    let lock_path = Path::new(&package.workspace)
+        .with_file_name("Cargo.lock")
+        .to_string_lossy()
+        .replace('\\', "/");
+    let lock = crate::source_projection::lock_dependency_closure(
+        &fs::read(root.join(&lock_path)).unwrap(),
+        &BTreeSet::from([package.name.clone()]),
+    )
+    .unwrap();
+    let config: Value = serde_json::from_slice(&fs::read(root.join(CONFIG)).unwrap()).unwrap();
+    let build_inputs = cfg
+        .build_inputs
+        .iter()
+        .filter(|path| {
+            current.inventory.contains(path) || current.current.inputs.contains_key(*path)
+        })
+        .map(|path| {
+            assert!(!path.ends_with('/'), "fixture uses explicit build files");
+            (path.clone(), digest(&fs::read(root.join(path)).unwrap()))
+        })
+        .collect::<BTreeMap<_, _>>();
+    let mut check_inputs = BTreeMap::new();
+    for check in config["development"][&entry.id]["checks"]
+        .as_array()
+        .unwrap()
+    {
+        for path in check["inputs"].as_array().into_iter().flatten() {
+            let path = path.as_str().unwrap();
+            check_inputs.insert(path, digest(&fs::read(root.join(path)).unwrap()));
+        }
+    }
+    entry.evidence = digest(&serde_json::to_vec(&json!({
+        "content":entry.content,"dependencies":{entry.id.clone():entry.content},
+        "build":build_inputs,"rust_build":BTreeMap::from([
+            (package.workspace.clone(),digest(workspace.to_string().as_bytes())),
+            (lock_path,digest(&lock))
+        ]),"environment":current.environment,"policy":cfg.development.get(&entry.id),
+        "contracts":{},"check_inputs":check_inputs,"adapters":format!("{:?}",cfg.native.adapters)
+    })).unwrap());
+    entry.evidence_schema = if unmarked { None } else { Some(2) };
+    entry.evidence_components = None;
     entry.hash.clear();
     entry.hash = digest(&serde_json::to_vec(entry).unwrap());
     write(
@@ -116,17 +186,16 @@ fn package_legacy_closure_mixed_history_preserves_prefix_and_modern_unmarked_rec
     let q = request(&r.0, "patch", false, &runner);
     assert_eq!(close(&r.0, &q, &runner).code, 0);
     // 7.0.x used the current evidence algorithm but omitted its schema too.
-    let mut ledger = development::Ledger::load(&r.0).unwrap();
-    let entry = ledger.entries.last_mut().unwrap();
-    assert_eq!(entry.evidence_schema, Some(2));
-    entry.evidence_schema = None;
-    entry.hash.clear();
-    entry.hash = digest(&serde_json::to_vec(entry).unwrap());
-    write(
-        &r.0,
-        development::RECORD,
-        &serde_json::to_vec(&ledger).unwrap(),
+    assert_eq!(
+        development::Ledger::load(&r.0)
+            .unwrap()
+            .entries
+            .last()
+            .unwrap()
+            .evidence_schema,
+        Some(3)
     );
+    use_host_closure(&r.0, &runner, true);
     let p = development::preview(&r.0, &Request::default(), &runner);
     assert_eq!(p.receipt.unwrap()["status"], "nothing-to-close");
     use_legacy_closure(&r.0, &runner);
@@ -143,7 +212,7 @@ fn package_legacy_closure_mixed_history_preserves_prefix_and_modern_unmarked_rec
         serde_json::to_value(&new.entries[..old.entries.len()]).unwrap(),
         serde_json::to_value(&old.entries).unwrap()
     );
-    assert_eq!(new.entries.last().unwrap().evidence_schema, Some(2));
+    assert_eq!(new.entries.last().unwrap().evidence_schema, Some(3));
     assert_eq!(new.entries.last().unwrap().after.as_deref(), Some("0.3.2"));
     assert_eq!(
         development::preview(&r.0, &Request::default(), &runner)
@@ -154,6 +223,522 @@ fn package_legacy_closure_mixed_history_preserves_prefix_and_modern_unmarked_rec
 }
 
 struct AlternateClosureHost<'a>(&'a Checks);
+
+#[test]
+fn package_portable_environment_excludes_only_correlation_metadata() {
+    let baseline = BTreeMap::from([
+        ("CODEX_THREAD_ID".into(), "thread-a".into()),
+        ("CODEX_SESSION_ID".into(), "session-a".into()),
+        ("CODEX_APP_TOOLS_PIPE_PATH".into(), "pipe-a".into()),
+        ("PATH".into(), "same-tool-directory".into()),
+        ("RUSTFLAGS".into(), "-C opt-level=1".into()),
+        ("tool:rustc".into(), "compiler-a".into()),
+        ("python:environment".into(), "runtime-a".into()),
+        ("PROJECT_CUSTOM_INPUT".into(), "private-test-value".into()),
+    ]);
+    let before = inputs::environment_fingerprints(&baseline).unwrap();
+    for key in [
+        "CODEX_THREAD_ID",
+        "CODEX_SESSION_ID",
+        "CODEX_APP_TOOLS_PIPE_PATH",
+    ] {
+        let mut changed = baseline.clone();
+        changed.insert(key.into(), "other-identity".into());
+        let after = inputs::environment_fingerprints(&changed).unwrap();
+        assert_ne!(before.planning, after.planning, "{key}");
+        assert_eq!(before.development, after.development, "{key}");
+    }
+    for key in [
+        "PATH",
+        "RUSTFLAGS",
+        "tool:rustc",
+        "python:environment",
+        "PROJECT_CUSTOM_INPUT",
+    ] {
+        let mut changed = baseline.clone();
+        changed.insert(key.into(), "changed-input".into());
+        let after = inputs::environment_fingerprints(&changed).unwrap();
+        assert_ne!(before.development, after.development, "{key}");
+    }
+}
+
+// Invoked in isolated processes by the parent test. No process-global env
+// mutation is used, so the ordinary parallel test suite remains deterministic.
+#[test]
+fn portable_closure_process_probe() {
+    let Some(root) = std::env::var_os("BRIDGEFORGE_PORTABLE_CLOSURE_PROBE_ROOT") else {
+        return;
+    };
+    let root = PathBuf::from(root);
+    let runner = Checks::new();
+    if !root.join(development::RECORD).exists() {
+        let q = request(&root, "patch", false, &runner);
+        let result = close(&root, &q, &runner);
+        assert_eq!(result.code, 0, "{}", result.stderr);
+        assert_eq!(result.receipt.unwrap()["status"], "development-closed");
+    }
+    let development = development::preview(&root, &Request::default(), &runner);
+    let release = preview(&root, "fix: portable proof", &Request::default(), &runner);
+    let snapshot = capture(&root, &load(&root).unwrap().unwrap(), &runner).unwrap();
+    println!(
+        "\nPORTABLE_PROBE_RESULT={}",
+        json!({
+            "development":development.receipt,"release":release.receipt,
+            "release_code":release.code,"release_error":release.stderr,
+            "planning_environment":snapshot.environment,
+            "development_environment":snapshot.development_environment,
+        })
+    );
+}
+
+fn portable_probe(root: &Path, identity: &str, flags: Option<&str>) -> Value {
+    let mut command = ProcessRequest::new(std::env::current_exe().unwrap(), root);
+    command.args = vec![
+        "--exact".into(),
+        format!(
+            "{}::portable_closure_process_probe",
+            module_path!().split_once("::").unwrap().1
+        )
+        .into(),
+        "--nocapture".into(),
+        "--test-threads=1".into(),
+    ];
+    command.timeout = std::time::Duration::from_secs(120);
+    command.env.insert(
+        "BRIDGEFORGE_PORTABLE_CLOSURE_PROBE_ROOT".into(),
+        root.as_os_str().to_owned(),
+    );
+    for key in [
+        "CODEX_THREAD_ID",
+        "CODEX_SESSION_ID",
+        "CODEX_APP_TOOLS_PIPE_PATH",
+    ] {
+        command.env.insert(key.into(), identity.into());
+    }
+    if let Some(flags) = flags {
+        command.env.insert("RUSTFLAGS".into(), flags.into());
+    }
+    let output = SystemProcessRunner.run(&command).unwrap();
+    assert_eq!(
+        output.code,
+        0,
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(!output.timed_out);
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    serde_json::from_str(
+        stdout
+            .lines()
+            .find_map(|line| line.strip_prefix("PORTABLE_PROBE_RESULT="))
+            .expect("child executed the probe"),
+    )
+    .unwrap()
+}
+
+#[test]
+fn package_portable_closure_survives_new_process_and_thread_but_rejects_build_env() {
+    let r = zero_fixture();
+    configure(&r.0, false);
+    change(&r.0, true);
+    let first = portable_probe(&r.0, "development-conversation", None);
+    assert_eq!(first["development"]["status"], "nothing-to-close");
+    let ledger = fs::read(r.0.join(development::RECORD)).unwrap();
+    let index = fs::read(r.0.join(".git/index")).unwrap();
+    let manifest = fs::read(r.0.join("pkg/Cargo.toml")).unwrap();
+    let second = portable_probe(&r.0, "release-conversation", None);
+    assert_ne!(
+        first["planning_environment"],
+        second["planning_environment"]
+    );
+    assert_eq!(
+        first["development_environment"],
+        second["development_environment"]
+    );
+    assert_eq!(second["development"]["status"], "nothing-to-close");
+    assert_eq!(second["release_code"], 0);
+    assert_eq!(second["release"]["status"], "analysis-required");
+    let third = portable_probe(
+        &r.0,
+        "release-conversation",
+        Some("--cfg materially_different_build"),
+    );
+    assert_eq!(third["development"]["affected_packages"], json!(["a"]));
+    assert_ne!(third["release_code"], 0);
+    assert!(
+        third["release_error"]
+            .as_str()
+            .unwrap()
+            .contains("components: environment")
+    );
+    assert!(
+        !third["release_error"]
+            .as_str()
+            .unwrap()
+            .contains("materially_different_build")
+    );
+    assert_eq!(fs::read(r.0.join(development::RECORD)).unwrap(), ledger);
+    assert_eq!(fs::read(r.0.join(".git/index")).unwrap(), index);
+    assert_eq!(fs::read(r.0.join("pkg/Cargo.toml")).unwrap(), manifest);
+}
+
+#[test]
+fn package_portable_evidence_diagnoses_inputs_and_preserves_chain() {
+    let r = zero_fixture();
+    configure(&r.0, false);
+    change(&r.0, true);
+    let runner = Checks::new();
+    let q = request(&r.0, "patch", false, &runner);
+    assert_eq!(close(&r.0, &q, &runner).code, 0);
+    let ledger = fs::read(r.0.join(development::RECORD)).unwrap();
+    let parsed = development::Ledger::parse(Some(&ledger)).unwrap();
+    let entry = parsed.entries.last().unwrap();
+    assert_eq!(entry.evidence_schema, Some(3));
+    assert_eq!(entry.evidence_components.as_ref().unwrap().len(), 8);
+    let alternate = AlternateClosureHost(&runner);
+    let result = preview(&r.0, "fix: env", &Request::default(), &alternate);
+    assert!(
+        result.stderr.contains("components: environment"),
+        "{}",
+        result.stderr
+    );
+    let config = fs::read(r.0.join(CONFIG)).unwrap();
+    let mut changed: Value = serde_json::from_slice(&config).unwrap();
+    changed["development"]["a"]["checks"][0]["timeout_seconds"] = json!(99);
+    write(&r.0, CONFIG, &serde_json::to_vec(&changed).unwrap());
+    let result = preview(&r.0, "fix: policy", &Request::default(), &runner);
+    assert!(
+        result.stderr.contains("components: policy"),
+        "{}",
+        result.stderr
+    );
+    write(&r.0, CONFIG, &config);
+    // Even an internally rehashed record must carry matching component evidence.
+    let mut invalid = parsed.clone();
+    let entry = invalid.entries.last_mut().unwrap();
+    entry
+        .evidence_components
+        .as_mut()
+        .unwrap()
+        .insert("environment".into(), "invented".into());
+    entry.hash.clear();
+    entry.hash = digest(&serde_json::to_vec(entry).unwrap());
+    assert!(
+        development::Ledger::parse(Some(&serde_json::to_vec(&invalid).unwrap()))
+            .unwrap_err()
+            .contains("components")
+    );
+    assert_eq!(fs::read(r.0.join(development::RECORD)).unwrap(), ledger);
+}
+
+#[test]
+fn package_published_host_closure_scopes_unrelated_lock_but_keeps_real_inputs() {
+    let r = scoped_rust_build_fixture();
+    let runner = Checks::new();
+    use_host_closure(&r.0, &runner, false);
+    let q = release_request(&r.0, "minor");
+    let plan = build(&r.0, "feat: publish", &q, &runner).unwrap().unwrap();
+    for (path, bytes) in plan.writes {
+        fs::write(path, bytes).unwrap();
+    }
+    git(&r.0, &["add", "."]);
+    git(&r.0, &["commit", "-m", "published host-bound proof"]);
+    let ledger = fs::read(r.0.join(development::RECORD)).unwrap();
+    change_locked_version(&r.0, "unrelated", "1.0.1");
+    let alternate = AlternateClosureHost(&runner);
+    let p = development::preview(&r.0, &Request::default(), &alternate);
+    assert_eq!(p.code, 0, "{}", p.stderr);
+    assert_eq!(p.receipt.unwrap()["status"], "nothing-to-close");
+    change_locked_version(&r.0, "remote", "1.0.1");
+    let p = development::preview(&r.0, &Request::default(), &alternate);
+    assert_eq!(p.receipt.unwrap()["affected_packages"], json!(["library"]));
+    assert_eq!(fs::read(r.0.join(development::RECORD)).unwrap(), ledger);
+}
+
+#[test]
+fn package_portable_publication_does_not_hide_real_environment_changes() {
+    let r = zero_fixture();
+    configure(&r.0, false);
+    change(&r.0, true);
+    let runner = Checks::new();
+    let q = request(&r.0, "patch", false, &runner);
+    assert_eq!(close(&r.0, &q, &runner).code, 0);
+    let q = release_request(&r.0, "patch");
+    for (path, bytes) in build(&r.0, "fix: publish", &q, &runner)
+        .unwrap()
+        .unwrap()
+        .writes
+    {
+        fs::write(path, bytes).unwrap();
+    }
+    git(&r.0, &["add", "."]);
+    git(&r.0, &["commit", "-m", "published portable proof"]);
+    let alternate = AlternateClosureHost(&runner);
+    let p = development::preview(&r.0, &Request::default(), &alternate);
+    assert_eq!(p.receipt.unwrap()["affected_packages"], json!(["a"]));
+}
+
+#[test]
+fn package_release_external_analysis_is_preview_only_and_tracks_drift() {
+    let r = zero_fixture();
+    configure(&r.0, false);
+    change(&r.0, true);
+    let runner = Checks::new();
+    let q = request(&r.0, "patch", false, &runner);
+    assert_eq!(close(&r.0, &q, &runner).code, 0);
+    let q = release_request(&r.0, "patch");
+    struct External(PathBuf);
+    impl Drop for External {
+        fn drop(&mut self) {
+            let _ = fs::remove_file(&self.0);
+        }
+    }
+    let external = External(r.0.with_extension("preview-analysis.json"));
+    let payload = fs::read(r.0.join(q.analysis_file.unwrap())).unwrap();
+    fs::write(&external.0, &payload).unwrap();
+    let q = Request {
+        analysis_file: Some(external.0.clone()),
+    };
+    let protected = [
+        "VERSION",
+        "CHANGELOG.md",
+        "pkg/Cargo.toml",
+        "pkg/Cargo.lock",
+        development::RECORD,
+        ".git/index",
+    ]
+    .into_iter()
+    .map(|p| (p, fs::read(r.0.join(p)).unwrap()))
+    .collect::<BTreeMap<_, _>>();
+    let status = git(&r.0, &["status", "--porcelain=v1", "--untracked-files=all"]);
+    let p = preview(&r.0, "fix: readonly external plan", &q, &runner);
+    assert_eq!(p.code, 0, "{}", p.stderr);
+    assert_eq!(p.receipt.unwrap()["status"], "release-planned");
+    for (path, bytes) in &protected {
+        assert_eq!(&fs::read(r.0.join(path)).unwrap(), bytes, "{path}");
+    }
+    assert_eq!(
+        git(&r.0, &["status", "--porcelain=v1", "--untracked-files=all"]),
+        status
+    );
+    assert!(
+        build(&r.0, "fix: forbidden external execution", &q, &runner)
+            .unwrap_err()
+            .contains("must belong to this project")
+    );
+
+    let cfg = load(&r.0).unwrap().unwrap();
+    let mut captured = capture(&r.0, &cfg, &runner).unwrap();
+    analysis::read_preview(&r.0, &q, &mut captured).unwrap();
+    fs::write(&external.0, b"changed after capture").unwrap();
+    assert!(verify_release_inputs(&captured.inputs).is_err());
+    let mut stale: Value = serde_json::from_slice(&payload).unwrap();
+    stale["fingerprint"] = json!("stale");
+    fs::write(&external.0, serde_json::to_vec(&stale).unwrap()).unwrap();
+    assert!(
+        analysis::read_preview(&r.0, &q, &mut captured)
+            .unwrap_err()
+            .contains("stale")
+    );
+    fs::write(&external.0, br#"{"schema":1,"schema":1}"#).unwrap();
+    assert!(analysis::read_preview(&r.0, &q, &mut captured).is_err());
+    fs::write(&external.0, &payload).unwrap();
+    // Mutation entry points retain their original project-local file boundary.
+    let original = fs::read(r.0.join("pkg/src/lib.rs")).unwrap();
+    write(&r.0, "pkg/src/lib.rs", b"pub fn value()->u8{3}\n");
+    let p = development::preview(&r.0, &q, &runner);
+    assert_ne!(p.code, 0);
+    assert!(
+        p.stderr.contains("must belong to this project"),
+        "{}",
+        p.stderr
+    );
+    write(&r.0, "pkg/src/lib.rs", &original);
+}
+
+#[test]
+fn package_declared_ignored_build_file_binds_presence_bytes_and_legacy_coverage() {
+    let r = zero_fixture();
+    configure(&r.0, false);
+    let mut config: Value = serde_json::from_slice(&fs::read(r.0.join(CONFIG)).unwrap()).unwrap();
+    config["build_inputs"] = json!([".runtime/global.txt"]);
+    write(&r.0, CONFIG, &serde_json::to_vec(&config).unwrap());
+    change(&r.0, true);
+    let runner = Checks::new();
+    let q = request(&r.0, "patch", false, &runner);
+    assert_eq!(close(&r.0, &q, &runner).code, 0);
+    let version = fs::read(r.0.join("pkg/Cargo.toml")).unwrap();
+    assert_eq!(
+        development::preview(&r.0, &Request::default(), &runner)
+            .receipt
+            .unwrap()["status"],
+        "nothing-to-close"
+    );
+    write(&r.0, ".runtime/global.txt", b"input-v1");
+    let p = development::preview(&r.0, &Request::default(), &runner);
+    assert!(
+        p.receipt.unwrap()["pending_reasons"]["a"]
+            .as_str()
+            .unwrap()
+            .contains("components: build")
+    );
+    let q = request(&r.0, "patch", false, &runner);
+    assert_eq!(close(&r.0, &q, &runner).code, 0);
+    assert_eq!(fs::read(r.0.join("pkg/Cargo.toml")).unwrap(), version);
+    for payload in [Some(b"input-v2".as_slice()), None] {
+        match payload {
+            Some(bytes) => write(&r.0, ".runtime/global.txt", bytes),
+            None => fs::remove_file(r.0.join(".runtime/global.txt")).unwrap(),
+        }
+        let p = preview(
+            &r.0,
+            "fix: changed build input",
+            &Request::default(),
+            &runner,
+        );
+        assert!(p.stderr.contains("components: build"), "{}", p.stderr);
+    }
+    write(&r.0, ".runtime/global.txt", b"input-v1");
+    use_host_closure(&r.0, &runner, false);
+    let ledger = fs::read(r.0.join(development::RECORD)).unwrap();
+    let p = preview(
+        &r.0,
+        "fix: incomplete old proof",
+        &Request::default(),
+        &runner,
+    );
+    assert!(
+        p.stderr
+            .contains("legacy proof does not cover declared global build inputs"),
+        "{}",
+        p.stderr
+    );
+    assert_eq!(fs::read(r.0.join(development::RECORD)).unwrap(), ledger);
+}
+
+#[test]
+fn package_declared_build_directory_tracks_ignored_and_empty_members() {
+    let r = zero_fixture();
+    configure(&r.0, false);
+    let mut config: Value = serde_json::from_slice(&fs::read(r.0.join(CONFIG)).unwrap()).unwrap();
+    config["build_inputs"] = json!([".runtime/global/"]);
+    write(&r.0, CONFIG, &serde_json::to_vec(&config).unwrap());
+    change(&r.0, true);
+    let runner = Checks::new();
+    let q = request(&r.0, "patch", false, &runner);
+    assert_eq!(close(&r.0, &q, &runner).code, 0);
+    fs::create_dir_all(r.0.join(".runtime/global/empty")).unwrap();
+    let p = development::preview(&r.0, &Request::default(), &runner);
+    assert!(
+        p.receipt.unwrap()["pending_reasons"]["a"]
+            .as_str()
+            .unwrap()
+            .contains("components: build")
+    );
+    write(&r.0, ".runtime/global/input.txt", b"global-v1");
+    let q = request(&r.0, "patch", false, &runner);
+    assert_eq!(close(&r.0, &q, &runner).code, 0);
+    let ledger = fs::read(r.0.join(development::RECORD)).unwrap();
+    for action in ["modify", "delete", "add", "remove-empty"] {
+        match action {
+            "modify" => write(&r.0, ".runtime/global/input.txt", b"global-v2"),
+            "delete" => fs::remove_file(r.0.join(".runtime/global/input.txt")).unwrap(),
+            "add" => write(&r.0, ".runtime/global/new.txt", b"new"),
+            _ => fs::remove_dir(r.0.join(".runtime/global/empty")).unwrap(),
+        }
+        let p = preview(&r.0, "fix: changed directory", &Request::default(), &runner);
+        assert_ne!(p.code, 0, "{action}");
+        assert!(p.stderr.contains("components: build"), "{}", p.stderr);
+        write(&r.0, ".runtime/global/input.txt", b"global-v1");
+        if action == "add" {
+            fs::remove_file(r.0.join(".runtime/global/new.txt")).unwrap();
+        }
+        fs::create_dir_all(r.0.join(".runtime/global/empty")).unwrap();
+    }
+    assert_eq!(fs::read(r.0.join(development::RECORD)).unwrap(), ledger);
+}
+
+#[test]
+fn package_declared_build_directory_rejects_drift_but_allows_declared_artifact() {
+    for artifact in [false, true] {
+        let r = zero_fixture();
+        configure(&r.0, false);
+        let mut config: Value =
+            serde_json::from_slice(&fs::read(r.0.join(CONFIG)).unwrap()).unwrap();
+        config["build_inputs"] = json!([".runtime/global/"]);
+        if artifact {
+            config["development"]["a"]["checks"][0]["artifacts"] =
+                json!([".runtime/global/new.txt"]);
+        }
+        write(&r.0, CONFIG, &serde_json::to_vec(&config).unwrap());
+        change(&r.0, true);
+        let mut runner = Checks::new();
+        runner.action = Some("new-build-file".into());
+        let q = request(&r.0, "patch", false, &runner);
+        let manifest = fs::read(r.0.join("pkg/Cargo.toml")).unwrap();
+        let result = close(&r.0, &q, &runner);
+        if artifact {
+            assert_eq!(result.code, 0, "{}", result.stderr);
+            assert_eq!(result.receipt.unwrap()["status"], "development-closed");
+            assert_eq!(
+                development::preview(&r.0, &Request::default(), &runner)
+                    .receipt
+                    .unwrap()["status"],
+                "nothing-to-close"
+            );
+        } else {
+            assert_ne!(result.code, 0);
+            assert!(
+                result.stderr.contains("directory membership changed"),
+                "{}",
+                result.stderr
+            );
+            assert!(!r.0.join(development::RECORD).exists());
+            assert_eq!(fs::read(r.0.join("pkg/Cargo.toml")).unwrap(), manifest);
+        }
+    }
+}
+
+#[test]
+fn package_declared_build_directory_blocks_release_apply_after_plan() {
+    let r = zero_fixture();
+    configure(&r.0, false);
+    let mut config: Value = serde_json::from_slice(&fs::read(r.0.join(CONFIG)).unwrap()).unwrap();
+    config["build_inputs"] = json!([".runtime/global/"]);
+    write(&r.0, CONFIG, &serde_json::to_vec(&config).unwrap());
+    write(&r.0, ".runtime/global/input.txt", b"original");
+    change(&r.0, true);
+    let runner = Checks::new();
+    let q = request(&r.0, "patch", false, &runner);
+    let closed = close(&r.0, &q, &runner);
+    assert_eq!(closed.code, 0, "{}", closed.stderr);
+    let q = release_request(&r.0, "patch");
+    let plan = build(&r.0, "fix: release", &q, &runner).unwrap().unwrap();
+    let version = fs::read(r.0.join("VERSION")).unwrap();
+    let changelog = fs::read(r.0.join("CHANGELOG.md")).unwrap();
+    let index = fs::read(r.0.join(".git/index")).unwrap();
+    for directory in [false, true] {
+        let path = r.0.join(".runtime/global/extra");
+        if directory {
+            fs::create_dir(&path).unwrap();
+        } else {
+            fs::write(&path, b"ignored addition").unwrap();
+        }
+        let error = apply_file_release_plan(&plan).unwrap_err();
+        assert!(error.contains("directory membership changed"), "{error}");
+        assert_eq!(fs::read(r.0.join("VERSION")).unwrap(), version);
+        assert_eq!(fs::read(r.0.join("CHANGELOG.md")).unwrap(), changelog);
+        assert_eq!(fs::read(r.0.join(".git/index")).unwrap(), index);
+        if directory {
+            fs::remove_dir(path).unwrap();
+        } else {
+            fs::remove_file(path).unwrap();
+        }
+    }
+    apply_file_release_plan(&plan).unwrap();
+    assert_eq!(fs::read(r.0.join("VERSION")).unwrap(), b"1.0.1\n");
+}
 impl ProcessRunner for AlternateClosureHost<'_> {
     fn run(&self, command: &ProcessRequest) -> std::io::Result<crate::ProcessOutput> {
         let mut output = self.0.run(command)?;
@@ -183,6 +768,7 @@ fn package_published_closure_accepts_git_eol_conversion_but_rejects_real_script_
     let runner = Checks::new();
     let q = request(&r.0, "patch", false, &runner);
     assert_eq!(close(&r.0, &q, &runner).code, 0);
+    use_host_closure(&r.0, &runner, false);
     let q = release_request(&r.0, "patch");
     let plan = build(&r.0, "fix: publish", &q, &runner).unwrap().unwrap();
     for (path, bytes) in plan.writes {
@@ -283,6 +869,7 @@ fn package_published_closure_reuses_history_but_rejects_unpublished_or_changed_i
 fn package_published_closure_checks_shared_workspace_inputs() {
     let r = scoped_rust_build_fixture();
     let runner = Checks::new();
+    use_host_closure(&r.0, &runner, false);
     let q = release_request(&r.0, "minor");
     let plan = build(&r.0, "feat: publish", &q, &runner).unwrap().unwrap();
     for (path, bytes) in plan.writes {
@@ -330,6 +917,9 @@ fn package_published_closure_checks_declared_files_and_unproven_ignored_inputs()
         assert_eq!(close(&r.0, &q, &runner).code, 0);
         let q = release_request(&r.0, "patch");
         let plan = build(&r.0, "fix: publish", &q, &runner).unwrap().unwrap();
+        // Model a historical publication by the old tool. The new tool must
+        // not newly certify the old algorithm's missing ignored-input coverage.
+        use_host_closure(&r.0, &runner, false);
         for (path, bytes) in plan.writes {
             fs::write(path, bytes).unwrap();
         }
@@ -1198,6 +1788,13 @@ impl ProcessRunner for Checks {
             }
             if self.action.as_deref() == Some("new-file") {
                 fs::write(request.cwd.join("pkg/src/new.rs"), b"// generated source\n")?;
+            }
+            if self.action.as_deref() == Some("new-build-file") {
+                fs::create_dir_all(request.cwd.join(".runtime/global"))?;
+                fs::write(
+                    request.cwd.join(".runtime/global/new.txt"),
+                    b"generated build input",
+                )?;
             }
             if self.action.as_deref() == Some("artifact-drift") {
                 fs::create_dir_all(request.cwd.join(".runtime"))?;

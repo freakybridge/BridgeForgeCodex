@@ -30,6 +30,8 @@ fn development_capabilities_and_mutation_flags_are_explicit() {
         "package-development-v1",
         "package-stability-v1",
         "git-sync-development-closure-v1",
+        "portable-development-evidence-v1",
+        "release-external-analysis-preview-v1",
     ] {
         assert!(
             identity["capabilities"]

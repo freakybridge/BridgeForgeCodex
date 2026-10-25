@@ -60,7 +60,8 @@ pub fn self_test() -> CommandOutcome {
             "version":env!("CARGO_PKG_VERSION"),"product_version":product,
             "capabilities":["factory-runtime-prepare-v1","factory-transaction-v1","factory-source-projection-v1",
                 "package-development-v1","package-stability-v1","git-sync-development-closure-v1",
-                "rust-mixed-workspace-v1","package-adoption-v1","scoped-rust-evidence-v1"]
+                "rust-mixed-workspace-v1","package-adoption-v1","scoped-rust-evidence-v1",
+                "portable-development-evidence-v1","release-external-analysis-preview-v1"]
         })),
         Err(error) => blocked("factory-self-test", error),
     }

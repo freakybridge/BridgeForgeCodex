@@ -100,6 +100,14 @@ schema 4 保留 `release_model=product-packages`、原生适配和不可移动�
 
 收口记录是随代码保存的追加历史，含版本、内容/环境/依赖指纹、检查命令和输出摘要、最终产物摘要及接受依据。纯证据失效只重新验证，不重复升版。正式发布仍用 `--release-preview` / `--release-analysis-file` / `--release`；分析只含 product 和可选 `targets.product`，子包级别与理由从收口历史累计读取。已有 `required_checks` / `check_scopes` 继续校验主程序及受影响子包的必需证据，不替代 develop 的实际检查，也不在 release 自动执行 develop。
 
+具备 `portable-development-evidence-v1` 的工具写入 `evidence_schema=3`，记录内容、依赖、构建、环境、检查配置、合同、检查输入及适配器的分项摘要。长期证据排除 `CODEX_THREAD_ID`、`CODEX_SESSION_ID`、`CODEX_TOOL_CALL_ID` 和 `CODEX_APP_TOOLS_PIPE_PATH` 这些会话关联信息；其余环境、工具链和 Python 运行时检查保留。预览/执行计划仍绑定严格宿主指纹，不能把另一宿主的分析直接交给 apply/release。`develop --preview` 的 `pending_reasons` 解释待处理包；schema 3 可报告变化类别，旧总摘要无法可靠拆解时明确报告缺失的可移植证明，不输出环境原值。
+
+旧记录保持原哈希链：仍能精确匹配原算法的记录直接复用；已正式发布的历史证书仅在内容、版本、依赖、配置及声明输入证明未变时复用。隐式 Cargo.lock 按包的实际依赖闭包比较，显式全局构建/检查输入仍按完整输入核验。未正式发布且旧总摘要失配的记录不自动转换成新认证；无法证明时须经实际受管检查补验。新记录不能借历史复用跳过真实环境变化。
+
+显式 `build_inputs` 包含被 Git 忽略的文件及其存在状态；目录声明同时绑定所有成员和空目录，验证期间新增、删除或改动成员会阻断认证。只有计划内版本写入和声明的检查产物更新可进入最终证据。旧摘要未覆盖这些声明输入时不能直接复用，须受管补验，内容不变不重复升版。
+
+具备 `release-external-analysis-preview-v1` 时，`--release-preview --release-analysis-file <绝对路径>` 可读取目标项目以外的普通分析文件，仍核验唯一 JSON、当前项目 fingerprint、必需证据和输入漂移，用于不写目标项目的 dry-run。外部路径不得经过 link/reparse；项目内分析仍放在忽略的 `.runtime/`。此能力只适用于 release 预览，实际 release 和 develop 继续要求本项目 `.runtime` 分析文件；预览通过不证明后续提交、Hook、推送或网络成功。
+
 Cargo.lock、已声明 Python lock、明确全局构建输入和自动记录不因单独变化直接升包；业务生成源码与资源不属于自动记录。不得执行任意 setup.py、SCM 后端、安装脚本或动态宏来猜测元数据。未知格式、歧义归属或不支持的证据应报告缺口。
 
 配置迁移只写配置，不改变业务版本或锁。无变化的既有包无需补造收口；存在未发布内容、未知版本变化或不可证明历史时必须先处理缺口。本合同不授权真实下游写入。

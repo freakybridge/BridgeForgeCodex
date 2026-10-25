@@ -133,7 +133,48 @@ pub(super) fn read(
         return Err("release analysis must be ignored and untracked".into());
     }
     let bytes = config::read_current(root, &relative)?.ok_or("release analysis file is missing")?;
-    let value = crate::json::parse_unique_json(&bytes, "schema 4 release analysis")?;
+    let analysis = validate(&bytes, capture)?;
+    capture.inputs.insert(path, Some(bytes));
+    Ok(Some(analysis))
+}
+
+/// A preview produces no transaction and may inspect an external analysis file
+/// without writing into the target project. Mutation paths must keep using read.
+pub(super) fn read_preview(
+    root: &Path,
+    request: &Request,
+    capture: &mut Capture,
+) -> Result<Option<Analysis>, String> {
+    let Some(path) = request
+        .analysis_file
+        .as_ref()
+        .filter(|p| p.is_absolute() && !p.starts_with(root))
+    else {
+        return read(root, request, capture);
+    };
+    for ancestor in path.ancestors().filter(|p| p.exists()) {
+        if crate::persistence::is_link_or_reparse(ancestor).map_err(|e| e.to_string())? {
+            return Err("external preview analysis must not traverse a link".into());
+        }
+    }
+    if !fs::symlink_metadata(path)
+        .map_err(|e| e.to_string())?
+        .is_file()
+    {
+        return Err("external preview analysis must be a regular file".into());
+    }
+    let path = path.canonicalize().map_err(|e| e.to_string())?;
+    if path.starts_with(root.canonicalize().map_err(|e| e.to_string())?) {
+        return Err("project-local analysis must use its ignored .runtime path".into());
+    }
+    let bytes = fs::read(&path).map_err(|e| e.to_string())?;
+    let analysis = validate(&bytes, capture)?;
+    capture.inputs.insert(path, Some(bytes));
+    Ok(Some(analysis))
+}
+
+fn validate(bytes: &[u8], capture: &Capture) -> Result<Analysis, String> {
+    let value = crate::json::parse_unique_json(bytes, "schema 4 release analysis")?;
     let analysis: Analysis =
         serde_json::from_value(value).map_err(|e| format!("invalid release analysis: {e}"))?;
     if analysis.schema != 1 || analysis.fingerprint != capture.fingerprint {
@@ -142,8 +183,7 @@ pub(super) fn read(
                 .into(),
         );
     }
-    capture.inputs.insert(path, Some(bytes));
-    Ok(Some(analysis))
+    Ok(analysis)
 }
 
 pub(super) fn validate_checks(

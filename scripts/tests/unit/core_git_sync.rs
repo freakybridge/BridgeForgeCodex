@@ -999,6 +999,142 @@ fn release_snapshot_unavailable_disables_reuse_without_new_preparation_requireme
 }
 
 #[test]
+fn release_declared_directory_drift_blocks_reuse_and_final_write() {
+    struct Drift {
+        late: bool,
+        fetched: std::cell::Cell<bool>,
+        identities: std::cell::Cell<usize>,
+        injected: std::cell::Cell<bool>,
+    }
+    impl ProcessRunner for Drift {
+        fn run(&self, request: &ProcessRequest) -> std::io::Result<ProcessOutput> {
+            let args = request
+                .args
+                .iter()
+                .map(|a| a.to_string_lossy())
+                .collect::<Vec<_>>();
+            let output = SystemProcessRunner.run(request)?;
+            let mut inject = false;
+            if request.program == "git" && args.first().is_some_and(|a| a == "fetch") {
+                self.fetched.set(true);
+                inject = !self.late;
+            }
+            if self.late
+                && self.fetched.get()
+                && args.iter().any(|a| a == "--git-path")
+                && args.iter().any(|a| a == "--git-common-dir")
+            {
+                self.identities.set(self.identities.get() + 1);
+                // Transaction capture, plan-reuse capture, then the post-prepare guard.
+                inject = self.identities.get() == 3;
+            }
+            if inject {
+                fs::create_dir_all(request.cwd.join(".runtime/global/new-empty"))?;
+                self.injected.set(true);
+            }
+            Ok(output)
+        }
+    }
+    for late in [false, true] {
+        let (repo, remote) =
+            versioned_repository_with_strategy("declared-directory-drift", true, true);
+        let config_path = repo.0.join(".codex/bridgeforge-version.json");
+        let mut cfg: serde_json::Value =
+            serde_json::from_slice(&fs::read(&config_path).unwrap()).unwrap();
+        cfg["build_inputs"] = json!([".runtime/global/"]);
+        fs::write(config_path, serde_json::to_vec(&cfg).unwrap()).unwrap();
+        fs::create_dir_all(repo.0.join(".runtime/global")).unwrap();
+        fs::write(repo.0.join("tracked.txt"), b"changed package\n").unwrap();
+        let request = fixture::analysis(&repo.0, &SystemProcessRunner, "patch", &[]).unwrap();
+        let index = fs::read(repo.0.join(".git/index")).unwrap();
+        let version = fs::read(repo.0.join("VERSION")).unwrap();
+        let changelog = fs::read(repo.0.join("CHANGELOG.md")).unwrap();
+        let runner = Drift {
+            late,
+            fetched: false.into(),
+            identities: 0.into(),
+            injected: false.into(),
+        };
+        let result = super::sync(
+            &repo.0,
+            &runner,
+            GitSyncOptions {
+                release: true,
+                skip_push: true,
+                message: Some("fix: directory guarded release".into()),
+                release_request: request,
+                ..Default::default()
+            },
+        );
+        assert!(
+            runner.injected.get(),
+            "did not reach intended mutation boundary: {}",
+            result.stderr
+        );
+        assert_eq!(result.code, 2, "{}", result.stderr);
+        if late {
+            assert!(
+                result.stderr.contains("directory membership changed"),
+                "{}",
+                result.stderr
+            );
+        } else {
+            assert!(
+                result.stderr.contains("components: build"),
+                "{}",
+                result.stderr
+            );
+        }
+        assert_eq!(fs::read(repo.0.join("VERSION")).unwrap(), version);
+        assert_eq!(fs::read(repo.0.join("CHANGELOG.md")).unwrap(), changelog);
+        assert_eq!(fs::read(repo.0.join(".git/index")).unwrap(), index);
+        fs::remove_dir_all(remote).unwrap();
+    }
+}
+
+#[test]
+fn preparation_declared_directory_drift_is_not_certified() {
+    struct CheckMutation;
+    impl ProcessRunner for CheckMutation {
+        fn run(&self, request: &ProcessRequest) -> std::io::Result<ProcessOutput> {
+            if request.program == "fixture-prepare-check" {
+                fs::create_dir_all(request.cwd.join(".runtime/global/added-empty"))?;
+                return Ok(out(0, "fixture check passed but added an input"));
+            }
+            SystemProcessRunner.run(request)
+        }
+    }
+    let (repo, remote) = versioned_repository_with_strategy("prepare-directory-drift", true, true);
+    let config_path = repo.0.join(".codex/bridgeforge-version.json");
+    let mut cfg: serde_json::Value =
+        serde_json::from_slice(&fs::read(&config_path).unwrap()).unwrap();
+    cfg["build_inputs"] = json!([".runtime/global/"]);
+    fs::write(config_path, serde_json::to_vec(&cfg).unwrap()).unwrap();
+    fs::create_dir_all(repo.0.join(".runtime/global")).unwrap();
+    fs::write(repo.0.join(".codex/development-checks.json"),
+        serde_json::to_vec(&json!({"schema":1,"checks":[{"id":"mutate","program":"fixture-prepare-check","args":[],"timeout_seconds":30}]})).unwrap()).unwrap();
+    fs::write(repo.0.join("tracked.txt"), b"package change\n").unwrap();
+    let result = prepare_release(&repo.0, &CheckMutation, "fix: preparation guard", None);
+    assert_eq!(result.code, 2, "{}", result.stderr);
+    assert!(
+        result.stderr.contains("directory membership changed"),
+        "{}",
+        result.stderr
+    );
+    let receipt: serde_json::Value = serde_json::from_slice(
+        &fs::read(
+            repo.0
+                .join(".runtime/bridgeforge-codex/release-preparation/current.json"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_ne!(receipt["status"], "prepared");
+    assert_eq!(fs::read(repo.0.join("VERSION")).unwrap(), b"1.0.0\n");
+    fs::remove_dir_all(remote).unwrap();
+}
+
+#[test]
 fn preparation_record_scope_does_not_exempt_instructions_code_or_invalid_documents() {
     let (repo, remote) = versioned_repository("record-boundaries", true);
     install_record_documents(&repo.0);

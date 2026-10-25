@@ -138,6 +138,8 @@ pub(super) struct Entry {
     // this field for those records so their append-only chain stays byte-valid.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub evidence_schema: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evidence_components: Option<BTreeMap<String, String>>,
 }
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -156,11 +158,32 @@ impl Ledger {
         let mut previous = String::new();
         let mut versions = BTreeMap::new();
         for entry in &ledger.entries {
-            if entry.evidence_schema.is_some_and(|schema| schema != 2) {
+            if entry
+                .evidence_schema
+                .is_some_and(|schema| !matches!(schema, 2 | 3))
+            {
                 return Err(format!(
                     "{}: unsupported closure evidence schema {:?}; upgrade the tool before release",
                     entry.id, entry.evidence_schema
                 ));
+            }
+            match (entry.evidence_schema, &entry.evidence_components) {
+                (Some(3), Some(parts))
+                    if parts.keys().map(String::as_str).collect::<BTreeSet<_>>()
+                        == BTreeSet::from([
+                            "adapters",
+                            "build",
+                            "check_inputs",
+                            "content",
+                            "contracts",
+                            "dependencies",
+                            "environment",
+                            "policy",
+                        ])
+                        && parts.get("content") == Some(&entry.content)
+                        && hash(parts)? == entry.evidence => {}
+                (None | Some(2), None) => {}
+                _ => return Err(format!("{}: invalid closure evidence components", entry.id)),
             }
             let mut unhashed = entry.clone();
             unhashed.hash.clear();
@@ -323,6 +346,22 @@ fn rust_build_evidence(
     products: &BTreeSet<String>,
     overlay: &model::Writes,
 ) -> Result<BTreeMap<String, Option<String>>, String> {
+    rust_build_evidence_from(capture, scope, products, &mut |path| {
+        overlay
+            .get(path)
+            .cloned()
+            .map(Some)
+            .map(Ok)
+            .unwrap_or_else(|| config::read_current(root, path))
+    })
+}
+
+fn rust_build_evidence_from(
+    capture: &Capture,
+    scope: &BTreeSet<String>,
+    products: &BTreeSet<String>,
+    read: &mut impl FnMut(&str) -> Result<Option<Vec<u8>>, String>,
+) -> Result<BTreeMap<String, Option<String>>, String> {
     let mut workspaces = BTreeMap::<String, BTreeSet<String>>::new();
     for id in scope {
         if let Some(package) = capture
@@ -339,12 +378,7 @@ fn rust_build_evidence(
     }
     let mut evidence = BTreeMap::new();
     for (workspace, names) in workspaces {
-        let bytes = overlay
-            .get(&workspace)
-            .cloned()
-            .map(Some)
-            .map(Ok)
-            .unwrap_or_else(|| config::read_current(root, &workspace))?
+        let bytes = read(&workspace)?
             .ok_or_else(|| format!("{workspace}: Rust workspace evidence is missing"))?;
         let mut document = std::str::from_utf8(&bytes)
             .map_err(|e| e.to_string())?
@@ -367,12 +401,7 @@ fn rust_build_evidence(
             .with_file_name("Cargo.lock")
             .to_string_lossy()
             .replace('\\', "/");
-        let bytes = overlay
-            .get(&lock)
-            .cloned()
-            .map(Some)
-            .map(Ok)
-            .unwrap_or_else(|| config::read_current(root, &lock))?;
+        let bytes = read(&lock)?;
         let normalized = bytes
             .as_deref()
             .map(|bytes| crate::source_projection::lock_dependency_closure(bytes, &names))
@@ -387,13 +416,49 @@ struct Fingerprints {
     content: String,
     evidence: String,
     legacy_evidence: String,
+    host_evidence: String,
+    components: BTreeMap<String, String>,
+    legacy_complete: bool,
 }
 
 impl Fingerprints {
     fn matches(&self, entry: &Entry) -> bool {
         entry.content == self.content
-            && (entry.evidence == self.evidence
-                || (entry.evidence_schema.is_none() && entry.evidence == self.legacy_evidence))
+            && match entry.evidence_schema {
+                Some(3) => entry.evidence == self.evidence,
+                Some(2) => self.legacy_complete && entry.evidence == self.host_evidence,
+                None => {
+                    self.legacy_complete
+                        && (entry.evidence == self.host_evidence
+                            || entry.evidence == self.legacy_evidence)
+                }
+                _ => false,
+            }
+    }
+
+    fn mismatch(&self, entry: Option<&Entry>) -> String {
+        let Some(entry) = entry else {
+            return "missing closure record".into();
+        };
+        if entry.content != self.content {
+            return "package content changed".into();
+        }
+        if entry.evidence_schema != Some(3) && !self.legacy_complete {
+            return "validation evidence changed (legacy proof does not cover declared global build inputs; run managed develop to verify those inputs)".into();
+        }
+        if let Some(parts) = &entry.evidence_components {
+            let changed = self
+                .components
+                .iter()
+                .filter(|(name, value)| parts.get(*name) != Some(*value))
+                .map(|(name, _)| name.as_str())
+                .collect::<Vec<_>>();
+            return format!(
+                "validation evidence changed (components: {}; run managed develop checks for these inputs)",
+                changed.join(", ")
+            );
+        }
+        "validation evidence changed (legacy aggregate evidence cannot identify dependency/build/environment/policy differences; no portable input proof is stored; run managed develop once in a stable validation environment)".into()
     }
 }
 
@@ -432,6 +497,8 @@ fn fingerprints(
             .entry(root.join(path))
             .or_insert(bytes.clone());
     }
+    let (declared_build, legacy_complete) =
+        development_inputs::capture(root, cfg, capture, &files)?;
     let mut contents = BTreeMap::new();
     for id in &ids {
         let mut owned = BTreeMap::new();
@@ -524,20 +591,47 @@ fn fingerprints(
             "build":legacy_build,"environment":capture.environment,"policy":cfg.development.get(&id),
             "contracts":contracts,"check_inputs":check_inputs,"adapters":format!("{:?}",cfg.native.adapters)}),
         )?;
-        let evidence = hash(
+        let host_evidence = hash(
             &json!({"content":contents[&id],"dependencies":dependency_inputs,
             "build":scoped_build,"rust_build":rust_build,"environment":capture.environment,"policy":cfg.development.get(&id),
             "contracts":contracts,"check_inputs":check_inputs,"adapters":format!("{:?}",cfg.native.adapters)}),
         )?;
+        let components = BTreeMap::from([
+            ("content".into(), contents[&id].clone()),
+            ("dependencies".into(), hash(&dependency_inputs)?),
+            (
+                "build".into(),
+                hash(
+                    &json!({"build":scoped_build,"rust_build":rust_build,"declared":declared_build}),
+                )?,
+            ),
+            (
+                "environment".into(),
+                capture.development_environment.clone(),
+            ),
+            ("policy".into(), hash(&cfg.development.get(&id))?),
+            ("contracts".into(), hash(&contracts)?),
+            ("check_inputs".into(), hash(&check_inputs)?),
+            (
+                "adapters".into(),
+                hash(&format!("{:?}", cfg.native.adapters))?,
+            ),
+        ]);
+        let evidence = hash(&components)?;
         result.insert(
             id.clone(),
             Fingerprints {
                 content: contents[&id].clone(),
                 evidence,
                 legacy_evidence,
+                host_evidence,
+                components,
+                legacy_complete,
             },
         );
     }
+    verify_release_inputs(&capture.inputs)?;
+    development_inputs::verify(root, capture, &capture.inputs)?;
     Ok(result)
 }
 
@@ -576,11 +670,21 @@ fn published_unchanged(
     {
         return Ok(reusable);
     }
+    let products = product_workspaces(root, cfg, capture)?;
     for (id, current) in hashes {
         let (Some(entry), Some(old)) = (ledger.latest(id), published.latest(id)) else {
             continue;
         };
-        if entry.hash != old.hash
+        // Portable certificates describe the validation environment. Publication
+        // may bridge Git EOL conversion, never a real tool/build environment change.
+        if (entry.evidence_schema != Some(3) && !current.legacy_complete)
+            || (entry.evidence_schema == Some(3)
+                && entry
+                    .evidence_components
+                    .as_ref()
+                    .and_then(|p| p.get("environment"))
+                    != current.components.get("environment"))
+            || entry.hash != old.hash
             || entry.content != current.content
             || entry.after.as_deref()
                 != capture.current.packages.get(id).map(|p| p.version.as_str())
@@ -609,20 +713,51 @@ fn published_unchanged(
         }) {
             continue;
         }
-        let mut paths = cfg.build_inputs.iter().cloned().collect::<BTreeSet<_>>();
-        for dep in &scope {
-            if let Some(package) = capture.current.packages.get(dep) {
-                if package.language == Language::Rust {
-                    paths.insert(package.workspace.clone());
-                    paths.insert(
-                        Path::new(&package.workspace)
-                            .with_file_name("Cargo.lock")
-                            .to_string_lossy()
-                            .replace('\\', "/"),
-                    );
-                }
+        let rust_now = rust_build_evidence(root, capture, &scope, &products, &BTreeMap::new())?;
+        reader.prefetch(
+            &capture.boundary,
+            &rust_now.keys().cloned().collect::<Vec<_>>(),
+        )?;
+        let mut old_rust_inputs = BTreeMap::new();
+        for path in rust_now.keys() {
+            old_rust_inputs.insert(
+                path.clone(),
+                revision_payload(root, &capture.boundary, path, &reader)?,
+            );
+        }
+        if old_rust_inputs.values().any(Option::is_none)
+            || rust_now
+                .keys()
+                .any(|path| capture.git_mode_changes.contains(path))
+        {
+            continue;
+        }
+        if rust_now
+            .keys()
+            .any(|path| capture.git_content_changes.contains(path))
+        {
+            // Historical blobs use LF; the checkout may use CRLF. Cargo TOML
+            // newline normalization must not masquerade as a dependency change.
+            let normalize = |bytes: Option<Vec<u8>>| -> Result<Option<Vec<u8>>, String> {
+                bytes
+                    .map(|b| {
+                        String::from_utf8(b)
+                            .map(|s| s.replace("\r\n", "\n").into_bytes())
+                            .map_err(|e| e.to_string())
+                    })
+                    .transpose()
+            };
+            let rust_old = rust_build_evidence_from(capture, &scope, &products, &mut |path| {
+                normalize(old_rust_inputs.get(path).cloned().flatten())
+            })?;
+            let rust_current = rust_build_evidence_from(capture, &scope, &products, &mut |path| {
+                normalize(config::read_current(root, path)?)
+            })?;
+            if rust_current != rust_old {
+                continue;
             }
         }
+        let mut paths = cfg.build_inputs.iter().cloned().collect::<BTreeSet<_>>();
         // Explicit global build inputs apply even when no package owns them.
         for path in capture
             .inventory
@@ -630,7 +765,10 @@ fn published_unchanged(
             .chain(capture.current.inputs.keys())
             .chain(capture.changes.iter().map(|c| &c.path))
         {
-            if scope.iter().any(|dep| uses_build(cfg, capture, dep, path)) {
+            if scope.iter().any(|dep| uses_build(cfg, capture, dep, path))
+                && (!rust_now.contains_key(path.as_str())
+                    || cfg.build_inputs.iter().any(|p| polyglot::owns(p, path)))
+            {
                 paths.insert(path.clone());
             }
         }
@@ -709,15 +847,14 @@ pub(super) fn release_gate(
     let published = published_unchanged(root, cfg, capture, &ledger, &hashes, runner)?;
     let pending = pending(cfg, capture, &ledger, &hashes, &published);
     if !pending.is_empty() {
-        let reasons = pending.iter().map(|id| {
-            let reason = match ledger.latest(id) {
-                None => "missing closure record",
-                Some(entry) if entry.content != hashes[id].content => "package content changed",
-                Some(entry) if entry.evidence_schema.is_none() => "validation evidence changed (neither 6.x nor 7.x evidence matches; dependency/build/environment/policy inputs require validation)",
-                Some(_) => "validation evidence changed (dependency/build/environment/policy inputs require validation)",
-            };
-            format!("{id}: {reason}")
-        }).collect::<Vec<_>>().join("; ");
+        let reasons = pending
+            .iter()
+            .map(|id| {
+                let reason = hashes[id].mismatch(ledger.latest(id));
+                format!("{id}: {reason}")
+            })
+            .collect::<Vec<_>>()
+            .join("; ");
         return Err(format!(
             "package development closure required: {reasons}; complete validation and managed version closure before release (release does not run develop)"
         ));
@@ -894,6 +1031,15 @@ fn prepare(
     let mut receipt = json!({"schema":1,"status":"development-analysis-required","fingerprint":capture.fingerprint,
         "affected_packages":affected,"packages":capture.current.packages,"writes":[],"product_version":capture.product_version});
     receipt["reused_published_packages"] = json!(published);
+    receipt["pending_reasons"] = json!(affected.iter().map(|id| {
+        let reason = if ledger.latest(id).is_some_and(|entry| hashes[id].matches(entry))
+            || published.contains(id) {
+            "development artifact missing or changed; restore or revalidate the declared artifact".into()
+        } else {
+            hashes[id].mismatch(ledger.latest(id))
+        };
+        (id.clone(), reason)
+    }).collect::<BTreeMap<_, _>>());
     if affected.is_empty() {
         receipt["status"] = json!("nothing-to-close");
         return Ok(Err(receipt));
@@ -1097,6 +1243,7 @@ fn prepare(
     }
     verify_release_inputs(&capture.inputs)?;
     receipt["status"] = json!("development-planned");
+    development_inputs::verify(root, &capture, &capture.inputs)?;
     receipt["affected_packages"] = json!(affected);
     receipt["versions"] = json!(versions);
     receipt["stability"] = json!(stability);
@@ -1278,6 +1425,7 @@ fn execute(
             .insert(path.clone(), config::read_current(root, path)?);
     }
     verify_release_inputs(&p.capture.inputs)?;
+    development_inputs::verify(root, &p.capture, &p.capture.inputs)?;
     save_journal(root, &journal)?;
     let result: Result<Value, String> = (|| {
         let mut proofs = BTreeMap::<String, Vec<Value>>::new();
@@ -1407,6 +1555,7 @@ fn execute(
             }
         }
         verify_release_inputs(&expected)?;
+        development_inputs::verify(root, &p.capture, &expected)?;
         if history::git(root, &InspectionRunner(runner), &["rev-parse", "HEAD"])?.trim()
             != p.capture.head
         {
@@ -1433,7 +1582,7 @@ fn execute(
             false,
             &mut |path| config::read_current(root, path),
         )?;
-        p.capture.inputs = expected;
+        p.capture.inputs = expected.clone();
         let hashes = fingerprints(root, &p.cfg, &mut p.capture)?;
         let mut changes = Vec::new();
         for files in artifacts.values() {
@@ -1472,7 +1621,7 @@ fn execute(
                 .cloned()
                 .unwrap_or_else(|| "retired".into());
             changes.push(json!({"id":id,"version_before":before,"version_after":after,"reason":a.reason,"stability":stability}));
-            p.ledger.append(Entry{id:id.clone(),before,after,content:current.content.clone(),evidence:current.evidence.clone(),evidence_schema:Some(2),
+            p.ledger.append(Entry{id:id.clone(),before,after,content:current.content.clone(),evidence:current.evidence.clone(),evidence_schema:Some(3),evidence_components:Some(current.components.clone()),
                 level:p.levels[id],compatibility:a.compatibility.clone(),acceptance:a.acceptance.as_ref().map(|v|json!({"fingerprint":v.fingerprint,"scope":v.scope,"reason":v.reason,"source":v.source})),reason:a.reason.clone(),stability,
                 checks:proofs.remove(id).unwrap_or_default(),artifacts:artifacts.remove(id).unwrap_or_default(),previous:String::new(),hash:String::new()})?;
         }
@@ -1484,6 +1633,7 @@ fn execute(
         journal.after.insert(RECORD.into(), bytes.clone());
         save_journal(root, &journal)?;
         verify_release_inputs(&p.capture.inputs)?;
+        development_inputs::verify(root, &p.capture, &expected)?;
         atomic(root, RECORD, &bytes)?;
         fs::remove_file(root.join(JOURNAL)).map_err(|e| e.to_string())?;
         Ok(
