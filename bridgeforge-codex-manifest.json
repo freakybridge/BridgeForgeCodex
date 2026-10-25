@@ -162,17 +162,17 @@
             {
               "source": "templates/skills/develop/references/ml-delivery.md",
               "target": "references/ml-delivery.md",
-              "sha256": "sha256:6dea3ad5659ceabf5254027036b6b792f3998809450aaf8ef93b666782d13b86"
+              "sha256": "sha256:4ea7a1a36cca38de1f65d51c5477048c6041f78a5e48258bf621c085f2634654"
             },
             {
               "source": "templates/skills/develop/references/completion-release.md",
               "target": "references/completion-release.md",
-              "sha256": "sha256:1e85029ac43237bf46dce82c05b349b02d7de9b81bb7e1c005d1d489ee69ec53"
+              "sha256": "sha256:4b90ec3ad4a16ad59309b58a7634816ff192902d83e863a1f2287cae72dd9944"
             },
             {
               "source": "templates/skills/develop/SKILL.md",
               "target": "SKILL.md",
-              "sha256": "sha256:9d3720065f674d9751959552e85c52c41a7ab26e3c8b087f9384d22047e6f55b"
+              "sha256": "sha256:e6f70624ab1645ffe1c3271995bfdddc87e5ee82d3dfc409d82310c573866f17"
             }
           ]
         },

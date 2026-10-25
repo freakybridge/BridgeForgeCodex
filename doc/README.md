@@ -8,6 +8,8 @@ delivery_layout: flat
 
 ## 从这里开始
 
+已验收：[develop 完成状态与受管收口](1_delivery/package-version-lifecycle/requirements_2026-10-26_develop-completion-state.md#用户验收与发布授权2026-10-26)（TODO-037；七项程序 fixture、factory 受管重验及最终 nothing-to-close 通过，子包未升版；自然 Agent 对话效果未验证；已授权 Forge release，实际发布结果以受管收据为准）。
+
 已验收：[骨架升级后的开发收口记录兼容](1_delivery/source-workspace-refactor/requirements_2026-10-25_closure-upgrade-compatibility.md#用户验收与发布授权2026-10-25)（TODO-036；七项回归及五组必需检查通过，lifecycle 0.1.1→0.1.2 已受管收口；Stratus 只读 release 预览由十包阻断缩小为两包真实变化，现场未变；已授权当前仓库 release，实际发布结果以受管收据为准）。
 
 已验收：[骨架路径迁移后的发布分类](1_delivery/source-workspace-refactor/requirements_2026-10-25_migration-release-classification.md#用户验收2026-10-25)（TODO-034；2026-10-25 用户验收，隔离下游回归及五组必需检查通过，lifecycle 0.1.0→0.1.1 已受管收口；主程序仍为 7.0.0，未提交推送发布，未修改真实下游或用户级安装）。[TODO-035：开发收口失败诊断](1_delivery/source-workspace-refactor/requirements_2026-10-25_migration-release-classification.md#验收核对新增事项-todo-035) 单独登记为待确认，尚未实施。

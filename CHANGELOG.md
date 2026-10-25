@@ -15,6 +15,23 @@
 
 > **追溯说明**：v0.1.0 - v0.7.0 基于 git log 历史回溯标记，**git tag 仅从 v0.8.0 开始打**。早期未启用版本号管理是 setup_agent 自打脸问题（要求下游用但自己没用），v0.8.0 修补。
 
+## [7.0.3] - 2026-10-26
+
+### Fixed
+
+- [product][meta] 明确开发收口与完成状态判定
+
+### Release analysis
+
+- Product: 修复 develop 小修、额外包及失败中断场景的收口遗漏和完成状态表达；保留既有验证与 release 门槛，工程验证和受管重验已通过并获得用户验收。
+- `checks`: 0.1.0 -> 0.1.0 (no_package_version_change)
+- `core`: 7.0.1 -> 7.0.1 (no_package_version_change)
+- `factory`: 0.1.1 -> 0.1.1 (Revalidate the registered develop Skill and distribution inputs after completion-state workflow clarification; factory source and API are unchanged.)
+- `lifecycle`: 0.1.2 -> 0.1.2 (no_package_version_change)
+- `memory`: 0.1.0 -> 0.1.0 (no_package_version_change)
+- `skeleton`: 0.1.0 -> 0.1.0 (no_package_version_change)
+- `workflow`: 0.1.0 -> 0.1.0 (no_package_version_change)
+
 ## [7.0.2] - 2026-10-25
 
 ### Fixed

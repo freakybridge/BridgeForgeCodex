@@ -1,6 +1,6 @@
 {
   "schema_version": 4,
-  "release_version": "7.0.2",
+  "release_version": "7.0.3",
   "release_model": "product-packages",
   "host": "codex",
   "stamp": ".codex/.bridgeforge_codex_version",
@@ -428,7 +428,7 @@
       "source": "Cargo.lock",
       "target": ".codex/hooks/Cargo.lock",
       "strategy": "whole",
-      "current_sha256": "sha256:4a883bf7eff60fb3cd141d99cfc131032504472d62527654867e19900cb17a82",
+      "current_sha256": "sha256:59cff37462bc4480aa776c4dc768775d0d39410059853de0d08581176fa40376",
       "render": "public-runtime-lock"
     },
     {
@@ -436,7 +436,7 @@
       "source": "Cargo.toml",
       "target": ".codex/hooks/Cargo.toml",
       "strategy": "whole",
-      "current_sha256": "sha256:19880edbde2c36e89a3c97add28aee9a710bc96c6d0b0b974b13f7871e8819ca",
+      "current_sha256": "sha256:c5afd8cc266f6bd1c410e8a72b287ddbd8f6954ddb8a12ac90017155995fb202",
       "render": "public-runtime-workspace"
     },
     {
@@ -1225,8 +1225,8 @@
           "status": "ok"
         }
       },
-      "source_tree_sha256": "sha256:5e1b9ecfeb05bde74d35849961a8bea5370d15d85709b8e6218b4d7cf4aa4eb7",
-      "lockfile_sha256": "sha256:4a883bf7eff60fb3cd141d99cfc131032504472d62527654867e19900cb17a82",
+      "source_tree_sha256": "sha256:2e9754283308dc2949ffed945bf96d970f5a4679953d3295a72fdad0135212c5",
+      "lockfile_sha256": "sha256:59cff37462bc4480aa776c4dc768775d0d39410059853de0d08581176fa40376",
       "build_recipe_sha256": "sha256:d26d34aa838a1a1f5556ef92f492d2abc7b415c2163e2a4c9ea7e07121dad78a",
       "self_test_sha256": "sha256:74a8b4a4c20ff1f5cc6660697138c151d9ed2172e6d57e75cce671d773e98f5a",
       "source_projection": "public-runtime-v1"
@@ -1271,8 +1271,8 @@
           "status": "ok"
         }
       },
-      "source_tree_sha256": "sha256:5e1b9ecfeb05bde74d35849961a8bea5370d15d85709b8e6218b4d7cf4aa4eb7",
-      "lockfile_sha256": "sha256:4a883bf7eff60fb3cd141d99cfc131032504472d62527654867e19900cb17a82",
+      "source_tree_sha256": "sha256:2e9754283308dc2949ffed945bf96d970f5a4679953d3295a72fdad0135212c5",
+      "lockfile_sha256": "sha256:59cff37462bc4480aa776c4dc768775d0d39410059853de0d08581176fa40376",
       "build_recipe_sha256": "sha256:079aefde96a8925913b7b6cd3ee9d8c7086014ad5e4b6e3f74a911b2ce49e537",
       "self_test_sha256": "sha256:6b0426352bb099a61fae52600d4f684c0e11bca644fa767a9b79d224e939b0e0",
       "source_projection": "public-runtime-v1"
