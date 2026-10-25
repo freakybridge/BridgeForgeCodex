@@ -244,7 +244,7 @@ fn finish(
             ));
         }
     }
-    let ledger = development::release_gate(root, cfg, &mut capture)?;
+    let ledger = development::release_gate(root, cfg, &mut capture, runner)?;
     if !analysis.packages.is_empty()
         || analysis.targets.keys().any(|id| id != "product")
         || !analysis.interface_impacts.is_empty()
@@ -515,7 +515,7 @@ pub fn build(
 ) -> Result<Option<FileReleasePlan>, String> {
     let cfg = load(root)?.ok_or("release requires schema 4 migration; run --migration-plan")?;
     let mut capture = capture(root, &cfg, runner)?;
-    development::release_gate(root, &cfg, &mut capture)?;
+    development::release_gate(root, &cfg, &mut capture, runner)?;
     let analysis = analysis::read(root, request, &mut capture)?;
     if capture.changes.iter().all(|c| c.role == "record")
         && analysis.as_ref().is_none_or(|a| a.targets.is_empty())
@@ -535,7 +535,7 @@ pub fn preview(
     let result = (|| {
         let cfg = load(root)?.ok_or("release requires schema 4 migration; run --migration-plan")?;
         let mut capture = capture(root, &cfg, runner)?;
-        development::release_gate(root, &cfg, &mut capture)?;
+        development::release_gate(root, &cfg, &mut capture, runner)?;
         let analysis = analysis::read(root, request, &mut capture)?;
         if capture.changes.iter().all(|c| c.role == "record")
             && analysis.as_ref().is_none_or(|a| a.targets.is_empty())

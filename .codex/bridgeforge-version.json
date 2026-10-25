@@ -356,7 +356,7 @@
             "--target-dir",
             ".runtime/source-workspace-refactor/cargo",
             "--",
-            "--test-threads=1"
+            "--test-threads=4"
           ],
           "id": "lifecycle-unit",
           "inputs": [

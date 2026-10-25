@@ -2,6 +2,360 @@
 use super::*;
 use std::sync::Mutex;
 
+// Reconstruct the published 6.0.0 serializer independently of the production
+// compatibility branch. This fixture has one standalone Rust package, no
+// dependencies, no extra check inputs and no stability contracts.
+fn use_legacy_closure(root: &Path, runner: &dyn ProcessRunner) {
+    let cfg = load(root).unwrap().unwrap();
+    let current = capture(root, &cfg, runner).unwrap();
+    let mut ledger = development::Ledger::load(root).unwrap();
+    let entry = ledger.entries.last_mut().unwrap();
+    let evidence = json!({
+        "content":entry.content,
+        "dependencies":{"a":entry.content},
+        "build":{"pkg/Cargo.lock":digest(&fs::read(root.join("pkg/Cargo.lock")).unwrap())},
+        "environment":current.environment,
+        "policy":cfg.development.get("a"),
+        "contracts":{},"check_inputs":{},
+        "adapters":format!("{:?}",cfg.native.adapters)
+    });
+    entry.evidence = digest(&serde_json::to_vec(&evidence).unwrap());
+    entry.evidence_schema = None;
+    entry.hash.clear();
+    entry.hash = digest(&serde_json::to_vec(entry).unwrap());
+    write(
+        root,
+        development::RECORD,
+        &serde_json::to_vec(&ledger).unwrap(),
+    );
+}
+
+#[test]
+fn package_legacy_closure_survives_skeleton_upgrade_without_revalidation() {
+    let r = zero_fixture();
+    configure(&r.0, false);
+    write(&r.0, "pkg/src/lib.rs", b"pub fn value()->u8{2}\n");
+    let runner = Checks::new();
+    let q = request(&r.0, "patch", false, &runner);
+    let result = close(&r.0, &q, &runner);
+    assert_eq!(result.code, 0, "{}", result.stderr);
+    use_legacy_closure(&r.0, &runner);
+    let before = fs::read(r.0.join(development::RECORD)).unwrap();
+    git(&r.0, &["add", "."]);
+    git(&r.0, &["commit", "-m", "legacy development closure"]);
+    let calls = runner.calls.lock().unwrap().len();
+    let p = development::preview(&r.0, &Request::default(), &runner);
+    assert_eq!(p.code, 0, "{}", p.stderr);
+    assert_eq!(p.receipt.unwrap()["status"], "nothing-to-close");
+    let q = release_request(&r.0, "patch");
+    let plan = build(&r.0, "fix: release after upgrade", &q, &runner)
+        .unwrap()
+        .unwrap();
+    assert_eq!(plan.package_changes[0].version_after, "0.3.1");
+    assert_eq!(runner.calls.lock().unwrap().len(), calls);
+    assert_eq!(fs::read(r.0.join(development::RECORD)).unwrap(), before);
+    // A real package edit still blocks and explains why, even with a valid old record.
+    write(&r.0, "pkg/src/lib.rs", b"pub fn value()->u8{3}\n");
+    let error = preview(&r.0, "fix: unpublished edit", &Request::default(), &runner).stderr;
+    assert!(error.contains("a: package content changed"), "{error}");
+}
+
+#[test]
+fn package_legacy_closure_rejects_changed_validation_and_schema_downgrade() {
+    let r = zero_fixture();
+    configure(&r.0, false);
+    write(&r.0, "pkg/src/lib.rs", b"pub fn value()->u8{2}\n");
+    let runner = Checks::new();
+    let q = request(&r.0, "patch", false, &runner);
+    assert_eq!(close(&r.0, &q, &runner).code, 0);
+    use_legacy_closure(&r.0, &runner);
+    let before = fs::read(r.0.join(development::RECORD)).unwrap();
+    let original_lock = fs::read(r.0.join("pkg/Cargo.lock")).unwrap();
+    write(
+        &r.0,
+        "pkg/Cargo.lock",
+        &[
+            original_lock.as_slice(),
+            b"\n# changed legacy build input\n",
+        ]
+        .concat(),
+    );
+    let error = preview(&r.0, "fix: changed evidence", &Request::default(), &runner).stderr;
+    assert!(error.contains("a: validation evidence changed"), "{error}");
+    write(&r.0, "pkg/Cargo.lock", &original_lock);
+    let mut ledger = development::Ledger::load(&r.0).unwrap();
+    let entry = ledger.entries.last_mut().unwrap();
+    entry.evidence_schema = Some(2);
+    entry.hash.clear();
+    entry.hash = digest(&serde_json::to_vec(entry).unwrap());
+    write(
+        &r.0,
+        development::RECORD,
+        &serde_json::to_vec(&ledger).unwrap(),
+    );
+    let p = development::preview(&r.0, &Request::default(), &runner);
+    assert_eq!(p.receipt.unwrap()["affected_packages"], json!(["a"]));
+    // Unknown schemas and a tampered hash chain fail closed.
+    ledger.entries.last_mut().unwrap().evidence_schema = Some(99);
+    assert!(
+        development::Ledger::parse(Some(&serde_json::to_vec(&ledger).unwrap()))
+            .unwrap_err()
+            .contains("unsupported closure evidence schema")
+    );
+    let mut tampered: Value = serde_json::from_slice(&before).unwrap();
+    tampered["entries"][0]["reason"] = json!("tampered");
+    assert!(development::Ledger::parse(Some(&serde_json::to_vec(&tampered).unwrap())).is_err());
+}
+
+#[test]
+fn package_legacy_closure_mixed_history_preserves_prefix_and_modern_unmarked_records() {
+    let r = zero_fixture();
+    configure(&r.0, false);
+    write(&r.0, "pkg/src/lib.rs", b"pub fn value()->u8{2}\n");
+    let runner = Checks::new();
+    let q = request(&r.0, "patch", false, &runner);
+    assert_eq!(close(&r.0, &q, &runner).code, 0);
+    // 7.0.x used the current evidence algorithm but omitted its schema too.
+    let mut ledger = development::Ledger::load(&r.0).unwrap();
+    let entry = ledger.entries.last_mut().unwrap();
+    assert_eq!(entry.evidence_schema, Some(2));
+    entry.evidence_schema = None;
+    entry.hash.clear();
+    entry.hash = digest(&serde_json::to_vec(entry).unwrap());
+    write(
+        &r.0,
+        development::RECORD,
+        &serde_json::to_vec(&ledger).unwrap(),
+    );
+    let p = development::preview(&r.0, &Request::default(), &runner);
+    assert_eq!(p.receipt.unwrap()["status"], "nothing-to-close");
+    use_legacy_closure(&r.0, &runner);
+    let old = development::Ledger::load(&r.0).unwrap();
+    git(&r.0, &["add", "."]);
+    git(&r.0, &["commit", "-m", "published legacy closure"]);
+    write(&r.0, "pkg/src/lib.rs", b"pub fn value()->u8{3}\n");
+    let q = request(&r.0, "patch", false, &runner);
+    let result = close(&r.0, &q, &runner);
+    assert_eq!(result.code, 0, "{}", result.stderr);
+    let new = development::Ledger::load(&r.0).unwrap();
+    new.extends(&old).unwrap();
+    assert_eq!(
+        serde_json::to_value(&new.entries[..old.entries.len()]).unwrap(),
+        serde_json::to_value(&old.entries).unwrap()
+    );
+    assert_eq!(new.entries.last().unwrap().evidence_schema, Some(2));
+    assert_eq!(new.entries.last().unwrap().after.as_deref(), Some("0.3.2"));
+    assert_eq!(
+        development::preview(&r.0, &Request::default(), &runner)
+            .receipt
+            .unwrap()["status"],
+        "nothing-to-close"
+    );
+}
+
+struct AlternateClosureHost<'a>(&'a Checks);
+impl ProcessRunner for AlternateClosureHost<'_> {
+    fn run(&self, command: &ProcessRequest) -> std::io::Result<crate::ProcessOutput> {
+        let mut output = self.0.run(command)?;
+        if command.program == "rustc" && command.args == vec![std::ffi::OsString::from("-vV")] {
+            output
+                .stdout
+                .extend_from_slice(b"\nfixture alternate validation host\n");
+        }
+        Ok(output)
+    }
+}
+
+#[test]
+fn package_published_closure_accepts_git_eol_conversion_but_rejects_real_script_edits() {
+    let r = zero_fixture();
+    configure(&r.0, false);
+    let mut cfg: Value = serde_json::from_slice(&fs::read(r.0.join(CONFIG)).unwrap()).unwrap();
+    cfg["product_inputs"]
+        .as_array_mut()
+        .unwrap()
+        .extend([json!(".gitattributes"), json!("scripts/check.ps1")]);
+    cfg["development"]["a"]["checks"][0]["inputs"] = json!(["scripts/check.ps1"]);
+    write(&r.0, CONFIG, &serde_json::to_vec(&cfg).unwrap());
+    write(&r.0, ".gitattributes", b"*.ps1 text eol=crlf\n");
+    write(&r.0, "scripts/check.ps1", b"Write-Output 'validated'\n");
+    write(&r.0, "pkg/src/lib.rs", b"pub fn value()->u8{2}\n");
+    let runner = Checks::new();
+    let q = request(&r.0, "patch", false, &runner);
+    assert_eq!(close(&r.0, &q, &runner).code, 0);
+    let q = release_request(&r.0, "patch");
+    let plan = build(&r.0, "fix: publish", &q, &runner).unwrap().unwrap();
+    for (path, bytes) in plan.writes {
+        fs::write(path, bytes).unwrap();
+    }
+    git(&r.0, &["add", "."]);
+    git(
+        &r.0,
+        &["commit", "-m", "formal release with Windows check input"],
+    );
+    write(&r.0, "scripts/check.ps1", b"Write-Output 'validated'\r\n");
+    assert_eq!(
+        revision_payload(&r.0, "HEAD", "scripts/check.ps1", &runner)
+            .unwrap()
+            .unwrap(),
+        b"Write-Output 'validated'\n"
+    );
+    assert!(
+        git(
+            &r.0,
+            &["diff", "--name-only", "HEAD", "--", "scripts/check.ps1"]
+        )
+        .is_empty()
+    );
+    let ledger = fs::read(r.0.join(development::RECORD)).unwrap();
+    let alternate = AlternateClosureHost(&runner);
+    let p = development::preview(&r.0, &Request::default(), &alternate);
+    assert_eq!(p.code, 0, "{}", p.stderr);
+    assert_eq!(p.receipt.unwrap()["status"], "nothing-to-close");
+    assert_eq!(fs::read(r.0.join(development::RECORD)).unwrap(), ledger);
+    write(
+        &r.0,
+        "scripts/check.ps1",
+        b"Write-Output 'actually changed'\r\n",
+    );
+    let p = development::preview(&r.0, &Request::default(), &alternate);
+    assert_eq!(p.receipt.unwrap()["affected_packages"], json!(["a"]));
+}
+
+#[test]
+fn package_published_closure_reuses_history_but_rejects_unpublished_or_changed_inputs() {
+    let r = zero_fixture();
+    configure(&r.0, false);
+    write(&r.0, "pkg/src/lib.rs", b"pub fn value()->u8{2}\n");
+    let runner = Checks::new();
+    let alternate = AlternateClosureHost(&runner);
+    let q = request(&r.0, "patch", false, &runner);
+    assert_eq!(close(&r.0, &q, &runner).code, 0);
+    use_legacy_closure(&r.0, &runner);
+    git(&r.0, &["add", "."]);
+    git(&r.0, &["commit", "-m", "unpublished package closure"]);
+    let p = development::preview(&r.0, &Request::default(), &alternate);
+    assert_eq!(p.receipt.unwrap()["affected_packages"], json!(["a"]));
+    let q = release_request(&r.0, "patch");
+    let plan = build(&r.0, "fix: publish", &q, &runner).unwrap().unwrap();
+    for (path, bytes) in plan.writes {
+        fs::write(path, bytes).unwrap();
+    }
+    git(&r.0, &["add", "."]);
+    git(&r.0, &["commit", "-m", "formal product release"]);
+    let ledger = fs::read(r.0.join(development::RECORD)).unwrap();
+    let index = fs::read(r.0.join(".git/index")).unwrap();
+    let p = development::preview(&r.0, &Request::default(), &alternate);
+    assert_eq!(p.code, 0, "{}", p.stderr);
+    let receipt = p.receipt.unwrap();
+    assert_eq!(receipt["status"], "nothing-to-close");
+    assert_eq!(receipt["reused_published_packages"], json!(["a"]));
+    assert_eq!(fs::read(r.0.join(development::RECORD)).unwrap(), ledger);
+    assert_eq!(fs::read(r.0.join(".git/index")).unwrap(), index);
+    // A separate product-only change can release without recertifying this package.
+    let readme = fs::read(r.0.join("README.md")).unwrap();
+    write(&r.0, "README.md", b"unrelated product documentation\n");
+    let p = preview(&r.0, "docs: product", &Request::default(), &alternate);
+    assert_eq!(p.code, 0, "{}", p.stderr);
+    assert_eq!(p.receipt.unwrap()["status"], "analysis-required");
+    write(&r.0, "README.md", &readme);
+    for (path, bytes) in [
+        ("pkg/src/lib.rs", b"pub fn value()->u8{3}\n".as_slice()),
+        (
+            "pkg/Cargo.lock",
+            b"version=4\n[[package]]\nname='a'\nversion='0.3.1'\n# changed\n".as_slice(),
+        ),
+    ] {
+        let original = fs::read(r.0.join(path)).unwrap();
+        write(&r.0, path, bytes);
+        let p = development::preview(&r.0, &Request::default(), &alternate);
+        assert_eq!(p.code, 0, "{}", p.stderr);
+        assert_eq!(
+            p.receipt.unwrap()["affected_packages"],
+            json!(["a"]),
+            "{path}"
+        );
+        write(&r.0, path, &original);
+    }
+}
+
+#[test]
+fn package_published_closure_checks_shared_workspace_inputs() {
+    let r = scoped_rust_build_fixture();
+    let runner = Checks::new();
+    let q = release_request(&r.0, "minor");
+    let plan = build(&r.0, "feat: publish", &q, &runner).unwrap().unwrap();
+    for (path, bytes) in plan.writes {
+        fs::write(path, bytes).unwrap();
+    }
+    git(&r.0, &["add", "."]);
+    git(&r.0, &["commit", "-m", "formal scoped product release"]);
+    let alternate = AlternateClosureHost(&runner);
+    let p = development::preview(&r.0, &Request::default(), &alternate);
+    assert_eq!(p.code, 0, "{}", p.stderr);
+    assert_eq!(p.receipt.unwrap()["status"], "nothing-to-close");
+    // Every package sharing a changed global Cargo profile requires validation.
+    let manifest = fs::read(r.0.join("Cargo.toml")).unwrap();
+    write(
+        &r.0,
+        "Cargo.toml",
+        &[manifest.as_slice(), b"\n[profile.release]\nlto=true\n"].concat(),
+    );
+    let p = development::preview(&r.0, &Request::default(), &alternate);
+    assert_eq!(p.code, 0, "{}", p.stderr);
+    assert!(
+        !p.receipt.unwrap()["affected_packages"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+fn package_published_closure_checks_declared_files_and_unproven_ignored_inputs() {
+    for ignored_build in [false, true] {
+        let r = zero_fixture();
+        configure(&r.0, false);
+        let mut cfg: Value = serde_json::from_slice(&fs::read(r.0.join(CONFIG)).unwrap()).unwrap();
+        if ignored_build {
+            cfg["build_inputs"] = json!([".runtime/global-build-input.txt"]);
+            write(&r.0, ".runtime/global-build-input.txt", b"build input\n");
+        } else {
+            cfg["development"]["a"]["checks"][0]["inputs"] = json!(["README.md"]);
+        }
+        write(&r.0, CONFIG, &serde_json::to_vec(&cfg).unwrap());
+        write(&r.0, "pkg/src/lib.rs", b"pub fn value()->u8{2}\n");
+        let runner = Checks::new();
+        let q = request(&r.0, "patch", false, &runner);
+        assert_eq!(close(&r.0, &q, &runner).code, 0);
+        let q = release_request(&r.0, "patch");
+        let plan = build(&r.0, "fix: publish", &q, &runner).unwrap().unwrap();
+        for (path, bytes) in plan.writes {
+            fs::write(path, bytes).unwrap();
+        }
+        git(&r.0, &["add", "."]);
+        git(
+            &r.0,
+            &["commit", "-m", "formal release with explicit inputs"],
+        );
+        let alternate = AlternateClosureHost(&runner);
+        if !ignored_build {
+            assert_eq!(
+                development::preview(&r.0, &Request::default(), &alternate)
+                    .receipt
+                    .unwrap()["status"],
+                "nothing-to-close"
+            );
+            write(&r.0, "README.md", b"changed explicit check input\n");
+        }
+        let p = development::preview(&r.0, &Request::default(), &alternate);
+        assert_eq!(p.code, 0, "{}", p.stderr);
+        let receipt = p.receipt.unwrap();
+        assert_eq!(receipt["affected_packages"], json!(["a"]));
+        assert_eq!(receipt["reused_published_packages"], json!([]));
+    }
+}
+
 /// The native crate predates registration and inherits version 6 from its
 /// workspace. The immutable schema-4 baseline deliberately has no packages.
 fn adoption_fixture(broken_source_lock: bool) -> Repo {

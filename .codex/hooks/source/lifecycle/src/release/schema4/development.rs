@@ -134,6 +134,10 @@ pub(super) struct Entry {
     pub artifacts: BTreeMap<String, String>,
     pub previous: String,
     pub hash: String,
+    // 6.x and 7.0.x records did not identify their evidence algorithm. Omit
+    // this field for those records so their append-only chain stays byte-valid.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evidence_schema: Option<u32>,
 }
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -152,6 +156,12 @@ impl Ledger {
         let mut previous = String::new();
         let mut versions = BTreeMap::new();
         for entry in &ledger.entries {
+            if entry.evidence_schema.is_some_and(|schema| schema != 2) {
+                return Err(format!(
+                    "{}: unsupported closure evidence schema {:?}; upgrade the tool before release",
+                    entry.id, entry.evidence_schema
+                ));
+            }
             let mut unhashed = entry.clone();
             unhashed.hash.clear();
             if entry.previous != previous
@@ -372,11 +382,26 @@ fn rust_build_evidence(
     Ok(evidence)
 }
 
+#[derive(Serialize)]
+struct Fingerprints {
+    content: String,
+    evidence: String,
+    legacy_evidence: String,
+}
+
+impl Fingerprints {
+    fn matches(&self, entry: &Entry) -> bool {
+        entry.content == self.content
+            && (entry.evidence == self.evidence
+                || (entry.evidence_schema.is_none() && entry.evidence == self.legacy_evidence))
+    }
+}
+
 fn fingerprints(
     root: &Path,
     cfg: &Config,
     capture: &mut Capture,
-) -> Result<BTreeMap<String, (String, String)>, String> {
+) -> Result<BTreeMap<String, Fingerprints>, String> {
     let ids = capture
         .current
         .packages
@@ -483,27 +508,185 @@ fn fingerprints(
                         .any(|id| uses_build(cfg, capture, id, path))
             })
             .collect::<BTreeMap<_, _>>();
+        // Replay the exact 6.x contract, including full locks, environment,
+        // dependency contents and check policy. This is comparison only: never
+        // rebind a historical digest or mark it as newly validated by 7.x.
+        let legacy_build = build
+            .iter()
+            .filter(|(path, _)| {
+                dependencies
+                    .iter()
+                    .any(|id| uses_build(cfg, capture, id, path))
+            })
+            .collect::<BTreeMap<_, _>>();
+        let legacy_evidence = hash(
+            &json!({"content":contents[&id],"dependencies":dependency_inputs,
+            "build":legacy_build,"environment":capture.environment,"policy":cfg.development.get(&id),
+            "contracts":contracts,"check_inputs":check_inputs,"adapters":format!("{:?}",cfg.native.adapters)}),
+        )?;
         let evidence = hash(
             &json!({"content":contents[&id],"dependencies":dependency_inputs,
             "build":scoped_build,"rust_build":rust_build,"environment":capture.environment,"policy":cfg.development.get(&id),
             "contracts":contracts,"check_inputs":check_inputs,"adapters":format!("{:?}",cfg.native.adapters)}),
         )?;
-        result.insert(id.clone(), (contents[&id].clone(), evidence));
+        result.insert(
+            id.clone(),
+            Fingerprints {
+                content: contents[&id].clone(),
+                evidence,
+                legacy_evidence,
+            },
+        );
     }
     Ok(result)
+}
+
+// A published certificate is historical evidence, not a promise that every
+// future shell has the same environment. Reuse it only when the formal release
+// and all relevant inputs prove this is still the same delivered package.
+fn published_unchanged(
+    root: &Path,
+    cfg: &Config,
+    capture: &Capture,
+    ledger: &Ledger,
+    hashes: &BTreeMap<String, Fingerprints>,
+    runner: &dyn ProcessRunner,
+) -> Result<BTreeSet<String>, String> {
+    let inspection = InspectionRunner(runner);
+    let reader = history_cache::Reader::new(root, &inspection);
+    let published =
+        Ledger::parse(revision_payload(root, &capture.boundary, RECORD, &reader)?.as_deref())?;
+    ledger.extends(&published)?;
+    let mut reusable = BTreeSet::new();
+    let Some(old_config) = revision_payload(root, &capture.boundary, CONFIG, &reader)? else {
+        return Ok(reusable);
+    };
+    let current_config =
+        config::read_current(root, CONFIG)?.ok_or("current release configuration missing")?;
+    // Deliberately conservative: configuration edits require current evidence.
+    if crate::json::parse_unique_json(&old_config, "published release configuration")?
+        != crate::json::parse_unique_json(&current_config, "current release configuration")?
+    {
+        return Ok(reusable);
+    }
+    // A directory declaration may include ignored files absent from Git's
+    // inventory. Without a stored inventory proof, keep requiring live evidence.
+    if cfg.build_inputs.iter().any(|path| path.ends_with('/'))
+        || capture.environment_guard.is_some()
+    {
+        return Ok(reusable);
+    }
+    for (id, current) in hashes {
+        let (Some(entry), Some(old)) = (ledger.latest(id), published.latest(id)) else {
+            continue;
+        };
+        if entry.hash != old.hash
+            || entry.content != current.content
+            || entry.after.as_deref()
+                != capture.current.packages.get(id).map(|p| p.version.as_str())
+        {
+            continue;
+        }
+        let scope = dependency_scope(capture, id);
+        // Python interpreter/dependency bytes are runtime inputs, not merely
+        // historical Rust build-host identity. Retain their live evidence gate.
+        if scope.iter().any(|dep| {
+            capture
+                .current
+                .packages
+                .get(dep)
+                .is_none_or(|p| p.language != Language::Rust)
+        }) {
+            continue;
+        }
+        if scope.iter().any(|dep| {
+            serde_json::to_value(capture.current.packages.get(dep)).ok()
+                != serde_json::to_value(capture.baseline.packages.get(dep)).ok()
+                || capture
+                    .changes
+                    .iter()
+                    .any(|c| c.role != "record" && c.packages.contains(dep))
+        }) {
+            continue;
+        }
+        let mut paths = cfg.build_inputs.iter().cloned().collect::<BTreeSet<_>>();
+        for dep in &scope {
+            if let Some(package) = capture.current.packages.get(dep) {
+                if package.language == Language::Rust {
+                    paths.insert(package.workspace.clone());
+                    paths.insert(
+                        Path::new(&package.workspace)
+                            .with_file_name("Cargo.lock")
+                            .to_string_lossy()
+                            .replace('\\', "/"),
+                    );
+                }
+            }
+        }
+        // Explicit global build inputs apply even when no package owns them.
+        for path in capture
+            .inventory
+            .iter()
+            .chain(capture.current.inputs.keys())
+            .chain(capture.changes.iter().map(|c| &c.path))
+        {
+            if scope.iter().any(|dep| uses_build(cfg, capture, dep, path)) {
+                paths.insert(path.clone());
+            }
+        }
+        if let Some(policy) = cfg.development.get(id) {
+            for check in policy
+                .checks
+                .iter()
+                .chain(policy.stability.iter().flat_map(|s| &s.checks))
+            {
+                paths.extend(check.inputs.iter().cloned());
+            }
+            if let Some(stability) = &policy.stability {
+                paths.extend(stability.contracts.iter().cloned());
+            }
+        }
+        reader.prefetch(
+            &capture.boundary,
+            &paths.iter().cloned().collect::<Vec<_>>(),
+        )?;
+        let mut same = true;
+        for path in paths {
+            let old = revision_payload(root, &capture.boundary, &path, &reader)?;
+            let now = config::read_current(root, &path)?;
+            // An ignored input absent from Git history has no published proof.
+            // Git applies the repository's built-in text/encoding attributes.
+            // Comparing blob LF bytes to worktree CRLF bytes would invalidate
+            // unchanged Windows scripts. Use the unfiltered capture instead.
+            if old.is_none()
+                || now.is_none()
+                || capture.git_content_changes.contains(&path)
+                || capture.git_mode_changes.contains(&path)
+            {
+                same = false;
+                break;
+            }
+        }
+        if same {
+            reusable.insert(id.clone());
+        }
+    }
+    reader.verify_unchanged()?;
+    Ok(reusable)
 }
 
 fn pending(
     cfg: &Config,
     capture: &Capture,
     ledger: &Ledger,
-    hashes: &BTreeMap<String, (String, String)>,
+    hashes: &BTreeMap<String, Fingerprints>,
+    published: &BTreeSet<String>,
 ) -> BTreeSet<String> {
     let affected = plan::affected(cfg, capture);
     hashes
         .iter()
-        .filter(|(id, (content, evidence))| match ledger.latest(id) {
-            Some(entry) => &entry.content != content || &entry.evidence != evidence,
+        .filter(|(id, current)| match ledger.latest(id) {
+            Some(entry) => !current.matches(entry) && !published.contains(*id),
             None => affected.contains(*id),
         })
         .map(|(id, _)| id.clone())
@@ -514,6 +697,7 @@ pub(super) fn release_gate(
     root: &Path,
     cfg: &Config,
     capture: &mut Capture,
+    runner: &dyn ProcessRunner,
 ) -> Result<Ledger, String> {
     if root.join(JOURNAL).exists() {
         return Err(
@@ -522,11 +706,20 @@ pub(super) fn release_gate(
     }
     let ledger = Ledger::load(root)?;
     let hashes = fingerprints(root, cfg, capture)?;
-    let pending = pending(cfg, capture, &ledger, &hashes);
+    let published = published_unchanged(root, cfg, capture, &ledger, &hashes, runner)?;
+    let pending = pending(cfg, capture, &ledger, &hashes, &published);
     if !pending.is_empty() {
+        let reasons = pending.iter().map(|id| {
+            let reason = match ledger.latest(id) {
+                None => "missing closure record",
+                Some(entry) if entry.content != hashes[id].content => "package content changed",
+                Some(entry) if entry.evidence_schema.is_none() => "validation evidence changed (neither 6.x nor 7.x evidence matches; dependency/build/environment/policy inputs require validation)",
+                Some(_) => "validation evidence changed (dependency/build/environment/policy inputs require validation)",
+            };
+            format!("{id}: {reason}")
+        }).collect::<Vec<_>>().join("; ");
         return Err(format!(
-            "package development closure required: {}; complete validation and managed version closure before release (release does not run develop)",
-            pending.into_iter().collect::<Vec<_>>().join(", ")
+            "package development closure required: {reasons}; complete validation and managed version closure before release (release does not run develop)"
         ));
     }
     for id in plan::affected(cfg, capture) {
@@ -680,7 +873,8 @@ fn prepare(
     // Declared ignored inputs are discovered above and must bind the preview too.
     capture.fingerprint = hash(&json!({"capture":capture.fingerprint,"packages":hashes,
         "inputs":capture.inputs.iter().map(|(p,b)|(p.to_string_lossy().into_owned(),b.as_deref().map(digest))).collect::<BTreeMap<_,_>>()}))?;
-    let mut affected = pending(&cfg, &capture, &ledger, &hashes);
+    let published = published_unchanged(root, &cfg, &capture, &ledger, &hashes, runner)?;
+    let mut affected = pending(&cfg, &capture, &ledger, &hashes, &published);
     // Lost or modified generated artifacts require revalidation, never a second bump.
     for (id, _) in &hashes {
         if let Some(entry) = ledger.latest(id) {
@@ -699,6 +893,7 @@ fn prepare(
     }
     let mut receipt = json!({"schema":1,"status":"development-analysis-required","fingerprint":capture.fingerprint,
         "affected_packages":affected,"packages":capture.current.packages,"writes":[],"product_version":capture.product_version});
+    receipt["reused_published_packages"] = json!(published);
     if affected.is_empty() {
         receipt["status"] = json!("nothing-to-close");
         return Ok(Err(receipt));
@@ -723,7 +918,11 @@ fn prepare(
     }
     let mut direct_changes = affected
         .iter()
-        .filter(|id| ledger.latest(id).is_none_or(|e| e.content != hashes[*id].0))
+        .filter(|id| {
+            ledger
+                .latest(id)
+                .is_none_or(|e| e.content != hashes[*id].content)
+        })
         .cloned()
         .collect::<BTreeSet<_>>();
     plan::interface_impacts(&capture, &analysis, &mut direct_changes, true)?;
@@ -774,7 +973,9 @@ fn prepare(
             }
             let revalidation = !force_bump.contains(id)
                 && (mechanical.contains(id)
-                    || ledger.latest(id).is_some_and(|e| e.content == hashes[id].0));
+                    || ledger
+                        .latest(id)
+                        .is_some_and(|e| e.content == hashes[id].content));
             if revalidation {
                 levels.insert(id.clone(), 0);
             }
@@ -1264,14 +1465,14 @@ fn execute(
                 .get(id)
                 .map(|p| p.version.clone());
             let a = &p.analysis.packages[id];
-            let (content, evidence) = hashes.get(id).ok_or("missing package fingerprint")?;
+            let current = hashes.get(id).ok_or("missing package fingerprint")?;
             let stability = p
                 .stability
                 .get(id)
                 .cloned()
                 .unwrap_or_else(|| "retired".into());
             changes.push(json!({"id":id,"version_before":before,"version_after":after,"reason":a.reason,"stability":stability}));
-            p.ledger.append(Entry{id:id.clone(),before,after,content:content.clone(),evidence:evidence.clone(),
+            p.ledger.append(Entry{id:id.clone(),before,after,content:current.content.clone(),evidence:current.evidence.clone(),evidence_schema:Some(2),
                 level:p.levels[id],compatibility:a.compatibility.clone(),acceptance:a.acceptance.as_ref().map(|v|json!({"fingerprint":v.fingerprint,"scope":v.scope,"reason":v.reason,"source":v.source})),reason:a.reason.clone(),stability,
                 checks:proofs.remove(id).unwrap_or_default(),artifacts:artifacts.remove(id).unwrap_or_default(),previous:String::new(),hash:String::new()})?;
         }

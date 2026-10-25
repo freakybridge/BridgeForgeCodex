@@ -107,7 +107,7 @@ dependencies = [
 
 [[package]]
 name = "bridgeforge-hook"
-version = "7.0.1"
+version = "7.0.2"
 dependencies = [
  "bridgeforge-checks",
  "bridgeforge-core",
@@ -125,7 +125,7 @@ dependencies = [
 
 [[package]]
 name = "bridgeforge-lifecycle"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "bridgeforge-core",
  "bridgeforge-skeleton",

@@ -18,6 +18,9 @@ pub(super) struct Capture {
     pub current: polyglot::Snapshot,
     pub baseline: polyglot::Snapshot,
     pub changes: Vec<Change>,
+    // Git-normalized differences before public skeleton ownership filtering.
+    pub git_content_changes: BTreeSet<String>,
+    pub git_mode_changes: BTreeSet<String>,
     pub inputs: BTreeMap<PathBuf, Option<Vec<u8>>>,
     pub fingerprint: String,
     pub validation_fingerprint: String,
@@ -314,6 +317,7 @@ fn capture_with_reader(
         }
     }
     let mut paths = content_changed_paths(root, &boundary, runner)?;
+    let git_content_changes = paths.clone();
     let raw = history::git(
         root,
         runner,
@@ -546,6 +550,8 @@ fn capture_with_reader(
         current,
         baseline,
         changes,
+        git_content_changes,
+        git_mode_changes: modes,
         inputs,
         fingerprint,
         validation_fingerprint,

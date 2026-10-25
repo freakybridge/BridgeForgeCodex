@@ -15,6 +15,23 @@
 
 > **追溯说明**：v0.1.0 - v0.7.0 基于 git log 历史回溯标记，**git tag 仅从 v0.8.0 开始打**。早期未启用版本号管理是 setup_agent 自打脸问题（要求下游用但自己没用），v0.8.0 修补。
 
+## [7.0.2] - 2026-10-25
+
+### Fixed
+
+- [product][repo][meta] 修复骨架升级后的发布收口兼容性
+
+### Release analysis
+
+- Product: 修复骨架升级后旧收口算法和 Windows 换行转换导致的 release 兼容误判；保留真实业务变化阻断，已通过回归并获得用户验收。
+- `checks`: 0.1.0 -> 0.1.0 (no_package_version_change)
+- `core`: 7.0.1 -> 7.0.1 (Revalidate affected evidence after lifecycle compatibility, test policy or public projection changes; no package API or source change.)
+- `factory`: 0.1.1 -> 0.1.1 (Revalidate affected evidence after lifecycle compatibility, test policy or public projection changes; no package API or source change.)
+- `lifecycle`: 0.1.1 -> 0.1.2 (Compatible closure algorithm upgrade and formal-release certificate reuse with Git-normalized input identity; retain changed inputs and Python environment gates.)
+- `memory`: 0.1.0 -> 0.1.0 (no_package_version_change)
+- `skeleton`: 0.1.0 -> 0.1.0 (Revalidate affected evidence after lifecycle compatibility, test policy or public projection changes; no package API or source change.)
+- `workflow`: 0.1.0 -> 0.1.0 (Revalidate affected evidence after lifecycle compatibility, test policy or public projection changes; no package API or source change.)
+
 ## [7.0.1] - 2026-10-25
 
 ### Fixed
