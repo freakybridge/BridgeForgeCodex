@@ -1,5 +1,8 @@
-use super::super::sha_git;
+#[path = "../support/factory_root.rs"]
+mod factory_repository;
+
 use super::*;
+use bridgeforge_core::build_manifest::normalized_hash as sha_git;
 use serde_json::json;
 use std::fs;
 
@@ -82,10 +85,7 @@ fn markdown_upgrade_selects_the_only_table_with_managed_keys() {
 
 #[test]
 fn real_template_upgrades_legacy_markdown_without_old_contract_or_losing_index() {
-    let factory = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .ancestors()
-        .nth(4)
-        .unwrap();
+    let factory = factory_repository::from_manifest_dir(env!("CARGO_MANIFEST_DIR"));
     let contract: Value =
         serde_json::from_slice(&fs::read(factory.join("templates/managed-skeleton.json")).unwrap())
             .unwrap();
@@ -123,31 +123,49 @@ fn real_template_upgrades_legacy_markdown_without_old_contract_or_losing_index()
     );
 }
 
-
 #[test]
 fn markdown_characterization_merge_boundaries_and_keys() {
     let unicode = "前言\n## 索引\n正文\n## 尾部";
     let (start, end) = markdown_section(unicode, "## 索引").unwrap();
     assert_eq!(&unicode[start..end], "## 索引\n正文\n");
-    assert_eq!(table_key("| [`标题`](文档/Ä.md) | 保留 |").as_deref(), Some("文档/Ä.md"));
+    assert_eq!(
+        table_key("| [`标题`](文档/Ä.md) | 保留 |").as_deref(),
+        Some("文档/Ä.md")
+    );
     let fenced = "```md\n## Index\ninside\n```\n";
     let (start, end) = markdown_section(fenced, "## Index").unwrap();
     assert_eq!(&fenced[start..end], "## Index\ninside\n```\n");
     let text = "## Index\r\nbody\r\n### Child\r\nnested\r\n# Root\r\ntail\r\n## End\r\n";
     let (start, end) = markdown_section(text, "## Index").unwrap();
-    assert_eq!(&text[start..end], "## Index\r\nbody\r\n### Child\r\nnested\r\n# Root\r\ntail\r\n");
-    assert_eq!(markdown_section("## Index\rlast", "## Index").unwrap_err(),
-        "managed Markdown heading is missing or duplicated: ## Index");
-    assert_eq!(markdown_section("## Index\nlast", "## Index").unwrap(), (0, 13));
-    assert_eq!(optional_markdown_section("## Other", "## Index").unwrap(), None);
-    assert_eq!(markdown_section("## Index\n## Index", "## Index").unwrap_err(),
-        "managed Markdown heading is missing or duplicated: ## Index");
+    assert_eq!(
+        &text[start..end],
+        "## Index\r\nbody\r\n### Child\r\nnested\r\n# Root\r\ntail\r\n"
+    );
+    assert_eq!(
+        markdown_section("## Index\rlast", "## Index").unwrap_err(),
+        "managed Markdown heading is missing or duplicated: ## Index"
+    );
+    assert_eq!(
+        markdown_section("## Index\nlast", "## Index").unwrap(),
+        (0, 13)
+    );
+    assert_eq!(
+        optional_markdown_section("## Other", "## Index").unwrap(),
+        None
+    );
+    assert_eq!(
+        markdown_section("## Index\n## Index", "## Index").unwrap_err(),
+        "managed Markdown heading is missing or duplicated: ## Index"
+    );
     for (line, key) in [
         ("| [`Label`](Target) | x |", Some("Target")),
         ("| [Label](Other) | x |", Some("Other")),
         ("| `MiXeD` | x |", Some("MiXeD")),
-        ("| | x |", None), ("|---|---|", None),
-    ] { assert_eq!(table_key(line).as_deref(), key); }
+        ("| | x |", None),
+        ("|---|---|", None),
+    ] {
+        assert_eq!(table_key(line).as_deref(), key);
+    }
 }
 
 #[test]
@@ -156,12 +174,28 @@ fn markdown_characterization_merge_bytes_and_failures() {
     let current = "| K | V |\r\n|---|---|\r\n| project | keep |\r\n| managed | old |";
     let keys = BTreeSet::from(["managed".to_string()]);
     let merged = merge_keyed_table(source, current, &keys, true).unwrap();
-    assert_eq!(merged, "| K | V |\n|---|---|\n| project | keep |\r\n| managed | new |\n");
-    assert_eq!(merge_keyed_table(source, &merged, &keys, false).unwrap(), merged);
-    assert_eq!(merge_keyed_table(source, "| K | V |\n|---|---|\n| managed | a |\n| managed | b |\n", &keys, true).unwrap_err(),
-        "managed Markdown target row is duplicated: managed");
-    assert_eq!(merge_keyed_table(source, "| K | V | Extra |\n|---|---|---|\n", &keys, true).unwrap_err(),
-        "managed Markdown table column count changed");
+    assert_eq!(
+        merged,
+        "| K | V |\n|---|---|\n| project | keep |\r\n| managed | new |\n"
+    );
+    assert_eq!(
+        merge_keyed_table(source, &merged, &keys, false).unwrap(),
+        merged
+    );
+    assert_eq!(
+        merge_keyed_table(
+            source,
+            "| K | V |\n|---|---|\n| managed | a |\n| managed | b |\n",
+            &keys,
+            true
+        )
+        .unwrap_err(),
+        "managed Markdown target row is duplicated: managed"
+    );
+    assert_eq!(
+        merge_keyed_table(source, "| K | V | Extra |\n|---|---|---|\n", &keys, true).unwrap_err(),
+        "managed Markdown table column count changed"
+    );
 }
 
 #[test]
@@ -172,10 +206,15 @@ fn markdown_characterization_merge_projection_roundtrip() {
         "headings":[], "keyed_tables":[{"heading":"## Index","managed_keys":["managed"]}]
     }});
     let expected = json!({"headings":{},"keyed_tables":{"## Index":{"managed":sha_git(b"| managed | new |\n")}}});
-    asset["managed_blocks"]["current_projection_sha256"] = json!(crate::manifest::canonical_sha(&expected).unwrap());
-    let merged = merge_managed_markdown(source, current, &asset, Path::new("Example"), true).unwrap();
+    asset["managed_blocks"]["current_projection_sha256"] =
+        json!(crate::manifest::canonical_sha(&expected).unwrap());
+    let merged =
+        merge_managed_markdown(source, current, &asset, Path::new("Example"), true).unwrap();
     assert_eq!(merged, b"## Index\n| K | V |\n|---|---|\n| project | keep |\n<!-- example\n| K | V |\n|---|---|\n| managed | new |\n-->\n");
-    assert_eq!(crate::baseline::markdown_projection(&merged, &asset["managed_blocks"]).unwrap(), expected);
+    assert_eq!(
+        crate::baseline::markdown_projection(&merged, &asset["managed_blocks"]).unwrap(),
+        expected
+    );
     crate::baseline::verify_asset_payload(&asset, &merged).unwrap();
 }
 

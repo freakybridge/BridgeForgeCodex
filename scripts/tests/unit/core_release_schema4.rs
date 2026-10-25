@@ -36,11 +36,11 @@ fn write(root: &Path, path: &str, bytes: &[u8]) {
     fs::write(root.join(path), bytes).unwrap();
 }
 fn fixture(strategy: &str, rust: bool) -> Repo {
-    static NEXT: std::sync::atomic::AtomicU64=std::sync::atomic::AtomicU64::new(0);
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let root = std::env::temp_dir().join(format!(
         "bf-schema4-{}-{}-{}",
         std::process::id(),
-        NEXT.fetch_add(1,std::sync::atomic::Ordering::Relaxed),
+        NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
@@ -133,7 +133,11 @@ fn cumulative_skeleton(root: &Path, generation: u8, project: &str) {
         {"id":"managed.readme","target":"README.md","strategy":"region",
          "region":{"begin":"BEGIN","end":"END","current_sha256":digest(public.as_bytes())}}
     ]});
-    write(root, ".codex/managed-skeleton.json", &serde_json::to_vec(&contract).unwrap());
+    write(
+        root,
+        ".codex/managed-skeleton.json",
+        &serde_json::to_vec(&contract).unwrap(),
+    );
 }
 
 fn cumulative_skeleton_fixture() -> Repo {
@@ -152,20 +156,34 @@ fn schema4_cumulative_skeleton_committed_update_is_not_business_release() {
     for committed in [false, true] {
         if committed {
             git(&r.0, &["add", "."]);
-            git(&r.0, &["commit", "-m", "chore: skeleton update without release"]);
+            git(
+                &r.0,
+                &["commit", "-m", "chore: skeleton update without release"],
+            );
         }
         let index = fs::read(r.0.join(".git/index")).unwrap();
         let cfg = load(&r.0).unwrap().unwrap();
         let captured = capture(&r.0, &cfg, &SystemProcessRunner).unwrap();
         assert!(captured.changes.is_empty(), "{:?}", captured.changes);
-        assert!(build(&r.0, "chore: skeleton", &Request::default(), &SystemProcessRunner).unwrap().is_none());
+        assert!(
+            build(
+                &r.0,
+                "chore: skeleton",
+                &Request::default(),
+                &SystemProcessRunner
+            )
+            .unwrap()
+            .is_none()
+        );
         assert_eq!(fs::read(r.0.join(".git/index")).unwrap(), index);
         assert_eq!(fs::read(r.0.join("VERSION")).unwrap(), b"1.0.0\n");
     }
     // Cumulative skeleton changes must not block or absorb a real package change.
     change(&r.0, true);
     let request = analyze(&r.0, "patch", Some("patch"));
-    let plan = build(&r.0, "fix: business", &request, &SystemProcessRunner).unwrap().unwrap();
+    let plan = build(&r.0, "fix: business", &request, &SystemProcessRunner)
+        .unwrap()
+        .unwrap();
     assert_eq!(plan.new_version.to_string(), "1.0.1");
     assert_eq!(plan.package_changes.len(), 1);
     assert_eq!(plan.package_changes[0].version_after, "1.0.1");
@@ -176,7 +194,10 @@ fn schema4_cumulative_skeleton_preserves_committed_project_region_changes() {
     let r = cumulative_skeleton_fixture();
     cumulative_skeleton(&r.0, 1, "project changed");
     git(&r.0, &["add", "."]);
-    git(&r.0, &["commit", "-m", "fix: project customization with skeleton"]);
+    git(
+        &r.0,
+        &["commit", "-m", "fix: project customization with skeleton"],
+    );
     // HEAD-to-worktree sees only the new public region; the release also owes
     // the already committed project customization since the formal boundary.
     cumulative_skeleton(&r.0, 2, "project changed");
@@ -185,7 +206,9 @@ fn schema4_cumulative_skeleton_preserves_committed_project_region_changes() {
     assert_eq!(captured.changes[0].path, "README.md");
     assert_eq!(captured.changes[0].role, "product");
     let request = analyze(&r.0, "patch", None);
-    let plan = build(&r.0, "fix: customization", &request, &SystemProcessRunner).unwrap().unwrap();
+    let plan = build(&r.0, "fix: customization", &request, &SystemProcessRunner)
+        .unwrap()
+        .unwrap();
     assert_eq!(plan.new_version.to_string(), "1.0.1");
     assert!(plan.package_changes.is_empty());
 }
@@ -199,11 +222,17 @@ fn schema4_cumulative_skeleton_rejects_tampering_and_unknown_inputs() {
     write(&r.0, MANAGED_CARGO, b"unverified payload\n");
     let cfg = load(&r.0).unwrap().unwrap();
     let error = capture(&r.0, &cfg, &SystemProcessRunner).err().unwrap();
-    assert!(error.contains("current ownership baseline is invalid"), "{error}");
+    assert!(
+        error.contains("current ownership baseline is invalid"),
+        "{error}"
+    );
     cumulative_skeleton(&r.0, 1, "project original");
     write(&r.0, ".codex/hooks/unknown.rs", b"fn unknown() {}\n");
     let error = capture(&r.0, &cfg, &SystemProcessRunner).err().unwrap();
-    assert!(error.contains("unattributed release input: .codex/hooks/unknown.rs"), "{error}");
+    assert!(
+        error.contains("unattributed release input: .codex/hooks/unknown.rs"),
+        "{error}"
+    );
 }
 
 #[test]
@@ -215,8 +244,13 @@ fn schema4_cutover_preserves_unreleased_changes_across_legacy_intermediate_commi
     assert_eq!(planned.code, 0, "{}", planned.stderr);
     let mut old = planned.receipt.unwrap()["configuration"].clone();
     old.as_object_mut().unwrap().remove("release_model");
-    old["baseline"]["initial_configuration"].as_object_mut().unwrap().remove("release_model");
-    old["baseline"]["initial_configuration_hash"] = json!(configuration::configuration_hash(&old["baseline"]["initial_configuration"]).unwrap());
+    old["baseline"]["initial_configuration"]
+        .as_object_mut()
+        .unwrap()
+        .remove("release_model");
+    old["baseline"]["initial_configuration_hash"] = json!(
+        configuration::configuration_hash(&old["baseline"]["initial_configuration"]).unwrap()
+    );
     write(&r.0, CONFIG, &serde_json::to_vec(&old).unwrap());
     git(&r.0, &["add", "."]);
     git(&r.0, &["commit", "-m", "chore: old schema4 migration"]);
@@ -242,7 +276,14 @@ fn schema4_cutover_preserves_unreleased_changes_across_legacy_intermediate_commi
     change(&r.0, true);
     write(&r.0, CONFIG, &payload);
     let request = analyze(&r.0, "patch", Some("patch"));
-    let plan = build(&r.0, "fix: preserved change", &request, &SystemProcessRunner).unwrap().unwrap();
+    let plan = build(
+        &r.0,
+        "fix: preserved change",
+        &request,
+        &SystemProcessRunner,
+    )
+    .unwrap()
+    .unwrap();
     assert_eq!(plan.new_version.to_string(), "1.0.1");
     assert_eq!(plan.package_changes[0].version_after, "1.0.1");
     assert_eq!(fs::read(r.0.join("VERSION")).unwrap(), b"1.0.0\n");
@@ -252,18 +293,42 @@ fn schema4_cutover_preserves_unreleased_changes_across_legacy_intermediate_commi
     // Reintroducing an old contract cannot obtain another automatic cutover.
     write(&r.0, CONFIG, &original);
     git(&r.0, &["add", "."]);
-    git(&r.0, &["commit", "-m", "chore: invalid legacy reintroduction"]);
-    assert!(prepare_project_upgrade(&r.0).unwrap_err().contains("cannot move"));
+    git(
+        &r.0,
+        &["commit", "-m", "chore: invalid legacy reintroduction"],
+    );
+    assert!(
+        prepare_project_upgrade(&r.0)
+            .unwrap_err()
+            .contains("cannot move")
+    );
     write(&r.0, CONFIG, &payload);
-    assert!(build(&r.0, "fix: no bypass", &Request::default(), &SystemProcessRunner).unwrap_err().contains("post-migration"));
+    assert!(
+        build(
+            &r.0,
+            "fix: no bypass",
+            &Request::default(),
+            &SystemProcessRunner
+        )
+        .unwrap_err()
+        .contains("post-migration")
+    );
 }
 
 #[test]
 fn schema4_cutover_rejects_retired_strategy_and_manual_package_versions() {
     let r = fixture("legacy", true);
-    assert!(configuration_plan(&r.0, &SystemProcessRunner, None, Some("synchronized")).stderr.contains("one model"));
+    assert!(
+        configuration_plan(&r.0, &SystemProcessRunner, None, Some("synchronized"))
+            .stderr
+            .contains("one model")
+    );
     let before = fs::read(r.0.join(CONFIG)).unwrap();
-    write(&r.0, "pkg/Cargo.toml", b"[package]\nname='a'\nversion='2.0.0'\nedition='2021'\n[workspace]\n");
+    write(
+        &r.0,
+        "pkg/Cargo.toml",
+        b"[package]\nname='a'\nversion='2.0.0'\nedition='2021'\n[workspace]\n",
+    );
     assert!(prepare_project_upgrade(&r.0).is_err());
     assert_eq!(fs::read(r.0.join(CONFIG)).unwrap(), before);
 }
@@ -271,8 +336,16 @@ fn schema4_cutover_rejects_retired_strategy_and_manual_package_versions() {
 #[test]
 fn schema4_product_mapping_cannot_implicitly_upgrade_registered_workspace_members() {
     let r = fixture("legacy", true);
-    write(&r.0, "Cargo.toml", b"[workspace]\nmembers=['pkg']\nresolver='2'\n");
-    write(&r.0, "pkg/Cargo.toml", b"[package]\nname='a'\nversion='1.0.0'\nedition='2021'\n");
+    write(
+        &r.0,
+        "Cargo.toml",
+        b"[workspace]\nmembers=['pkg']\nresolver='2'\n",
+    );
+    write(
+        &r.0,
+        "pkg/Cargo.toml",
+        b"[package]\nname='a'\nversion='1.0.0'\nedition='2021'\n",
+    );
     fs::rename(r.0.join("pkg/Cargo.lock"), r.0.join("Cargo.lock")).unwrap();
     let mut cfg: Value = serde_json::from_slice(&fs::read(r.0.join(CONFIG)).unwrap()).unwrap();
     cfg["adapters"]["rust"]["workspaces"] = json!(["Cargo.toml"]);
@@ -285,12 +358,320 @@ fn schema4_product_mapping_cannot_implicitly_upgrade_registered_workspace_member
     cfg["product_manifests"] = json!(["Cargo.toml"]);
     write(&r.0, CONFIG, &serde_json::to_vec(&cfg).unwrap());
     write(&r.0, "README.md", b"product-only change\n");
-    let error = build(&r.0, "fix: product only", &Request::default(), &SystemProcessRunner).unwrap_err();
-    assert!(error.contains("must not include independently registered packages"), "{error}");
+    let error = build(
+        &r.0,
+        "fix: product only",
+        &Request::default(),
+        &SystemProcessRunner,
+    )
+    .unwrap_err();
+    assert!(
+        error.contains("must not include independently registered packages"),
+        "{error}"
+    );
     cfg.as_object_mut().unwrap().remove("baseline");
-    write(&r.0, ".runtime/overlap.json", &serde_json::to_vec(&cfg).unwrap());
-    let plan = configuration_plan(&r.0, &SystemProcessRunner, Some(".runtime/overlap.json"), None);
-    assert!(plan.stderr.contains("must not include independently registered packages"), "{}", plan.stderr);
+    write(
+        &r.0,
+        ".runtime/overlap.json",
+        &serde_json::to_vec(&cfg).unwrap(),
+    );
+    let plan = configuration_plan(
+        &r.0,
+        &SystemProcessRunner,
+        Some(".runtime/overlap.json"),
+        None,
+    );
+    assert!(
+        plan.stderr
+            .contains("must not include independently registered packages"),
+        "{}",
+        plan.stderr
+    );
+}
+
+fn mixed_product_native() -> (polyglot::Config, BTreeMap<String, Vec<u8>>) {
+    let config: polyglot::Config = serde_json::from_value(json!({
+        "schema_version":3,"release_policy":"explicit_release","strategy":"independent",
+        "git_sync_setup":{"schema":1,"confirmed":true,"selection":"independent"},
+        "adapters":{"rust":{"workspaces":["Cargo.toml"]}},
+        "packages":[{"id":"library","name":"library","language":"rust","manifest":"source/library/Cargo.toml"}],
+        "product_packages":[
+            {"id":"cli","name":"cli","language":"rust","manifest":"source/cli/Cargo.toml"},
+            {"id":"hook","name":"hook","language":"rust","manifest":"source/hook/Cargo.toml"}
+        ]
+    })).unwrap();
+    let files = BTreeMap::from([
+        ("Cargo.toml".into(), b"[workspace]\nmembers=['source/library','source/cli','source/hook']\nresolver='2'\n[workspace.package]\nversion='1.0.0'\n".to_vec()),
+        ("source/library/Cargo.toml".into(), b"[package]\nname='library'\nversion='0.4.0'\nedition='2021'\n".to_vec()),
+        ("source/cli/Cargo.toml".into(), b"[package]\nname='cli'\nversion.workspace=true\nedition='2021'\n[dependencies]\nlibrary={path='../library',version='^0.4'}\n".to_vec()),
+        ("source/hook/Cargo.toml".into(), b"[package]\nname='hook'\nversion.workspace=true\nedition='2021'\n".to_vec()),
+        ("Cargo.lock".into(), b"version=4\n[[package]]\nname='library'\nversion='0.4.0'\n[[package]]\nname='cli'\nversion='1.0.0'\ndependencies=['library']\n[[package]]\nname='hook'\nversion='1.0.0'\n".to_vec()),
+    ]);
+    (config, files)
+}
+
+#[test]
+fn schema4_explicit_product_packages_share_a_workspace_with_independent_versions() {
+    let (cfg, files) = mixed_product_native();
+    let paths = files.keys().cloned().collect::<Vec<_>>();
+    let snapshot = polyglot::snapshot(&cfg, paths.clone(), false, &mut |p| {
+        Ok(files.get(p).cloned())
+    })
+    .unwrap();
+    assert_eq!(snapshot.packages.len(), 1);
+    assert_eq!(snapshot.packages["library"].version, "0.4.0");
+    assert!(snapshot.dependencies.is_empty());
+    let rust = cfg.adapters.rust.as_ref().unwrap();
+    let inputs = rust::product_package_inputs(
+        rust,
+        &cfg.product_packages,
+        &paths,
+        &mut |p| Ok(files.get(p).cloned()),
+        "1.0.0".parse().unwrap(),
+    )
+    .unwrap();
+    assert!(inputs.contains_key("Cargo.lock"));
+    assert!(inputs.contains_key("source/library/Cargo.toml"));
+    assert!(
+        rust::product_package_inputs(
+            rust,
+            &cfg.product_packages,
+            &paths,
+            &mut |p| Ok(files.get(p).cloned()),
+            "1.0.1".parse().unwrap()
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn schema4_explicit_product_release_only_changes_carriers_and_their_lock_entries() {
+    let (cfg, files) = mixed_product_native();
+    let paths = files.keys().cloned().collect::<Vec<_>>();
+    let writes = rust::render_product_packages(
+        cfg.adapters.rust.as_ref().unwrap(),
+        &cfg.product_packages,
+        &paths,
+        &mut |p| Ok(files.get(p).cloned()),
+        "1.0.0".parse().unwrap(),
+        "1.0.1".parse().unwrap(),
+    )
+    .unwrap();
+    assert!(!writes.contains_key("source/library/Cargo.toml"));
+    assert!(!writes.contains_key("source/cli/Cargo.toml"));
+    assert!(!writes.contains_key("source/hook/Cargo.toml"));
+    let workspace = std::str::from_utf8(&writes["Cargo.toml"])
+        .unwrap()
+        .parse::<toml_edit::DocumentMut>()
+        .unwrap();
+    assert_eq!(
+        workspace["workspace"]["package"]["version"].as_str(),
+        Some("1.0.1")
+    );
+    let snapshot = rust::snapshot(cfg.adapters.rust.as_ref().unwrap(), &paths, &mut |p| {
+        Ok(writes.get(p).or_else(|| files.get(p)).cloned())
+    })
+    .unwrap();
+    assert_eq!(
+        snapshot.packages["source/library/Cargo.toml"].version,
+        "0.4.0"
+    );
+    assert_eq!(snapshot.packages["source/cli/Cargo.toml"].version, "1.0.1");
+    assert_eq!(snapshot.packages["source/hook/Cargo.toml"].version, "1.0.1");
+}
+
+#[test]
+fn schema4_explicit_product_development_preserves_inheritance_and_updates_caller_requirement() {
+    let (cfg, files) = mixed_product_native();
+    let paths = files.keys().cloned().collect::<Vec<_>>();
+    let writes = rust::render_versions_with_product_packages(
+        cfg.adapters.rust.as_ref().unwrap(),
+        &cfg.product_packages,
+        &paths,
+        &mut |p| Ok(files.get(p).cloned()),
+        &BTreeMap::from([("source/library/Cargo.toml".into(), "0.5.0".into())]),
+    )
+    .unwrap();
+    assert!(!writes.contains_key("Cargo.toml"));
+    assert!(!writes.contains_key("source/hook/Cargo.toml"));
+    let cli = std::str::from_utf8(&writes["source/cli/Cargo.toml"])
+        .unwrap()
+        .parse::<toml_edit::DocumentMut>()
+        .unwrap();
+    assert_eq!(cli["package"]["version"]["workspace"].as_bool(), Some(true));
+    assert_eq!(
+        cli["dependencies"]["library"]["version"].as_str(),
+        Some("^0.5.0")
+    );
+    let snapshot = rust::snapshot(cfg.adapters.rust.as_ref().unwrap(), &paths, &mut |p| {
+        Ok(writes.get(p).or_else(|| files.get(p)).cloned())
+    })
+    .unwrap();
+    assert_eq!(
+        snapshot.packages["source/library/Cargo.toml"].version,
+        "0.5.0"
+    );
+    assert_eq!(snapshot.packages["source/cli/Cargo.toml"].version, "1.0.0");
+}
+
+#[test]
+fn schema4_explicit_product_roles_reject_conflicts_missing_members_and_implicit_followers() {
+    let (cfg, files) = mixed_product_native();
+    let paths = files.keys().cloned().collect::<Vec<_>>();
+    let mut value = json!({
+        "schema_version":3,"release_policy":"explicit_release","strategy":"independent",
+        "git_sync_setup":{"schema":1,"confirmed":true,"selection":"independent"},
+        "adapters":{"rust":{"workspaces":["Cargo.toml"]}},
+        "packages":[{"id":"library","name":"library","language":"rust","manifest":"source/library/Cargo.toml"}],
+        "product_packages":[{"id":"library","name":"cli","language":"rust","manifest":"source/cli/Cargo.toml"}]
+    });
+    assert!(
+        polyglot::parse(&serde_json::to_vec(&value).unwrap())
+            .unwrap_err()
+            .contains("disjoint")
+    );
+    value["product_packages"][0]["id"] = json!("cli");
+    value["product_packages"][0]["manifest"] = json!("source/library/Cargo.toml");
+    assert!(
+        polyglot::parse(&serde_json::to_vec(&value).unwrap())
+            .unwrap_err()
+            .contains("disjoint")
+    );
+    let mut missing = cfg.clone();
+    missing.product_packages[0].manifest = "source/missing/Cargo.toml".into();
+    assert!(
+        polyglot::snapshot(&missing, paths.clone(), false, &mut |p| Ok(files
+            .get(p)
+            .cloned()))
+        .is_err()
+    );
+    let mut inherited = files.clone();
+    inherited.insert(
+        "source/library/Cargo.toml".into(),
+        b"[package]\nname='library'\nversion.workspace=true\nedition='2021'\n".to_vec(),
+    );
+    inherited.insert(
+        "Cargo.lock".into(),
+        String::from_utf8(files["Cargo.lock"].clone())
+            .unwrap()
+            .replace("0.4.0", "1.0.0")
+            .into_bytes(),
+    );
+    inherited.insert("source/cli/Cargo.toml".into(), b"[package]\nname='cli'\nversion.workspace=true\nedition='2021'\n[dependencies]\nlibrary={path='../library',version='^1'}\n".to_vec());
+    assert!(
+        rust::product_package_inputs(
+            cfg.adapters.rust.as_ref().unwrap(),
+            &cfg.product_packages,
+            &paths,
+            &mut |p| Ok(inherited.get(p).cloned()),
+            "1.0.0".parse().unwrap()
+        )
+        .unwrap_err()
+        .contains("must own its version")
+    );
+    let mut undeclared = cfg.clone();
+    undeclared.product_packages.clear();
+    assert!(
+        polyglot::snapshot(&undeclared, paths, false, &mut |p| Ok(files
+            .get(p)
+            .cloned()))
+        .unwrap_err()
+        .contains("registered identity")
+    );
+}
+
+fn mixed_product_repo() -> Repo {
+    let r = fixture("legacy", true);
+    fs::remove_dir_all(r.0.join("pkg")).unwrap();
+    let (_, files) = mixed_product_native();
+    for (path, bytes) in files {
+        write(&r.0, &path, &bytes);
+    }
+    write(
+        &r.0,
+        "source/library/src/lib.rs",
+        b"pub fn value()->u8{1}\n",
+    );
+    write(&r.0, "source/cli/src/main.rs", b"fn main(){}\n");
+    write(&r.0, "source/hook/src/main.rs", b"fn main(){}\n");
+    let cfg = json!({
+        "schema_version":3,"release_policy":"explicit_release","strategy":"independent",
+        "git_sync_setup":{"schema":1,"confirmed":true,"selection":"independent"},
+        "adapters":{"rust":{"workspaces":["Cargo.toml"]}},
+        "packages":[{"id":"library","name":"library","language":"rust","manifest":"source/library/Cargo.toml"}],
+        "product_packages":[
+            {"id":"cli","name":"cli","language":"rust","manifest":"source/cli/Cargo.toml"},
+            {"id":"hook","name":"hook","language":"rust","manifest":"source/hook/Cargo.toml"}
+        ],
+        "product_inputs":["Cargo.toml","README.md",".gitignore","source/cli/","source/hook/"]
+    });
+    write(&r.0, CONFIG, &serde_json::to_vec(&cfg).unwrap());
+    git(&r.0, &["add", "."]);
+    git(&r.0, &["commit", "--amend", "--no-edit"]);
+    migrate(&r.0);
+    r
+}
+
+#[test]
+fn schema4_explicit_product_migration_and_release_keep_independent_library_version() {
+    let r = mixed_product_repo();
+    let cfg = load(&r.0).unwrap().unwrap();
+    assert_eq!(cfg.native.product_packages.len(), 2);
+    assert_eq!(cfg.baseline.packages.len(), 1);
+    assert_eq!(cfg.baseline.packages["library"].version, "0.4.0");
+    let before = fs::read(r.0.join("source/library/Cargo.toml")).unwrap();
+    let index = fs::read(r.0.join(".git/index")).unwrap();
+    write(&r.0, "README.md", b"product documentation change\n");
+    let request = analyze(&r.0, "patch", None);
+    let plan = build(&r.0, "fix: product only", &request, &SystemProcessRunner)
+        .unwrap()
+        .unwrap();
+    assert_eq!(plan.new_version.to_string(), "1.0.1");
+    assert!(
+        !plan
+            .writes
+            .contains_key(&r.0.join("source/library/Cargo.toml"))
+    );
+    assert!(plan.package_changes.is_empty());
+    assert!(plan.writes.contains_key(&r.0.join("Cargo.toml")));
+    assert_eq!(
+        fs::read(r.0.join("source/library/Cargo.toml")).unwrap(),
+        before
+    );
+    assert_eq!(fs::read(r.0.join(".git/index")).unwrap(), index);
+}
+
+#[test]
+fn schema4_explicit_product_development_updates_product_caller_without_product_bump() {
+    let r = mixed_product_repo();
+    write(
+        &r.0,
+        "source/library/src/lib.rs",
+        b"pub fn value()->u8{2}\npub fn added()->u8{3}\n",
+    );
+    fixture::close_packages(&r.0, &SystemProcessRunner, &[("library", "minor")]).unwrap();
+    let library = fs::read_to_string(r.0.join("source/library/Cargo.toml"))
+        .unwrap()
+        .parse::<toml_edit::DocumentMut>()
+        .unwrap();
+    assert_eq!(library["package"]["version"].as_str(), Some("0.5.0"));
+    let cli = fs::read_to_string(r.0.join("source/cli/Cargo.toml"))
+        .unwrap()
+        .parse::<toml_edit::DocumentMut>()
+        .unwrap();
+    assert_eq!(cli["package"]["version"]["workspace"].as_bool(), Some(true));
+    assert_eq!(
+        cli["dependencies"]["library"]["version"].as_str(),
+        Some("^0.5.0")
+    );
+    assert_eq!(
+        fs::read_to_string(r.0.join("VERSION")).unwrap().trim(),
+        "1.0.0"
+    );
+    let ledger = development::Ledger::load(&r.0).unwrap();
+    assert!(ledger.latest("library").is_some());
+    assert!(ledger.latest("cli").is_none());
+    assert!(ledger.latest("hook").is_none());
 }
 
 #[test]
@@ -303,7 +684,11 @@ fn schema4_formal_boundary_cannot_reintroduce_old_release_model() {
     legacy.as_object_mut().unwrap().remove("release_model");
     write(&r.0, CONFIG, &serde_json::to_vec(&legacy).unwrap());
     write(&r.0, "VERSION", b"1.0.1\n");
-    write(&r.0, "CHANGELOG.md", b"# Changelog\n\n## [1.0.1]\n\n- invalid old-model release\n");
+    write(
+        &r.0,
+        "CHANGELOG.md",
+        b"# Changelog\n\n## [1.0.1]\n\n- invalid old-model release\n",
+    );
     git(&r.0, &["add", "."]);
     git(&r.0, &["commit", "-m", "chore: invalid release"]);
     write(&r.0, CONFIG, &payload);
@@ -322,7 +707,13 @@ fn external_cargo_fixture() -> Repo {
     let p = migration_plan(&r.0, &SystemProcessRunner, None);
     assert_eq!(p.code, 0, "{}", p.stderr);
     let v = p.receipt.unwrap();
-    let a = migration_apply(&r.0, &SystemProcessRunner, None, v["fingerprint"].as_str().unwrap(), true);
+    let a = migration_apply(
+        &r.0,
+        &SystemProcessRunner,
+        None,
+        v["fingerprint"].as_str().unwrap(),
+        true,
+    );
     assert_eq!(a.code, 0, "{}", a.stderr);
     r
 }
@@ -330,7 +721,10 @@ fn external_cargo_fixture() -> Repo {
 fn legacy_source_roots(root: &Path) -> Value {
     let mut v: Value = serde_json::from_slice(&fs::read(root.join(CONFIG)).unwrap()).unwrap();
     v["baseline"]["packages"]["a"]["source_roots"] = json!(["pkg/"]);
-    v["baseline"]["input_hashes"].as_object_mut().unwrap().retain(|path, _| !path.starts_with("external/"));
+    v["baseline"]["input_hashes"]
+        .as_object_mut()
+        .unwrap()
+        .retain(|path, _| !path.starts_with("external/"));
     write(root, CONFIG, &serde_json::to_vec(&v).unwrap());
     v
 }
@@ -340,26 +734,65 @@ fn historical_sharing_fixture() -> Repo {
     write(&r.0, "pkg/src/gui.rs", b"pub fn gui() {}\n");
     write(&r.0, "pkg/src/helper.rs", b"pub fn helper() {}\n");
     write(&r.0, "tools/Cargo.toml", b"[package]\nname='b'\nversion='1.0.0'\nedition='2021'\n[workspace]\n[[test]]\nname='shared'\npath='../checks/main.rs'\n");
-    write(&r.0, "tools/Cargo.lock", b"version=4\n[[package]]\nname='b'\nversion='1.0.0'\n");
-    write(&r.0, "checks/main.rs", b"#[path=\"../pkg/src/gui.rs\"] mod gui;\n#[path=\"../pkg/src/helper.rs\"] mod helper;\n");
+    write(
+        &r.0,
+        "tools/Cargo.lock",
+        b"version=4\n[[package]]\nname='b'\nversion='1.0.0'\n",
+    );
+    write(
+        &r.0,
+        "checks/main.rs",
+        b"#[path=\"../pkg/src/gui.rs\"] mod gui;\n#[path=\"../pkg/src/helper.rs\"] mod helper;\n",
+    );
     let mut cfg: Value = serde_json::from_slice(&fs::read(r.0.join(CONFIG)).unwrap()).unwrap();
-    cfg["adapters"]["rust"]["workspaces"].as_array_mut().unwrap().push(json!("tools/Cargo.toml"));
-    cfg["packages"].as_array_mut().unwrap().push(json!({"id":"b","name":"b","language":"rust","manifest":"tools/Cargo.toml"}));
-    cfg["product_inputs"].as_array_mut().unwrap().push(json!("tools/Cargo.lock"));
+    cfg["adapters"]["rust"]["workspaces"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!("tools/Cargo.toml"));
+    cfg["packages"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"id":"b","name":"b","language":"rust","manifest":"tools/Cargo.toml"}));
+    cfg["product_inputs"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!("tools/Cargo.lock"));
     write(&r.0, CONFIG, &serde_json::to_vec(&cfg).unwrap());
     git(&r.0, &["add", "."]);
     git(&r.0, &["commit", "--amend", "--no-edit"]);
     let p = migration_plan(&r.0, &SystemProcessRunner, None);
     assert_eq!(p.code, 0, "{}", p.stderr);
     let v = p.receipt.unwrap();
-    assert_eq!(v["ownership_analysis"]["shared_input_additions"]["historical"].as_array().unwrap().len(), 2);
-    assert_eq!(migration_apply(&r.0, &SystemProcessRunner, None, v["fingerprint"].as_str().unwrap(), true).code, 0);
+    assert_eq!(
+        v["ownership_analysis"]["shared_input_additions"]["historical"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    assert_eq!(
+        migration_apply(
+            &r.0,
+            &SystemProcessRunner,
+            None,
+            v["fingerprint"].as_str().unwrap(),
+            true
+        )
+        .code,
+        0
+    );
     let migrated = load(&r.0).unwrap().unwrap();
     let captured = capture(&r.0, &migrated, &SystemProcessRunner).unwrap();
-    assert!(!captured.changes.iter().any(|c| c.path == CONFIG), "inferred sharing alone is migration bookkeeping");
+    assert!(
+        !captured.changes.iter().any(|c| c.path == CONFIG),
+        "inferred sharing alone is migration bookkeeping"
+    );
     let mut changed: Value = serde_json::from_slice(&fs::read(r.0.join(CONFIG)).unwrap()).unwrap();
     changed["build_inputs"] = json!(["scripts/recipe.json"]);
-    assert!(!migration::is_initial_configuration(&changed, &migrated, &captured.current).unwrap(), "sharing must not conceal other configuration changes");
+    assert!(
+        !migration::is_initial_configuration(&changed, &migrated, &captured.current).unwrap(),
+        "sharing must not conceal other configuration changes"
+    );
     // Simulate an existing schema-4 migration that already repaired file roots,
     // but predates the shared-source correction (the reported downstream case).
     let mut v: Value = serde_json::from_slice(&fs::read(r.0.join(CONFIG)).unwrap()).unwrap();
@@ -380,7 +813,11 @@ fn schema4_baseline_repair_sharing_is_snapshot_bound_atomic_and_release_ready() 
     let index = fs::read(root.join(".git/index")).unwrap();
     let head = git(root, &["rev-parse", "HEAD"]);
     // The current tool no longer consumes helper.rs. History must still show it.
-    write(root, "checks/main.rs", b"#[path=\"../pkg/src/gui.rs\"] mod gui;\n");
+    write(
+        root,
+        "checks/main.rs",
+        b"#[path=\"../pkg/src/gui.rs\"] mod gui;\n",
+    );
     let p = repair_baseline_plan(root, &SystemProcessRunner);
     assert_eq!(p.code, 0, "{}", p.stderr);
     let p = p.receipt.unwrap();
@@ -389,40 +826,91 @@ fn schema4_baseline_repair_sharing_is_snapshot_bound_atomic_and_release_ready() 
     assert_eq!(additions["current"].as_array().unwrap().len(), 1);
     assert_eq!(additions["current"][0]["path"], "pkg/src/gui.rs");
     assert_eq!(additions["historical"][0]["packages"], json!(["a", "b"]));
-    assert!(additions["historical"][0]["content_sha256"].as_str().unwrap().starts_with("sha256:"));
-    assert_eq!(additions["historical"][0]["evidence"].as_array().unwrap().len(), 2);
+    assert!(
+        additions["historical"][0]["content_sha256"]
+            .as_str()
+            .unwrap()
+            .starts_with("sha256:")
+    );
+    assert_eq!(
+        additions["historical"][0]["evidence"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
     assert_eq!(fs::read(root.join(CONFIG)).unwrap(), before);
     let fp = p["fingerprint"].as_str().unwrap();
-    assert_ne!(repair_baseline_apply(root, &SystemProcessRunner, fp, false).code, 0);
+    assert_ne!(
+        repair_baseline_apply(root, &SystemProcessRunner, fp, false).code,
+        0
+    );
     write(root, "pkg/src/gui.rs", b"pub fn changed_after_plan() {}\n");
-    assert_ne!(repair_baseline_apply(root, &SystemProcessRunner, fp, true).code, 0);
+    assert_ne!(
+        repair_baseline_apply(root, &SystemProcessRunner, fp, true).code,
+        0
+    );
     assert_eq!(fs::read(root.join(CONFIG)).unwrap(), before);
-    let p = repair_baseline_plan(root, &SystemProcessRunner).receipt.unwrap();
-    let applied = repair_baseline_apply(root, &SystemProcessRunner, p["fingerprint"].as_str().unwrap(), true);
+    let p = repair_baseline_plan(root, &SystemProcessRunner)
+        .receipt
+        .unwrap();
+    let applied = repair_baseline_apply(
+        root,
+        &SystemProcessRunner,
+        p["fingerprint"].as_str().unwrap(),
+        true,
+    );
     assert_eq!(applied.code, 0, "{}", applied.stderr);
     let repaired: Value = serde_json::from_slice(&fs::read(root.join(CONFIG)).unwrap()).unwrap();
     let mut normalized = repaired.clone();
     normalized["baseline"]["shared_inputs"] = original["baseline"]["shared_inputs"].clone();
     normalized["shared_inputs"] = original["shared_inputs"].clone();
-    assert_eq!(normalized, original, "only missing shared declarations may change");
+    assert_eq!(
+        normalized, original,
+        "only missing shared declarations may change"
+    );
     assert_eq!(fs::read(root.join(".git/index")).unwrap(), index);
     assert_eq!(git(root, &["rev-parse", "HEAD"]), head);
     assert_eq!(fs::read(root.join("VERSION")).unwrap(), b"1.0.0\n");
     let cfg = load(root).unwrap().unwrap();
     let c = capture(root, &cfg, &SystemProcessRunner).unwrap();
-    assert_eq!(polyglot::owner(&c.baseline, "pkg/src/helper.rs", &cfg.native).unwrap(), vec!["a", "b"]);
-    assert_eq!(polyglot::owner(&c.current, "pkg/src/helper.rs", &cfg.native).unwrap(), vec!["a"]);
-    assert_eq!(c.changes.iter().find(|c| c.path == "pkg/src/gui.rs").unwrap().packages, vec!["a", "b"]);
+    assert_eq!(
+        polyglot::owner(&c.baseline, "pkg/src/helper.rs", &cfg.native).unwrap(),
+        vec!["a", "b"]
+    );
+    assert_eq!(
+        polyglot::owner(&c.current, "pkg/src/helper.rs", &cfg.native).unwrap(),
+        vec!["a"]
+    );
+    assert_eq!(
+        c.changes
+            .iter()
+            .find(|c| c.path == "pkg/src/gui.rs")
+            .unwrap()
+            .packages,
+        vec!["a", "b"]
+    );
     let request = analyze(root, "patch", Some("patch"));
-    let release = build(root, "fix: shared sources", &request, &SystemProcessRunner).unwrap().unwrap();
+    let release = build(root, "fix: shared sources", &request, &SystemProcessRunner)
+        .unwrap()
+        .unwrap();
     assert_eq!(release.old_version.to_string(), "1.0.0");
-    let second = repair_baseline_plan(root, &SystemProcessRunner).receipt.unwrap();
-    assert_eq!(second["configuration"]["baseline"], repaired["baseline"], "repair must preserve the baseline after development policy configuration");
+    let second = repair_baseline_plan(root, &SystemProcessRunner)
+        .receipt
+        .unwrap();
+    assert_eq!(
+        second["configuration"]["baseline"], repaired["baseline"],
+        "repair must preserve the baseline after development policy configuration"
+    );
     apply_file_release_plan(&release).unwrap();
     git(root, &["add", "."]);
     git(root, &["commit", "-m", "fix: fixture release"]);
     let published = fs::read(root.join(CONFIG)).unwrap();
-    assert!(repair_baseline_plan(root, &SystemProcessRunner).stderr.contains("published migration baseline cannot be repaired"));
+    assert!(
+        repair_baseline_plan(root, &SystemProcessRunner)
+            .stderr
+            .contains("published migration baseline cannot be repaired")
+    );
     assert_eq!(fs::read(root.join(CONFIG)).unwrap(), published);
 }
 
@@ -432,21 +920,30 @@ fn schema4_history_prefetch_does_not_load_unregistered_business_blobs() {
     struct Counting(RefCell<Vec<Vec<u8>>>);
     impl ProcessRunner for Counting {
         fn run(&self, request: &ProcessRequest) -> std::io::Result<crate::ProcessOutput> {
-            if request.args.iter().any(|arg| arg == "cat-file") { self.0.borrow_mut().push(request.stdin.clone()); }
+            if request.args.iter().any(|arg| arg == "cat-file") {
+                self.0.borrow_mut().push(request.stdin.clone());
+            }
             SystemProcessRunner.run(request)
         }
     }
     let r = fixture("independent", true);
     write(&r.0, "business.bin", &[42; 65536]);
     git(&r.0, &["add", "."]);
-    git(&r.0, &["commit", "-m", "chore: unrelated business resource"]);
+    git(
+        &r.0,
+        &["commit", "-m", "chore: unrelated business resource"],
+    );
     let head = git(&r.0, &["rev-parse", "HEAD"]);
     let blob = git(&r.0, &["rev-parse", "HEAD:business.bin"]);
     let cfg = load(&r.0).unwrap().unwrap();
     let runner = Counting(RefCell::new(Vec::new()));
     let reader = history_cache::Reader::new(&r.0, &runner);
     prefetch_history(&cfg, &head, &reader).unwrap();
-    assert!(!runner.0.borrow().iter().any(|bytes| String::from_utf8_lossy(bytes).lines().any(|oid| oid == blob)));
+    assert!(!runner.0.borrow().iter().any(|bytes| {
+        String::from_utf8_lossy(bytes)
+            .lines()
+            .any(|oid| oid == blob)
+    }));
     let count = runner.0.borrow().len();
     prefetch_history(&cfg, &head, &reader).unwrap();
     assert_eq!(runner.0.borrow().len(), count);
@@ -458,44 +955,76 @@ fn schema4_reused_classifier_binds_current_contract_bytes() {
     let r = fixture("independent", false);
     let cfg = load(&r.0).unwrap().unwrap();
     let bookkeeping = capture(&r.0, &cfg, &SystemProcessRunner).unwrap();
-    assert!(!bookkeeping.inputs.contains_key(&r.0.join(".codex/managed-skeleton.json")), "pure migration bookkeeping does not construct a classifier");
+    assert!(
+        !bookkeeping
+            .inputs
+            .contains_key(&r.0.join(".codex/managed-skeleton.json")),
+        "pure migration bookkeeping does not construct a classifier"
+    );
     change(&r.0, false);
     let captured = capture(&r.0, &cfg, &SystemProcessRunner).unwrap();
     let contract = r.0.join(".codex/managed-skeleton.json");
     assert!(captured.inputs.contains_key(&contract));
-    write(&r.0, ".codex/managed-skeleton.json", br#"{"schema_version":1,"assets":[],"changed":true}"#);
+    write(
+        &r.0,
+        ".codex/managed-skeleton.json",
+        br#"{"schema_version":1,"assets":[],"changed":true}"#,
+    );
     assert!(verify_release_inputs(&captured.inputs).is_err());
 }
 
 #[test]
 fn schema4_reused_classifier_rejects_contract_drift_before_its_path_is_captured() {
-    struct ChangeContract { spec:String, changed:std::cell::Cell<bool> }
+    struct ChangeContract {
+        spec: String,
+        changed: std::cell::Cell<bool>,
+    }
     impl ProcessRunner for ChangeContract {
-        fn run(&self, request:&ProcessRequest) -> std::io::Result<crate::ProcessOutput> {
-            let output=SystemProcessRunner.run(request)?;
-            if !self.changed.get() && request.args.iter().any(|a| a == "show")
-                && request.args.iter().any(|a| a.to_string_lossy() == self.spec) {
-                fs::write(request.cwd.join(".codex/managed-skeleton.json"), br#"{"schema_version":1,"assets":[],"note":"B"}"#)?;
+        fn run(&self, request: &ProcessRequest) -> std::io::Result<crate::ProcessOutput> {
+            let output = SystemProcessRunner.run(request)?;
+            if !self.changed.get()
+                && request.args.iter().any(|a| a == "show")
+                && request
+                    .args
+                    .iter()
+                    .any(|a| a.to_string_lossy() == self.spec)
+            {
+                fs::write(
+                    request.cwd.join(".codex/managed-skeleton.json"),
+                    br#"{"schema_version":1,"assets":[],"note":"B"}"#,
+                )?;
                 self.changed.set(true);
             }
             Ok(output)
         }
     }
-    let r=fixture("independent", false);
-    let boundary=git(&r.0,&["rev-parse","HEAD"]);
-    git(&r.0,&["add","."]);
-    git(&r.0,&["commit","-m","chore: commit migration before drift probe"]);
+    let r = fixture("independent", false);
+    let boundary = git(&r.0, &["rev-parse", "HEAD"]);
+    git(&r.0, &["add", "."]);
+    git(
+        &r.0,
+        &["commit", "-m", "chore: commit migration before drift probe"],
+    );
     // An empty graft file preserves history but deliberately disables the
     // object cache, making the classifier's release-boundary read observable.
-    write(&r.0,".git/info/grafts",b"");
-    let mut value:Value=serde_json::from_slice(&fs::read(r.0.join(CONFIG)).unwrap()).unwrap();
-    value["build_inputs"]=json!(["recipe.json"]);
-    write(&r.0,CONFIG,&serde_json::to_vec(&value).unwrap());
-    write(&r.0,".codex/managed-skeleton.json",br#"{"schema_version":1,"assets":[],"note":"A"}"#);
-    let runner=ChangeContract { spec:format!("{boundary}:.codex/managed-skeleton.json"),changed:std::cell::Cell::new(false) };
-    let error=capture(&r.0,&load(&r.0).unwrap().unwrap(),&runner).err().unwrap();
+    write(&r.0, ".git/info/grafts", b"");
+    let mut value: Value = serde_json::from_slice(&fs::read(r.0.join(CONFIG)).unwrap()).unwrap();
+    value["build_inputs"] = json!(["recipe.json"]);
+    write(&r.0, CONFIG, &serde_json::to_vec(&value).unwrap());
+    write(
+        &r.0,
+        ".codex/managed-skeleton.json",
+        br#"{"schema_version":1,"assets":[],"note":"A"}"#,
+    );
+    let runner = ChangeContract {
+        spec: format!("{boundary}:.codex/managed-skeleton.json"),
+        changed: std::cell::Cell::new(false),
+    };
+    let error = capture(&r.0, &load(&r.0).unwrap().unwrap(), &runner)
+        .err()
+        .unwrap();
     assert!(runner.changed.get());
-    assert!(error.contains("ownership contract changed"),"{error}");
+    assert!(error.contains("ownership contract changed"), "{error}");
 }
 
 #[test]
@@ -520,22 +1049,63 @@ fn schema4_baseline_repair_sharing_rejects_forged_and_broad_declarations() {
 fn schema4_baseline_repair_sharing_preserves_explicit_roles_and_opaque_boundaries() {
     let r = historical_sharing_fixture();
     let cfg = load(&r.0).unwrap().unwrap();
-    let mut snapshot = polyglot::historical(&r.0, &cfg.baseline.revision, &cfg.native, &SystemProcessRunner).unwrap();
+    let mut snapshot = polyglot::historical(
+        &r.0,
+        &cfg.baseline.revision,
+        &cfg.native,
+        &SystemProcessRunner,
+    )
+    .unwrap();
     let additions = polyglot::proven_shared_inputs(&snapshot, &cfg.native);
     assert_eq!(additions.len(), 2);
-    snapshot.config.as_mut().unwrap().shared_inputs.push(polyglot::SharedInput { path:"pkg/src/".into(), packages:vec!["a".into()] });
+    snapshot
+        .config
+        .as_mut()
+        .unwrap()
+        .shared_inputs
+        .push(polyglot::SharedInput {
+            path: "pkg/src/".into(),
+            packages: vec!["a".into()],
+        });
     assert!(polyglot::proven_shared_inputs(&snapshot, &cfg.native).is_empty());
     snapshot.config.as_mut().unwrap().shared_inputs.clear();
-    snapshot.config.as_mut().unwrap().product_inputs.push("pkg/src/".into());
+    snapshot
+        .config
+        .as_mut()
+        .unwrap()
+        .product_inputs
+        .push("pkg/src/".into());
     assert!(polyglot::proven_shared_inputs(&snapshot, &cfg.native).is_empty());
-    snapshot.config.as_mut().unwrap().product_inputs.retain(|p| p != "pkg/src/");
+    snapshot
+        .config
+        .as_mut()
+        .unwrap()
+        .product_inputs
+        .retain(|p| p != "pkg/src/");
     snapshot.inputs.remove("pkg/src/gui.rs");
-    assert!(!polyglot::proven_shared_inputs(&snapshot, &cfg.native).iter().any(|m| m.path == "pkg/src/gui.rs"));
+    assert!(
+        !polyglot::proven_shared_inputs(&snapshot, &cfg.native)
+            .iter()
+            .any(|m| m.path == "pkg/src/gui.rs")
+    );
     snapshot.packages.get_mut("a").unwrap().language = Language::Python;
     assert!(polyglot::proven_shared_inputs(&snapshot, &cfg.native).is_empty());
-    write(&r.0, "checks/main.rs", b"include!(env!(\"SHARED_SOURCE\"));\n");
-    let current = polyglot::snapshot(&cfg.native, independent::inventory(&r.0, &SystemProcessRunner).unwrap(), false, &mut |p| config::read_current(&r.0, p)).unwrap();
-    assert!(polyglot::proven_shared_inputs(&current, &cfg.native).is_empty(), "opaque includes must not invent consumers");
+    write(
+        &r.0,
+        "checks/main.rs",
+        b"include!(env!(\"SHARED_SOURCE\"));\n",
+    );
+    let current = polyglot::snapshot(
+        &cfg.native,
+        independent::inventory(&r.0, &SystemProcessRunner).unwrap(),
+        false,
+        &mut |p| config::read_current(&r.0, p),
+    )
+    .unwrap();
+    assert!(
+        polyglot::proven_shared_inputs(&current, &cfg.native).is_empty(),
+        "opaque includes must not invent consumers"
+    );
 }
 
 #[test]
@@ -543,43 +1113,84 @@ fn schema4_external_cargo_targets_survive_moves_without_claiming_siblings() {
     let r = external_cargo_fixture();
     let cfg = load(&r.0).unwrap().unwrap();
     assert_eq!(cfg.baseline.packages["a"].source_roots.len(), 7);
-    fs::rename(r.0.join("external/all_inventory.rs"), r.0.join("pkg/src/inventory.rs")).unwrap();
-    let manifest = fs::read_to_string(r.0.join("pkg/Cargo.toml")).unwrap().replace("../external/all_inventory.rs", "src/inventory.rs");
+    fs::rename(
+        r.0.join("external/all_inventory.rs"),
+        r.0.join("pkg/src/inventory.rs"),
+    )
+    .unwrap();
+    let manifest = fs::read_to_string(r.0.join("pkg/Cargo.toml"))
+        .unwrap()
+        .replace("../external/all_inventory.rs", "src/inventory.rs");
     write(&r.0, "pkg/Cargo.toml", manifest.as_bytes());
     let c = capture(&r.0, &cfg, &SystemProcessRunner).unwrap();
-    let old = c.changes.iter().find(|c| c.path == "external/all_inventory.rs").unwrap();
+    let old = c
+        .changes
+        .iter()
+        .find(|c| c.path == "external/all_inventory.rs")
+        .unwrap();
     assert_eq!(old.packages, vec!["a"]);
     write(&r.0, "external/unrelated.rs", b"fn unrelated() {}\n");
     let e = capture(&r.0, &cfg, &SystemProcessRunner).err().unwrap();
-    assert!(e.contains("unattributed release input: external/unrelated.rs"), "{e}");
+    assert!(
+        e.contains("unattributed release input: external/unrelated.rs"),
+        "{e}"
+    );
 }
 
 #[test]
 fn schema4_opaque_include_does_not_claim_unknown_changed_file() {
     let r = external_cargo_fixture();
     let cfg = load(&r.0).unwrap().unwrap();
-    write(&r.0, "external/lib.rs", b"include!(env!(\"SOURCE_FILE\"));\n");
+    write(
+        &r.0,
+        "external/lib.rs",
+        b"include!(env!(\"SOURCE_FILE\"));\n",
+    );
     write(&r.0, "unknown/generated.rs", b"pub fn generated(){}\n");
     let error = capture(&r.0, &cfg, &SystemProcessRunner).err().unwrap();
-    assert!(error.contains("unattributed release input: unknown/generated.rs"), "{error}");
+    assert!(
+        error.contains("unattributed release input: unknown/generated.rs"),
+        "{error}"
+    );
 }
 
 #[test]
 fn schema4_missing_external_target_keeps_only_declared_ownership_without_hash() {
     let r = external_cargo_fixture();
     let cfg = load(&r.0).unwrap().unwrap();
-    let manifest = format!("{}\n[[test]]\nname='removed'\npath='../external/missing.rs'\n", fs::read_to_string(r.0.join("pkg/Cargo.toml")).unwrap());
+    let manifest = format!(
+        "{}\n[[test]]\nname='removed'\npath='../external/missing.rs'\n",
+        fs::read_to_string(r.0.join("pkg/Cargo.toml")).unwrap()
+    );
     write(&r.0, "pkg/Cargo.toml", manifest.as_bytes());
     let c = capture(&r.0, &cfg, &SystemProcessRunner).unwrap();
-    assert!(c.current.packages["a"].source_roots.contains(&"external/missing.rs".into()));
+    assert!(
+        c.current.packages["a"]
+            .source_roots
+            .contains(&"external/missing.rs".into())
+    );
     assert!(!c.current.inputs.contains_key("external/missing.rs"));
-    assert_eq!(polyglot::owner(&c.current, "external/missing.rs", &cfg.native).unwrap(), vec!["a"]);
-    assert!(polyglot::owner(&c.current, "external/missing.rs/unrelated.txt", &cfg.native).unwrap_err().contains("unattributed"));
+    assert_eq!(
+        polyglot::owner(&c.current, "external/missing.rs", &cfg.native).unwrap(),
+        vec!["a"]
+    );
+    assert!(
+        polyglot::owner(&c.current, "external/missing.rs/unrelated.txt", &cfg.native)
+            .unwrap_err()
+            .contains("unattributed")
+    );
     write(&r.0, "external/missing.rs", b"mod restored;\n");
     write(&r.0, "external/restored.rs", b"pub fn restored() {}\n");
     let c = capture(&r.0, &cfg, &SystemProcessRunner).unwrap();
-    assert!(c.current.packages["a"].source_roots.contains(&"external/restored.rs".into()));
-    assert_eq!(c.current.inputs["external/missing.rs"], Some(b"mod restored;\n".to_vec()));
+    assert!(
+        c.current.packages["a"]
+            .source_roots
+            .contains(&"external/restored.rs".into())
+    );
+    assert_eq!(
+        c.current.inputs["external/missing.rs"],
+        Some(b"mod restored;\n".to_vec())
+    );
     assert!(c.current.inputs["external/restored.rs"].is_some());
 }
 
@@ -593,8 +1204,17 @@ fn schema4_baseline_repair_is_proven_atomic_and_accepts_committed_migration() {
     let index = fs::read(r.0.join(".git/index")).unwrap();
     let config = fs::read(r.0.join(CONFIG)).unwrap();
     let lock = fs::read(r.0.join("pkg/Cargo.lock")).unwrap();
-    let blocked = preview(&r.0, "fix: release", &Request::default(), &SystemProcessRunner);
-    assert!(blocked.stderr.contains("--repair-baseline-plan"), "{}", blocked.stderr);
+    let blocked = preview(
+        &r.0,
+        "fix: release",
+        &Request::default(),
+        &SystemProcessRunner,
+    );
+    assert!(
+        blocked.stderr.contains("--repair-baseline-plan"),
+        "{}",
+        blocked.stderr
+    );
     let p = repair_baseline_plan(&r.0, &SystemProcessRunner);
     assert_eq!(p.code, 0, "{}", p.stderr);
     let v = p.receipt.unwrap();
@@ -602,47 +1222,103 @@ fn schema4_baseline_repair_is_proven_atomic_and_accepts_committed_migration() {
     assert_eq!(fs::read(r.0.join(CONFIG)).unwrap(), config);
     assert_eq!(fs::read(r.0.join(".git/index")).unwrap(), index);
     let fp = v["fingerprint"].as_str().unwrap();
-    assert_ne!(repair_baseline_apply(&r.0, &SystemProcessRunner, fp, false).code, 0);
+    assert_ne!(
+        repair_baseline_apply(&r.0, &SystemProcessRunner, fp, false).code,
+        0
+    );
     assert_eq!(fs::read(r.0.join(CONFIG)).unwrap(), config);
     // A previously missing static reference appearing after planning must
     // invalidate the inventory even though it has no old input hash.
     write(&r.0, "external/lib.rs", b"mod restored;\n");
-    let missing_plan = repair_baseline_plan(&r.0, &SystemProcessRunner).receipt.unwrap();
+    let missing_plan = repair_baseline_plan(&r.0, &SystemProcessRunner)
+        .receipt
+        .unwrap();
     write(&r.0, "external/restored.rs", b"pub fn restored(){}\n");
-    assert_ne!(repair_baseline_apply(&r.0, &SystemProcessRunner, missing_plan["fingerprint"].as_str().unwrap(), true).code, 0);
+    assert_ne!(
+        repair_baseline_apply(
+            &r.0,
+            &SystemProcessRunner,
+            missing_plan["fingerprint"].as_str().unwrap(),
+            true
+        )
+        .code,
+        0
+    );
     assert_eq!(fs::read(r.0.join(CONFIG)).unwrap(), config);
     fs::remove_file(r.0.join("external/restored.rs")).unwrap();
     write(&r.0, "external/lib.rs", b"fn main() {}\n");
     write(&r.0, "README.md", b"changed after plan\n");
-    assert_ne!(repair_baseline_apply(&r.0, &SystemProcessRunner, fp, true).code, 0);
+    assert_ne!(
+        repair_baseline_apply(&r.0, &SystemProcessRunner, fp, true).code,
+        0
+    );
     assert_eq!(fs::read(r.0.join(CONFIG)).unwrap(), config);
-    let p = repair_baseline_plan(&r.0, &SystemProcessRunner).receipt.unwrap();
-    let a = repair_baseline_apply(&r.0, &SystemProcessRunner, p["fingerprint"].as_str().unwrap(), true);
+    let p = repair_baseline_plan(&r.0, &SystemProcessRunner)
+        .receipt
+        .unwrap();
+    let a = repair_baseline_apply(
+        &r.0,
+        &SystemProcessRunner,
+        p["fingerprint"].as_str().unwrap(),
+        true,
+    );
     assert_eq!(a.code, 0, "{}", a.stderr);
     let mut repaired: Value = serde_json::from_slice(&fs::read(r.0.join(CONFIG)).unwrap()).unwrap();
-    assert_eq!(repaired["baseline"]["packages"]["a"]["source_roots"].as_array().unwrap().len(), 7);
+    assert_eq!(
+        repaired["baseline"]["packages"]["a"]["source_roots"]
+            .as_array()
+            .unwrap()
+            .len(),
+        7
+    );
     repaired["baseline"]["packages"]["a"]["source_roots"] = json!(["pkg/"]);
-    repaired["baseline"]["input_hashes"].as_object_mut().unwrap().retain(|path, _| !path.starts_with("external/"));
+    repaired["baseline"]["input_hashes"]
+        .as_object_mut()
+        .unwrap()
+        .retain(|path, _| !path.starts_with("external/"));
     assert_eq!(repaired, old);
     assert_eq!(git(&r.0, &["rev-parse", "HEAD"]), head);
     assert_eq!(fs::read(r.0.join(".git/index")).unwrap(), index);
     assert_eq!(fs::read(r.0.join("pkg/Cargo.lock")).unwrap(), lock);
     assert_eq!(fs::read(r.0.join("VERSION")).unwrap(), b"1.0.0\n");
-    assert_eq!(preview(&r.0, "fix: release", &Request::default(), &SystemProcessRunner).code, 0);
+    assert_eq!(
+        preview(
+            &r.0,
+            "fix: release",
+            &Request::default(),
+            &SystemProcessRunner
+        )
+        .code,
+        0
+    );
     let request = analyze(&r.0, "patch", None);
-    let release = build(&r.0, "fix: product", &request, &SystemProcessRunner).unwrap().unwrap();
+    let release = build(&r.0, "fix: product", &request, &SystemProcessRunner)
+        .unwrap()
+        .unwrap();
     apply_file_release_plan(&release).unwrap();
     git(&r.0, &["add", "."]);
     git(&r.0, &["commit", "-m", "fix: product"]);
     let published = fs::read(r.0.join(CONFIG)).unwrap();
     let blocked = repair_baseline_plan(&r.0, &SystemProcessRunner);
-    assert!(blocked.stderr.contains("published migration baseline cannot be repaired"), "{}", blocked.stderr);
+    assert!(
+        blocked
+            .stderr
+            .contains("published migration baseline cannot be repaired"),
+        "{}",
+        blocked.stderr
+    );
     assert_eq!(fs::read(r.0.join(CONFIG)).unwrap(), published);
 }
 
 #[test]
 fn schema4_baseline_repair_rejects_forged_facts_and_ownership() {
-    for field in ["version", "source_roots", "changed_hash", "removed_hash", "invented_hash"] {
+    for field in [
+        "version",
+        "source_roots",
+        "changed_hash",
+        "removed_hash",
+        "invented_hash",
+    ] {
         let r = external_cargo_fixture();
         let mut v = legacy_source_roots(&r.0);
         match field {
@@ -658,7 +1334,9 @@ fn schema4_baseline_repair_rejects_forged_facts_and_ownership() {
                 let key = hashes.keys().next().unwrap().clone();
                 hashes.remove(&key);
             }
-            "invented_hash" => v["baseline"]["input_hashes"]["external/unrelated.rs"] = json!("sha256:forged"),
+            "invented_hash" => {
+                v["baseline"]["input_hashes"]["external/unrelated.rs"] = json!("sha256:forged")
+            }
             _ => unreachable!(),
         }
         write(&r.0, CONFIG, &serde_json::to_vec(&v).unwrap());
@@ -673,24 +1351,57 @@ fn schema4_baseline_repair_rejects_forged_facts_and_ownership() {
 fn schema4_external_targets_reject_ambiguity_and_path_escape() {
     let r = external_cargo_fixture();
     let cfg = load(&r.0).unwrap().unwrap();
-    let mut snapshot = baseline_snapshot(&r.0, &cfg, &cfg.baseline.revision, &SystemProcessRunner).unwrap();
+    let mut snapshot =
+        baseline_snapshot(&r.0, &cfg, &cfg.baseline.revision, &SystemProcessRunner).unwrap();
     let mut second = snapshot.packages["a"].clone();
     second.manifest = "other/Cargo.toml".into();
     snapshot.packages.insert("b".into(), second);
-    assert!(polyglot::owner(&snapshot, "external/lib.rs", &cfg.native).unwrap_err().contains("ambiguous"));
-    assert!(polyglot::owner(&snapshot, "external/lib.rs/unrelated.txt", &cfg.native).unwrap_err().contains("unattributed"));
+    assert!(
+        polyglot::owner(&snapshot, "external/lib.rs", &cfg.native)
+            .unwrap_err()
+            .contains("ambiguous")
+    );
+    assert!(
+        polyglot::owner(&snapshot, "external/lib.rs/unrelated.txt", &cfg.native)
+            .unwrap_err()
+            .contains("unattributed")
+    );
     snapshot.packages.get_mut("b").unwrap().source_roots = vec!["external/".into()];
-    assert!(polyglot::owner(&snapshot, "external/lib.rs", &cfg.native).unwrap_err().contains("ambiguous"));
+    assert!(
+        polyglot::owner(&snapshot, "external/lib.rs", &cfg.native)
+            .unwrap_err()
+            .contains("ambiguous")
+    );
     // Python explicit version sources retain their existing precedence in the
     // absence of Cargo external declarations; a cross-language collision does not.
-    for package in snapshot.packages.values_mut() { package.language = Language::Python; }
-    assert_eq!(polyglot::owner(&snapshot, "external/lib.rs", &cfg.native).unwrap(), vec!["a"]);
+    for package in snapshot.packages.values_mut() {
+        package.language = Language::Python;
+    }
+    assert_eq!(
+        polyglot::owner(&snapshot, "external/lib.rs", &cfg.native).unwrap(),
+        vec!["a"]
+    );
     snapshot.packages.get_mut("b").unwrap().language = Language::Rust;
     snapshot.packages.get_mut("b").unwrap().source_roots = vec!["external/lib.rs".into()];
-    assert!(polyglot::owner(&snapshot, "external/lib.rs", &cfg.native).unwrap_err().contains("ambiguous"));
-    let text = fs::read_to_string(r.0.join("pkg/Cargo.toml")).unwrap().replace("../external/lib.rs", "../../outside.rs");
+    assert!(
+        polyglot::owner(&snapshot, "external/lib.rs", &cfg.native)
+            .unwrap_err()
+            .contains("ambiguous")
+    );
+    let text = fs::read_to_string(r.0.join("pkg/Cargo.toml"))
+        .unwrap()
+        .replace("../external/lib.rs", "../../outside.rs");
     write(&r.0, "pkg/Cargo.toml", text.as_bytes());
-    assert_ne!(preview(&r.0, "fix: release", &Request::default(), &SystemProcessRunner).code, 0);
+    assert_ne!(
+        preview(
+            &r.0,
+            "fix: release",
+            &Request::default(),
+            &SystemProcessRunner
+        )
+        .code,
+        0
+    );
 }
 
 #[test]
@@ -698,11 +1409,19 @@ fn schema4_inline_cargo_targets_keep_the_same_ownership() {
     let r = external_cargo_fixture();
     let cfg = load(&r.0).unwrap().unwrap();
     let manifest = fs::read_to_string(r.0.join("pkg/Cargo.toml")).unwrap();
-    let manifest = format!("bin = [{{name='inventory',path='../external/all_inventory.rs'}}]\n{}",
-        manifest.replace("[[bin]]\nname='inventory'\npath='../external/all_inventory.rs'\n", ""));
+    let manifest = format!(
+        "bin = [{{name='inventory',path='../external/all_inventory.rs'}}]\n{}",
+        manifest.replace(
+            "[[bin]]\nname='inventory'\npath='../external/all_inventory.rs'\n",
+            ""
+        )
+    );
     write(&r.0, "pkg/Cargo.toml", manifest.as_bytes());
     let c = capture(&r.0, &cfg, &SystemProcessRunner).unwrap();
-    assert_eq!(c.current.packages["a"].source_roots, cfg.baseline.packages["a"].source_roots);
+    assert_eq!(
+        c.current.packages["a"].source_roots,
+        cfg.baseline.packages["a"].source_roots
+    );
 }
 
 #[test]
@@ -711,26 +1430,57 @@ fn schema4_external_lib_module_history_is_repaired_before_module_move_release() 
         let r = fixture("legacy", true);
         write(&r.0, "pkg/Cargo.toml", b"[package]\nname='a'\nversion='1.0.0'\nedition='2021'\n[workspace]\n[lib]\npath='../legacy/lib.rs'\n");
         write(&r.0, "legacy/lib.rs", b"pub mod all_inventory;\n");
-        write(&r.0, "legacy/all_inventory.rs", b"#[cfg(test)]\n#[path=\"all_inventory_tests.rs\"] mod tests; pub fn value()->u8{1}\n");
-        write(&r.0, "legacy/all_inventory_tests.rs", b"#[test] fn example(){}\n");
+        write(
+            &r.0,
+            "legacy/all_inventory.rs",
+            b"#[cfg(test)]\n#[path=\"all_inventory_tests.rs\"] mod tests; pub fn value()->u8{1}\n",
+        );
+        write(
+            &r.0,
+            "legacy/all_inventory_tests.rs",
+            b"#[test] fn example(){}\n",
+        );
         write(&r.0, "legacy/unrelated.rs", b"pub fn unrelated(){}\n");
         git(&r.0, &["add", "."]);
         git(&r.0, &["commit", "--amend", "--no-edit"]);
         let p = migration_plan(&r.0, &SystemProcessRunner, None);
         assert_eq!(p.code, 0, "{}", p.stderr);
         let p = p.receipt.unwrap();
-        assert_eq!(migration_apply(&r.0, &SystemProcessRunner, None, p["fingerprint"].as_str().unwrap(), true).code, 0);
+        assert_eq!(
+            migration_apply(
+                &r.0,
+                &SystemProcessRunner,
+                None,
+                p["fingerprint"].as_str().unwrap(),
+                true
+            )
+            .code,
+            0
+        );
         let mut old: Value = serde_json::from_slice(&fs::read(r.0.join(CONFIG)).unwrap()).unwrap();
-        old["baseline"]["packages"]["a"]["source_roots"] = if exact_entry_already_recorded { json!(["pkg/", "legacy/lib.rs"]) } else { json!(["pkg/"]) };
-        old["baseline"]["input_hashes"].as_object_mut().unwrap().retain(|path, _| !path.starts_with("legacy/"));
+        old["baseline"]["packages"]["a"]["source_roots"] = if exact_entry_already_recorded {
+            json!(["pkg/", "legacy/lib.rs"])
+        } else {
+            json!(["pkg/"])
+        };
+        old["baseline"]["input_hashes"]
+            .as_object_mut()
+            .unwrap()
+            .retain(|path, _| !path.starts_with("legacy/"));
         write(&r.0, CONFIG, &serde_json::to_vec(&old).unwrap());
         git(&r.0, &["add", "."]);
         git(&r.0, &["commit", "-m", "chore: old metadata migration"]);
 
         for name in ["lib.rs", "all_inventory.rs", "all_inventory_tests.rs"] {
-            fs::rename(r.0.join("legacy").join(name), r.0.join("pkg/src").join(name)).unwrap();
+            fs::rename(
+                r.0.join("legacy").join(name),
+                r.0.join("pkg/src").join(name),
+            )
+            .unwrap();
         }
-        let manifest = fs::read_to_string(r.0.join("pkg/Cargo.toml")).unwrap().replace("../legacy/lib.rs", "src/lib.rs");
+        let manifest = fs::read_to_string(r.0.join("pkg/Cargo.toml"))
+            .unwrap()
+            .replace("../legacy/lib.rs", "src/lib.rs");
         write(&r.0, "pkg/Cargo.toml", manifest.as_bytes());
         let config_before = fs::read(r.0.join(CONFIG)).unwrap();
         let index = fs::read(r.0.join(".git/index")).unwrap();
@@ -739,26 +1489,53 @@ fn schema4_external_lib_module_history_is_repaired_before_module_move_release() 
         let planned = planned.receipt.unwrap();
         let baseline = &planned["configuration"]["baseline"];
         assert_eq!(baseline["revision"], old["baseline"]["revision"]);
-        assert!(baseline["packages"]["a"]["source_roots"].as_array().unwrap().contains(&json!("legacy/all_inventory.rs")));
+        assert!(
+            baseline["packages"]["a"]["source_roots"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("legacy/all_inventory.rs"))
+        );
         assert_eq!(baseline["input_hashes"]["legacy/all_inventory.rs"], json!(digest(b"#[cfg(test)]\n#[path=\"all_inventory_tests.rs\"] mod tests; pub fn value()->u8{1}\n")));
-        assert!(!baseline["packages"]["a"]["source_roots"].as_array().unwrap().contains(&json!("legacy/unrelated.rs")));
+        assert!(
+            !baseline["packages"]["a"]["source_roots"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("legacy/unrelated.rs"))
+        );
         assert_eq!(fs::read(r.0.join(CONFIG)).unwrap(), config_before);
-        assert_eq!(repair_baseline_apply(&r.0, &SystemProcessRunner, planned["fingerprint"].as_str().unwrap(), true).code, 0);
+        assert_eq!(
+            repair_baseline_apply(
+                &r.0,
+                &SystemProcessRunner,
+                planned["fingerprint"].as_str().unwrap(),
+                true
+            )
+            .code,
+            0
+        );
         assert_eq!(fs::read(r.0.join(".git/index")).unwrap(), index);
         assert_eq!(fs::read(r.0.join("VERSION")).unwrap(), b"1.0.0\n");
         let cfg = load(&r.0).unwrap().unwrap();
         let captured = capture(&r.0, &cfg, &SystemProcessRunner).unwrap();
         for path in ["legacy/all_inventory.rs", "pkg/src/all_inventory.rs"] {
-            assert_eq!(captured.changes.iter().find(|c| c.path == path).unwrap().packages, vec!["a"]);
+            assert_eq!(
+                captured
+                    .changes
+                    .iter()
+                    .find(|c| c.path == path)
+                    .unwrap()
+                    .packages,
+                vec!["a"]
+            );
         }
     }
 }
 fn analyze(root: &Path, product: &str, package: Option<&str>) -> Request {
-    if let Some(level)=package {
-        fixture::close_packages(root,&SystemProcessRunner,&[("a",level)]).unwrap();
+    if let Some(level) = package {
+        fixture::close_packages(root, &SystemProcessRunner, &[("a", level)]).unwrap();
     }
-    let cfg=load(root).unwrap().unwrap();
-    let captured=capture(root,&cfg,&SystemProcessRunner).unwrap();
+    let cfg = load(root).unwrap().unwrap();
+    let captured = capture(root, &cfg, &SystemProcessRunner).unwrap();
     write(root,".runtime/analysis.json",&serde_json::to_vec(&json!({"schema":1,"fingerprint":captured.fingerprint,"product":{"level":product,"reason":"actual final release changes","compatibility":"compatible"}})).unwrap());
     Request {
         analysis_file: Some(PathBuf::from(".runtime/analysis.json")),
@@ -781,10 +1558,7 @@ fn schema4_single_model_uses_both_language_adapters() {
             .unwrap()
             .unwrap();
             assert_eq!(p.new_version.to_string(), "1.1.0");
-            assert_eq!(
-                p.package_changes[0].version_after,
-                "1.0.1"
-            );
+            assert_eq!(p.package_changes[0].version_after, "1.0.1");
             assert_eq!(fs::read(r.0.join(".git/index")).unwrap(), before);
             assert_eq!(fs::read(r.0.join("VERSION")).unwrap(), b"1.0.0\n");
         }
@@ -827,14 +1601,16 @@ fn schema4_final_difference_cancels_unpublished_commits() {
         "{}",
         serde_json::to_string(&c.changes).unwrap()
     );
-    assert!(build(
-        &r.0,
-        "fix: restored",
-        &Request::default(),
-        &SystemProcessRunner
-    )
-    .unwrap()
-    .is_none());
+    assert!(
+        build(
+            &r.0,
+            "fix: restored",
+            &Request::default(),
+            &SystemProcessRunner
+        )
+        .unwrap()
+        .is_none()
+    );
 }
 #[test]
 fn schema4_nested_cargo_lock_only_changes_product() {
@@ -853,24 +1629,54 @@ fn schema4_nested_cargo_lock_only_changes_product() {
 }
 #[test]
 fn schema4_analysis_binds_final_bytes_and_missing_package_is_rejected() {
-    let r=fixture("independent",false); change(&r.0,false);
-    let request=analyze(&r.0,"patch",None);
-    assert!(build(&r.0,"fix: change",&request,&SystemProcessRunner).unwrap_err().contains("development closure required"));
-    let request=analyze(&r.0,"patch",Some("patch"));
-    write(&r.0,"README.md",b"new product bytes\n");
-    assert!(build(&r.0,"fix: change",&request,&SystemProcessRunner).unwrap_err().contains("stale"));
+    let r = fixture("independent", false);
+    change(&r.0, false);
+    let request = analyze(&r.0, "patch", None);
+    assert!(
+        build(&r.0, "fix: change", &request, &SystemProcessRunner)
+            .unwrap_err()
+            .contains("development closure required")
+    );
+    let request = analyze(&r.0, "patch", Some("patch"));
+    write(&r.0, "README.md", b"new product bytes\n");
+    assert!(
+        build(&r.0, "fix: change", &request, &SystemProcessRunner)
+            .unwrap_err()
+            .contains("stale")
+    );
 }
 
 #[test]
 fn schema4_explicit_targets_reject_lower_and_unchanged_package_bumps() {
-    let r=fixture("independent",false); change(&r.0,false);
-    let request=analyze(&r.0,"minor",Some("minor"));
-    let mut v=analysis_value(&r.0); v["targets"]=json!({"product":"1.0.1"});save_analysis(&r.0,&v);
-    assert!(build(&r.0,"feat: change",&request,&SystemProcessRunner).unwrap_err().contains("below suggested"));
-    v["targets"]=json!({"a":"1.2.0"});save_analysis(&r.0,&v);
-    assert!(build(&r.0,"feat: change",&request,&SystemProcessRunner).unwrap_err().contains("release only analyzes product"));
-    write(&r.0,"pkg/a.py",b"VALUE=1\n");
-    assert!(build(&r.0,"fix: reverted after closure",&request,&SystemProcessRunner).unwrap_err().contains("development closure required"));
+    let r = fixture("independent", false);
+    change(&r.0, false);
+    let request = analyze(&r.0, "minor", Some("minor"));
+    let mut v = analysis_value(&r.0);
+    v["targets"] = json!({"product":"1.0.1"});
+    save_analysis(&r.0, &v);
+    assert!(
+        build(&r.0, "feat: change", &request, &SystemProcessRunner)
+            .unwrap_err()
+            .contains("below suggested")
+    );
+    v["targets"] = json!({"a":"1.2.0"});
+    save_analysis(&r.0, &v);
+    assert!(
+        build(&r.0, "feat: change", &request, &SystemProcessRunner)
+            .unwrap_err()
+            .contains("release only analyzes product")
+    );
+    write(&r.0, "pkg/a.py", b"VALUE=1\n");
+    assert!(
+        build(
+            &r.0,
+            "fix: reverted after closure",
+            &request,
+            &SystemProcessRunner
+        )
+        .unwrap_err()
+        .contains("development closure required")
+    );
 }
 
 fn migrate(root: &Path) {
@@ -942,14 +1748,27 @@ fn schema4_dependency_upgrade_only_bumps_owner_when_requirement_changes() {
         git(&r.0, &["commit", "--amend", "--no-edit"]);
         migrate(&r.0);
         change(&r.0, false);
-        let overrides=if pinned {vec![("a","patch"),("b","patch")]}else{vec![("a","patch")]};
-        fixture::close_packages(&r.0,&SystemProcessRunner,&overrides).unwrap();
-        let request=analyze(&r.0,"patch",None);
-        let p=build(&r.0,"fix: a",&request,&SystemProcessRunner).unwrap().unwrap();
-        assert_eq!(p.package_changes.len(),if pinned{2}else{1});
+        let overrides = if pinned {
+            vec![("a", "patch"), ("b", "patch")]
+        } else {
+            vec![("a", "patch")]
+        };
+        fixture::close_packages(&r.0, &SystemProcessRunner, &overrides).unwrap();
+        let request = analyze(&r.0, "patch", None);
+        let p = build(&r.0, "fix: a", &request, &SystemProcessRunner)
+            .unwrap()
+            .unwrap();
+        assert_eq!(p.package_changes.len(), if pinned { 2 } else { 1 });
         assert!(!p.writes.contains_key(&r.0.join("consumer/pyproject.toml")));
-        let native=fs::read_to_string(r.0.join("consumer/pyproject.toml")).unwrap();
-        if pinned {assert!(native.contains("1.0.1"));}else{assert_eq!(p.details.unwrap()["packages"][1]["reason"],"no_package_version_change");}
+        let native = fs::read_to_string(r.0.join("consumer/pyproject.toml")).unwrap();
+        if pinned {
+            assert!(native.contains("1.0.1"));
+        } else {
+            assert_eq!(
+                p.details.unwrap()["packages"][1]["reason"],
+                "no_package_version_change"
+            );
+        }
     }
 }
 
@@ -974,20 +1793,27 @@ fn schema4_mixed_languages_keep_per_package_impact() {
     migrate(&r.0);
     change(&r.0, true);
     write(&r.0, "py/p.py", b"VALUE=2\n");
-    fixture::close_packages(&r.0,&SystemProcessRunner,&[("a","patch"),("p","minor")]).unwrap();
+    fixture::close_packages(
+        &r.0,
+        &SystemProcessRunner,
+        &[("a", "patch"), ("p", "minor")],
+    )
+    .unwrap();
     let request = analyze(&r.0, "minor", None);
     let p = build(&r.0, "feat: mixed release", &request, &SystemProcessRunner)
         .unwrap()
         .unwrap();
     assert_eq!(p.new_version.to_string(), "1.1.0");
-    assert!(p
-        .package_changes
-        .iter()
-        .any(|p| p.name == "a" && p.version_after == "1.0.1"));
-    assert!(p
-        .package_changes
-        .iter()
-        .any(|p| p.name == "p" && p.version_after == "1.1.0"));
+    assert!(
+        p.package_changes
+            .iter()
+            .any(|p| p.name == "a" && p.version_after == "1.0.1")
+    );
+    assert!(
+        p.package_changes
+            .iter()
+            .any(|p| p.name == "p" && p.version_after == "1.1.0")
+    );
 }
 
 #[test]
@@ -999,16 +1825,18 @@ fn schema4_stratus_style_build_recipe_and_ledger_do_not_bump_package() {
     write(&r.0, CONFIG, &serde_json::to_vec(&cfg).unwrap());
     write(&r.0, "pkg/versions.json", b"{\"template-one\":7}\n");
     let config_request = analyze(&r.0, "patch", None);
-    assert!(build(
-        &r.0,
-        "chore: roles and record",
-        &config_request,
-        &SystemProcessRunner
-    )
-    .unwrap()
-    .unwrap()
-    .package_changes
-    .is_empty());
+    assert!(
+        build(
+            &r.0,
+            "chore: roles and record",
+            &config_request,
+            &SystemProcessRunner
+        )
+        .unwrap()
+        .unwrap()
+        .package_changes
+        .is_empty()
+    );
     write(
         &r.0,
         "scripts/build-recipes/common.json",
@@ -1036,17 +1864,30 @@ fn schema4_stratus_style_build_recipe_and_ledger_do_not_bump_package() {
 
 #[test]
 fn schema4_breaking_and_unknown_changes_block_until_bound_user_acceptance() {
-    let r=fixture("independent",true);change(&r.0,true);development_tests::configure(&r.0,false);
-    let runner=development_tests::Checks::new();
-    let request=development_tests::request(&r.0,"major",false,&runner);
-    let path=r.0.join(".runtime/develop.json");
-    let mut v:Value=serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
-    v["packages"]["a"]["compatibility"]=json!("breaking");fs::write(&path,serde_json::to_vec(&v).unwrap()).unwrap();
-    assert!(development::preview(&r.0,&request,&runner).stderr.contains("explicit user acceptance"));
-    v["packages"]["a"]["acceptance"]=json!({"fingerprint":v["fingerprint"],"scope":["a"],"reason":"accept migration","source":"fixture user decision"});
-    fs::write(&path,serde_json::to_vec(&v).unwrap()).unwrap();assert_eq!(development::preview(&r.0,&request,&runner).code,0);
-    v["packages"]["a"]["compatibility"]=json!("unknown");fs::write(&path,serde_json::to_vec(&v).unwrap()).unwrap();
-    assert!(development::preview(&r.0,&request,&runner).stderr.contains("unknown"));
+    let r = fixture("independent", true);
+    change(&r.0, true);
+    development_tests::configure(&r.0, false);
+    let runner = development_tests::Checks::new();
+    let request = development_tests::request(&r.0, "major", false, &runner);
+    let path = r.0.join(".runtime/develop.json");
+    let mut v: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    v["packages"]["a"]["compatibility"] = json!("breaking");
+    fs::write(&path, serde_json::to_vec(&v).unwrap()).unwrap();
+    assert!(
+        development::preview(&r.0, &request, &runner)
+            .stderr
+            .contains("explicit user acceptance")
+    );
+    v["packages"]["a"]["acceptance"] = json!({"fingerprint":v["fingerprint"],"scope":["a"],"reason":"accept migration","source":"fixture user decision"});
+    fs::write(&path, serde_json::to_vec(&v).unwrap()).unwrap();
+    assert_eq!(development::preview(&r.0, &request, &runner).code, 0);
+    v["packages"]["a"]["compatibility"] = json!("unknown");
+    fs::write(&path, serde_json::to_vec(&v).unwrap()).unwrap();
+    assert!(
+        development::preview(&r.0, &request, &runner)
+            .stderr
+            .contains("unknown")
+    );
 }
 
 #[test]
@@ -1058,9 +1899,11 @@ fn schema4_validation_binds_report_scope_and_bytes() {
     write(&r.0, CONFIG, &serde_json::to_vec(&cfg).unwrap());
     change(&r.0, false);
     let request = analyze(&r.0, "patch", Some("patch"));
-    assert!(build(&r.0, "fix: change", &request, &SystemProcessRunner)
-        .unwrap_err()
-        .contains("required release evidence missing"));
+    assert!(
+        build(&r.0, "fix: change", &request, &SystemProcessRunner)
+            .unwrap_err()
+            .contains("required release evidence missing")
+    );
     let mut v = analysis_value(&r.0);
     let validation = capture(&r.0, &load(&r.0).unwrap().unwrap(), &SystemProcessRunner)
         .unwrap()
@@ -1070,13 +1913,17 @@ fn schema4_validation_binds_report_scope_and_bytes() {
     write(&r.0, ".runtime/evidence.json", &bytes);
     v["checks"] = json!([{"id":"unit","status":"passed","fingerprint":validation,"scope":["product","a"],"reason":"fixture input-bound validation","artifact":".runtime/evidence.json","sha256":digest(&bytes)}]);
     save_analysis(&r.0, &v);
-    assert!(build(&r.0, "fix: change", &request, &SystemProcessRunner)
-        .unwrap()
-        .is_some());
+    assert!(
+        build(&r.0, "fix: change", &request, &SystemProcessRunner)
+            .unwrap()
+            .is_some()
+    );
     write(&r.0, ".runtime/evidence.json", b"{}");
-    assert!(build(&r.0, "fix: change", &request, &SystemProcessRunner)
-        .unwrap_err()
-        .contains("artifact changed"));
+    assert!(
+        build(&r.0, "fix: change", &request, &SystemProcessRunner)
+            .unwrap_err()
+            .contains("artifact changed")
+    );
 }
 
 #[test]
@@ -1165,14 +2012,16 @@ fn schema4_retirement_survives_release_and_cannot_reuse_identity() {
     cfg["packages"] =
         json!([{"id":"a","language":"python","manifest":"pkg/pyproject.toml","name":"a"}]);
     write(&r.0, CONFIG, &serde_json::to_vec(&cfg).unwrap());
-    assert!(build(
-        &r.0,
-        "fix: reuse",
-        &Request::default(),
-        &SystemProcessRunner
-    )
-    .unwrap_err()
-    .contains("retired identity"));
+    assert!(
+        build(
+            &r.0,
+            "fix: reuse",
+            &Request::default(),
+            &SystemProcessRunner
+        )
+        .unwrap_err()
+        .contains("retired identity")
+    );
 }
 
 #[test]
@@ -1224,33 +2073,47 @@ fn schema4_single_model_splits_rust_workspace_version_for_changed_package() {
         .unwrap()
         .unwrap();
     assert!(!p.writes.contains_key(&r.0.join("pkg/Cargo.toml")));
-    let manifest = fs::read_to_string(r.0.join("pkg/Cargo.toml")).unwrap()
+    let manifest = fs::read_to_string(r.0.join("pkg/Cargo.toml"))
+        .unwrap()
         .parse::<toml_edit::DocumentMut>()
         .unwrap();
-    assert_eq!(
-        manifest["package"]["version"].as_str(),
-        Some("1.0.1")
-    );
+    assert_eq!(manifest["package"]["version"].as_str(), Some("1.0.1"));
     assert!(!p.writes.contains_key(&r.0.join("Cargo.toml")));
 }
 
 #[test]
 fn schema4_breaking_lifecycle_cannot_disguise_major_as_compatible() {
-    let r=fixture("independent",false);
-    let mut cfg:Value=serde_json::from_slice(&fs::read(r.0.join(CONFIG)).unwrap()).unwrap();
-    let base=cfg["baseline"]["revision"].clone();fs::remove_dir_all(r.0.join("pkg")).unwrap();
-    cfg["adapters"]["python"]["projects"]=json!([]);cfg["packages"]=json!([]);
-    cfg["development"]=json!({"a":development_tests::policy(false)});cfg["python_environment"]=python_environment_fixture(&r.0);
-    cfg["lifecycle"]=json!([{"id":"remove-a","base":base,"operation":"remove","compatibility":"breaking","from":[{"id":"a","language":"python","manifest":"pkg/pyproject.toml","name":"a"}],"to":[]}]);
-    write(&r.0,CONFIG,&serde_json::to_vec(&cfg).unwrap());
-    let runner=development_tests::Checks::new();let q=development_tests::request(&r.0,"major",false,&runner);
-    assert!(development::preview(&r.0,&q,&runner).stderr.contains("breaking lifecycle"));
-    let q=development_tests::request(&r.0,"major",true,&runner);let result=development_tests::close(&r.0,&q,&runner);assert_eq!(result.code,0,"{}",result.stderr);
-    let q=analyze(&r.0,"major",None);
-    assert!(build(&r.0,"feat!: retire",&q,&runner).unwrap_err().contains("breaking"));
-    let mut v=analysis_value(&r.0);v["product"]["compatibility"]=json!("breaking");
-    v["product"]["acceptance"]=json!({"fingerprint":v["fingerprint"],"scope":["product"],"reason":"accepted product migration","source":"existing fixture decision"});save_analysis(&r.0,&v);
-    assert!(build(&r.0,"feat!: retire",&q,&runner).unwrap().is_some());
+    let r = fixture("independent", false);
+    let mut cfg: Value = serde_json::from_slice(&fs::read(r.0.join(CONFIG)).unwrap()).unwrap();
+    let base = cfg["baseline"]["revision"].clone();
+    fs::remove_dir_all(r.0.join("pkg")).unwrap();
+    cfg["adapters"]["python"]["projects"] = json!([]);
+    cfg["packages"] = json!([]);
+    cfg["development"] = json!({"a":development_tests::policy(false)});
+    cfg["python_environment"] = python_environment_fixture(&r.0);
+    cfg["lifecycle"] = json!([{"id":"remove-a","base":base,"operation":"remove","compatibility":"breaking","from":[{"id":"a","language":"python","manifest":"pkg/pyproject.toml","name":"a"}],"to":[]}]);
+    write(&r.0, CONFIG, &serde_json::to_vec(&cfg).unwrap());
+    let runner = development_tests::Checks::new();
+    let q = development_tests::request(&r.0, "major", false, &runner);
+    assert!(
+        development::preview(&r.0, &q, &runner)
+            .stderr
+            .contains("breaking lifecycle")
+    );
+    let q = development_tests::request(&r.0, "major", true, &runner);
+    let result = development_tests::close(&r.0, &q, &runner);
+    assert_eq!(result.code, 0, "{}", result.stderr);
+    let q = analyze(&r.0, "major", None);
+    assert!(
+        build(&r.0, "feat!: retire", &q, &runner)
+            .unwrap_err()
+            .contains("breaking")
+    );
+    let mut v = analysis_value(&r.0);
+    v["product"]["compatibility"] = json!("breaking");
+    v["product"]["acceptance"] = json!({"fingerprint":v["fingerprint"],"scope":["product"],"reason":"accepted product migration","source":"existing fixture decision"});
+    save_analysis(&r.0, &v);
+    assert!(build(&r.0, "feat!: retire", &q, &runner).unwrap().is_some());
 }
 
 #[test]
@@ -1258,32 +2121,80 @@ fn schema4_stat_only_index_refresh_keeps_analysis_valid_without_weakening_drift_
     let r = fixture("independent", false);
     git(&r.0, &["config", "core.autocrlf", "false"]);
     change(&r.0, false);
-    let file = fs::OpenOptions::new().write(true).open(r.0.join("README.md")).unwrap();
-    file.set_times(fs::FileTimes::new().set_modified(
-        std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_000_000),
-    )).unwrap();
-    let candidates = git(&r.0, &["--no-optional-locks", "-c", "diff.autoRefreshIndex=false", "diff", "--name-only", "HEAD", "--"]);
-    assert!(candidates.lines().any(|p| p == "README.md"), "stat-only fixture did not create a false candidate: {candidates}");
+    let file = fs::OpenOptions::new()
+        .write(true)
+        .open(r.0.join("README.md"))
+        .unwrap();
+    file.set_times(
+        fs::FileTimes::new()
+            .set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_000_000)),
+    )
+    .unwrap();
+    let candidates = git(
+        &r.0,
+        &[
+            "--no-optional-locks",
+            "-c",
+            "diff.autoRefreshIndex=false",
+            "diff",
+            "--name-only",
+            "HEAD",
+            "--",
+        ],
+    );
+    assert!(
+        candidates.lines().any(|p| p == "README.md"),
+        "stat-only fixture did not create a false candidate: {candidates}"
+    );
     let request = analyze(&r.0, "patch", Some("patch"));
     let cfg = load(&r.0).unwrap().unwrap();
     let index = fs::read(r.0.join(".git/index")).unwrap();
     let before = capture(&r.0, &cfg, &SystemProcessRunner).unwrap();
-    assert_eq!(fs::read(r.0.join(".git/index")).unwrap(), index, "inspection must remain read-only");
+    assert_eq!(
+        fs::read(r.0.join(".git/index")).unwrap(),
+        index,
+        "inspection must remain read-only"
+    );
     git(&r.0, &["diff", "--name-only"]);
     let after = capture(&r.0, &cfg, &SystemProcessRunner).unwrap();
-    assert_eq!(serde_json::to_value(&before.changes).unwrap(), serde_json::to_value(&after.changes).unwrap());
+    assert_eq!(
+        serde_json::to_value(&before.changes).unwrap(),
+        serde_json::to_value(&after.changes).unwrap()
+    );
     assert_eq!(before.validation_fingerprint, after.validation_fingerprint);
-    assert_eq!(before.fingerprint, after.fingerprint, "stat refresh must not invalidate an unchanged release analysis");
-    assert!(build(&r.0, "fix: release", &request, &SystemProcessRunner).unwrap().is_some());
+    assert_eq!(
+        before.fingerprint, after.fingerprint,
+        "stat refresh must not invalidate an unchanged release analysis"
+    );
+    assert!(
+        build(&r.0, "fix: release", &request, &SystemProcessRunner)
+            .unwrap()
+            .is_some()
+    );
 
     write(&r.0, "README.md", b"real product change\n");
-    assert!(build(&r.0, "fix: release", &request, &SystemProcessRunner).err().unwrap().contains("stale"));
+    assert!(
+        build(&r.0, "fix: release", &request, &SystemProcessRunner)
+            .err()
+            .unwrap()
+            .contains("stale")
+    );
     let request = analyze(&r.0, "patch", Some("patch"));
     git(&r.0, &["add", "pkg/a.py"]);
-    assert!(build(&r.0, "fix: release", &request, &SystemProcessRunner).err().unwrap().contains("stale"));
+    assert!(
+        build(&r.0, "fix: release", &request, &SystemProcessRunner)
+            .err()
+            .unwrap()
+            .contains("stale")
+    );
     let request = analyze(&r.0, "patch", Some("patch"));
     git(&r.0, &["update-index", "--chmod=+x", "README.md"]);
-    assert!(build(&r.0, "fix: release", &request, &SystemProcessRunner).err().unwrap().contains("stale"));
+    assert!(
+        build(&r.0, "fix: release", &request, &SystemProcessRunner)
+            .err()
+            .unwrap()
+            .contains("stale")
+    );
 }
 
 #[test]
@@ -1296,10 +2207,24 @@ fn schema4_content_diff_retains_binary_empty_mode_and_delimited_paths() {
         paths.push("line\nname.asset");
     }
     let mut value: Value = serde_json::from_slice(&fs::read(r.0.join(CONFIG)).unwrap()).unwrap();
-    value["product_inputs"].as_array_mut().unwrap().push(json!("new-empty.asset"));
+    value["product_inputs"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!("new-empty.asset"));
     for path in &paths {
-        write(&r.0, path, if *path == "empty.asset" { b"" } else { b"old\0bytes\n" });
-        value["product_inputs"].as_array_mut().unwrap().push(json!(path));
+        write(
+            &r.0,
+            path,
+            if *path == "empty.asset" {
+                b""
+            } else {
+                b"old\0bytes\n"
+            },
+        );
+        value["product_inputs"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!(path));
     }
     write(&r.0, CONFIG, &serde_json::to_vec(&value).unwrap());
     git(&r.0, &["add", "."]);
@@ -1325,11 +2250,26 @@ fn schema4_content_diff_retains_binary_empty_mode_and_delimited_paths() {
     }
     let captured = capture(&r.0, &load(&r.0).unwrap().unwrap(), &SystemProcessRunner).unwrap();
     for path in paths {
-        let changed = captured.changes.iter().find(|c| c.path == path).unwrap_or_else(|| panic!("missing content diff: {path:?}"));
+        let changed = captured
+            .changes
+            .iter()
+            .find(|c| c.path == path)
+            .unwrap_or_else(|| panic!("missing content diff: {path:?}"));
         assert_ne!(changed.before, changed.after);
     }
-    assert!(captured.changes.iter().find(|c| c.path == "README.md").unwrap().mode_changed);
-    let added = captured.changes.iter().find(|c| c.path == "new-empty.asset").unwrap();
+    assert!(
+        captured
+            .changes
+            .iter()
+            .find(|c| c.path == "README.md")
+            .unwrap()
+            .mode_changed
+    );
+    let added = captured
+        .changes
+        .iter()
+        .find(|c| c.path == "new-empty.asset")
+        .unwrap();
     assert!(added.before.is_none());
     assert!(added.after.is_some());
 }
@@ -1365,14 +2305,16 @@ fn schema4_real_configuration_changes_after_migration_are_product_changes() {
         "{}",
         serde_json::to_string(&c.changes).unwrap()
     );
-    assert!(build(
-        &r.0,
-        "chore: no changes",
-        &Request::default(),
-        &SystemProcessRunner
-    )
-    .unwrap()
-    .is_none());
+    assert!(
+        build(
+            &r.0,
+            "chore: no changes",
+            &Request::default(),
+            &SystemProcessRunner
+        )
+        .unwrap()
+        .is_none()
+    );
     let mut cfg: Value = serde_json::from_slice(&fs::read(r.0.join(CONFIG)).unwrap()).unwrap();
     cfg["build_inputs"] = json!(["scripts/recipe.json"]);
     write(&r.0, CONFIG, &serde_json::to_vec(&cfg).unwrap());
@@ -1416,14 +2358,16 @@ fn schema4_single_model_rejects_ambiguous_shared_package_source() {
     );
     assert_eq!(p.code, 0, "{}", p.stderr);
     write(&r.0, "shared/data.py", b"VALUE=2\n");
-    assert!(build(
-        &r.0,
-        "fix: shared",
-        &Request::default(),
-        &SystemProcessRunner
-    )
-    .unwrap_err()
-    .contains("ambiguous"));
+    assert!(
+        build(
+            &r.0,
+            "fix: shared",
+            &Request::default(),
+            &SystemProcessRunner
+        )
+        .unwrap_err()
+        .contains("ambiguous")
+    );
 }
 
 #[test]
@@ -1481,14 +2425,16 @@ fn schema4_committed_migration_baseline_is_immutable() {
     let mut cfg: Value = serde_json::from_slice(&fs::read(r.0.join(CONFIG)).unwrap()).unwrap();
     cfg["baseline"]["retired_ids"] = json!(["invented"]);
     write(&r.0, CONFIG, &serde_json::to_vec(&cfg).unwrap());
-    assert!(build(
-        &r.0,
-        "fix: forged retirement",
-        &Request::default(),
-        &SystemProcessRunner
-    )
-    .unwrap_err()
-    .contains("baseline"));
+    assert!(
+        build(
+            &r.0,
+            "fix: forged retirement",
+            &Request::default(),
+            &SystemProcessRunner
+        )
+        .unwrap_err()
+        .contains("baseline")
+    );
 }
 
 #[test]
@@ -1516,9 +2462,11 @@ fn schema4_python_environment_bytes_invalidate_evidence_and_apply_at_same_paths(
             .unwrap()
             .validation_fingerprint
     );
-    assert!(apply_file_release_plan(&plan)
-        .unwrap_err()
-        .contains("environment changed"));
+    assert!(
+        apply_file_release_plan(&plan)
+            .unwrap_err()
+            .contains("environment changed")
+    );
     assert!(
         build(&r.0, "fix: stale evidence", &request, &SystemProcessRunner)
             .unwrap_err()
@@ -1533,9 +2481,11 @@ fn schema4_python_environment_bytes_invalidate_evidence_and_apply_at_same_paths(
         ".runtime/python-environment/python.exe",
         b"fixture interpreter two",
     );
-    assert!(apply_file_release_plan(&plan)
-        .unwrap_err()
-        .contains("environment changed"));
+    assert!(
+        apply_file_release_plan(&plan)
+            .unwrap_err()
+            .contains("environment changed")
+    );
     assert_eq!(fs::read(r.0.join("VERSION")).unwrap(), b"1.0.0\n");
 }
 
@@ -1559,9 +2509,14 @@ fn schema4_rust_patch_overflow_fails_without_touching_versions() {
     git(&r.0, &["commit", "--amend", "--no-edit"]);
     migrate(&r.0);
     change(&r.0, true);
-    development_tests::configure(&r.0,false);let runner=development_tests::Checks::new();
-    let request=development_tests::request(&r.0,"patch",false,&runner);
-    assert!(development::preview(&r.0,&request,&runner).stderr.contains("overflow"));
+    development_tests::configure(&r.0, false);
+    let runner = development_tests::Checks::new();
+    let request = development_tests::request(&r.0, "patch", false, &runner);
+    assert!(
+        development::preview(&r.0, &request, &runner)
+            .stderr
+            .contains("overflow")
+    );
     assert_eq!(fs::read(r.0.join("VERSION")).unwrap(), b"1.0.0\n");
 }
 
@@ -1581,29 +2536,75 @@ fn schema4_runtime_guard_and_record_roles_fail_closed_without_writes() {
     let mut cfg: Value = serde_json::from_slice(&fs::read(r.0.join(CONFIG)).unwrap()).unwrap();
     for path in ["pkg/a.pyi", "pkg/code.dll", "pkg/resource.bin"] {
         cfg["record_inputs"] = json!([path]);
-        assert!(parse(&serde_json::to_vec(&cfg).unwrap())
-            .unwrap_err()
-            .contains("record_inputs"));
+        assert!(
+            parse(&serde_json::to_vec(&cfg).unwrap())
+                .unwrap_err()
+                .contains("record_inputs")
+        );
     }
 }
 
 #[test]
 fn schema4_forwarded_public_interface_changes_are_explicit_and_do_not_propagate_automatically() {
-    let r=development_tests::python_pair(false);let runner=development_tests::Checks::new();change(&r.0,false);
-    let q=development_tests::request(&r.0,"minor",false,&runner);
-    let path=r.0.join(".runtime/develop.json");let mut v:Value=serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
-    let single=development::preview(&r.0,&q,&runner);assert_eq!(single.code,0,"{}",single.stderr);
-    assert_eq!(single.receipt.unwrap()["versions"].as_object().unwrap().len(),1);
-    v["packages"]["b"]=json!({"level":"minor","reason":"re-exported API","compatibility":"compatible"});fs::write(&path,serde_json::to_vec(&v).unwrap()).unwrap();
-    assert!(development::preview(&r.0,&q,&runner).stderr.contains("unchanged or unknown"));
-    v["interface_impacts"]=json!({"b":{"dependencies":["a"],"reason":"public re-export"}});fs::write(&path,serde_json::to_vec(&v).unwrap()).unwrap();
-    let both=development::preview(&r.0,&q,&runner);assert_eq!(both.code,0,"{}",both.stderr);
-    assert!(both.receipt.unwrap()["versions"].as_object().unwrap().values().all(|v|v=="1.1.0"));
-    v["interface_impacts"]["b"]["reason"]=json!("");fs::write(&path,serde_json::to_vec(&v).unwrap()).unwrap();assert!(development::preview(&r.0,&q,&runner).stderr.contains("reason"));
-    v["interface_impacts"]["b"]=json!({"dependencies":["product"],"reason":"invalid dependency"});fs::write(&path,serde_json::to_vec(&v).unwrap()).unwrap();assert!(development::preview(&r.0,&q,&runner).stderr.contains("no declared dependency"));
-    v["interface_impacts"]=json!({"a":{"dependencies":["b"],"reason":"invalid cycle"}});fs::write(&path,serde_json::to_vec(&v).unwrap()).unwrap();assert!(development::preview(&r.0,&q,&runner).stderr.contains("no declared dependency"));
-    write(&r.0,"pkg/a.py",b"VALUE=1\n");
-    let no_change=development::preview(&r.0,&Request::default(),&runner);assert_eq!(no_change.code,0,"{}",no_change.stderr);assert_eq!(no_change.receipt.unwrap()["status"],"nothing-to-close");
+    let r = development_tests::python_pair(false);
+    let runner = development_tests::Checks::new();
+    change(&r.0, false);
+    let q = development_tests::request(&r.0, "minor", false, &runner);
+    let path = r.0.join(".runtime/develop.json");
+    let mut v: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    let single = development::preview(&r.0, &q, &runner);
+    assert_eq!(single.code, 0, "{}", single.stderr);
+    assert_eq!(
+        single.receipt.unwrap()["versions"]
+            .as_object()
+            .unwrap()
+            .len(),
+        1
+    );
+    v["packages"]["b"] =
+        json!({"level":"minor","reason":"re-exported API","compatibility":"compatible"});
+    fs::write(&path, serde_json::to_vec(&v).unwrap()).unwrap();
+    assert!(
+        development::preview(&r.0, &q, &runner)
+            .stderr
+            .contains("unchanged or unknown")
+    );
+    v["interface_impacts"] = json!({"b":{"dependencies":["a"],"reason":"public re-export"}});
+    fs::write(&path, serde_json::to_vec(&v).unwrap()).unwrap();
+    let both = development::preview(&r.0, &q, &runner);
+    assert_eq!(both.code, 0, "{}", both.stderr);
+    assert!(
+        both.receipt.unwrap()["versions"]
+            .as_object()
+            .unwrap()
+            .values()
+            .all(|v| v == "1.1.0")
+    );
+    v["interface_impacts"]["b"]["reason"] = json!("");
+    fs::write(&path, serde_json::to_vec(&v).unwrap()).unwrap();
+    assert!(
+        development::preview(&r.0, &q, &runner)
+            .stderr
+            .contains("reason")
+    );
+    v["interface_impacts"]["b"] = json!({"dependencies":["product"],"reason":"invalid dependency"});
+    fs::write(&path, serde_json::to_vec(&v).unwrap()).unwrap();
+    assert!(
+        development::preview(&r.0, &q, &runner)
+            .stderr
+            .contains("no declared dependency")
+    );
+    v["interface_impacts"] = json!({"a":{"dependencies":["b"],"reason":"invalid cycle"}});
+    fs::write(&path, serde_json::to_vec(&v).unwrap()).unwrap();
+    assert!(
+        development::preview(&r.0, &q, &runner)
+            .stderr
+            .contains("no declared dependency")
+    );
+    write(&r.0, "pkg/a.py", b"VALUE=1\n");
+    let no_change = development::preview(&r.0, &Request::default(), &runner);
+    assert_eq!(no_change.code, 0, "{}", no_change.stderr);
+    assert_eq!(no_change.receipt.unwrap()["status"], "nothing-to-close");
 }
 
 #[test]
@@ -1660,17 +2661,27 @@ fn schema4_required_checks_combine_their_declared_object_scopes() {
     let complete = analysis.clone();
     analysis["checks"].as_array_mut().unwrap().remove(0);
     save_analysis(&r.0, &analysis);
-    assert!(build(&r.0,"fix: missing package evidence",&request,&SystemProcessRunner)
-        .unwrap_err().contains("required release evidence missing"));
+    assert!(
+        build(
+            &r.0,
+            "fix: missing package evidence",
+            &request,
+            &SystemProcessRunner
+        )
+        .unwrap_err()
+        .contains("required release evidence missing")
+    );
     analysis = complete;
     analysis["checks"].as_array_mut().unwrap().pop();
     save_analysis(&r.0, &analysis);
-    assert!(build(
-        &r.0,
-        "fix: missing integration",
-        &request,
-        &SystemProcessRunner
-    )
-    .unwrap_err()
-    .contains("required release evidence missing"));
+    assert!(
+        build(
+            &r.0,
+            "fix: missing integration",
+            &request,
+            &SystemProcessRunner
+        )
+        .unwrap_err()
+        .contains("required release evidence missing")
+    );
 }

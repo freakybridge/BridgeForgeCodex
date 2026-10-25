@@ -22,9 +22,9 @@ adaptation proof 与 glob ownership。
 无戳但存在骨架资产
   -> adopt + latest rebuild
 
-Rule / Memory 源存在
-  -> 逐文件确认完整迁移包
-  -> latest Template + 迁移目标 + 已确认源删除同一事务
+旧 Rule / 项目 Memory 文件存在
+  -> 不再执行语义迁移
+  -> 兼容更新保留；重建按普通项目资产保留或删除决策处理
 
 双戳 / 非法戳 / 身份不一致
   -> 零写阻断
@@ -45,7 +45,7 @@ before 包或迁移账本。
 
 `project_sync/content.rs` 负责 AGENTS 区域、受管 Markdown、Hook JSON、普通 JSON、区域替换和 seed/whole/merge 策略的内容转换，继续复用 `managed_markdown` 基础解析。输入是已经读取的字节、资产规则及项目路径信息，输出为新字节或原有错误；该模块不读写文件，也不调用计划或事务。
 
-`project_sync::render_asset` 保留路径校验和文件读取，优先将迁移提供的内容交给转换器，并单独返回磁盘原始字节用于计划与漂移判定。计划、确认、指纹、锁、落盘、回滚和版本戳顺序仍归 `project_sync`，公开入口与合同 schema 不变。
+`project_sync::render_asset` 保留路径校验和文件读取，将当前磁盘内容交给转换器，并单独返回磁盘原始字节用于计划与漂移判定。计划、确认、指纹、锁、落盘、回滚和版本戳顺序仍归 `project_sync`。旧语义迁移输入、`build_plan_with_migration`、plan 的 `asset_migration` 和 receipt 的 `asset_migration_manifest_sha256` 已移除；CLI 明确拒绝旧迁移参数，不静默忽略后执行 Apply。
 
 ## 共享构建边界
 
@@ -75,7 +75,7 @@ project_sync 拥有只读项目计划、内部准备、固定公共产物挂接�
 
 `PostToolUse` 对相关输入只在 `.runtime/bridgeforge-codex/` 写脏标记；`Stop` 合并重建，`SessionStart` 兜底校验，两个 Skill 在读取前调用 `bridgeforge-hook project-map ensure-current`。生成文件携带 schema 与输入 SHA-256；相同输入逐字生成相同内容，目标字节未变化时不得重写。生命周期 Hook 的维护成功与 no-op 都不输出；严格 Skill 入口失败且 fallback 也不能完成任务时才向用户报告真正阻断。
 
-`.codex/rules/*.md` 与 `.codex/memory/**` 在两条升级路径中都由 Rust `project-sync` 盘点和验证。Agent 逐源文件提出语义迁移包；机器验证完整覆盖、source/target hash、目标职责、公共受管区、Hook 注册、文档索引和事务。`MEMORY.md`、`MEMORY_COLD.md`、`_stats.json` 逐个确认固定退役。全部确认前零写入，禁止落盘 manifest 或创建项目锁；中断后从第一个源重来。Apply 前重新盘点，新增、消失或改动的源均使旧计划失效。
+`.codex/rules/*.md` 与 `.codex/memory/**` 的语义迁移已退役，不再专门扫描、解析或生成目标。兼容更新保留，重建通过普通项目文件盘点和 `PreservationManifest` 明确保留或删除；不存在固定退役的 Memory 派生文件。现有资产哈希、漂移检查、确认和回滚合同继续适用，不把功能退役视为项目文件删除授权。
 
 ## Current-only 事务
 
@@ -84,12 +84,12 @@ probe canonical commit + reuse/stage product source
   -> prepare public artifacts + commit verified user-level installation
   -> identify project
   -> build deterministic actions + aggregate fingerprint
-  -> confirm every Rule / Memory source in one continuous session when required
+  -> confirm project preservation/deletion decisions when required
   -> Apply owns the necessary replan/fingerprint check (no extra Skill replan)
   -> internal payload preparation + capture prepared public bytes
   -> project lock + input verification and rollback snapshot from the same read
-  -> combine latest assets / generated binary + receipt / migration targets / selected project assets
-  -> remove confirmed Rule / Memory sources
+  -> combine latest assets / generated binary + receipt / selected project assets
+  -> remove explicitly approved or contract-owned retired assets
   -> verify actions + preserved knowledge
   -> config health + text hygiene validators
   -> verify prospective current baseline on real disk
@@ -134,12 +134,12 @@ Windows 上当前 CLI 的运行映像不能直接覆盖：新程序先写入同�
 
 ## 项目资产边界
 
-- 根 `AGENTS.md` 公共区由产品管理；项目区允许由 `PreservationManifest` 保留并由已确认迁移包追加，二者必须与 latest 公共区确定性组合。
+- 根 `AGENTS.md` 公共区由产品管理；项目区由项目所有并按既有合同保留，与 latest 公共区确定性组合。
 - `.codex/hooks.json` 只允许 canonical managed handler 与已确认的项目 Hook 注册；项目注册
-  必须与一个 `.codex/hooks/project_XXXX/` 自包含业务 Hook 目录成对；既有业务 Hook 不限制语言，整体逐项确认保留或删除，未知 managed ID 阻断。迁移包新建 Hook 的目标约束仍由资产迁移合同规定。
+  必须与一个 `.codex/hooks/project_XXXX/` 自包含业务 Hook 目录成对；既有业务 Hook 不限制语言，整体逐项确认保留或删除，未知 managed ID 阻断。旧 Rule／Memory 不再生成 Hook 包。
 - 普通未知文件必须按精确路径确认保留或删除，禁止读取旧合同决定所有权。`project_` 文件名前缀不会把普通文件变成 Hook 目录；此类脚本确认删除后，已有 `hooks.json` 中匹配其完整路径的注册一并退役，文件与注册同一事务回滚，相似文件名注册保留。链接、非普通目录的项目 Hook 包、未知 Rule 格式仍阻断。
 - schema 4 merge/Markdown/region/AGENTS 都携带当前可验证 projection；真实下游不存在
   `templates/**` 时也不得跳过。
-- 项目 Skills 正文只有在对应源迁移包中逐项确认后才允许语义改写；legacy Rule / Memory 禁止派生索引、自动分类或未确认保留。
+- 普通骨架升级不语义改写项目 Skills 或旧 Rule／Memory；项目资料仍按所属资产保留或经明确决定处理。
 - 项目 `find-doc` / `sync-docs` 映射在 project-sync 事务内按精确路径登记为 required-preserve；事务完成后的受管 Hook 可按自动索引合同重建，禁止扩大为 glob ownership。
 - Claude、switch、project finalizer 与 harness parity 不属于当前产品面，也不保留识别谱系。

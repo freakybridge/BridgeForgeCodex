@@ -1,5 +1,5 @@
-use bridgeforge_core::memory::remote::{reconcile, resolve_conflict_with_choices};
-use bridgeforge_core::memory::{
+use bridgeforge_memory::remote::{reconcile, resolve_conflict_with_choices};
+use bridgeforge_memory::{
     MemoryRemoteClient, authorization_payload, remote_targets_managed_repository,
 };
 use bridgeforge_core::{ProcessOutput, ProcessRequest, ProcessRunner};

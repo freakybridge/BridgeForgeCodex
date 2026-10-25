@@ -1,18 +1,32 @@
 use super::*;
 
-fn source_graph(entry: &str, files: &[(&str, &str)]) -> Result<(BTreeSet<String>, BTreeMap<String, Option<Vec<u8>>>), String> {
-    let files = files.iter().map(|(p, s)| (p.to_string(), s.as_bytes().to_vec())).collect::<BTreeMap<_, _>>();
+fn source_graph(
+    entry: &str,
+    files: &[(&str, &str)],
+) -> Result<(BTreeSet<String>, BTreeMap<String, Option<Vec<u8>>>), String> {
+    let files = files
+        .iter()
+        .map(|(p, s)| (p.to_string(), s.as_bytes().to_vec()))
+        .collect::<BTreeMap<_, _>>();
     let inventory = files.keys().cloned().collect();
     let mut inputs = BTreeMap::new();
-    let graph = sources::reachable(&[entry.into()], &inventory, &mut inputs, &mut |p| Ok(files.get(p).cloned()))?;
+    let graph = sources::reachable(&[entry.into()], &inventory, &mut inputs, &mut |p| {
+        Ok(files.get(p).cloned())
+    })?;
     Ok((graph, inputs))
 }
 
 #[test]
 fn rust_external_source_graph_tracks_modules_paths_includes_and_package_bridges() {
     let files = [
-        ("outside/entry.rs", "pub mod all_inventory; mod inline { #[path=\"other.rs\"] mod nested; } #[path=\"../pkg/bridge.rs\"] mod bridge; include!(\"included/items.rs\"); const TEXT:&str=include_str!(\"data.txt\"); const BYTES:&[u8]=include_bytes!(\"data.bin\"); const VALUE:u8=include!(\"value.rs\"); // mod decoy;\nconst DECOY:&str=\"mod decoy;\";"),
-        ("outside/all_inventory.rs", "pub mod child; #[path=\"all_inventory_tests.rs\"] mod tests;"),
+        (
+            "outside/entry.rs",
+            "pub mod all_inventory; mod inline { #[path=\"other.rs\"] mod nested; } #[path=\"../pkg/bridge.rs\"] mod bridge; include!(\"included/items.rs\"); const TEXT:&str=include_str!(\"data.txt\"); const BYTES:&[u8]=include_bytes!(\"data.bin\"); const VALUE:u8=include!(\"value.rs\"); // mod decoy;\nconst DECOY:&str=\"mod decoy;\";",
+        ),
+        (
+            "outside/all_inventory.rs",
+            "pub mod child; #[path=\"all_inventory_tests.rs\"] mod tests;",
+        ),
         ("outside/all_inventory/child/mod.rs", "pub mod leaf;"),
         ("outside/all_inventory/child/leaf.rs", ""),
         ("outside/all_inventory_tests.rs", ""),
@@ -34,7 +48,12 @@ fn rust_external_source_graph_tracks_modules_paths_includes_and_package_bridges(
     assert!(!graph.contains("outside/unrelated.rs"));
     assert!(!graph.contains("outside/decoy.rs"));
     assert_eq!(graph, inputs.keys().cloned().collect());
-    for (path, bytes) in inputs { assert_eq!(bytes.unwrap(), files.iter().find(|(p, _)| *p == path).unwrap().1.as_bytes()); }
+    for (path, bytes) in inputs {
+        assert_eq!(
+            bytes.unwrap(),
+            files.iter().find(|(p, _)| *p == path).unwrap().1.as_bytes()
+        );
+    }
 }
 
 #[test]
@@ -71,34 +90,64 @@ fn rust_external_source_graph_propagates_scoped_conditions_and_standard_includes
         const VALUE: u8 = ::std::include!("value.rs");
         other::include!("unowned.rs");
     "##;
-    let files = [("out/lib.rs", source), ("out/child.rs", ""), ("out/module-doc.md", "docs"),
-        ("out/standard.rs", ""), ("out/data.bin", "bytes"), ("out/value.rs", "42"), ("out/unowned.rs", ""), ("out/conditional.md", "docs")];
+    let files = [
+        ("out/lib.rs", source),
+        ("out/child.rs", ""),
+        ("out/module-doc.md", "docs"),
+        ("out/standard.rs", ""),
+        ("out/data.bin", "bytes"),
+        ("out/value.rs", "42"),
+        ("out/unowned.rs", ""),
+        ("out/conditional.md", "docs"),
+    ];
     let (graph, inputs) = source_graph("out/lib.rs", &files).unwrap();
     assert_eq!(graph.len(), 7);
     assert_eq!(graph, inputs.keys().cloned().collect());
     assert!(graph.contains("out/module-doc.md"));
     assert!(graph.contains("out/conditional.md"));
     assert!(!graph.contains("out/unowned.rs"));
-    let unconditional = format!("{source}\ninclude!(\"unconditionally-missing.rs\"); const OLD:&str=include_str!(\"missing.txt\"); const OLD_BYTES:&[u8]=include_bytes!(\"missing.bin\"); #[path=\"stale.rs\"] mod stale; mod absent;");
+    let unconditional = format!(
+        "{source}\ninclude!(\"unconditionally-missing.rs\"); const OLD:&str=include_str!(\"missing.txt\"); const OLD_BYTES:&[u8]=include_bytes!(\"missing.bin\"); #[path=\"stale.rs\"] mod stale; mod absent;"
+    );
     let mut files = files.to_vec();
     files[0].1 = &unconditional;
     assert_eq!(source_graph("out/lib.rs", &files).unwrap().0, graph);
     // A real inventory entry with unavailable bytes remains a read failure,
     // rather than being mistaken for an absent historical declaration.
     let inventory = BTreeSet::from(["out/lib.rs".into(), "out/broken.rs".into()]);
-    let error = sources::reachable(&["out/lib.rs".into()], &inventory, &mut BTreeMap::new(), &mut |path| {
-        Ok((path == "out/lib.rs").then(|| b"mod broken;".to_vec()))
-    }).unwrap_err();
+    let error = sources::reachable(
+        &["out/lib.rs".into()],
+        &inventory,
+        &mut BTreeMap::new(),
+        &mut |path| Ok((path == "out/lib.rs").then(|| b"mod broken;".to_vec())),
+    )
+    .unwrap_err();
     assert!(error.contains("file is missing: out/broken.rs"));
 }
 
 #[test]
 fn rust_external_source_graph_rejects_ambiguity_cycles_and_escape() {
     for (files, expected) in [
-        (vec![("out/lib.rs", "mod both;"), ("out/both.rs", ""), ("out/both/mod.rs", "")], "ambiguous"),
-        (vec![("out/lib.rs", "#[path=\"lib.rs\"] mod cycle;")], "cyclic"),
-        (vec![("out/lib.rs", "#[path=\"../../escape.rs\"] mod escape;")], "escapes"),
-        (vec![("out/lib.rs", "include_str!(\"../../escape.txt\");")], "escapes"),
+        (
+            vec![
+                ("out/lib.rs", "mod both;"),
+                ("out/both.rs", ""),
+                ("out/both/mod.rs", ""),
+            ],
+            "ambiguous",
+        ),
+        (
+            vec![("out/lib.rs", "#[path=\"lib.rs\"] mod cycle;")],
+            "cyclic",
+        ),
+        (
+            vec![("out/lib.rs", "#[path=\"../../escape.rs\"] mod escape;")],
+            "escapes",
+        ),
+        (
+            vec![("out/lib.rs", "include_str!(\"../../escape.txt\");")],
+            "escapes",
+        ),
     ] {
         let error = source_graph("out/lib.rs", &files).unwrap_err();
         assert!(error.contains(expected), "{expected}: {error}");
@@ -120,15 +169,36 @@ fn rust_external_source_graph_does_not_guess_dynamic_includes_or_consumers() {
 fn rust_source_ownership_preserves_metadata_only_local_targets() {
     let mut document: DocumentMut = "[package]\nname='tool'\nversion='1.0.0'\nbuild='build.rs'\n[lib]\npath='lib.rs'\n[[bin]]\nname='tool'\npath='src/main.rs'\n[[test]]\nname='check'\npath='tests/check.rs'\n[[bench]]\nname='bench'\npath='benches/bench.rs'\n[[example]]\nname='example'\npath='examples/example.rs'\n".parse().unwrap();
     let mut inventory = BTreeSet::from(["pkg/Cargo.toml".into()]);
-    assert_eq!(cargo_source_roots("pkg/Cargo.toml", &document, &inventory).unwrap(), vec!["pkg/"]);
-    assert_eq!(cargo_source_roots("Cargo.toml", &document, &BTreeSet::from(["Cargo.toml".into()])).unwrap(), vec![""]);
+    assert_eq!(
+        cargo_source_roots("pkg/Cargo.toml", &document, &inventory).unwrap(),
+        vec!["pkg/"]
+    );
+    assert_eq!(
+        cargo_source_roots(
+            "Cargo.toml",
+            &document,
+            &BTreeSet::from(["Cargo.toml".into()])
+        )
+        .unwrap(),
+        vec![""]
+    );
 
     document["lib"]["path"] = value("../shared/lib.rs");
-    assert_eq!(cargo_source_roots("pkg/Cargo.toml", &document, &inventory).unwrap(), vec!["pkg/", "shared/lib.rs"]);
-    let (missing, hashes) = source_graph("shared/lib.rs", &[("shared/lib.rs/unrelated.txt", "not a source file")]).unwrap();
+    assert_eq!(
+        cargo_source_roots("pkg/Cargo.toml", &document, &inventory).unwrap(),
+        vec!["pkg/", "shared/lib.rs"]
+    );
+    let (missing, hashes) = source_graph(
+        "shared/lib.rs",
+        &[("shared/lib.rs/unrelated.txt", "not a source file")],
+    )
+    .unwrap();
     assert!(missing.is_empty() && hashes.is_empty());
     inventory.insert("shared/lib.rs".into());
-    assert_eq!(cargo_source_roots("pkg/Cargo.toml", &document, &inventory).unwrap(), vec!["pkg/", "shared/lib.rs"]);
+    assert_eq!(
+        cargo_source_roots("pkg/Cargo.toml", &document, &inventory).unwrap(),
+        vec!["pkg/", "shared/lib.rs"]
+    );
 }
 
 fn config(roots: &[&str]) -> RustConfig {

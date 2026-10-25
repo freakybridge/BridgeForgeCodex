@@ -16,7 +16,7 @@ Claude 骨架已经退役。遗留 `.claude/` 只报告存在，不读取正文�
 1. 在目标项目运行 `$bridgeforge-codex`。
 2. 入口先识别项目版本戳；双戳、非法戳停止，无戳空项目 init，无戳已有资产 adopt。运行 `doctor --product-root <产品目录> --json` 检查产品 runtime，不要求目标项目已经安装 Rust 骨架。
 3. 任意合法旧版本直接进入 latest current-only rebuild；版本只证明身份，禁止运行旧 schema、旧 manifest 或逐版本兼容链。
-4. `.codex/rules/*.md` 与 `.codex/memory/**` 按 [迁移手册](../../../skills/bridgeforge-codex/references/project-asset-migration.md)逐源确认；全部确认前零写入、不新增持久恢复状态。中断恢复时按手册核验决定与现场，仅重核失效部分；确认同时授权在同一事务删除对应源，不再追加清理确认。
+4. 旧 Markdown Rule／项目 Memory 的语义迁移已退役。`.codex/rules/*.md` 与 `.codex/memory/**` 在兼容更新中保留，重建时按普通项目自有资产确认保留或删除；不生成迁移包，也不默认删除文件。原生 `~/.codex/memories/` 不属于这项退役范围。
 5. apply 先取得项目级事务锁，再重算聚合 fingerprint。锁覆盖验证、写入、版本戳与回滚；独立 build-assets 使用同一把锁。任何漂移、验证失败或运行错误都必须零写入或事务回滚。
 6. validators 与真实磁盘 current baseline 全部通过后，最后写新版本戳；旧项目成功时同事务删除旧戳。
 
@@ -29,7 +29,7 @@ Claude 骨架已经退役。遗留 `.claude/` 只报告存在，不读取正文�
 - 项目 Hook 以 `.codex/hooks/project_XXXX/` 自包含 Rust 目录为原子所有权单位，目录与 `.codex/hooks.json` 注册必须成对。删除注册按路径边界匹配 `command` / `commandWindows`，不能误删相似前缀目录；已确认退役的空目录随文件一并删除，失败时恢复目录与文件。
 - 散落 Hook 先阻断；独立 Agent 只能在临时副本或受控前置步骤中完成目录正规化，随后重新生成 `PreservationManifest`。
 - `seed` 只在缺失时创建，既有内容归项目。
-- `.codex/skills/` 自动保留正文并执行当前兼容检查；legacy Rule / Memory 只能按已确认 manifest 迁移，机器不得猜语义；其他未登记普通文件逐路径确认保留或删除，不得静默删除。
+- `.codex/skills/` 自动保留正文并执行当前兼容检查；legacy Rule / Memory 不再解析或转换，重建时与其他未登记普通文件一样逐路径确认保留或删除，不得静默删除。
 
 ## 4. 验收收据
 
@@ -48,7 +48,7 @@ Claude 骨架已经退役。遗留 `.claude/` 只报告存在，不读取正文�
 
 - 禁止手工 `copy`/`cp` 覆盖下游骨架。
 - 禁止用旧同步脚本或多入口串联写戳。
-- 禁止覆盖未确认的项目 rules、AGENTS 项目区、memory 或 doc；确认迁移目标必须与 latest 公共受管区确定性组合。
+- 禁止覆盖未确认的项目 rules、AGENTS 项目区、memory 或 doc；已确认保留的项目资产必须遵守现有所有权和事务合同。
 - 禁止在同一轮重复索要确认。
 - 禁止把 Claude 遗留目录当作 Codex 模板来源。
 

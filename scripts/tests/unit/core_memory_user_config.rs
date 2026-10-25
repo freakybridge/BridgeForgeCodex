@@ -1,3 +1,6 @@
+#[path = "../support/factory_root.rs"]
+mod factory_repository;
+
 use super::*;
 #[cfg(windows)]
 use std::path::PathBuf;
@@ -204,10 +207,7 @@ fn powershell_host_preserves_native_arguments_stdin_streams_and_exit_code() {
     ));
     fs::create_dir_all(&folder).unwrap();
     let binary = folder.join("probe.exe");
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .ancestors()
-        .nth(4)
-        .unwrap();
+    let root = factory_repository::from_manifest_dir(env!("CARGO_MANIFEST_DIR"));
     let built = Command::new("rustc")
         .arg(root.join("scripts/tests/fixtures/native_memory_shell_probe.rs"))
         .arg("-o")

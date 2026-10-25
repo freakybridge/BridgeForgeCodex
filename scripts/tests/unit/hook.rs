@@ -1,3 +1,6 @@
+#[path = "../support/factory_root.rs"]
+mod factory_repository;
+
 use super::*;
 use std::fs;
 use std::path::PathBuf;
@@ -13,14 +16,25 @@ fn archive_reminder_uses_the_same_candidates_and_propagates_invalid_todo() {
     let fixture = Fixture::new();
     let topic = fixture.root.join("doc/1_delivery/demo");
     fs::create_dir_all(&topic).unwrap();
-    fs::write(topic.join("requirements_test.md"), "---\nlifecycle: completed\nvalidation_status: verified\n---\n").unwrap();
+    fs::write(
+        topic.join("requirements_test.md"),
+        "---\nlifecycle: completed\nvalidation_status: verified\n---\n",
+    )
+    .unwrap();
     fs::write(topic.join("scan.md"), "---\nlifecycle: active\n---\n").unwrap();
-    let candidates = bridgeforge_core::archive_scan::scan(&fixture.root).unwrap();
+    let candidates = bridgeforge_checks::archive_scan::scan(&fixture.root).unwrap();
     assert_eq!(candidates.len(), 1);
     assert!(session::show_state().stdout.contains("有 1 个候选可归档"));
     fs::create_dir_all(fixture.root.join("doc/0_architecture")).unwrap();
-    fs::write(fixture.root.join("doc/0_architecture/TODO-INDEX.md"), "broken table\n").unwrap();
-    assert!(session::show_state().stdout.contains("candidates unknown"), "unknown candidates must not be reported as zero");
+    fs::write(
+        fixture.root.join("doc/0_architecture/TODO-INDEX.md"),
+        "broken table\n",
+    )
+    .unwrap();
+    assert!(
+        session::show_state().stdout.contains("candidates unknown"),
+        "unknown candidates must not be reported as zero"
+    );
 }
 
 #[test]
@@ -234,15 +248,27 @@ fn project_maps_reference_regex_preserves_suffix_drive_and_punctuation() {
     ];
     for (index, (reference, _)) in cases.iter().enumerate() {
         fs::write(
-            fixture.root.join(format!("doc/0_architecture/design/case_{index:02}.md")),
+            fixture
+                .root
+                .join(format!("doc/0_architecture/design/case_{index:02}.md")),
             format!("# Reference\n`{reference}`\n"),
-        ).unwrap();
+        )
+        .unwrap();
     }
     let result = project_map::ensure_current();
     assert_eq!(result.code, 0, "{}", result.stderr);
-    let output = fs::read_to_string(fixture.root.join(".runtime/bridgeforge-codex/sync-docs.map.md")).unwrap();
+    let output = fs::read_to_string(
+        fixture
+            .root
+            .join(".runtime/bridgeforge-codex/sync-docs.map.md"),
+    )
+    .unwrap();
     for (index, (reference, expected)) in cases.iter().enumerate() {
-        assert_eq!(output.contains(&format!("doc/0_architecture/design/case_{index:02}.md")), *expected, "{reference}");
+        assert_eq!(
+            output.contains(&format!("doc/0_architecture/design/case_{index:02}.md")),
+            *expected,
+            "{reference}"
+        );
     }
 }
 
@@ -724,7 +750,11 @@ fn atomic_write_replaces_existing_file_and_cleans_failed_temporary() {
 #[test]
 fn registered_hook_routes_have_lifecycle_and_tool_coverage() {
     let document: Value = serde_json::from_slice(
-        &fs::read(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../hooks.json")).unwrap(),
+        &fs::read(
+            factory_repository::from_manifest_dir(env!("CARGO_MANIFEST_DIR"))
+                .join("templates/hooks.json"),
+        )
+        .unwrap(),
     )
     .unwrap();
     let routes = document["hooks"]
@@ -831,11 +861,14 @@ fn expands_apply_patch_move_targets() {
 fn artifact_layout_edit_warnings_keep_completed_action_and_cover_patch_targets() {
     let fixture = Fixture::new();
     let target = fixture.root.join("tests/probe.rs");
-    fs::create_dir_all(target.parent().unwrap()).unwrap(); fs::write(&target, b"fn probe() {}\n").unwrap();
+    fs::create_dir_all(target.parent().unwrap()).unwrap();
+    fs::write(&target, b"fn probe() {}\n").unwrap();
     let payload = json!({"tool_name":"apply_patch","tool_input":{"command":"*** Begin Patch\n*** Add File: tests/probe.rs\n+fn probe() {}\n*** End Patch"}});
-    let values = edits(&payload); assert_eq!(values.len(), 1);
+    let values = edits(&payload);
+    assert_eq!(values.len(), 1);
     let warning = post::artifact_layout(&values[0]);
-    assert_eq!(warning.code, 0); assert!(warning.stdout.contains("legacy-test-root"));
+    assert_eq!(warning.code, 0);
+    assert!(warning.stdout.contains("legacy-test-root"));
     assert_eq!(fs::read(&target).unwrap(), b"fn probe() {}\n");
     fs::remove_file(&target).unwrap();
     assert!(post::artifact_layout(&values[0]).stdout.is_empty());

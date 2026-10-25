@@ -8,6 +8,10 @@ delivery_layout: flat
 
 ## 从这里开始
 
+- [Rust 源码与公共投影结构](0_architecture/design/source-workspace.md)
+
+已验收：[源码子包、Skills 与分发结构重构](1_delivery/source-workspace-refactor/requirements_2026-10-24_source-workspace.md#用户验收2026-10-25)（TODO-032；2026-10-25 用户验收 `source/` 九包、版本收口、Skills 迁移、公共投影与 dogfood，以及忽略模板路径调整；未提交推送发布、未修改真实下游。TODO-033 单独跟踪非阻断的 TODO 参考导航旧路径，待确认）。
+
 已验收：[子包开发收口与累计版本公告](1_delivery/package-version-lifecycle/requirements_2026-10-24_package-version-lifecycle.md)（TODO-025；develop 升子包、程序自动判断 1.0.0、release 只升主程序并公告累计变化；已授权 release，实际发布结果以受管收据为准；未修改真实下游）。
 
 已验收：[工厂运行时准备与 Hook 正确性、性能](1_delivery/runtime-hook-hardening/requirements_2026-10-24_runtime-hook-hardening.md#用户验收与发布授权2026-10-24)（TODO-023、TODO-024；定向验证、实际产物及独立审计完成，普通编辑基准中位数降低 79.11%；2026-10-24 用户验收并授权 release，实际发布以受管收据为准；真实下游和自然生命周期全链路未验证）。
@@ -97,9 +101,11 @@ delivery_layout: flat
 - 工厂[独立构建产物缓存](0_architecture/design/factory-artifact-cache.md)：编译身份、缓存所有权、有限清理和中断恢复；当前 R04 的结果见交付卡。
 - 设计资料：[`0_architecture/design/`](0_architecture/design/)，包括 [`codex-project-sync.md`](0_architecture/design/codex-project-sync.md)、[`codex-native-instruction-architecture.md`](0_architecture/design/codex-native-instruction-architecture.md)、[`codex-native-memory-sync.md`](0_architecture/design/codex-native-memory-sync.md)、[`user-facing-result-contract.md`](0_architecture/design/user-facing-result-contract.md)、`design-rationale.md` 与上游同步 playbook。
 - 操作参考：[`codex-project-operating-guide.md`](3_reference/codex-project-operating-guide.md)、[项目自有 Rust Hook](3_reference/project-rust-hooks.md) 与主动澄清参考 [`codex-hook-signals.md`](3_reference/codex-hook-signals.md)；自动 Clarify / Focus Hook 已退役。
-- `$bridgeforge-codex` 的运行手册属于产品源码，位于 [`skills/bridgeforge-codex/references/`](../skills/bridgeforge-codex/references/)，不纳入 `doc/`。
+- `$bridgeforge-codex` 的运行手册属于产品源码，位于 [`skills/bridgeforge-codex/references/`](../templates/skills/bridgeforge-codex/references/)，不纳入 `doc/`。
 
 ## Delivery topic
+
+- [旧 Rule／项目 Memory 语义迁移退役](1_delivery/legacy-asset-migration-retirement/requirements_2026-10-24_retirement.md)：承接 TODO-026，本地实现与工程验证完成、尚未用户验收；2026-10-24 按用户要求冻结，进度与恢复边界已保存。
 
 update part I–V：[完整更新流程与项目 Hook 解耦](1_delivery/project-sync-performance/requirements_2026-10-21_update-part-i.md#用户验收与发布授权2026-10-21)（2026-10-21 用户验收，TODO-014 已完成；七项检查、workspace 449 项、fixture 96 项及独立审计通过；已授权本轮受管 release，发布结果以最终收据为准；暂不升级用户级安装和真实下游）。
 
@@ -223,6 +229,8 @@ R07：[TODO 管理与归档收口一致性](1_delivery/todo-lifecycle/requiremen
 - [`BUG-create-worktree-sandbox-half-created.md`](2_bugs/BUG-create-worktree-sandbox-half-created.md)
 
 ## 归档与参考
+
+- [骨架社区对标与问题清单（2026-10-24）](3_reference/skeleton-benchmark_2026-10-24.md)：关联 TODO-026～TODO-031；第 1 项退役已完成本地实现和工程验证，其余五项待讨论。当前已冻结，恢复位置为 TODO-027，详见文首进度记录。
 
 `4_archive/` 内现有文件为迁移前历史档案，继续保持可追溯性；Codex harness parity 设计与交付材料已归档到 [`codex-harness-parity-design.md`](4_archive/codex-harness-parity-design.md) 和 [`codex-harness-parity-delivery/`](4_archive/codex-harness-parity-delivery/)，旧运行手册打包结构见 [`bridgeforge-doc-runtime-packaging`](4_archive/delivery/bridgeforge-doc-runtime-packaging/summary.md)。新归档按 `4_archive/delivery/<topic>/` 或 `4_archive/bugs/` 落位。外部资料与仅供参考的实现放入 `3_reference/`，不作为运行时资产。
 

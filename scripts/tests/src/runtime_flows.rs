@@ -1,8 +1,8 @@
-use bridgeforge_core::memory::remote::{
+use bridgeforge_memory::remote::{
     apply_conflict_choices, reconcile, resolve_conflict_with_choices,
 };
-use bridgeforge_core::memory::worker::mark_pending;
-use bridgeforge_core::project_sync::{
+use bridgeforge_memory::worker::mark_pending;
+use bridgeforge_workflow::project_sync::{
     SyncMode, apply_plan, attach_generated_assets, build_plan, build_plan_with_inputs,
 };
 use bridgeforge_core::{ProcessOutput, ProcessRequest, ProcessRunner, SystemProcessRunner};
@@ -281,7 +281,7 @@ fn project_sync_real_init_builds_and_applies_generated_assets() {
     .unwrap();
     let initial_fingerprint = initial.aggregate_fingerprint.clone();
     apply_plan(initial, &initial_fingerprint, false).unwrap();
-    bridgeforge_core::baseline::verify(&project, None, true).unwrap();
+    bridgeforge_skeleton::baseline::verify(&project, None, true).unwrap();
     let initial_stamp = fs::read(project.join(".codex/.bridgeforge_codex_version")).unwrap();
     // Project hook installation is a subsequent compatible update.
     // but remains outside managed source ownership. Its regular branch reads stdin.
@@ -398,7 +398,7 @@ fn project_sync_real_init_builds_and_applies_generated_assets() {
         );
     }
     fs::write(&registry_path, b"invalid working-tree registry").unwrap();
-    bridgeforge_core::baseline::verify_index(&project, &SystemProcessRunner).unwrap();
+    bridgeforge_skeleton::baseline::verify_index(&project, &SystemProcessRunner).unwrap();
     fs::write(&registry_path, &registry).unwrap();
     let mut unstage = ProcessRequest::new("git", &project);
     unstage.args = [
@@ -413,7 +413,7 @@ fn project_sync_real_init_builds_and_applies_generated_assets() {
     .collect();
     assert_eq!(SystemProcessRunner.run(&unstage).unwrap().code, 0);
     assert!(
-        bridgeforge_core::baseline::verify_index(&project, &SystemProcessRunner)
+        bridgeforge_skeleton::baseline::verify_index(&project, &SystemProcessRunner)
             .unwrap_err()
             .contains("no registry")
     );
@@ -426,7 +426,7 @@ fn project_sync_real_init_builds_and_applies_generated_assets() {
             )
         );
     }
-    bridgeforge_core::baseline::verify(&project, None, true).unwrap();
+    bridgeforge_skeleton::baseline::verify(&project, None, true).unwrap();
     let again = build_plan(&project, &factory, SyncMode::Update).unwrap();
     assert_eq!(again.status, "current");
     let mut project_hook = ProcessRequest::new(
@@ -447,7 +447,7 @@ fn project_sync_real_init_builds_and_applies_generated_assets() {
     let source = fs::read(&source_path).unwrap();
     fs::write(&source_path, b"changed").unwrap();
     assert!(
-        bridgeforge_core::baseline::verify(&project, None, true)
+        bridgeforge_skeleton::baseline::verify(&project, None, true)
             .unwrap_err()
             .contains("project Rust hook")
     );
@@ -494,7 +494,7 @@ fn project_sync_real_init_builds_and_applies_generated_assets() {
         managed_manifest
     );
     assert_eq!(fs::read(package.join("Cargo.lock")).unwrap(), project_lock);
-    bridgeforge_core::baseline::verify(&project, None, true).unwrap();
+    bridgeforge_skeleton::baseline::verify(&project, None, true).unwrap();
     assert_eq!(
         build_plan(&project, &factory, SyncMode::Update)
             .unwrap()
@@ -506,7 +506,7 @@ fn project_sync_real_init_builds_and_applies_generated_assets() {
     assert_eq!(String::from_utf8(output.stdout).unwrap().trim(), "42");
     git_at(&project, &["add", "--force", "."]);
     write(&package.join("Cargo.lock"), b"not staged");
-    bridgeforge_core::baseline::verify_index(&project, &SystemProcessRunner).unwrap();
+    bridgeforge_skeleton::baseline::verify_index(&project, &SystemProcessRunner).unwrap();
     write(&package.join("Cargo.lock"), project_lock);
     git_at(
         &project,
@@ -519,7 +519,7 @@ fn project_sync_real_init_builds_and_applies_generated_assets() {
         ],
     );
     assert!(
-        bridgeforge_core::baseline::verify_index(&project, &SystemProcessRunner)
+        bridgeforge_skeleton::baseline::verify_index(&project, &SystemProcessRunner)
             .unwrap_err()
             .contains("Cargo.lock")
     );
@@ -550,7 +550,7 @@ fn project_sync_real_init_builds_and_applies_generated_assets() {
 
 #[test]
 fn prepared_public_artifacts_are_shared_and_update_preserves_project_hooks() {
-    use bridgeforge_core::{project_sync::attach_prepared_public, public_artifacts};
+    use bridgeforge_workflow::{project_sync::attach_prepared_public, public_artifacts};
     let temp = TestDirectory::new("prepared-update");
     let factory = Path::new(env!("CARGO_MANIFEST_DIR"))
         .ancestors()
@@ -584,7 +584,7 @@ fn prepared_public_artifacts_are_shared_and_update_preserves_project_hooks() {
                 .iter()
                 .any(|a| a.id.starts_with("public:"))
         );
-        bridgeforge_core::baseline::verify(&project, None, true).unwrap();
+        bridgeforge_skeleton::baseline::verify(&project, None, true).unwrap();
         // A legacy project's private program and even invalid source must not
         // be touched or compiled by ordinary update.
         let native = project.join(".codex/hooks.json");
@@ -706,7 +706,7 @@ fn independent_project_hook_completion_requires_own_build_and_rejects_external_i
         &project.join(".codex/bin").join(&binary),
         &fs::read(package.join("target/release").join(&binary)).unwrap(),
     );
-    let result = bridgeforge_core::project_hook_migration::verify_completed(
+    let result = bridgeforge_workflow::project_hook_migration::verify_completed(
         project,
         true,
         &SystemProcessRunner,
@@ -719,7 +719,7 @@ fn independent_project_hook_completion_requires_own_build_and_rejects_external_i
         b"skeleton-owned dependency",
     );
     write(&package.join("src/main.rs"), b"#![cfg_attr(windows, windows_subsystem = \"windows\")]\nfn main() { let _ = include_str!(\"../../shared.txt\"); }\n");
-    let error = bridgeforge_core::project_hook_migration::verify_completed(
+    let error = bridgeforge_workflow::project_hook_migration::verify_completed(
         project,
         true,
         &SystemProcessRunner,
@@ -814,7 +814,7 @@ fn assist_registry_migration_in_isolated_fixture() {
         fs::read(project.join(".codex/hooks/project_vault/entrypoint.rs")).unwrap(),
         original_entry
     );
-    bridgeforge_core::baseline::verify(&project, None, true).unwrap();
+    bridgeforge_skeleton::baseline::verify(&project, None, true).unwrap();
     assert_eq!(
         build_plan(&project, factory, SyncMode::Update)
             .unwrap()
@@ -928,7 +928,6 @@ fn project_sync_retired_assets_require_exact_preservation_decisions() {
         &preserve,
         &factory,
         SyncMode::Update,
-        None,
         Some(&preserve_decision),
     )
     .unwrap();
@@ -947,7 +946,6 @@ fn project_sync_retired_assets_require_exact_preservation_decisions() {
         &delete,
         &factory,
         SyncMode::Update,
-        None,
         Some(&delete_decision),
     )
     .unwrap();
@@ -1034,11 +1032,11 @@ fn destructive_rebuild_requires_unknown_file_decisions_and_retires_old_project_m
         "preserve": ["P:rule:.codex/rules/custom.rules"],
         "delete": []
     });
-    let plan = build_plan_with_inputs(&project, &factory, SyncMode::Adopt, None, Some(&decisions))
+    let plan = build_plan_with_inputs(&project, &factory, SyncMode::Adopt, Some(&decisions))
         .unwrap();
     assert!(plan.gaps.is_empty(), "{:?}", plan.gaps);
     let combined =
-        bridgeforge_core::project_sync::outcome_plan_with_format(Ok(plan.clone()), "combined");
+        bridgeforge_workflow::project_sync::outcome_plan_with_format(Ok(plan.clone()), "combined");
     assert!(combined.receipt.as_ref().unwrap()["machine"].is_object());
     assert_eq!(
         combined.receipt.as_ref().unwrap()["human"]["conclusion"],
@@ -1099,21 +1097,21 @@ fn batch_confirmation_detects_target_identity_drift_before_write() {
     commit_and_push(&target, "target");
 
     let roots = vec![target.clone()];
-    let plan = bridgeforge_core::batch::plan(&factory, &roots).unwrap();
+    let plan = bridgeforge_factory::batch::plan(&factory, &roots).unwrap();
     assert_eq!(plan.status, "planned");
     assert!(!plan.projects[0].git.as_ref().unwrap().dirty);
     let state_path = temp.0.join("batch/state.json");
-    bridgeforge_core::batch::start(&state_path, &factory, &roots, &plan.aggregate_fingerprint)
+    bridgeforge_factory::batch::start(&state_path, &factory, &roots, &plan.aggregate_fingerprint)
         .unwrap();
     let other_state = temp.0.join("other-state/state.json");
     assert!(
-        bridgeforge_core::batch::start(&other_state, &factory, &roots, &plan.aggregate_fingerprint)
+        bridgeforge_factory::batch::start(&other_state, &factory, &roots, &plan.aggregate_fingerprint)
             .unwrap_err()
             .contains("another batch is already active")
     );
     assert!(!other_state.exists());
     write(&target.join("after-confirmation.txt"), b"drift\n");
-    let state = bridgeforge_core::batch::begin(&state_path).unwrap();
+    let state = bridgeforge_factory::batch::begin(&state_path).unwrap();
     assert_eq!(state.current_order, None);
     assert_eq!(state.projects[0].status, "deferred");
     assert!(
@@ -1173,13 +1171,13 @@ fn batch_restart_requires_committed_bug_and_changed_controller_witness() {
     }
 
     let roots = vec![first, second];
-    let plan = bridgeforge_core::batch::plan(&factory, &roots).unwrap();
+    let plan = bridgeforge_factory::batch::plan(&factory, &roots).unwrap();
     let state_path = temp.0.join("batch/state.json");
-    bridgeforge_core::batch::start(&state_path, &factory, &roots, &plan.aggregate_fingerprint)
+    bridgeforge_factory::batch::start(&state_path, &factory, &roots, &plan.aggregate_fingerprint)
         .unwrap();
     for _ in 0..2 {
-        bridgeforge_core::batch::begin(&state_path).unwrap();
-        bridgeforge_core::batch::finish(
+        bridgeforge_factory::batch::begin(&state_path).unwrap();
+        bridgeforge_factory::batch::finish(
             &state_path,
             false,
             "shared controller failure".into(),
@@ -1187,7 +1185,7 @@ fn batch_restart_requires_committed_bug_and_changed_controller_witness() {
         )
         .unwrap();
     }
-    assert!(bridgeforge_core::batch::restart(&state_path, "doc/2_bugs/BUG-batch.md").is_err());
+    assert!(bridgeforge_factory::batch::restart(&state_path, "doc/2_bugs/BUG-batch.md").is_err());
 
     write(&controller, b"batch controller witness v2\n");
     write(
@@ -1196,7 +1194,7 @@ fn batch_restart_requires_committed_bug_and_changed_controller_witness() {
     );
     commit_and_push(&factory, "fix batch controller");
     let restarted =
-        bridgeforge_core::batch::restart(&state_path, "doc/2_bugs/BUG-batch.md").unwrap();
+        bridgeforge_factory::batch::restart(&state_path, "doc/2_bugs/BUG-batch.md").unwrap();
     assert_eq!(restarted.generation, 2);
     assert!(
         restarted
@@ -1356,7 +1354,7 @@ fn project_sync_combined_upgrade_preserves_project_assets_and_is_idempotent() {
     assert!(hooks.contains("custom-tool --check"));
     assert!(!hooks.contains("hook_dispatcher.py"));
     assert!(hooks.contains("bridgeforge-codex.project-hook.v1:session-start"));
-    bridgeforge_core::baseline::verify(&project, None, true).unwrap();
+    bridgeforge_skeleton::baseline::verify(&project, None, true).unwrap();
     assert_eq!(
         fs::read(project.join(".codex/.bridgeforge_codex_version")).unwrap(),
         fs::read(factory.join("VERSION")).unwrap()

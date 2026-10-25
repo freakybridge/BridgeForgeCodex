@@ -97,7 +97,7 @@
 
 - bridgeforge-codex 同时是 Codex 协作骨架工厂与 dogfood 样板；公共 AGENTS 以 `templates/AGENTS.md` 为单一事实源，工厂专属约束只留在本节。
 - 任何改动落地前必须明确回答传播四问：属于产品层、自身配置层还是元文档；是通用能力还是工厂专属；是否需要版本与 CHANGELOG；是否需要同步自身 dogfood。
-- 通用改进必须进入 `templates/` 或共享 `skills/` 并同步自身镜像；工厂专属事实禁止下沉污染 Template。
+- 通用 Rust 实现进入 `source/`，公共配置与内容进入 `templates/`，共享 Skill 进入 `templates/skills/`，并同步对应自身镜像；工厂专属事实禁止下沉污染 Template。
 - 上游到下游与下游反哺上游的边界分别以 `doc/0_architecture/design/sync-from-upstream-playbook.md` 和 `doc/0_architecture/design/reverse-sync-playbook.md` 为准。
 - 禁止对本仓库执行下游 `project_sync adopt/apply`，禁止写入 `.bridgeforge_codex_version`；工厂合规只能由 dogfood 一致性硬闸证明。
 - 本项目的模块职责、依赖方向、数据流和外部副作用边界必须与本文件“项目目录地图”一致。
@@ -117,8 +117,9 @@
 ### 项目目录地图
 
 - `templates/**`：下沉到项目的 Codex 公共骨架与公共 `AGENTS.md` 源。
-- `skills/**`：由用户级分发器安装的通用 Skill 与 bridgeforge-codex 入口。
-- `scripts/**`：工厂同步、迁移、manifest 重建器及 `scripts/tests/**` 自动测试。
+- `source/**`：工厂 Rust workspace 的唯一维护源，公共八包投影到 `.codex/hooks/source/`，factory 只用于本仓库。
+- `templates/skills/**`：由用户级分发器安装的通用 Skill 与 bridgeforge-codex 入口。
+- `scripts/**`：Windows 用户级安装与分发入口、独立辅助工具及 `scripts/tests/**` 自动测试；工厂 Rust 命令由 `source/factory/` 实现。
 - `.codex/**`：本仓库 dogfood 镜像与本仓库配置；legacy 项目 Memory 仅在迁移完成前保留，不再作为运行时设施。
 - `doc/**`、`README.md`、`CHANGELOG.md`：架构、交付、Bug、参考资料与发布说明。
 
@@ -126,15 +127,17 @@
 
 ### 项目快速命令
 
-工厂声明的运行时准备入口为下列第一条命令：普通 `$git-sync`、`$git-sync release` 和显式工具刷新在 CLI 能力检查之前执行。它通过锁定 Cargo 启动当前源码 CLI，按需准备 CLI/Hook；成功后才使用 `.codex/bin`。准备失败停止，不对工厂执行下游 adopt/apply。只读检查直接使用已具备 `factory-runtime-prepare-v1` 的 CLI 的 `build-assets --factory --project-root . --check`；没有该能力时报告工具不可用，不用 Cargo 引导冒充零写入检查。完整说明见 INSTALL.md。
+本工厂的 Git 同步与开发收口入口为 `.codex/bin/bridgeforge-factory.exe git-sync` 和 `develop`；先执行下述当前源码准备。公共 CLI 保留兼容转发，但工厂直接入口避免额外转发进程，并在发布时直接处理自身映像刷新。
+
+工厂声明的运行时准备入口为下列第一条命令：普通 `$git-sync`、`$git-sync release` 和显式工具刷新在能力检查之前执行。它通过锁定 Cargo 启动当前源码工厂工具，按需准备 CLI、Hook 和工厂工具；成功后才使用 `.codex/bin`。准备失败停止，不对工厂执行下游 adopt/apply。只读检查直接使用已具备 `factory-runtime-prepare-v1` 的工厂工具的 `build-assets --factory --project-root . --check`；没有该能力时报告工具不可用，不用 Cargo 引导冒充零写入检查。完整说明见 INSTALL.md。
 
 ```powershell
-cargo run --locked --release --manifest-path .codex/hooks/Cargo.toml --bin bridgeforge -- build-assets --factory --project-root .
-cargo build --locked --release --manifest-path .codex/hooks/Cargo.toml
-cargo test --locked --config scripts/tests/factory-cargo.toml --manifest-path .codex/hooks/Cargo.toml --workspace
+cargo run --locked --release --manifest-path Cargo.toml --bin bridgeforge-factory -- build-assets --factory --project-root .
+cargo build --locked --release --manifest-path Cargo.toml
+cargo test --locked --config scripts/tests/factory-cargo.toml --manifest-path Cargo.toml --workspace
 cargo test --locked --manifest-path scripts/tests/Cargo.toml
-.codex\bin\bridgeforge.exe manifest --root . --check
-.codex\bin\bridgeforge.exe check factory-version --root .
+.codex\bin\bridgeforge-factory.exe manifest --root . --check
+.codex\bin\bridgeforge-factory.exe check factory-version --root .
 ```
 
 ### 目录级 AGENTS 索引

@@ -31,7 +31,7 @@ fn release_repository(name: &str, contract: &Value, files: &[(&str, &[u8])]) -> 
         .as_nanos();
     let root = std::env::temp_dir().join(format!("bridgeforge-release-{name}-{token}"));
     fs::create_dir_all(root.join(".codex")).unwrap();
-    fs::write(root.join(".gitignore"),b".runtime/\n").unwrap();
+    fs::write(root.join(".gitignore"), b".runtime/\n").unwrap();
     git_ok(&root, &["init"]);
     git_ok(&root, &["config", "user.name", "BridgeForge Test"]);
     git_ok(
@@ -60,49 +60,111 @@ struct TimeoutRunner;
 #[test]
 fn immutable_history_reader_batches_payloads_and_never_caches_mutable_head() {
     use std::cell::RefCell;
-    struct Counting { trees:RefCell<usize>, batches:RefCell<usize>, shows:RefCell<usize> }
+    struct Counting {
+        trees: RefCell<usize>,
+        batches: RefCell<usize>,
+        shows: RefCell<usize>,
+    }
     impl ProcessRunner for Counting {
         fn run(&self, request: &ProcessRequest) -> std::io::Result<ProcessOutput> {
-            if request.args.iter().any(|arg| arg == "ls-tree") { *self.trees.borrow_mut() += 1; }
-            if request.args.iter().any(|arg| arg == "cat-file") { *self.batches.borrow_mut() += 1; }
-            if request.args.iter().any(|arg| arg == "show") { *self.shows.borrow_mut() += 1; }
+            if request.args.iter().any(|arg| arg == "ls-tree") {
+                *self.trees.borrow_mut() += 1;
+            }
+            if request.args.iter().any(|arg| arg == "cat-file") {
+                *self.batches.borrow_mut() += 1;
+            }
+            if request.args.iter().any(|arg| arg == "show") {
+                *self.shows.borrow_mut() += 1;
+            }
             SystemProcessRunner.run(request)
         }
     }
-    let repo = release_repository("batch-reader", &json!({"assets":[]}), &[("first.bin", b"\0\xff\n"), ("second.txt", b"second\n")]);
+    let repo = release_repository(
+        "batch-reader",
+        &json!({"assets":[]}),
+        &[("first.bin", b"\0\xff\n"), ("second.txt", b"second\n")],
+    );
     let oid = history::git(&repo.0, &SystemProcessRunner, &["rev-parse", "HEAD"]).unwrap();
-    let runner = Counting { trees:RefCell::new(0), batches:RefCell::new(0), shows:RefCell::new(0) };
+    let runner = Counting {
+        trees: RefCell::new(0),
+        batches: RefCell::new(0),
+        shows: RefCell::new(0),
+    };
     let reader = history_cache::Reader::new(&repo.0, &runner);
-    reader.prefetch(oid.trim(), &["first.bin".into(), "second.txt".into(), "missing.txt".into()]).unwrap();
+    reader
+        .prefetch(
+            oid.trim(),
+            &[
+                "first.bin".into(),
+                "second.txt".into(),
+                "missing.txt".into(),
+            ],
+        )
+        .unwrap();
     for _ in 0..3 {
-        assert_eq!(revision_payload(&repo.0, oid.trim(), "first.bin", &reader).unwrap().unwrap(), b"\0\xff\n");
-        assert_eq!(revision_payload(&repo.0, oid.trim(), "second.txt", &reader).unwrap().unwrap(), b"second\n");
-        assert!(revision_payload(&repo.0, oid.trim(), "missing.txt", &reader).unwrap().is_none());
+        assert_eq!(
+            revision_payload(&repo.0, oid.trim(), "first.bin", &reader)
+                .unwrap()
+                .unwrap(),
+            b"\0\xff\n"
+        );
+        assert_eq!(
+            revision_payload(&repo.0, oid.trim(), "second.txt", &reader)
+                .unwrap()
+                .unwrap(),
+            b"second\n"
+        );
+        assert!(
+            revision_payload(&repo.0, oid.trim(), "missing.txt", &reader)
+                .unwrap()
+                .is_none()
+        );
     }
     assert_eq!(*runner.trees.borrow(), 1);
     assert_eq!(*runner.batches.borrow(), 1);
     assert_eq!(*runner.shows.borrow(), 0);
-    assert_eq!(head_payload(&repo.0, "second.txt", &reader).unwrap().unwrap(), b"second\n");
+    assert_eq!(
+        head_payload(&repo.0, "second.txt", &reader)
+            .unwrap()
+            .unwrap(),
+        b"second\n"
+    );
     fs::write(repo.0.join("second.txt"), b"new HEAD\n").unwrap();
     git_ok(&repo.0, &["add", "."]);
     git_ok(&repo.0, &["commit", "-m", "fix: new head"]);
-    assert_eq!(head_payload(&repo.0, "second.txt", &reader).unwrap().unwrap(), b"new HEAD\n");
+    assert_eq!(
+        head_payload(&repo.0, "second.txt", &reader)
+            .unwrap()
+            .unwrap(),
+        b"new HEAD\n"
+    );
     assert_eq!(*runner.shows.borrow(), 2);
     assert!(!repo.0.join(".runtime").exists());
 }
 
 #[test]
 fn immutable_history_reader_rejects_failed_or_malformed_batches() {
-    struct BadBatch { timeout:bool }
+    struct BadBatch {
+        timeout: bool,
+    }
     impl ProcessRunner for BadBatch {
         fn run(&self, request: &ProcessRequest) -> std::io::Result<ProcessOutput> {
             if request.args.iter().any(|arg| arg == "cat-file") {
-                return Ok(ProcessOutput { code:0, stdout:b"invalid blob 999\nshort".to_vec(), stderr:Vec::new(), timed_out:self.timeout });
+                return Ok(ProcessOutput {
+                    code: 0,
+                    stdout: b"invalid blob 999\nshort".to_vec(),
+                    stderr: Vec::new(),
+                    timed_out: self.timeout,
+                });
             }
             SystemProcessRunner.run(request)
         }
     }
-    let repo = release_repository("bad-batch", &json!({"assets":[]}), &[("file.bin", b"content")]);
+    let repo = release_repository(
+        "bad-batch",
+        &json!({"assets":[]}),
+        &[("file.bin", b"content")],
+    );
     let oid = history::git(&repo.0, &SystemProcessRunner, &["rev-parse", "HEAD"]).unwrap();
     for timeout in [false, true] {
         let runner = BadBatch { timeout };
@@ -118,62 +180,178 @@ fn immutable_history_reader_reuses_blob_identity_across_paths_and_commits() {
     struct Counting(RefCell<Vec<Vec<u8>>>);
     impl ProcessRunner for Counting {
         fn run(&self, request: &ProcessRequest) -> std::io::Result<ProcessOutput> {
-            if request.args.iter().any(|arg| arg == "cat-file") { self.0.borrow_mut().push(request.stdin.clone()); }
+            if request.args.iter().any(|arg| arg == "cat-file") {
+                self.0.borrow_mut().push(request.stdin.clone());
+            }
             SystemProcessRunner.run(request)
         }
     }
-    let repo = release_repository("blob-identity-reuse", &json!({"assets":[]}), &[("first.txt", b"same\n"), ("alias.txt", b"same\n")]);
-    let old = history::git(&repo.0, &SystemProcessRunner, &["rev-parse", "HEAD"]).unwrap().trim().to_string();
+    let repo = release_repository(
+        "blob-identity-reuse",
+        &json!({"assets":[]}),
+        &[("first.txt", b"same\n"), ("alias.txt", b"same\n")],
+    );
+    let old = history::git(&repo.0, &SystemProcessRunner, &["rev-parse", "HEAD"])
+        .unwrap()
+        .trim()
+        .to_string();
     fs::write(repo.0.join("changed.txt"), b"different\n").unwrap();
     git_ok(&repo.0, &["add", "."]);
     git_ok(&repo.0, &["commit", "-m", "fix: distinct object"]);
-    let next = history::git(&repo.0, &SystemProcessRunner, &["rev-parse", "HEAD"]).unwrap().trim().to_string();
+    let next = history::git(&repo.0, &SystemProcessRunner, &["rev-parse", "HEAD"])
+        .unwrap()
+        .trim()
+        .to_string();
     let runner = Counting(RefCell::new(Vec::new()));
     let reader = history_cache::Reader::new(&repo.0, &runner);
-    reader.prefetch(&old, &["first.txt".into(), "alias.txt".into()]).unwrap();
+    reader
+        .prefetch(&old, &["first.txt".into(), "alias.txt".into()])
+        .unwrap();
     assert_eq!(runner.0.borrow().len(), 1);
-    assert_eq!(runner.0.borrow()[0].iter().filter(|b| **b == b'\n').count(), 1, "one request per object, not per path");
-    reader.prefetch(&next, &["first.txt".into(), "alias.txt".into()]).unwrap();
-    assert_eq!(runner.0.borrow().len(), 1, "unchanged object reused across fixed revisions");
-    assert_eq!(revision_payload(&repo.0, &next, "changed.txt", &reader).unwrap().unwrap(), b"different\n");
+    assert_eq!(
+        runner.0.borrow()[0].iter().filter(|b| **b == b'\n').count(),
+        1,
+        "one request per object, not per path"
+    );
+    reader
+        .prefetch(&next, &["first.txt".into(), "alias.txt".into()])
+        .unwrap();
+    assert_eq!(
+        runner.0.borrow().len(),
+        1,
+        "unchanged object reused across fixed revisions"
+    );
+    assert_eq!(
+        revision_payload(&repo.0, &next, "changed.txt", &reader)
+            .unwrap()
+            .unwrap(),
+        b"different\n"
+    );
     assert_eq!(runner.0.borrow().len(), 2, "new object must be fetched");
-    assert_eq!(revision_payload(&repo.0, &old, "first.txt", &reader).unwrap().unwrap(), b"same\n");
+    assert_eq!(
+        revision_payload(&repo.0, &old, "first.txt", &reader)
+            .unwrap()
+            .unwrap(),
+        b"same\n"
+    );
     reader.verify_unchanged().unwrap();
     git_ok(&repo.0, &["replace", &old, &next]);
-    assert!(reader.verify_unchanged().is_err(), "history interpretation drift must still block apply");
+    assert!(
+        reader.verify_unchanged().is_err(),
+        "history interpretation drift must still block apply"
+    );
     let replaced = history_cache::Reader::new(&repo.0, &runner);
-    assert_eq!(revision_payload(&repo.0, &old, "changed.txt", &replaced).unwrap().unwrap(), b"different\n");
-    assert_eq!(runner.0.borrow().len(), 2, "replacement histories bypass the object cache");
+    assert_eq!(
+        revision_payload(&repo.0, &old, "changed.txt", &replaced)
+            .unwrap()
+            .unwrap(),
+        b"different\n"
+    );
+    assert_eq!(
+        runner.0.borrow().len(),
+        2,
+        "replacement histories bypass the object cache"
+    );
 }
 
 #[test]
 fn immutable_history_hints_never_add_failures_or_lazy_fetches() {
-    struct FailBlob { oid: String, promisor: bool, batches: std::cell::Cell<usize> }
+    struct FailBlob {
+        oid: String,
+        promisor: bool,
+        batches: std::cell::Cell<usize>,
+    }
     impl ProcessRunner for FailBlob {
         fn run(&self, request: &ProcessRequest) -> std::io::Result<ProcessOutput> {
             if self.promisor && request.args.iter().any(|a| a == "--get-regexp") {
-                return Ok(ProcessOutput { code:0, stdout:b"remote.origin.promisor true\n".to_vec(), stderr:vec![], timed_out:false });
+                return Ok(ProcessOutput {
+                    code: 0,
+                    stdout: b"remote.origin.promisor true\n".to_vec(),
+                    stderr: vec![],
+                    timed_out: false,
+                });
             }
-            if request.args.iter().any(|a| a == "cat-file") { self.batches.set(self.batches.get()+1); }
-            if request.args.iter().any(|a| a == "cat-file") && String::from_utf8_lossy(&request.stdin).lines().any(|oid| oid == self.oid) {
-                return Ok(ProcessOutput { code:1, stdout:vec![], stderr:b"unavailable object".to_vec(), timed_out:false });
+            if request.args.iter().any(|a| a == "cat-file") {
+                self.batches.set(self.batches.get() + 1);
+            }
+            if request.args.iter().any(|a| a == "cat-file")
+                && String::from_utf8_lossy(&request.stdin)
+                    .lines()
+                    .any(|oid| oid == self.oid)
+            {
+                return Ok(ProcessOutput {
+                    code: 1,
+                    stdout: vec![],
+                    stderr: b"unavailable object".to_vec(),
+                    timed_out: false,
+                });
             }
             SystemProcessRunner.run(request)
         }
     }
-    let repo = release_repository("optional-prefetch", &json!({"assets":[]}), &[("needed.txt", b"required\n"), ("hint.txt", b"not consumed\n")]);
-    let oid = history::git(&repo.0, &SystemProcessRunner, &["rev-parse", "HEAD"]).unwrap().trim().to_string();
-    let unavailable = history::git(&repo.0, &SystemProcessRunner, &["rev-parse", "HEAD:hint.txt"]).unwrap().trim().to_string();
-    let runner = FailBlob { oid:unavailable, promisor:false, batches:std::cell::Cell::new(0) };
+    let repo = release_repository(
+        "optional-prefetch",
+        &json!({"assets":[]}),
+        &[
+            ("needed.txt", b"required\n"),
+            ("hint.txt", b"not consumed\n"),
+        ],
+    );
+    let oid = history::git(&repo.0, &SystemProcessRunner, &["rev-parse", "HEAD"])
+        .unwrap()
+        .trim()
+        .to_string();
+    let unavailable = history::git(
+        &repo.0,
+        &SystemProcessRunner,
+        &["rev-parse", "HEAD:hint.txt"],
+    )
+    .unwrap()
+    .trim()
+    .to_string();
+    let runner = FailBlob {
+        oid: unavailable,
+        promisor: false,
+        batches: std::cell::Cell::new(0),
+    };
     let reader = history_cache::Reader::new(&repo.0, &runner);
-    reader.prefetch_hints(&BTreeSet::from([oid.as_str()]), &["needed.txt".into(),"hint.txt".into()]);
-    assert_eq!(revision_payload(&repo.0, &oid, "needed.txt", &reader).unwrap().unwrap(), b"required\n");
-    assert!(revision_payload(&repo.0, &oid, "hint.txt", &reader).is_err(), "required failed reads cannot be masked by a speculative failure");
-    let runner = FailBlob { oid:history::git(&repo.0, &SystemProcessRunner, &["rev-parse","HEAD:needed.txt"]).unwrap().trim().into(), promisor:true, batches:std::cell::Cell::new(0) };
+    reader.prefetch_hints(
+        &BTreeSet::from([oid.as_str()]),
+        &["needed.txt".into(), "hint.txt".into()],
+    );
+    assert_eq!(
+        revision_payload(&repo.0, &oid, "needed.txt", &reader)
+            .unwrap()
+            .unwrap(),
+        b"required\n"
+    );
+    assert!(
+        revision_payload(&repo.0, &oid, "hint.txt", &reader).is_err(),
+        "required failed reads cannot be masked by a speculative failure"
+    );
+    let runner = FailBlob {
+        oid: history::git(
+            &repo.0,
+            &SystemProcessRunner,
+            &["rev-parse", "HEAD:needed.txt"],
+        )
+        .unwrap()
+        .trim()
+        .into(),
+        promisor: true,
+        batches: std::cell::Cell::new(0),
+    };
     let reader = history_cache::Reader::new(&repo.0, &runner);
     reader.prefetch_hints(&BTreeSet::from([oid.as_str()]), &["needed.txt".into()]);
-    assert_eq!(runner.batches.get(), 0, "partial clone hints must not request objects");
-    assert!(revision_payload(&repo.0, &oid, "needed.txt", &reader).is_err(), "promisor hints must not supply invented success");
+    assert_eq!(
+        runner.batches.get(),
+        0,
+        "partial clone hints must not request objects"
+    );
+    assert!(
+        revision_payload(&repo.0, &oid, "needed.txt", &reader).is_err(),
+        "promisor hints must not supply invented success"
+    );
 }
 
 #[test]
@@ -182,24 +360,56 @@ fn synchronized_history_skips_unowned_gitlinks_and_large_business_blobs() {
     struct Counting(RefCell<Vec<Vec<u8>>>);
     impl ProcessRunner for Counting {
         fn run(&self, request: &ProcessRequest) -> std::io::Result<ProcessOutput> {
-            if request.args.iter().any(|arg| arg == "cat-file") { self.0.borrow_mut().push(request.stdin.clone()); }
+            if request.args.iter().any(|arg| arg == "cat-file") {
+                self.0.borrow_mut().push(request.stdin.clone());
+            }
             SystemProcessRunner.run(request)
         }
     }
     let repo = explicit_repository("gitlink-release");
     let parent = history::git(&repo.0, &SystemProcessRunner, &["rev-parse", "HEAD"]).unwrap();
-    git_ok(&repo.0, &["update-index", "--add", "--cacheinfo", "160000", parent.trim(), "vendor/module"]);
-    fs::write(repo.0.join("business.bin"), vec![42u8; 1024*1024]).unwrap();
+    git_ok(
+        &repo.0,
+        &[
+            "update-index",
+            "--add",
+            "--cacheinfo",
+            "160000",
+            parent.trim(),
+            "vendor/module",
+        ],
+    );
+    fs::write(repo.0.join("business.bin"), vec![42u8; 1024 * 1024]).unwrap();
     git_ok(&repo.0, &["add", "business.bin"]);
     git_ok(&repo.0, &["commit", "-m", "feat: add business assets"]);
     let next = history::git(&repo.0, &SystemProcessRunner, &["rev-parse", "HEAD"]).unwrap();
-    git_ok(&repo.0, &["update-index", "--cacheinfo", "160000", next.trim(), "vendor/module"]);
+    git_ok(
+        &repo.0,
+        &[
+            "update-index",
+            "--cacheinfo",
+            "160000",
+            next.trim(),
+            "vendor/module",
+        ],
+    );
     git_ok(&repo.0, &["commit", "-m", "fix: advance submodule"]);
-    let blob = history::git(&repo.0, &SystemProcessRunner, &["rev-parse", "HEAD:business.bin"]).unwrap();
+    let blob = history::git(
+        &repo.0,
+        &SystemProcessRunner,
+        &["rev-parse", "HEAD:business.bin"],
+    )
+    .unwrap();
     let runner = Counting(RefCell::new(Vec::new()));
-    let reader=history_cache::Reader::new(&repo.0,&runner);reader.prefetch(next.trim(),&["Cargo.toml".into(),"Cargo.lock".into()]).unwrap();
-    assert!(!runner.0.borrow().iter().any(|input|String::from_utf8_lossy(input).lines().any(|oid|oid==blob.trim())));
-
+    let reader = history_cache::Reader::new(&repo.0, &runner);
+    reader
+        .prefetch(next.trim(), &["Cargo.toml".into(), "Cargo.lock".into()])
+        .unwrap();
+    assert!(!runner.0.borrow().iter().any(|input| {
+        String::from_utf8_lossy(input)
+            .lines()
+            .any(|oid| oid == blob.trim())
+    }));
 }
 
 impl ProcessRunner for TimeoutRunner {
@@ -372,7 +582,7 @@ fn conventional_commit_parses_description_and_breaking_annotation() {
     let info =
         parse_commit_message("feat(core)!: replace runtime\n\nBREAKING CHANGE: changed").unwrap();
     assert!(info.breaking);
-    assert_eq!(info.kind,"feat");
+    assert_eq!(info.kind, "feat");
     assert!(parse_commit_message("update runtime").is_err());
 }
 
@@ -631,8 +841,11 @@ fn history_commit(repo: &ReleaseRepository, content: &[u8], message: &str) {
 }
 
 fn independent_repository(name: &str, legacy: bool) -> ReleaseRepository {
-    let config = if legacy { json!({"schema_version":1,"release_policy":"explicit_release","manifests":["Cargo.toml"]}) }
-        else { independent_config() };
+    let config = if legacy {
+        json!({"schema_version":1,"release_policy":"explicit_release","manifests":["Cargo.toml"]})
+    } else {
+        independent_config()
+    };
     release_repository(name, &json!({"contract_target":".codex/managed-skeleton.json","assets":[{
         "id":"managed.asset","target":"managed.txt","strategy":"whole","current_sha256":digest(b"old\n")
     }]}), &[
@@ -657,58 +870,158 @@ fn independent_config() -> Value {
         "rust":{"workspaces":["Cargo.toml"],"dependency_bump":"patch","shared_inputs":[],"product_inputs":["README.md","doc/"]}})
 }
 
-fn migrate_fixture(repo:&ReleaseRepository){schema4::fixture::migrate(&repo.0,&SystemProcessRunner).unwrap();}
-fn fixture_plan(repo:&ReleaseRepository,product:&str,packages:&[(&str,&str)])->Result<Option<FileReleasePlan>,String>{
-    let request=schema4::fixture::analysis(&repo.0,&SystemProcessRunner,product,packages)?;
-    build_explicit_release_plan_with_request(&repo.0,"chore: fixture final release",vec![],&SystemProcessRunner,&request)
+fn migrate_fixture(repo: &ReleaseRepository) {
+    schema4::fixture::migrate(&repo.0, &SystemProcessRunner).unwrap();
+}
+fn fixture_plan(
+    repo: &ReleaseRepository,
+    product: &str,
+    packages: &[(&str, &str)],
+) -> Result<Option<FileReleasePlan>, String> {
+    let request = schema4::fixture::analysis(&repo.0, &SystemProcessRunner, product, packages)?;
+    build_explicit_release_plan_with_request(
+        &repo.0,
+        "chore: fixture final release",
+        vec![],
+        &SystemProcessRunner,
+        &request,
+    )
 }
 
 #[test]
-fn independent_release_rates_each_final_package_and_is_idempotent(){
-    let repo=independent_repository("schema4-impacts",false);migrate_fixture(&repo);
-    fs::write(repo.0.join("core/src/lib.rs"),b"pub fn value() -> u32 { 2 }\n").unwrap();
-    fs::write(repo.0.join("app/src/lib.rs"),b"pub fn value() -> u32 { core::value()+1 }\n").unwrap();
-    let index=fs::read(repo.0.join(".git/index")).unwrap();
-    let p=fixture_plan(&repo,"minor",&[("core","minor"),("app","patch")]).unwrap().unwrap();
-    assert_eq!(p.new_version.to_string(),"1.1.0");assert_eq!(p.package_changes.len(),2);
-    assert!(p.package_changes.iter().any(|p|p.name=="core"&&p.version_after=="1.1.0"));
-    assert!(p.package_changes.iter().any(|p|p.name=="app"&&p.version_after=="1.0.1"));
-    let ledger:Value=serde_json::from_slice(&fs::read(repo.0.join(".codex/package-closures.json")).unwrap()).unwrap();
-    let idle=ledger["entries"].as_array().unwrap().iter().find(|e|e["id"]=="idle").unwrap();
-    assert_eq!(idle["level"],0);
-    assert_eq!(idle["after"],"1.0.0");
-    assert_eq!(fs::read(repo.0.join(".git/index")).unwrap(),index);apply_file_release_plan(&p).unwrap();
-    let output=Command::new("cargo").args(["metadata","--locked","--offline","--format-version","1"]).current_dir(&repo.0).output().unwrap();assert!(output.status.success(),"{}",String::from_utf8_lossy(&output.stderr));
-    git_ok(&repo.0,&["add","."]);git_ok(&repo.0,&["commit","-m","chore: release"]);
-    assert!(build_explicit_release_plan(&repo.0,"feat!: ignored title",vec![],&SystemProcessRunner).unwrap().is_none());
+fn independent_release_rates_each_final_package_and_is_idempotent() {
+    let repo = independent_repository("schema4-impacts", false);
+    migrate_fixture(&repo);
+    fs::write(
+        repo.0.join("core/src/lib.rs"),
+        b"pub fn value() -> u32 { 2 }\n",
+    )
+    .unwrap();
+    fs::write(
+        repo.0.join("app/src/lib.rs"),
+        b"pub fn value() -> u32 { core::value()+1 }\n",
+    )
+    .unwrap();
+    let index = fs::read(repo.0.join(".git/index")).unwrap();
+    let p = fixture_plan(&repo, "minor", &[("core", "minor"), ("app", "patch")])
+        .unwrap()
+        .unwrap();
+    assert_eq!(p.new_version.to_string(), "1.1.0");
+    assert_eq!(p.package_changes.len(), 2);
+    assert!(
+        p.package_changes
+            .iter()
+            .any(|p| p.name == "core" && p.version_after == "1.1.0")
+    );
+    assert!(
+        p.package_changes
+            .iter()
+            .any(|p| p.name == "app" && p.version_after == "1.0.1")
+    );
+    let ledger: Value =
+        serde_json::from_slice(&fs::read(repo.0.join(".codex/package-closures.json")).unwrap())
+            .unwrap();
+    let idle = ledger["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["id"] == "idle")
+        .unwrap();
+    assert_eq!(idle["level"], 0);
+    assert_eq!(idle["after"], "1.0.0");
+    assert_eq!(fs::read(repo.0.join(".git/index")).unwrap(), index);
+    apply_file_release_plan(&p).unwrap();
+    let output = Command::new("cargo")
+        .args(["metadata", "--locked", "--offline", "--format-version", "1"])
+        .current_dir(&repo.0)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    git_ok(&repo.0, &["add", "."]);
+    git_ok(&repo.0, &["commit", "-m", "chore: release"]);
+    assert!(
+        build_explicit_release_plan(
+            &repo.0,
+            "feat!: ignored title",
+            vec![],
+            &SystemProcessRunner
+        )
+        .unwrap()
+        .is_none()
+    );
 }
 
 #[test]
-fn independent_migration_preserves_versions_unpublished_changes_and_initial_package(){
-    let repo=independent_repository("schema4-new",false);
-    fs::write(repo.0.join("app/src/lib.rs"),b"pub fn value() -> u32 { 9 }\n").unwrap();
+fn independent_migration_preserves_versions_unpublished_changes_and_initial_package() {
+    let repo = independent_repository("schema4-new", false);
+    fs::write(
+        repo.0.join("app/src/lib.rs"),
+        b"pub fn value() -> u32 { 9 }\n",
+    )
+    .unwrap();
     fs::create_dir_all(repo.0.join("new/src")).unwrap();
-    fs::write(repo.0.join("new/Cargo.toml"),b"[package]\nname='new'\nversion='0.3.7'\nedition='2024'\n[workspace]\n").unwrap();
-    fs::write(repo.0.join("new/Cargo.lock"),b"version=4\n[[package]]\nname='new'\nversion='0.3.7'\n").unwrap();
-    fs::write(repo.0.join("new/src/lib.rs"),b"pub fn value() {}\n").unwrap();
-    let mut cfg=independent_config();cfg["rust"]["workspaces"]=json!(["Cargo.toml","new/Cargo.toml"]);
-    fs::write(repo.0.join(".codex/bridgeforge-version.json"),serde_json::to_vec(&cfg).unwrap()).unwrap();
-    git_ok(&repo.0,&["add","."]);git_ok(&repo.0,&["commit","-m","unclassified ordinary commit"]);
-    let version=fs::read(repo.0.join("VERSION")).unwrap();migrate_fixture(&repo);assert_eq!(fs::read(repo.0.join("VERSION")).unwrap(),version);
-    let p=fixture_plan(&repo,"patch",&[]).unwrap().unwrap();assert_eq!(p.package_changes.len(),2);
-    assert!(p.package_changes.iter().any(|p|p.name=="new"&&p.version_before=="unreleased"&&p.version_after=="0.3.7"));
-    assert!(p.package_changes.iter().any(|p|p.name=="app"&&p.version_after=="1.0.1"));
+    fs::write(
+        repo.0.join("new/Cargo.toml"),
+        b"[package]\nname='new'\nversion='0.3.7'\nedition='2024'\n[workspace]\n",
+    )
+    .unwrap();
+    fs::write(
+        repo.0.join("new/Cargo.lock"),
+        b"version=4\n[[package]]\nname='new'\nversion='0.3.7'\n",
+    )
+    .unwrap();
+    fs::write(repo.0.join("new/src/lib.rs"), b"pub fn value() {}\n").unwrap();
+    let mut cfg = independent_config();
+    cfg["rust"]["workspaces"] = json!(["Cargo.toml", "new/Cargo.toml"]);
+    fs::write(
+        repo.0.join(".codex/bridgeforge-version.json"),
+        serde_json::to_vec(&cfg).unwrap(),
+    )
+    .unwrap();
+    git_ok(&repo.0, &["add", "."]);
+    git_ok(&repo.0, &["commit", "-m", "unclassified ordinary commit"]);
+    let version = fs::read(repo.0.join("VERSION")).unwrap();
+    migrate_fixture(&repo);
+    assert_eq!(fs::read(repo.0.join("VERSION")).unwrap(), version);
+    let p = fixture_plan(&repo, "patch", &[]).unwrap().unwrap();
+    assert_eq!(p.package_changes.len(), 2);
+    assert!(p.package_changes.iter().any(|p| p.name == "new"
+        && p.version_before == "unreleased"
+        && p.version_after == "0.3.7"));
+    assert!(
+        p.package_changes
+            .iter()
+            .any(|p| p.name == "app" && p.version_after == "1.0.1")
+    );
 }
 
 #[test]
-fn independent_migration_rejects_transient_identity_and_version_changes(){
-    for mode in ["delete","rename","version"]{
-        let repo=independent_repository(mode,false);let original=fs::read(repo.0.join("core/Cargo.toml")).unwrap();
-        if mode=="delete" {git_ok(&repo.0,&["rm","-r","core"]);}else{let old=String::from_utf8(original.clone()).unwrap();let text=if mode=="rename"{old.replace("name = \"core\"","name = \"renamed\"")}else{old.replace("version.workspace = true","version = \"0.9.0\"")};fs::write(repo.0.join("core/Cargo.toml"),text).unwrap();}
-        git_ok(&repo.0,&["add","."]);git_ok(&repo.0,&["commit","-m","chore: unsafe transient"]);
-        fs::create_dir_all(repo.0.join("core")).unwrap();fs::write(repo.0.join("core/Cargo.toml"),original).unwrap();
-        let p=schema4::migration_plan(&repo.0,&SystemProcessRunner,None);assert_ne!(p.code,0,"{mode}");
-        assert_eq!(fs::read(repo.0.join("VERSION")).unwrap(),b"1.0.0\n");
+fn independent_migration_rejects_transient_identity_and_version_changes() {
+    for mode in ["delete", "rename", "version"] {
+        let repo = independent_repository(mode, false);
+        let original = fs::read(repo.0.join("core/Cargo.toml")).unwrap();
+        if mode == "delete" {
+            git_ok(&repo.0, &["rm", "-r", "core"]);
+        } else {
+            let old = String::from_utf8(original.clone()).unwrap();
+            let text = if mode == "rename" {
+                old.replace("name = \"core\"", "name = \"renamed\"")
+            } else {
+                old.replace("version.workspace = true", "version = \"0.9.0\"")
+            };
+            fs::write(repo.0.join("core/Cargo.toml"), text).unwrap();
+        }
+        git_ok(&repo.0, &["add", "."]);
+        git_ok(&repo.0, &["commit", "-m", "chore: unsafe transient"]);
+        fs::create_dir_all(repo.0.join("core")).unwrap();
+        fs::write(repo.0.join("core/Cargo.toml"), original).unwrap();
+        let p = schema4::migration_plan(&repo.0, &SystemProcessRunner, None);
+        assert_ne!(p.code, 0, "{mode}");
+        assert_eq!(fs::read(repo.0.join("VERSION")).unwrap(), b"1.0.0\n");
     }
 }
 
@@ -744,19 +1057,44 @@ fn historical_lock_repository(name: &str, config: Value, stale: bool) -> Release
 }
 
 fn write_independent_lock_config(repo: &ReleaseRepository) {
-    fs::write(repo.0.join(".codex/bridgeforge-version.json"),
-        serde_json::to_vec(&historical_lock_config(false)).unwrap()).unwrap();
+    fs::write(
+        repo.0.join(".codex/bridgeforge-version.json"),
+        serde_json::to_vec(&historical_lock_config(false)).unwrap(),
+    )
+    .unwrap();
 }
 
 #[test]
-fn independent_historical_lock_migration_accepts_legacy_boundary_and_intermediate(){
-    for stale in [true,false]{let repo=historical_lock_repository("legacy-lock",historical_lock_config(true),stale);fs::write(repo.0.join("strategy/Cargo.lock"),strategy_lock(true)).unwrap();fs::write(repo.0.join("strategy/src/lib.rs"),b"pub fn value()->u32{native::value()+1}\n").unwrap();git_ok(&repo.0,&["add","."]);git_ok(&repo.0,&["commit","-m","unclassified change"]);fs::write(repo.0.join("strategy/Cargo.lock"),strategy_lock(false)).unwrap();write_independent_lock_config(&repo);migrate_fixture(&repo);let p=fixture_plan(&repo,"minor",&[("strategy","minor")]).unwrap().unwrap();assert_eq!(p.package_changes.len(),1);assert_eq!(p.package_changes[0].version_after,"1.1.0");}
+fn independent_historical_lock_migration_accepts_legacy_boundary_and_intermediate() {
+    for stale in [true, false] {
+        let repo = historical_lock_repository("legacy-lock", historical_lock_config(true), stale);
+        fs::write(repo.0.join("strategy/Cargo.lock"), strategy_lock(true)).unwrap();
+        fs::write(
+            repo.0.join("strategy/src/lib.rs"),
+            b"pub fn value()->u32{native::value()+1}\n",
+        )
+        .unwrap();
+        git_ok(&repo.0, &["add", "."]);
+        git_ok(&repo.0, &["commit", "-m", "unclassified change"]);
+        fs::write(repo.0.join("strategy/Cargo.lock"), strategy_lock(false)).unwrap();
+        write_independent_lock_config(&repo);
+        migrate_fixture(&repo);
+        let p = fixture_plan(&repo, "minor", &[("strategy", "minor")])
+            .unwrap()
+            .unwrap();
+        assert_eq!(p.package_changes.len(), 1);
+        assert_eq!(p.package_changes[0].version_after, "1.1.0");
+    }
 }
 
 #[test]
 fn independent_historical_lock_migration_keeps_current_and_schema2_locks_strict() {
     for (legacy, stale_boundary) in [(true, false), (false, true), (false, false)] {
-        let repo = historical_lock_repository("strict-lock", historical_lock_config(legacy), stale_boundary);
+        let repo = historical_lock_repository(
+            "strict-lock",
+            historical_lock_config(legacy),
+            stale_boundary,
+        );
         if !stale_boundary {
             fs::write(repo.0.join("strategy/Cargo.lock"), strategy_lock(true)).unwrap();
             git_ok(&repo.0, &["add", "."]);
@@ -766,15 +1104,21 @@ fn independent_historical_lock_migration_keeps_current_and_schema2_locks_strict(
             fs::write(repo.0.join("strategy/Cargo.lock"), strategy_lock(false)).unwrap();
         }
         write_independent_lock_config(&repo);
-        let error = schema4::fixture::migrate(&repo.0,&SystemProcessRunner).unwrap_err();
-        assert!(error.contains("strategy/Cargo.lock: local package native has missing, ambiguous, or stale version"), "{error}");
+        let error = schema4::fixture::migrate(&repo.0, &SystemProcessRunner).unwrap_err();
+        assert!(
+            error.contains(
+                "strategy/Cargo.lock: local package native has missing, ambiguous, or stale version"
+            ),
+            "{error}"
+        );
     }
 }
 
 #[test]
 fn independent_historical_lock_migration_keeps_identity_and_effective_version_guards() {
     for replacement in ["name = 'renamed'", "version = '0.9.0'"] {
-        let repo = historical_lock_repository("legacy-identity", historical_lock_config(true), true);
+        let repo =
+            historical_lock_repository("legacy-identity", historical_lock_config(true), true);
         let original = fs::read_to_string(repo.0.join("strategy/Cargo.toml")).unwrap();
         let changed = if replacement.starts_with("name") {
             original.replace("name = 'strategy'", replacement)
@@ -787,8 +1131,11 @@ fn independent_historical_lock_migration_keeps_identity_and_effective_version_gu
         fs::write(repo.0.join("strategy/Cargo.toml"), original).unwrap();
         fs::write(repo.0.join("strategy/Cargo.lock"), strategy_lock(false)).unwrap();
         write_independent_lock_config(&repo);
-        let error = schema4::fixture::migrate(&repo.0,&SystemProcessRunner).unwrap_err();
-        assert!((error.contains("identity") || error.contains("version")), "{error}");
+        let error = schema4::fixture::migrate(&repo.0, &SystemProcessRunner).unwrap_err();
+        assert!(
+            (error.contains("identity") || error.contains("version")),
+            "{error}"
+        );
     }
 }
 
@@ -799,25 +1146,38 @@ fn independent_historical_lock_migration_does_not_exempt_legacy_managed_roots() 
     let repo = historical_lock_repository("legacy-managed-lock", legacy, true);
     fs::write(repo.0.join("strategy/Cargo.lock"), strategy_lock(false)).unwrap();
     write_independent_lock_config(&repo);
-    let error = schema4::fixture::migrate(&repo.0,&SystemProcessRunner).unwrap_err();
-    assert!(error.contains("strategy/Cargo.lock: local package native has missing, ambiguous, or stale version"), "{error}");
+    let error = schema4::fixture::migrate(&repo.0, &SystemProcessRunner).unwrap_err();
+    assert!(
+        error.contains(
+            "strategy/Cargo.lock: local package native has missing, ambiguous, or stale version"
+        ),
+        "{error}"
+    );
 }
 
 #[test]
 fn independent_historical_lock_migration_requires_proven_legacy_contract() {
     for missing in [true, false] {
-        let repo = historical_lock_repository("unproven-legacy-lock", historical_lock_config(true), false);
+        let repo =
+            historical_lock_repository("unproven-legacy-lock", historical_lock_config(true), false);
         if missing {
             fs::remove_file(repo.0.join(".codex/bridgeforge-version.json")).unwrap();
         } else {
-            fs::write(repo.0.join(".codex/bridgeforge-version.json"), b"{\"schema_version\":99}").unwrap();
+            fs::write(
+                repo.0.join(".codex/bridgeforge-version.json"),
+                b"{\"schema_version\":99}",
+            )
+            .unwrap();
         }
         fs::write(repo.0.join("strategy/Cargo.lock"), strategy_lock(true)).unwrap();
         git_ok(&repo.0, &["add", "."]);
-        git_ok(&repo.0, &["commit", "-m", "fix: unproven historical configuration"]);
+        git_ok(
+            &repo.0,
+            &["commit", "-m", "fix: unproven historical configuration"],
+        );
         fs::write(repo.0.join("strategy/Cargo.lock"), strategy_lock(false)).unwrap();
         write_independent_lock_config(&repo);
-        let error = schema4::fixture::migrate(&repo.0,&SystemProcessRunner).unwrap_err();
+        let error = schema4::fixture::migrate(&repo.0, &SystemProcessRunner).unwrap_err();
         if missing {
             assert!(error.contains("strategy/Cargo.lock: local package native has missing, ambiguous, or stale version"), "{error}");
         } else {
@@ -830,76 +1190,214 @@ fn independent_historical_lock_migration_requires_proven_legacy_contract() {
 fn independent_historical_lock_migration_respects_auto_and_member_manifest_scope() {
     // The automatic legacy contract manages only root manifests, not every
     // nested workspace that independent release later registers.
-    let repo = historical_lock_repository("auto-legacy-lock", json!({
-        "schema_version":1,"manifest_policy":"auto","release_policy":"explicit_release"
-    }), true);
+    let repo = historical_lock_repository(
+        "auto-legacy-lock",
+        json!({
+            "schema_version":1,"manifest_policy":"auto","release_policy":"explicit_release"
+        }),
+        true,
+    );
     fs::write(repo.0.join("strategy/Cargo.lock"), strategy_lock(false)).unwrap();
     write_independent_lock_config(&repo);
-    assert!(schema4::fixture::migrate(&repo.0,&SystemProcessRunner).is_ok());
+    assert!(schema4::fixture::migrate(&repo.0, &SystemProcessRunner).is_ok());
 
     // Explicitly managing a member also keeps its containing root's lock
     // strict, even when the root manifest itself was not in the legacy list.
     let cfg = rust::RustConfig {
-        workspaces: vec!["Cargo.toml".into()], dependency_bump: "patch".into(),
-        shared_inputs: vec![], product_inputs: vec![],
+        workspaces: vec!["Cargo.toml".into()],
+        dependency_bump: "patch".into(),
+        shared_inputs: vec![],
+        product_inputs: vec![],
     };
     let files = BTreeMap::from([
-        ("Cargo.toml", b"[workspace]\nmembers=['member']\n".as_slice()),
-        ("member/Cargo.toml", b"[package]\nname='member'\nversion='1.0.0'\n".as_slice()),
-        ("Cargo.lock", b"version=4\n[[package]]\nname='member'\nversion='0.9.0'\n".as_slice()),
+        (
+            "Cargo.toml",
+            b"[workspace]\nmembers=['member']\n".as_slice(),
+        ),
+        (
+            "member/Cargo.toml",
+            b"[package]\nname='member'\nversion='1.0.0'\n".as_slice(),
+        ),
+        (
+            "Cargo.lock",
+            b"version=4\n[[package]]\nname='member'\nversion='0.9.0'\n".as_slice(),
+        ),
     ]);
     let inventory = files.keys().map(|p| p.to_string()).collect::<Vec<_>>();
     let mut read = |path: &str| Ok(files.get(path).map(|b| b.to_vec()));
-    let error = rust::load_legacy_history(&cfg, &inventory,
-        &BTreeSet::from(["member/Cargo.toml".into()]), &mut read).unwrap_err();
-    assert!(error.contains("Cargo.lock: local package member has missing, ambiguous, or stale version"), "{error}");
-    assert!(rust::load_legacy_history(&cfg, &inventory,
-        &BTreeSet::from(["unrelated/Cargo.toml".into()]), &mut read).is_ok());
+    let error = rust::load_legacy_history(
+        &cfg,
+        &inventory,
+        &BTreeSet::from(["member/Cargo.toml".into()]),
+        &mut read,
+    )
+    .unwrap_err();
+    assert!(
+        error.contains("Cargo.lock: local package member has missing, ambiguous, or stale version"),
+        "{error}"
+    );
+    assert!(
+        rust::load_legacy_history(
+            &cfg,
+            &inventory,
+            &BTreeSet::from(["unrelated/Cargo.toml".into()]),
+            &mut read
+        )
+        .is_ok()
+    );
 }
 
 #[test]
-fn schema4_plan_collects_actual_changes_and_rejects_apply_drift(){
-    let repo=independent_repository("schema4-drift",false);migrate_fixture(&repo);
-    fs::write(repo.0.join("app/src/lib.rs"),b"pub fn value() -> u32 { 8 }\n").unwrap();
-    fs::write(repo.0.join("idle/src/lib.rs"),b"pub fn value() -> u32 { 9 }\n").unwrap();
-    let p=fixture_plan(&repo,"patch",&[]).unwrap().unwrap();assert_eq!(p.package_changes.len(),2);
-    fs::write(repo.0.join("idle/src/lib.rs"),b"pub fn value() -> u32 { 10 }\n").unwrap();
-    assert!(apply_file_release_plan(&p).unwrap_err().contains("changed concurrently"));
-    assert_eq!(fs::read(repo.0.join("VERSION")).unwrap(),b"1.0.0\n");
+fn schema4_plan_collects_actual_changes_and_rejects_apply_drift() {
+    let repo = independent_repository("schema4-drift", false);
+    migrate_fixture(&repo);
+    fs::write(
+        repo.0.join("app/src/lib.rs"),
+        b"pub fn value() -> u32 { 8 }\n",
+    )
+    .unwrap();
+    fs::write(
+        repo.0.join("idle/src/lib.rs"),
+        b"pub fn value() -> u32 { 9 }\n",
+    )
+    .unwrap();
+    let p = fixture_plan(&repo, "patch", &[]).unwrap().unwrap();
+    assert_eq!(p.package_changes.len(), 2);
+    fs::write(
+        repo.0.join("idle/src/lib.rs"),
+        b"pub fn value() -> u32 { 10 }\n",
+    )
+    .unwrap();
+    assert!(
+        apply_file_release_plan(&p)
+            .unwrap_err()
+            .contains("changed concurrently")
+    );
+    assert_eq!(fs::read(repo.0.join("VERSION")).unwrap(), b"1.0.0\n");
 }
 
 #[test]
-fn schema4_legacy_release_entrances_are_retired_without_writes(){
-    for schema in [1,2]{let repo=if schema==1{explicit_repository("retired")}else{independent_repository("retired",false)};
-        let index=fs::read(repo.0.join(".git/index")).unwrap();
-        for error in [build_explicit_release_plan(&repo.0,"fix: retired",vec![],&SystemProcessRunner).unwrap_err(),build_file_release_plan(&repo.0,"fix: retired",vec!["business.txt".into()],&SystemProcessRunner).unwrap_err()]{assert!(error.contains("schema 4 migration"),"{error}");}
-        assert_eq!(fs::read(repo.0.join(".git/index")).unwrap(),index);
+fn schema4_legacy_release_entrances_are_retired_without_writes() {
+    for schema in [1, 2] {
+        let repo = if schema == 1 {
+            explicit_repository("retired")
+        } else {
+            independent_repository("retired", false)
+        };
+        let index = fs::read(repo.0.join(".git/index")).unwrap();
+        for error in [
+            build_explicit_release_plan(&repo.0, "fix: retired", vec![], &SystemProcessRunner)
+                .unwrap_err(),
+            build_file_release_plan(
+                &repo.0,
+                "fix: retired",
+                vec!["business.txt".into()],
+                &SystemProcessRunner,
+            )
+            .unwrap_err(),
+        ] {
+            assert!(error.contains("schema 4 migration"), "{error}");
+        }
+        assert_eq!(fs::read(repo.0.join(".git/index")).unwrap(), index);
     }
 }
 
 #[test]
-fn schema4_final_analysis_controls_level_not_commit_titles(){
-    for (level,expected) in [("patch","1.47.12"),("minor","1.48.0"),("major","2.0.0")]{
-        let repo=explicit_repository(level);history_commit(&repo,b"one\n","feat!: temporary feature");history_commit(&repo,b"two\n","unclassified title");migrate_fixture(&repo);
-        let index=fs::read(repo.0.join(".git/index")).unwrap();let p=fixture_plan(&repo,level,&[]).unwrap().unwrap();assert_eq!(p.new_version.to_string(),expected);assert_eq!(fs::read(repo.0.join(".git/index")).unwrap(),index);
-        for name in ["Cargo.toml","Cargo.lock"]{assert!(String::from_utf8_lossy(&p.writes[&repo.0.join(name)]).contains(expected));}
-        apply_file_release_plan(&p).unwrap();git_ok(&repo.0,&["add","."]);git_ok(&repo.0,&["commit","-m","chore: release"]);assert!(fixture_plan(&repo,"major",&[]).unwrap().is_none());
+fn schema4_final_analysis_controls_level_not_commit_titles() {
+    for (level, expected) in [
+        ("patch", "1.47.12"),
+        ("minor", "1.48.0"),
+        ("major", "2.0.0"),
+    ] {
+        let repo = explicit_repository(level);
+        history_commit(&repo, b"one\n", "feat!: temporary feature");
+        history_commit(&repo, b"two\n", "unclassified title");
+        migrate_fixture(&repo);
+        let index = fs::read(repo.0.join(".git/index")).unwrap();
+        let p = fixture_plan(&repo, level, &[]).unwrap().unwrap();
+        assert_eq!(p.new_version.to_string(), expected);
+        assert_eq!(fs::read(repo.0.join(".git/index")).unwrap(), index);
+        for name in ["Cargo.toml", "Cargo.lock"] {
+            assert!(String::from_utf8_lossy(&p.writes[&repo.0.join(name)]).contains(expected));
+        }
+        apply_file_release_plan(&p).unwrap();
+        git_ok(&repo.0, &["add", "."]);
+        git_ok(&repo.0, &["commit", "-m", "chore: release"]);
+        assert!(fixture_plan(&repo, "major", &[]).unwrap().is_none());
     }
 }
 
 #[test]
-fn schema4_migration_rejects_manual_version_shallow_and_invalid_formal_history(){
-    let repo=explicit_repository("manual-version");fs::write(repo.0.join("VERSION"),b"9.0.0\n").unwrap();let p=schema4::migration_plan(&repo.0,&SystemProcessRunner,None);assert!(p.stderr.contains("VERSION differs"),"{}",p.stderr);
-    fs::write(repo.0.join("VERSION"),b"1.47.11\n").unwrap();let oid=history::git(&repo.0,&SystemProcessRunner,&["rev-parse","HEAD"]).unwrap();fs::write(repo.0.join(".git/shallow"),oid).unwrap();assert!(schema4::migration_plan(&repo.0,&SystemProcessRunner,None).stderr.contains("complete Git history"));
-    for mode in ["missing-notes","wrong-native","decrease","invalid","delete"]{
-        let repo=explicit_repository(mode);if mode=="delete"{git_ok(&repo.0,&["rm","VERSION"]);}else{fs::write(repo.0.join("VERSION"),match mode{"decrease"=>"1.47.10\n","invalid"=>"invalid\n",_=>"1.48.0\n"}).unwrap();}
-        if mode=="wrong-native"{fs::write(repo.0.join("CHANGELOG.md"),b"# Changelog\n\n## [1.48.0]\n").unwrap();}
-        git_ok(&repo.0,&["add","."]);git_ok(&repo.0,&["commit","-m","chore: invalid boundary"]);let result=schema4::migration_plan(&repo.0,&SystemProcessRunner,None);assert_ne!(result.code,0,"{mode}");
+fn schema4_migration_rejects_manual_version_shallow_and_invalid_formal_history() {
+    let repo = explicit_repository("manual-version");
+    fs::write(repo.0.join("VERSION"), b"9.0.0\n").unwrap();
+    let p = schema4::migration_plan(&repo.0, &SystemProcessRunner, None);
+    assert!(p.stderr.contains("VERSION differs"), "{}", p.stderr);
+    fs::write(repo.0.join("VERSION"), b"1.47.11\n").unwrap();
+    let oid = history::git(&repo.0, &SystemProcessRunner, &["rev-parse", "HEAD"]).unwrap();
+    fs::write(repo.0.join(".git/shallow"), oid).unwrap();
+    assert!(
+        schema4::migration_plan(&repo.0, &SystemProcessRunner, None)
+            .stderr
+            .contains("complete Git history")
+    );
+    for mode in [
+        "missing-notes",
+        "wrong-native",
+        "decrease",
+        "invalid",
+        "delete",
+    ] {
+        let repo = explicit_repository(mode);
+        if mode == "delete" {
+            git_ok(&repo.0, &["rm", "VERSION"]);
+        } else {
+            fs::write(
+                repo.0.join("VERSION"),
+                match mode {
+                    "decrease" => "1.47.10\n",
+                    "invalid" => "invalid\n",
+                    _ => "1.48.0\n",
+                },
+            )
+            .unwrap();
+        }
+        if mode == "wrong-native" {
+            fs::write(repo.0.join("CHANGELOG.md"), b"# Changelog\n\n## [1.48.0]\n").unwrap();
+        }
+        git_ok(&repo.0, &["add", "."]);
+        git_ok(&repo.0, &["commit", "-m", "chore: invalid boundary"]);
+        let result = schema4::migration_plan(&repo.0, &SystemProcessRunner, None);
+        assert_ne!(result.code, 0, "{mode}");
     }
 }
 
 #[test]
-fn schema4_merges_use_final_difference_and_keep_version_formatting_a_noop(){
-    let repo=explicit_repository("merge");git_ok(&repo.0,&["checkout","-b","feature"]);history_commit(&repo,b"feature\n","feat: side feature");git_ok(&repo.0,&["checkout","-"]);fs::write(repo.0.join("main.txt"),b"main\n").unwrap();git_ok(&repo.0,&["add","."]);git_ok(&repo.0,&["commit","-m","fix: main"]);git_ok(&repo.0,&["merge","--no-ff","feature","-m","merge business"]);migrate_fixture(&repo);assert_eq!(fixture_plan(&repo,"patch",&[]).unwrap().unwrap().new_version.to_string(),"1.47.12");
-    let repo=explicit_repository("formatting");fs::write(repo.0.join("VERSION"),b" 1.47.11\n\n").unwrap();git_ok(&repo.0,&["add","."]);git_ok(&repo.0,&["commit","-m","docs: formatting"]);migrate_fixture(&repo);assert!(fixture_plan(&repo,"patch",&[]).unwrap().is_none());
+fn schema4_merges_use_final_difference_and_keep_version_formatting_a_noop() {
+    let repo = explicit_repository("merge");
+    git_ok(&repo.0, &["checkout", "-b", "feature"]);
+    history_commit(&repo, b"feature\n", "feat: side feature");
+    git_ok(&repo.0, &["checkout", "-"]);
+    fs::write(repo.0.join("main.txt"), b"main\n").unwrap();
+    git_ok(&repo.0, &["add", "."]);
+    git_ok(&repo.0, &["commit", "-m", "fix: main"]);
+    git_ok(
+        &repo.0,
+        &["merge", "--no-ff", "feature", "-m", "merge business"],
+    );
+    migrate_fixture(&repo);
+    assert_eq!(
+        fixture_plan(&repo, "patch", &[])
+            .unwrap()
+            .unwrap()
+            .new_version
+            .to_string(),
+        "1.47.12"
+    );
+    let repo = explicit_repository("formatting");
+    fs::write(repo.0.join("VERSION"), b" 1.47.11\n\n").unwrap();
+    git_ok(&repo.0, &["add", "."]);
+    git_ok(&repo.0, &["commit", "-m", "docs: formatting"]);
+    migrate_fixture(&repo);
+    assert!(fixture_plan(&repo, "patch", &[]).unwrap().is_none());
 }

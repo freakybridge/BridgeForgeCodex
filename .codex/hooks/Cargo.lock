@@ -42,19 +42,74 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "36f64beae40a84da1b4b26ff2761a5b895c12adc41dc25aaee1c4f2bbfe97a6e"
 
 [[package]]
-name = "bridgeforge-cli"
-version = "6.0.0"
+name = "bridgeforge-checks"
+version = "0.1.0"
 dependencies = [
  "bridgeforge-core",
+ "bridgeforge-skeleton",
+ "chrono",
+ "regex",
+ "serde",
  "serde_json",
+ "sha2",
+ "toml_edit",
+ "walkdir",
+]
+
+[[package]]
+name = "bridgeforge-cli"
+version = "7.0.0"
+dependencies = [
+ "bridgeforge-checks",
+ "bridgeforge-core",
+ "bridgeforge-lifecycle",
+ "bridgeforge-memory",
+ "bridgeforge-skeleton",
+ "bridgeforge-workflow",
+ "serde_json",
+ "toml_edit",
 ]
 
 [[package]]
 name = "bridgeforge-core"
-version = "6.0.0"
+version = "7.0.1"
 dependencies = [
  "chrono",
  "libc",
+ "regex",
+ "serde",
+ "serde_json",
+ "sha2",
+ "toml_edit",
+ "walkdir",
+ "windows-sys",
+]
+
+[[package]]
+name = "bridgeforge-hook"
+version = "7.0.0"
+dependencies = [
+ "bridgeforge-checks",
+ "bridgeforge-core",
+ "bridgeforge-lifecycle",
+ "bridgeforge-memory",
+ "bridgeforge-skeleton",
+ "bridgeforge-workflow",
+ "chrono",
+ "regex",
+ "serde_json",
+ "sha1",
+ "sha2",
+ "walkdir",
+]
+
+[[package]]
+name = "bridgeforge-lifecycle"
+version = "0.1.0"
+dependencies = [
+ "bridgeforge-core",
+ "bridgeforge-skeleton",
+ "chrono",
  "pep440_rs",
  "pep508_rs",
  "regex",
@@ -64,19 +119,45 @@ dependencies = [
  "syn 2.0.119",
  "toml_edit",
  "walkdir",
- "windows-sys",
 ]
 
 [[package]]
-name = "bridgeforge-hook"
-version = "6.0.0"
+name = "bridgeforge-memory"
+version = "0.1.0"
 dependencies = [
  "bridgeforge-core",
  "chrono",
  "regex",
  "serde",
  "serde_json",
- "sha1",
+ "sha2",
+ "toml_edit",
+ "walkdir",
+ "windows-sys",
+]
+
+[[package]]
+name = "bridgeforge-skeleton"
+version = "0.1.0"
+dependencies = [
+ "bridgeforge-core",
+ "regex",
+ "serde",
+ "serde_json",
+ "sha2",
+ "toml_edit",
+]
+
+[[package]]
+name = "bridgeforge-workflow"
+version = "0.1.0"
+dependencies = [
+ "bridgeforge-checks",
+ "bridgeforge-core",
+ "bridgeforge-lifecycle",
+ "bridgeforge-skeleton",
+ "serde",
+ "serde_json",
  "sha2",
  "walkdir",
 ]

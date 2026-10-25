@@ -9,7 +9,7 @@ Codex 原生 `~/.codex/memories/` 由 Codex 官方机制生成和注入。Bridge
 
 Agent 的只读分析与同步器职责分开：`$summary` 检索相关记忆后阅读命中正文，必要时追溯
 历史记录，再结合当前上下文和现行约束提出 Rule / Hook / AGENTS.md 建议。流程以
-[`summary` 的记忆阅读与建议流程](../../../skills/summary/references/deep-steps.md)为准；
+[`summary` 的记忆阅读与建议流程](../../../templates/skills/summary/references/deep-steps.md)为准；
 它不修改原生 Memory，也不因提出建议而自动修改项目约束。
 
 项目 `.codex/memory/` 不属于本架构。新骨架不得创建、注入、检索或写入项目 Memory；下游

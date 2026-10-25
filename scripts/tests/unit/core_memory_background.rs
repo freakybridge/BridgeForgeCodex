@@ -1,3 +1,6 @@
+#[path = "../support/factory_root.rs"]
+mod factory_repository;
+
 use super::*;
 use std::fs::{self, OpenOptions};
 use std::os::windows::fs::OpenOptionsExt;
@@ -68,10 +71,7 @@ fn background_does_not_inherit_extra_handles_and_preserves_native_contract() {
     ));
     fs::create_dir_all(&folder).unwrap();
     let binary = folder.join("worker probe.exe");
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .ancestors()
-        .nth(4)
-        .unwrap();
+    let root = factory_repository::from_manifest_dir(env!("CARGO_MANIFEST_DIR"));
     let built = Command::new("rustc")
         .arg(root.join("scripts/tests/fixtures/native_memory_background_probe.rs"))
         .arg("-o")

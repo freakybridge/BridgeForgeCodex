@@ -6,7 +6,7 @@
 
 ## 1. 版本对象与来源
 
-- 根 `VERSION` 表达主程序整体发布；`product_manifests` 是它的原生载体，不是独立子包。
+- 根 `VERSION` 表达主程序整体发布；`product_manifests` 用于整 workspace 的原生产品映射，`product_packages` 显式登记混合 Rust workspace 内跟随主程序的载体，不作为独立子包。
 - 所有项目自有子包须登记稳定 id、原生包名、语言、输入归属和唯一版本来源；普通目录不自动视为包，第三方依赖和骨架工具不登记为项目业务子包。不新增全仓库漏登记扫描硬闸，已有归属检查不放宽。
 - 子包允许版本不同。已有 Rust/Python 适配边界保留，其他语言不能仅靠文档宣称自动支持。
 - 语义版本采用 MAJOR.MINOR.PATCH，高位递增时低位归零；已发布版本不得覆盖、复用、倒退。Python 特殊版本保留 PEP 440 原生语义；不支持自动计算的格式必须由适配器明确处理，不猜测转换。
@@ -68,6 +68,10 @@ release 依据正式发布以来的累计实际影响判定主程序目标；不
 ## 6. 机器入口与配置
 
 schema 4 保留 `release_model=product-packages`、原生适配和不可移动的发布基线。通过已有 `git-sync --migration-plan/--migration-apply --setup-config-file ...` 配置提案登记 `development`，不在提案中填写 `baseline`。已有 schema 4 只补项目自己的检查合同，不重新切分历史，不认证未发布内容。配置提案必须按项目实际入口填写；骨架升级不猜造业务检查。
+
+同一个 Rust workspace 混合独立库和产品 CLI/Hook 时，在 `packages` 登记独立身份，在 `product_packages` 登记产品载体；载体源码必须有显式产品输入归属。独立包不得继承产品版本或依赖产品载体。不把混合 workspace 整体填入 `product_manifests`，以免同步独立包。产品载体可保留 `version.workspace=true`。
+
+旧原生包首次纳入独立管理、此前没有登记身份时，可通过提案的 `package_adoptions` 声明当前首次分配的 id、不可变来源 revision、原生版本和 source 身份。程序从紧邻首次登记的 Git revision 重建真实 Cargo workspace 与锁，核验名称、语言、版本和历史连续性；此声明不表示历史已经登记，也不能替代 split/move 等已有身份生命周期。不可伪造旧版本、冒领产品/退役身份、挑更早的方便版本，或删除/改写已纳管的来源声明。原发布 baseline 保持不变。
 
 `development` 以包的稳定 id 为键；每包必须有非空 `checks`。检查使用 `program`、`args`、可选 `timeout_seconds`（默认 300，范围 1–14400）、`inputs`（包输入之外的验证脚本、夹具或验收数据）和 `artifacts`（需核验的最终产物路径）。必要验证输入必须纳入包归属或 checks.inputs；受 Git 跟踪的产物须声明为 build_inputs。`stability` 可选，包含非空 `contracts` 文件列表与 `checks`；稳定检查至少分别声明 `kind=core` 和 `kind=integration`，后者必须是实际调用方或使用场景。命令从项目根执行，退出码 0 且未超时才通过，缺失输入或产物不算通过。Python 仍须配置 `python_environment` 的解释器、运行时及依赖目录。
 

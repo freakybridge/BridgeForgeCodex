@@ -111,8 +111,8 @@ mod tests {
     }
 
     #[test]
-    fn rust_source_is_identical_in_template_and_dogfood() {
-        let template = files(&root().join("templates/hooks"));
+    fn rust_source_is_identical_in_public_projection_and_dogfood() {
+        let template = bridgeforge_core::source_projection::render(&root(),true).unwrap();
         let dogfood = files(&root().join(".codex/hooks"));
         let changed = template
             .keys()
@@ -129,10 +129,10 @@ mod tests {
     fn windows_subsystem_is_split_between_cli_and_hook() {
         let repository = root();
         let cli = fs::read_to_string(
-            repository.join("templates/hooks/crates/bridgeforge-cli/src/main.rs"),
+            repository.join("source/cli/src/main.rs"),
         )
         .unwrap();
-        let hook = fs::read_to_string(repository.join("templates/hooks/src/main.rs")).unwrap();
+        let hook = fs::read_to_string(repository.join("source/hook/src/main.rs")).unwrap();
         assert!(
             !cli.contains("windows_subsystem"),
             "bridgeforge CLI must remain a console application"
@@ -219,7 +219,7 @@ mod tests {
         )
         .unwrap();
 
-        let error = bridgeforge_core::baseline::verify(project, None, true).unwrap_err();
+        let error = bridgeforge_skeleton::baseline::verify(project, None, true).unwrap_err();
         assert!(error.contains("generated asset receipt drifted"), "{error}");
     }
 
@@ -283,7 +283,7 @@ mod tests {
             fs::write(project.join("templates/hooks.json"), &payload).unwrap();
             fs::write(project.join(".codex/hooks.json"), &payload).unwrap();
             if round > 0 {
-                let error = bridgeforge_core::baseline::verify(project, None, false).unwrap_err();
+                let error = bridgeforge_skeleton::baseline::verify(project, None, false).unwrap_err();
                 let expected = if round == 1 {
                     "matcher drifted"
                 } else {
@@ -292,13 +292,13 @@ mod tests {
                 assert!(error.contains(expected), "{error}");
             }
             let before = files(project);
-            let rebuilt = bridgeforge_core::manifest::render_managed_contract(project).unwrap();
+            let rebuilt = bridgeforge_factory::manifest::render_managed_contract(project).unwrap();
             assert_eq!(files(project), before, "render must not write files");
             fs::write(&source_contract, &rebuilt).unwrap();
             fs::write(&active_contract, &rebuilt).unwrap();
-            bridgeforge_core::baseline::verify(project, None, false).unwrap();
+            bridgeforge_skeleton::baseline::verify(project, None, false).unwrap();
             assert_eq!(
-                bridgeforge_core::manifest::render_managed_contract(project).unwrap(),
+                bridgeforge_factory::manifest::render_managed_contract(project).unwrap(),
                 rebuilt,
                 "projection must be deterministic"
             );
@@ -314,7 +314,7 @@ mod tests {
         )
         .unwrap();
         let before = files(project);
-        let error = bridgeforge_core::manifest::render_managed_contract(project).unwrap_err();
+        let error = bridgeforge_factory::manifest::render_managed_contract(project).unwrap_err();
         assert!(error.contains("handler is duplicated"), "{error}");
         assert_eq!(
             files(project),
@@ -326,7 +326,7 @@ mod tests {
     #[test]
     fn managed_manifests_are_current_and_python_free() {
         let repository = root();
-        assert!(!bridgeforge_core::manifest::rebuild(&repository, true).unwrap());
+        assert!(!bridgeforge_factory::manifest::rebuild(&repository, true).unwrap());
         let contract =
             fs::read_to_string(repository.join("templates/managed-skeleton.json")).unwrap();
         assert!(!contract.contains(".py\""));
@@ -335,7 +335,7 @@ mod tests {
         let distribution:serde_json::Value=serde_json::from_slice(&fs::read(repository.join("bridgeforge-codex-manifest.json")).unwrap()).unwrap();
         for platform in distribution["platforms"].as_object().unwrap().values() {
             let skill=platform["skills"].as_array().unwrap().iter().find(|s|s["name"]=="git-sync").unwrap();
-            assert!(skill["files"].as_array().unwrap().iter().any(|f|f["source"]=="skills/git-sync/references/first-use.md" && f["target"]=="references/first-use.md"),"first-use reference must be shipped with git-sync");
+            assert!(skill["files"].as_array().unwrap().iter().any(|f|f["source"]=="templates/skills/git-sync/references/first-use.md" && f["target"]=="references/first-use.md"),"first-use reference must be shipped with git-sync");
         }
     }
 
@@ -377,7 +377,7 @@ mod tests {
     #[test]
     fn proposal_and_factory_structure_have_rust_validators() {
         let repository = root();
-        let proposal = bridgeforge_core::proposal_contract::validate(
+        let proposal = bridgeforge_factory::proposal_contract::validate(
             &repository.join("doc/2_bugs/BUG-agents-ia/proposal"),
         );
         assert!(proposal.healthy, "{:?}", proposal.issues);
@@ -392,7 +392,7 @@ mod tests {
     #[test]
     fn active_skills_do_not_invoke_retired_python_entries() {
         let repository = root();
-        for base in [repository.join("skills"), repository.join(".codex/skills")] {
+        for base in [repository.join("templates/skills"), repository.join(".codex/skills")] {
             for (path, payload) in files(&base) {
                 if !path.ends_with(".md") {
                     continue;

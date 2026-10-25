@@ -7,8 +7,8 @@
 
 bridgeforge-codex 只维护 Codex 协作骨架：
 
-- `templates/` 是下游公共骨架的唯一来源；
-- `skills/` 是用户级通用 Skill 的唯一来源；
+- `source/` 是 Rust 唯一维护源，公共八包经生成器投影到下游 `.codex/hooks/source/`；
+- `templates/` 保存下游公共骨架资产，`templates/skills/` 是用户级通用 Skill 的唯一来源；
 - `scripts/` 只放工厂发布、同步和校验工具；
 - `.codex/` 是工厂自身的 dogfood 投影，不是第二份产品源。
 
@@ -58,7 +58,7 @@ Markdown `paths:` 不是 Codex 的自动指令路由机制。项目不得建立�
 
 旧文件名在 latest rebuild 事务内删除并最终只写当前戳。双戳、非法戳和高于当前产品的版本仍然阻断。
 
-当前合同未覆盖的旧文件不能依据旧 manifest 或旧 hash 自动删除。同步器只执行用户按精确路径确认的保留/删除决定；未决定时不写入。Rule / Memory 使用逐源迁移包。
+当前合同未覆盖的旧文件不能依据旧 manifest 或旧 hash 自动删除。同步器只执行用户按精确路径确认的保留/删除决定；未决定时不写入。旧 Rule／项目 Memory 的语义迁移已退役：兼容更新保留，重建按普通项目自有资产处理。
 
 ## 5. 事务与失败边界
 

@@ -1,3 +1,6 @@
+#[path = "../support/factory_root.rs"]
+mod factory_repository;
+
 use super::*;
 use crate::ProcessRequest;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -35,7 +38,7 @@ fn r05_render_asset_preserves_strategy_bytes_and_disk_snapshot() {
         }
         let asset = json!({"id":"fixture", "source":"source.txt", "target":"target.txt",
             "strategy":strategy, "region":{"begin":"BEGIN", "end":"END"}});
-        let (rendered, before) = render_asset(&root, &root, &asset, None, false).unwrap();
+        let (rendered, before) = render_asset(&root, &root, &asset, false).unwrap();
         assert_eq!(rendered, expected, "{strategy}");
         assert_eq!(before.as_deref(), current, "{strategy}");
         assert_eq!(fs::read(&target).ok().as_deref(), current);
@@ -44,7 +47,7 @@ fn r05_render_asset_preserves_strategy_bytes_and_disk_snapshot() {
 }
 
 #[test]
-fn r05_render_asset_migration_and_special_policy_precedence() {
+fn r05_render_asset_special_policy_precedence() {
     let (root, _) = transaction_fixture(true);
     let source = root.join("source.txt");
     let target = root.join("target.txt");
@@ -52,22 +55,13 @@ fn r05_render_asset_migration_and_special_policy_precedence() {
     fs::write(&target, b"disk\r\n").unwrap();
     let mut asset =
         json!({"id":"fixture", "source":"source.txt", "target":"target.txt", "strategy":"seed"});
-    let (rendered, before) = render_asset(&root, &root, &asset, Some(b"migration"), false).unwrap();
-    assert_eq!(rendered, b"migration");
-    assert_eq!(before.as_deref(), Some(b"disk\r\n".as_slice()));
-    fs::remove_file(&target).unwrap();
-    assert_eq!(
-        render_asset(&root, &root, &asset, Some(b"migration"), false).unwrap(),
-        (b"migration".to_vec(), None)
-    );
-
     // AGENTS zones take precedence over both seed and the Hook merge policy.
     asset["agents_zones"] = json!({"project":{"begin":"BEGIN", "end":"END"}});
     asset["merge_policy"] = json!("codex-hooks");
     fs::write(&source, b"public-new\nBEGIN\ndefault\nEND\n").unwrap();
     fs::write(&target, b"public-old\nBEGIN\ncustom\r\nEND\n").unwrap();
     assert_eq!(
-        render_asset(&root, &root, &asset, None, false).unwrap().0,
+        render_asset(&root, &root, &asset, false).unwrap().0,
         b"public-new\nBEGIN\ncustom\r\nEND\n"
     );
 
@@ -76,7 +70,7 @@ fn r05_render_asset_migration_and_special_policy_precedence() {
     fs::write(&source, b"## Managed\nnew\n").unwrap();
     fs::write(&target, b"## Managed\nold\n## Custom\nkeep\n").unwrap();
     assert_eq!(
-        render_asset(&root, &root, &asset, None, false).unwrap().0,
+        render_asset(&root, &root, &asset, false).unwrap().0,
         b"## Managed\nnew\n## Custom\nkeep\n"
     );
 
@@ -84,20 +78,17 @@ fn r05_render_asset_migration_and_special_policy_precedence() {
     fs::write(&source, b"{\"hooks\":{}}").unwrap();
     fs::write(&target, b"{\"hooks\":{},\"custom\":true}").unwrap();
     assert_eq!(
-        render_asset(&root, &root, &asset, None, false).unwrap().0,
+        render_asset(&root, &root, &asset, false).unwrap().0,
         b"{\n  \"hooks\": {},\n  \"custom\": true\n}\n"
     );
 
     asset["strategy"] = json!("merge");
     asset["merge_policy"] = json!("git-attributes-default-lf");
     fs::write(&target, b"custom -text").unwrap();
-    let merged = render_asset(&root, &root, &asset, None, false).unwrap().0;
+    let merged = render_asset(&root, &root, &asset, false).unwrap().0;
     assert_eq!(merged, b"custom -text\n* text=auto eol=lf\n");
     fs::write(&target, &merged).unwrap();
-    assert_eq!(
-        render_asset(&root, &root, &asset, None, false).unwrap().0,
-        merged
-    );
+    assert_eq!(render_asset(&root, &root, &asset, false).unwrap().0, merged);
     fs::remove_dir_all(root).unwrap();
 }
 
@@ -110,28 +101,28 @@ fn r05_render_asset_retains_rendering_and_failure_order() {
         "strategy":"whole", "render":"project-name"});
     fs::write(&source, b"{{PROJECT_NAME}}\r\n").unwrap();
     assert_eq!(
-        render_asset(&root, &root, &asset, None, false).unwrap().0,
+        render_asset(&root, &root, &asset, false).unwrap().0,
         format!("{}\r\n", root.file_name().unwrap().to_str().unwrap()).into_bytes()
     );
     fs::write(&source, [0xff]).unwrap();
     assert_eq!(
-        render_asset(&root, &root, &asset, None, false).unwrap_err(),
+        render_asset(&root, &root, &asset, false).unwrap_err(),
         "asset \"fixture\" render source is not UTF-8"
     );
     asset["strategy"] = json!("seed");
     fs::write(&target, b"keep").unwrap();
     assert_eq!(
-        render_asset(&root, &root, &asset, None, false).unwrap().0,
+        render_asset(&root, &root, &asset, false).unwrap().0,
         b"keep"
     );
     asset["strategy"] = json!("unknown");
     assert_eq!(
-        render_asset(&root, &root, &asset, None, false).unwrap_err(),
+        render_asset(&root, &root, &asset, false).unwrap_err(),
         "unsupported asset strategy: fixture: unknown"
     );
     fs::remove_file(&source).unwrap();
     assert!(
-        render_asset(&root, &root, &asset, None, false)
+        render_asset(&root, &root, &asset, false)
             .unwrap_err()
             .starts_with("cannot read asset source source.txt:")
     );
@@ -173,23 +164,119 @@ fn upgrade_fixture(previous: &str, release: &str) -> (PathBuf, PathBuf, PathBuf)
 }
 
 #[test]
+fn retired_legacy_assets_use_project_preservation_without_semantic_migration() {
+    for previous in ["1.8.5", "1.8.6"] {
+        let (root, project, factory) = upgrade_fixture(previous, "2.0.0");
+        let paths = [
+            ".codex/rules/old.md",
+            ".codex/memory/old.md",
+            ".codex/memory/MEMORY.md",
+        ];
+        for path in paths {
+            fs::create_dir_all(project.join(path).parent().unwrap()).unwrap();
+            fs::write(project.join(path), [0xff, 0, 1]).unwrap();
+        }
+        let plan = build_plan(&project, &factory, SyncMode::Update).unwrap();
+        let serialized = serde_json::to_value(&plan).unwrap();
+        assert!(serialized.get("asset_migration").is_none());
+        let plan = if previous == "1.8.5" {
+            assert!(!plan.gaps.is_empty() || !plan.blockers.is_empty());
+            let fingerprint = plan.aggregate_fingerprint.clone();
+            assert!(apply_plan(plan, &fingerprint, true).is_err());
+            assert!(!project.join(".runtime").exists());
+            let choices =
+                json!({"preserve":paths.map(|p| format!("P:project-file:{p}")),"delete":[]});
+            build_plan_with_inputs(&project, &factory, SyncMode::Update, Some(&choices)).unwrap()
+        } else {
+            plan
+        };
+        let fingerprint = plan.aggregate_fingerprint.clone();
+        let receipt = apply_plan(plan, &fingerprint, true).unwrap();
+        assert!(
+            serde_json::to_value(receipt)
+                .unwrap()
+                .get("asset_migration_manifest_sha256")
+                .is_none()
+        );
+        for path in paths {
+            assert_eq!(fs::read(project.join(path)).unwrap(), [0xff, 0, 1]);
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[test]
+fn retired_legacy_asset_explicit_delete_keeps_drift_and_rollback_guards() {
+    for drift in [false, true] {
+        let (root, project, factory) = upgrade_fixture("1.8.5", "2.0.0");
+        let relative = ".codex/rules/old.md";
+        let path = project.join(relative);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, b"original\r\n").unwrap();
+        let choices = json!({"preserve":[], "delete":[format!("P:project-file:{relative}")]});
+        let plan =
+            build_plan_with_inputs(&project, &factory, SyncMode::Update, Some(&choices)).unwrap();
+        let fingerprint = plan.aggregate_fingerprint.clone();
+        if drift {
+            fs::write(&path, b"external").unwrap();
+        }
+        let fail = |_: &Path, _: &Path| Err("retirement rollback probe".to_string());
+        assert!(apply_plan_internal(plan, &fingerprint, true, Some(&fail)).is_err());
+        assert_eq!(
+            fs::read(&path).unwrap(),
+            if drift {
+                b"external".as_slice()
+            } else {
+                b"original\r\n".as_slice()
+            }
+        );
+        assert_eq!(
+            fs::read_to_string(project.join(".codex/.bridgeforge_codex_version")).unwrap(),
+            "1.8.5\n"
+        );
+        assert!(!project.join("managed.txt").exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+    let (root, project, factory) = upgrade_fixture("1.8.5", "2.0.0");
+    fs::create_dir_all(project.join(".codex/memory")).unwrap();
+    fs::write(project.join(".codex/memory/old.md"), b"old").unwrap();
+    let choices = json!({"preserve":[], "delete":["P:project-file:.codex/memory/old.md"]});
+    let plan =
+        build_plan_with_inputs(&project, &factory, SyncMode::Update, Some(&choices)).unwrap();
+    let fingerprint = plan.aggregate_fingerprint.clone();
+    apply_plan(plan, &fingerprint, true).unwrap();
+    assert!(!project.join(".codex/memory/old.md").exists());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn release_cutover_is_atomic_with_project_update_and_rejects_input_drift() {
     for scenario in ["success", "file-drift", "head-drift", "rollback"] {
         let (root, project, factory) = upgrade_fixture("1.8.6", "1.8.7");
         let contract_path = factory.join("templates/managed-skeleton.json");
-        let mut contract: Value = serde_json::from_slice(&fs::read(&contract_path).unwrap()).unwrap();
+        let mut contract: Value =
+            serde_json::from_slice(&fs::read(&contract_path).unwrap()).unwrap();
         contract["release_model"] = json!("product-packages");
         fs::write(&contract_path, serde_json::to_vec(&contract).unwrap()).unwrap();
         let config_path = project.join(".codex/bridgeforge-version.json");
-        let original = br#"{"schema_version":1,"release_policy":"explicit_release","manifest_policy":"auto"}"#;
+        let original =
+            br#"{"schema_version":1,"release_policy":"explicit_release","manifest_policy":"auto"}"#;
         fs::write(&config_path, original).unwrap();
         fs::write(project.join("VERSION"), b"1.0.0\n").unwrap();
         fs::write(project.join("CHANGELOG.md"), b"# Changelog\n").unwrap();
         fs::write(project.join(".gitignore"), b".runtime/\n").unwrap();
         fs::write(project.join("app.txt"), b"before\n").unwrap();
         let git = |args: &[&str]| {
-            let output = std::process::Command::new("git").args(args).current_dir(&project).output().unwrap();
-            assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+            let output = std::process::Command::new("git")
+                .args(args)
+                .current_dir(&project)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
         };
         git(&["init"]);
         git(&["config", "user.name", "Fixture"]);
@@ -206,7 +293,12 @@ fn release_cutover_is_atomic_with_project_update_and_rejects_input_drift() {
             git(&["commit", "--allow-empty", "-m", "chore: concurrent commit"]);
         }
         let result = if scenario == "rollback" {
-            apply_plan_internal(plan.clone(), &plan.aggregate_fingerprint, true, Some(&|_, _| Err("injected failure".into())))
+            apply_plan_internal(
+                plan.clone(),
+                &plan.aggregate_fingerprint,
+                true,
+                Some(&|_, _| Err("injected failure".into())),
+            )
         } else {
             apply_plan(plan.clone(), &plan.aggregate_fingerprint, true)
         };
@@ -223,7 +315,10 @@ fn release_cutover_is_atomic_with_project_update_and_rejects_input_drift() {
         } else {
             assert!(result.is_err(), "{scenario}");
             assert_eq!(fs::read(&config_path).unwrap(), original);
-            assert_eq!(fs::read(project.join(".codex/.bridgeforge_codex_version")).unwrap(), b"1.8.6\n");
+            assert_eq!(
+                fs::read(project.join(".codex/.bridgeforge_codex_version")).unwrap(),
+                b"1.8.6\n"
+            );
         }
         fs::remove_dir_all(root).unwrap();
     }
@@ -298,7 +393,9 @@ fn upgrade_keeps_skeleton_ready_and_preserves_project_release_checks() {
         assert_eq!(plan.readiness, "ready");
         assert!(!plan.confirmation_required);
         assert!(plan.gaps.is_empty());
-        let expected = "not-required";
+        // This fixture has VERSION but no product-packages configuration.
+        // Skeleton updates must preserve that release-setup gap, not certify it.
+        let expected = "migration-required";
         assert_eq!(plan.release_setup["status"], expected);
         assert!(!plan.safe.iter().any(|action| action.target == ".codex/development-checks.json"));
         assert_eq!(fs::read(&config).ok().as_deref(), payload);
@@ -323,17 +420,37 @@ fn artifact_layout_policy_remains_project_owned_during_update_and_dry_plan() {
     let bytes = b"{\r\n  \"schema\": 1, \"source_roots\": [\"custom-src/\"]\r\n}\r\n";
     fs::write(&path, bytes).unwrap();
     let plan = build_plan(&project, &factory, SyncMode::Update).unwrap();
-    assert_eq!(fs::read(&path).unwrap(), bytes, "planning must be zero-write");
-    assert!(!plan.safe.iter().chain(plan.risk.iter()).any(|a| a.target == ".codex/artifact-layout.json"));
+    assert_eq!(
+        fs::read(&path).unwrap(),
+        bytes,
+        "planning must be zero-write"
+    );
+    assert!(
+        !plan
+            .safe
+            .iter()
+            .chain(plan.risk.iter())
+            .any(|a| a.target == ".codex/artifact-layout.json")
+    );
     let fingerprint = plan.aggregate_fingerprint.clone();
     apply_plan(plan, &fingerprint, false).unwrap();
-    assert_eq!(fs::read(&path).unwrap(), bytes, "upgrade must preserve policy bytes");
+    assert_eq!(
+        fs::read(&path).unwrap(),
+        bytes,
+        "upgrade must preserve policy bytes"
+    );
     fs::remove_file(&path).unwrap();
     let plan = build_plan(&project, &factory, SyncMode::Update).unwrap();
     let fingerprint = plan.aggregate_fingerprint.clone();
-    assert!(!path.exists(), "planning must not seed default policy files");
+    assert!(
+        !path.exists(),
+        "planning must not seed default policy files"
+    );
     apply_plan(plan, &fingerprint, false).unwrap();
-    assert!(!path.exists(), "defaults must work without creating project policy");
+    assert!(
+        !path.exists(),
+        "defaults must work without creating project policy"
+    );
     fs::remove_dir_all(root).unwrap();
 }
 
@@ -628,126 +745,6 @@ fn retired_role_is_restored_on_failure_and_late_references_are_preserved() {
     }
 }
 
-fn confirmed_sources(project: &Path) -> Value {
-    let sources = crate::asset_migration::scan_sources(project).unwrap();
-    json!({"schema_version":1,"sources":sources.iter().enumerate().map(|(index, source)| {
-        json!({"asset_id":source.asset_id,"source_path":source.source_path,
-            "source_sha256":source.source_sha256,"kind":source.kind,"confirmed":true,
-            "retire_source":true,"retirement_reason":"migrated",
-            "decisions":[{"target":format!(".codex/rules/retained-{index}.rules"),
-                "asset_type":"command-rule","reason":"user confirmed exact content",
-                "target_before_sha256":null,"content_utf8":fs::read_to_string(project.join(&source.source_path)).unwrap()}],
-            "discarded":[]})
-    }).collect::<Vec<_>>()})
-}
-
-#[test]
-fn every_legacy_source_requires_confirmation_on_both_upgrade_routes() {
-    for previous in ["1.8.5", "1.8.6"] {
-        let (root, project, factory) = upgrade_fixture(previous, "1.8.7");
-        fs::create_dir_all(project.join(".codex/memory")).unwrap();
-        fs::create_dir_all(project.join(".codex/rules")).unwrap();
-        fs::write(
-            project.join(".codex/memory/one.md"),
-            b"memory knowledge\r\n",
-        )
-        .unwrap();
-        fs::write(project.join(".codex/rules/two.md"), b"rule knowledge\r\n").unwrap();
-        let before = tree_sha(&project).unwrap();
-        let plan = build_plan(&project, &factory, SyncMode::Update).unwrap();
-        assert_eq!(plan.asset_migration["source_count"], 2);
-        assert!(
-            apply_plan(plan.clone(), &plan.aggregate_fingerprint, true)
-                .unwrap_err()
-                .contains("gap")
-        );
-        assert_eq!(tree_sha(&project).unwrap(), before);
-        assert!(!project.join(".runtime").exists());
-        let manifest = confirmed_sources(&project);
-        let mut partial = manifest.clone();
-        partial["sources"].as_array_mut().unwrap().pop();
-        assert!(
-            build_plan_with_inputs(&project, &factory, SyncMode::Update, Some(&partial), None)
-                .is_err()
-        );
-        let mut unconfirmed = manifest.clone();
-        unconfirmed["sources"][0]["confirmed"] = json!(false);
-        assert!(
-            build_plan_with_inputs(
-                &project,
-                &factory,
-                SyncMode::Update,
-                Some(&unconfirmed),
-                None
-            )
-            .is_err()
-        );
-        assert_eq!(tree_sha(&project).unwrap(), before);
-        let plan =
-            build_plan_with_inputs(&project, &factory, SyncMode::Update, Some(&manifest), None)
-                .unwrap();
-        let fail = |_: &Path, _: &Path| Err("injected migration failure".into());
-        assert!(
-            apply_plan_internal(plan.clone(), &plan.aggregate_fingerprint, true, Some(&fail))
-                .unwrap_err()
-                .contains("rolled back")
-        );
-        assert_eq!(
-            fs::read(project.join(".codex/memory/one.md")).unwrap(),
-            b"memory knowledge\r\n"
-        );
-        assert_eq!(
-            fs::read(project.join(".codex/rules/two.md")).unwrap(),
-            b"rule knowledge\r\n"
-        );
-        assert!(!project.join(".codex/rules/retained-0.rules").exists());
-        apply_plan(plan.clone(), &plan.aggregate_fingerprint, true).unwrap();
-        assert!(!project.join(".codex/memory/one.md").exists());
-        assert!(!project.join(".codex/rules/two.md").exists());
-        assert_eq!(
-            fs::read(project.join(".codex/rules/retained-0.rules")).unwrap(),
-            b"memory knowledge\r\n"
-        );
-        assert_eq!(
-            fs::read(project.join(".codex/rules/retained-1.rules")).unwrap(),
-            b"rule knowledge\r\n"
-        );
-        fs::remove_dir_all(root).unwrap();
-    }
-}
-
-#[test]
-fn new_or_changed_legacy_sources_invalidate_apply_without_writing() {
-    for previous in ["1.8.5", "1.8.6"] {
-        let (root, project, factory) = upgrade_fixture(previous, "1.8.7");
-        let plan = build_plan(&project, &factory, SyncMode::Update).unwrap();
-        fs::create_dir_all(project.join(".codex/memory")).unwrap();
-        let source = project.join(".codex/memory/one.md");
-        fs::write(&source, b"knowledge").unwrap();
-        let before = tree_sha(&project).unwrap();
-        assert!(
-            apply_plan(plan.clone(), &plan.aggregate_fingerprint, true)
-                .unwrap_err()
-                .contains("sources or confirmations drifted")
-        );
-        assert_eq!(tree_sha(&project).unwrap(), before);
-        let manifest = confirmed_sources(&project);
-        let plan =
-            build_plan_with_inputs(&project, &factory, SyncMode::Update, Some(&manifest), None)
-                .unwrap();
-        fs::write(&source, b"changed knowledge").unwrap();
-        let before = tree_sha(&project).unwrap();
-        assert!(
-            build_plan_with_inputs(&project, &factory, SyncMode::Update, Some(&manifest), None)
-                .is_err()
-        );
-        assert!(apply_plan(plan.clone(), &plan.aggregate_fingerprint, true).is_err());
-        assert_eq!(tree_sha(&project).unwrap(), before);
-        assert!(!project.join(".runtime").exists());
-        fs::remove_dir_all(root).unwrap();
-    }
-}
-
 #[test]
 fn hook_removal_matches_path_boundaries_and_platform_commands() {
     let payload = json!({"hooks":{"Stop":[{"hooks":[
@@ -811,7 +808,7 @@ fn project_prefixed_files_use_exact_file_decisions_not_hook_bundles() {
     preserve_ids.push(bundle_id.into());
     let choices = json!({"preserve":preserve_ids});
     let plan =
-        build_plan_with_inputs(&project, &factory, SyncMode::Update, None, Some(&choices)).unwrap();
+        build_plan_with_inputs(&project, &factory, SyncMode::Update, Some(&choices)).unwrap();
     assert!(plan.blockers.is_empty());
     assert!(plan.gaps.is_empty());
     fs::write(project.join(targets[0]), b"concurrent edit").unwrap();
@@ -834,7 +831,7 @@ fn project_prefixed_files_use_exact_file_decisions_not_hook_bundles() {
     .unwrap();
     let choices = json!({"preserve":[bundle_id],"delete":file_ids});
     let plan =
-        build_plan_with_inputs(&project, &factory, SyncMode::Update, None, Some(&choices)).unwrap();
+        build_plan_with_inputs(&project, &factory, SyncMode::Update, Some(&choices)).unwrap();
     assert!(plan.blockers.is_empty());
     assert!(plan.gaps.is_empty());
     let fail = |_: &Path, _: &Path| Err("injected file retirement failure".into());
@@ -864,10 +861,7 @@ fn project_prefixed_files_use_exact_file_decisions_not_hook_bundles() {
 #[test]
 fn project_prefixed_file_retirement_removes_only_its_hook_registration_atomically() {
     let (root, project, factory) = upgrade_fixture("1.5.8", "1.8.7");
-    let repository = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .ancestors()
-        .nth(4)
-        .unwrap();
+    let repository = factory_repository::from_manifest_dir(env!("CARGO_MANIFEST_DIR"));
     let current: Value = serde_json::from_slice(
         &fs::read(repository.join("templates/managed-skeleton.json")).unwrap(),
     )
@@ -908,7 +902,7 @@ fn project_prefixed_file_retirement_removes_only_its_hook_registration_atomicall
     let choices = json!({"preserve":[format!("P:project-file:{kept}")],
         "delete":[format!("P:project-file:{deleted}")]});
     let plan =
-        build_plan_with_inputs(&project, &factory, SyncMode::Update, None, Some(&choices)).unwrap();
+        build_plan_with_inputs(&project, &factory, SyncMode::Update, Some(&choices)).unwrap();
     assert!(plan.blockers.is_empty());
     assert!(plan.gaps.is_empty());
     let fail = |_: &Path, _: &Path| Err("injected registration failure".into());
@@ -975,7 +969,7 @@ fn project_prefixed_junction_still_blocks_rebuild() {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    assert!(crate::memory::is_link_or_reparse(&link).unwrap());
+    assert!(crate::persistence::is_link_or_reparse(&link).unwrap());
     let plan = build_plan(&project, &factory, SyncMode::Update).unwrap();
     assert!(
         plan.blockers
@@ -1002,8 +996,8 @@ fn legacy_business_hook_bundle_is_language_neutral_and_fingerprinted() {
     assert!(plan.blockers.is_empty(), "{:?}", plan.blockers);
     assert!(!plan.gaps.is_empty());
     let decisions = json!({"preserve":["P:project-hook-bundle:.codex/hooks/project_business"]});
-    let plan = build_plan_with_inputs(&project, &factory, SyncMode::Update, None, Some(&decisions))
-        .unwrap();
+    let plan =
+        build_plan_with_inputs(&project, &factory, SyncMode::Update, Some(&decisions)).unwrap();
     assert!(plan.gaps.is_empty());
     fs::write(bundle.join("late.txt"), b"concurrent content").unwrap();
     assert!(
@@ -1011,8 +1005,8 @@ fn legacy_business_hook_bundle_is_language_neutral_and_fingerprinted() {
             .unwrap_err()
             .contains("preserved project asset drifted")
     );
-    let plan = build_plan_with_inputs(&project, &factory, SyncMode::Update, None, Some(&decisions))
-        .unwrap();
+    let plan =
+        build_plan_with_inputs(&project, &factory, SyncMode::Update, Some(&decisions)).unwrap();
     apply_plan(plan.clone(), &plan.aggregate_fingerprint, true).unwrap();
     assert_eq!(
         fs::read(bundle.join("entrypoint.py")).unwrap(),
@@ -1308,6 +1302,77 @@ fn unknown_legacy_receipt_blocks_apply_without_deletion() {
     fs::remove_dir_all(root).unwrap();
 }
 
+#[test]
+fn source_retirement_rechecks_absence_and_content_and_rolls_back_deleted_files() {
+    let (root, mut plan) = transaction_fixture(true);
+    let known = ".codex/hooks/crates/old/src/lib.rs";
+    let absent = ".codex/hooks/crates/old/src/late.rs";
+    fs::create_dir_all(root.join(known).parent().unwrap()).unwrap();
+    fs::write(root.join(known), b"published\n").unwrap();
+    let retire = json!({"retired_assets":[
+        {"id":"old.lib","target":known,"known_hashes":[sha_git(b"published\n")]},
+        {"id":"old.late","target":absent,"known_hashes":[sha_git(b"late\n")]}
+    ]});
+    source_retirement::plan(
+        &root,
+        &retire,
+        &mut plan.safe,
+        &mut plan.deletes,
+        &mut plan.gaps,
+        &mut plan.project_hook_reads,
+        plan.preservation_manifest["entries"]
+            .as_array_mut()
+            .unwrap(),
+    )
+    .unwrap();
+    let contract_path = root.join(".codex/managed-skeleton.json");
+    let mut contract: Value = serde_json::from_slice(&plan.writes[&contract_path]).unwrap();
+    contract["retired_assets"] = retire["retired_assets"].clone();
+    plan.writes
+        .insert(contract_path, serde_json::to_vec(&contract).unwrap());
+    plan.aggregate_fingerprint = plan_fingerprint(
+        &plan.mode,
+        &plan.current_version,
+        &plan.safe,
+        &plan.risk,
+        &plan.preservation_manifest,
+        &plan.generated_source_fingerprints,
+    )
+    .unwrap();
+    let fp = plan.aggregate_fingerprint.clone();
+    let observer = |root: &Path, _: &Path| {
+        assert!(!root.join(known).exists());
+        Err("injected after source retirement".into())
+    };
+    assert!(
+        apply_plan_internal(plan.clone(), &fp, false, Some(&observer))
+            .unwrap_err()
+            .contains("rolled back")
+    );
+    assert_eq!(fs::read(root.join(known)).unwrap(), b"published\n");
+    assert_eq!(fs::read(root.join("managed.txt")).unwrap(), b"old\n");
+    fs::write(root.join(known), b"external").unwrap();
+    assert!(
+        apply_plan(plan.clone(), &fp, false)
+            .unwrap_err()
+            .contains("changed after plan")
+    );
+    assert_eq!(fs::read(root.join(known)).unwrap(), b"external");
+    fs::write(root.join(known), b"published\n").unwrap();
+    fs::write(root.join(absent), b"late\n").unwrap();
+    assert!(
+        apply_plan(plan.clone(), &fp, false)
+            .unwrap_err()
+            .contains("changed after plan")
+    );
+    assert_eq!(fs::read(root.join(absent)).unwrap(), b"late\n");
+    fs::remove_file(root.join(absent)).unwrap();
+    apply_plan(plan, &fp, false).unwrap();
+    assert!(!root.join(known).exists());
+    assert_eq!(fs::read(root.join("managed.txt")).unwrap(), b"new\n");
+    fs::remove_dir_all(root).unwrap();
+}
+
 fn transaction_fixture(valid_asset_hash: bool) -> (PathBuf, SyncPlan) {
     let token = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -1379,7 +1444,6 @@ fn transaction_fixture(valid_asset_hash: bool) -> (PathBuf, SyncPlan) {
         risk: Vec::new(),
         gaps: Vec::new(),
         blockers: Vec::new(),
-        asset_migration: json!({}),
         preservation_manifest,
         confirmation_required: false,
         aggregate_fingerprint: fingerprint,

@@ -1,4 +1,4 @@
-use bridgeforge_core::project_sync::build_generated_assets;
+use bridgeforge_workflow::project_sync::build_generated_assets;
 use bridgeforge_core::{ProcessOutput, ProcessRequest, ProcessRunner};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -205,7 +205,7 @@ impl Fixture {
         )
         .unwrap();
         let contract = serde_json::from_slice(
-            &bridgeforge_core::manifest::render_managed_contract(&root).unwrap(),
+            &bridgeforge_factory::manifest::render_managed_contract(&root).unwrap(),
         )
         .unwrap();
         let fixture = Self { root, contract };

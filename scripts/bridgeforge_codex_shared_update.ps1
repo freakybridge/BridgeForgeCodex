@@ -226,6 +226,35 @@ function Assert-DirectoryContentHash {
     }
 }
 
+function Get-RustWorkspaceContentHash {
+    param([Parameter(Mandatory = $true)][string]$RepositoryRoot)
+    $records = @()
+    foreach ($relative in @('Cargo.toml', 'Cargo.lock')) {
+        $file = Join-Path $RepositoryRoot $relative
+        if (Test-ReparsePoint -Path $file) { throw "Managed workspace input is linked: $relative" }
+        $records += "$relative`n$(Get-Sha256 -Path $file)"
+    }
+    $sourceRoot = Join-Path $RepositoryRoot 'source'
+    $pendingDirectories = New-Object 'Collections.Generic.Stack[string]'
+    $pendingDirectories.Push($sourceRoot)
+    while ($pendingDirectories.Count -gt 0) {
+        $directory = $pendingDirectories.Pop()
+        if (-not (Test-Path -LiteralPath $directory -PathType Container) -or (Test-ReparsePoint -Path $directory)) {
+            throw "Managed workspace source directory is missing or is a reparse point: $directory"
+        }
+        # Walk one level at a time: recursive file enumeration may skip a
+        # junction entirely and therefore cannot prove that source is local.
+        foreach ($entry in @(Get-ChildItem -LiteralPath $directory -Force)) {
+            if (($entry.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+                throw "Managed workspace source may not be a reparse point: $($entry.FullName)"
+            }
+            if ($entry.PSIsContainer) { $pendingDirectories.Push($entry.FullName) }
+        }
+    }
+    $records += "source`n$(Get-DirectoryContentHash -Root $sourceRoot)"
+    return "sha256:$(Get-TextSha256 -Text (($records -join "`n") + "`n"))"
+}
+
 function Enter-UpdateMutex {
     param([Parameter(Mandatory = $true)][string]$UserProfile)
     $name = "Local\BridgeForgeCodex.SharedSkillUpdate.$(Get-TextSha256 -Text $UserProfile)"
@@ -1594,7 +1623,7 @@ function Get-RustCliReuseIdentity {
         if ([int]$self.schema -ne 1 -or [string]$self.name -ne 'bridgeforge' -or
             [string]$self.status -ne 'ok' -or [string]$self.version -ne $expectedVersion -or
             @($self.capabilities) -notcontains 'user-cli-reuse-v1') { return $null }
-        $result = & $Binary build-environment --source-root (Join-Path $RepositoryRoot 'templates/hooks') 2>$null
+        $result = & $Binary build-environment --source-root $RepositoryRoot 2>$null
         if ($LASTEXITCODE -ne 0) { return $null }
         $identity = ($result -join "`n") | ConvertFrom-Json
         if ([int]$identity.schema -ne 1 -or [string]$identity.status -ne 'cacheable' -or
@@ -1635,8 +1664,8 @@ function New-RustCliPlan {
         [Parameter(Mandatory = $true)][string]$OperationId,
         [switch]$KeepBuildTree
     )
-    $manifest = Join-Path $RepositoryRoot "templates\hooks\Cargo.toml"
-    $lockfile = Join-Path $RepositoryRoot "templates\hooks\Cargo.lock"
+    $manifest = Join-Path $RepositoryRoot "Cargo.toml"
+    $lockfile = Join-Path $RepositoryRoot "Cargo.lock"
     if (-not (Test-Path -LiteralPath $manifest -PathType Leaf) -or
         -not (Test-Path -LiteralPath $lockfile -PathType Leaf)) {
         throw "Managed Rust workspace is incomplete."
@@ -1696,7 +1725,7 @@ function New-RustCliPlan {
         Write-Verbose "Public CLI bootstrap unavailable: $($_.Exception.Message)"
     }
     $targetDirectory = Join-Path ([IO.Path]::GetTempPath()) "bridgeforge-cli-build-$OperationId"
-    $sourceBefore = Get-DirectoryContentHash -Root (Split-Path -Parent $manifest)
+    $sourceBefore = Get-RustWorkspaceContentHash -RepositoryRoot $RepositoryRoot
     if (Test-Path -LiteralPath $targetDirectory) {
         Remove-SafeTree -Path $targetDirectory
     }
@@ -1720,7 +1749,7 @@ function New-RustCliPlan {
         }
         throw "Managed Rust CLI build failed: $($output -join [Environment]::NewLine)"
     }
-    if ((Get-DirectoryContentHash -Root (Split-Path -Parent $manifest)) -ne $sourceBefore) {
+    if ((Get-RustWorkspaceContentHash -RepositoryRoot $RepositoryRoot) -ne $sourceBefore) {
         Remove-SafeTree -Path $targetDirectory
         throw 'Managed source changed during CLI bootstrap.'
     }

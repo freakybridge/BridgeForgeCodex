@@ -101,15 +101,31 @@ fn git(root: &Path, args: &[&str]) -> String {
 }
 
 fn fixture_development_checks(root: &Path) {
+    assert!(root.starts_with(std::env::temp_dir()) && !root.join(".git").exists(), "fixture setup requires a fresh temporary repository");
     fs::write(root.join(".codex/development-checks.json"), br#"{"schema":1,"checks":[{"id":"fixture-diff","program":"git","args":["diff","--check"],"timeout_seconds":30}]}"#).unwrap();
     // Factory build/rollback fixtures start from an already confirmed policy;
     // first-use interaction is tested through the real CLI below.
     let path=root.join(".codex/bridgeforge-version.json");
     let copied:serde_json::Value=serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
-    // Each copied fixture has its own Git history and must create its own baseline.
-    let mappings=copied.get("synchronized_manifests").or_else(||copied.get("manifests")).unwrap();
-    let config=serde_json::json!({"schema_version":1,"release_policy":"explicit_release","manifests":mappings,"git_sync_setup":{"schema":1,"confirmed":true,"selection":"current"}});
+    // Each copied fixture starts with its own native history. Preserve the
+    // mixed graph while migrating a fresh schema-3 seed; never copy the real
+    // repository's immutable baseline, adoption provenance or closure ledger.
+    let config = if copied.get("product_packages").is_some() {
+        serde_json::json!({
+            "schema_version":3,"release_policy":"explicit_release","strategy":"independent",
+            "git_sync_setup":{"schema":1,"confirmed":true,"selection":"independent"},
+            "adapters":copied["adapters"],"packages":copied["packages"],
+            "product_packages":copied["product_packages"],"product_inputs":copied["product_inputs"]
+        })
+    } else {
+        let mappings=copied.get("product_manifests").or_else(||copied.get("synchronized_manifests")).or_else(||copied.get("manifests")).expect("fixture version mappings");
+        serde_json::json!({"schema_version":1,"release_policy":"explicit_release","manifests":mappings,"git_sync_setup":{"schema":1,"confirmed":true,"selection":"current"}})
+    };
     fs::write(path,serde_json::to_vec_pretty(&config).unwrap()).unwrap();
+    let closures = root.join(".codex/package-closures.json");
+    if closures.exists() {
+        fs::remove_file(closures).unwrap();
+    }
 }
 
 #[test]
@@ -434,7 +450,7 @@ fn real_factory_cli_sync_builds_new_runtime_and_commits_through_precommit() {
         &["remote", "add", "origin", remote.to_str().unwrap()],
     );
     git(&root, &["push", "-u", "origin", "HEAD"]);
-    let old: bridgeforge_core::release::SemVer = fs::read_to_string(root.join("VERSION"))
+    let old: bridgeforge_lifecycle::release::SemVer = fs::read_to_string(root.join("VERSION"))
         .unwrap()
         .trim()
         .parse()
@@ -484,9 +500,9 @@ fn real_factory_cli_sync_builds_new_runtime_and_commits_through_precommit() {
     );
     assert_ne!(fs::read(&cli).unwrap(), original);
     assert_eq!(fs::read(root.join("README.md")).unwrap(), readme);
-    bridgeforge_core::baseline::verify(&root, None, true).unwrap();
-    bridgeforge_core::baseline::verify_index(&root, &SystemProcessRunner).unwrap();
-    assert!(!bridgeforge_core::manifest::rebuild(&root, true).unwrap());
+    bridgeforge_skeleton::baseline::verify(&root, None, true).unwrap();
+    bridgeforge_skeleton::baseline::verify_index(&root, &SystemProcessRunner).unwrap();
+    assert!(!bridgeforge_factory::manifest::rebuild(&root, true).unwrap());
     request.args = ["self-test", "--json"].iter().map(Into::into).collect();
     request.timeout = Duration::from_secs(30);
     let tested = SystemProcessRunner.run(&request).unwrap();
@@ -519,7 +535,7 @@ fn real_factory_cli_sync_builds_new_runtime_and_commits_through_precommit() {
         ),
         "0\t0"
     );
-    bridgeforge_core::baseline::verify(&root, None, true).unwrap();
+    bridgeforge_skeleton::baseline::verify(&root, None, true).unwrap();
     assert_ne!(fs::read(&hook_receipt).unwrap(), b"{}\n");
 
     let cli_modified = fs::metadata(&cli).unwrap().modified().unwrap();

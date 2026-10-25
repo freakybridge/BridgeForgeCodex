@@ -14,13 +14,13 @@ bridgeforge-codex 只支持 Windows、Rust/Cargo 1.88+ 和 Codex。Cargo 在安�
 `$git-sync`、`$git-sync release` 的能力检查之前，或需要显式刷新工具时执行：
 
 ```powershell
-cargo run --locked --release --manifest-path .codex/hooks/Cargo.toml --bin bridgeforge -- build-assets --factory --project-root .
+cargo run --locked --release --manifest-path Cargo.toml --bin bridgeforge-factory -- build-assets --factory --project-root .
 ```
 
 该入口不依赖旧 `.codex/bin/bridgeforge.exe`，不提交或发布，不安装下游骨架。
-它先校验产品源、dogfood 和派生 manifest，再核对 CLI/Hook 的源码、锁文件、配方、产物
+它先校验产品源、dogfood 和派生 manifest，再核对 CLI、Hook、工厂工具的源码、锁文件、配方、产物
 哈希、自检与收据；健康产物不改写，失效产物复用经验证的缓存或执行锁定构建。
-两种产物及收据共用安装回滚事务，并与 git-sync 共用仓库锁。输入漂移、构建失败、
+三种产物及收据共用安装回滚事务，并与 git-sync 共用仓库锁。输入漂移、构建失败、
 文件占用或安装校验失败均停止；并发外部修改保留并报告，不覆盖其他进程的文件。
 
 Cargo 引导可能产生增量构建及缓存写入，只用于已授权维护。引导产物未建立完整输入
@@ -30,13 +30,15 @@ Cargo 引导可能产生增量构建及缓存写入，只用于已授权维护�
 只读诊断使用已支持 `factory-runtime-prepare-v1` 的工具：
 
 ```powershell
-.codex/bin/bridgeforge.exe build-assets --factory --project-root . --check
+.codex/bin/bridgeforge-factory.exe build-assets --factory --project-root . --check
 ```
 
 `--check`（以及同义 `--dry-run`）不创建锁、缓存或收据，不启动 Cargo 或产物自检进程；
-它只证明当前源码/镜像与产物哈希、收据一致。缺失或旧 CLI 不支持此入口时报告检查不可用，
+它只证明当前源码/镜像与产物哈希、收据一致。缺失或旧工厂工具不支持此入口时报告检查不可用，
 不得改用 `cargo run` 声称零写入。直接绕过准备入口运行旧 EXE 仍可能使用旧程序。
 不新增拉取后构建 Hook，pre-commit 保持校验职责。下游继续使用原有受管安装升级流程。
+
+严格只读检查对 `.gitattributes` 只接受能够直接证明的默认 `* text=auto eol=lf` 规则及注释；复杂属性语法报告无法证明，不创建临时 Git 仓库兜底。普通基线核验保留完整 Git 属性语义检查。
 
 ## 首次安装
 
@@ -50,7 +52,7 @@ Cargo 引导可能产生增量构建及缓存写入，只用于已授权维护�
 2. 用锁定的 Cargo workspace 构建工厂 dogfood 工具，再安装用户级入口、通用 Skills 和统一用户指令：
 
    ```powershell
-   cargo build --locked --release --manifest-path .\templates\hooks\Cargo.toml
+   cargo build --locked --release --manifest-path .\Cargo.toml --bin bridgeforge
    & powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install-shared-skills.ps1
    ```
 
@@ -95,13 +97,11 @@ Skills 由产品管理，避免覆盖来源不明或被人工修改的 Skill 文
 - 等于或高于 `1.8.6`：兼容更新并保留项目定制；升级分界线固定，不随最新发布版本自动上移。比产品 home 更新的版本拒绝降级。
 - 已有骨架资产但无戳：受控接入；双戳或非法戳在项目写入前停止。
 
-两条升级路径都会逐文件整理 `.codex/rules/*.md` 和 `.codex/memory/**`。每个源文件展示完整迁移包并由用户确认：红线进 `AGENTS.md`，命令策略进 `.rules`，流程进 Skill，机械约束进 Hook / test，工作与设计资料进 `doc/`。`MEMORY.md`、`MEMORY_COLD.md`、`_stats.json` 逐个确认固定退役，不做语义转换。
+旧 Markdown Rule／项目 Memory 的语义迁移已经退役。`.codex/rules/*.md` 和 `.codex/memory/**` 不再生成迁移包，也不会被固定删除；兼容更新保留这些文件，低基线重建或 adopt 时按普通项目自有资产的精确路径确认保留或删除。原生 `~/.codex/memories/` 不属于本操作范围。
 
-确认必须在一次连续流程中完成，中断后不保存选择并从第一个源重来。全部确认前项目零写入；确认后的新资产、最新基线、旧 Rule / Memory 删除和验证属于同一事务，失败时完整回滚。逐文件迁移确认已经授权删除对应源，不会再弹出第二次清理确认。
+可选项目资产通过一次性 `PreservationManifest` 明确保留或删除；确认前项目零写入，不长期保存该 manifest。资产处理、最新基线及验证属于同一项目事务；可捕获失败恢复本事务能够证明归属的改动，外部编辑保留并报告未恢复项。同步器最后才写当前版本戳，`.codex/managed-skeleton.json` 只保存当次最新 schema 4 的资产归属和内容哈希。
 
-其他可选项目资产仍通过一次性 `PreservationManifest` 明确保留或删除；它和迁移 manifest 都不长期写入项目。同步器最后才写当前版本戳，`.codex/managed-skeleton.json` 只保存当次最新 schema 4 的资产归属和内容哈希。
-
-[子包开发收口与主程序发布](doc/0_architecture/design/package-version-lifecycle.md)要求 `package-development-v1`、`package-stability-v1` 和 `git-sync-development-closure-v1`。安装或骨架升级成功不等于项目已配置业务检查或完成版本收口。复用 schema 4 配置提案登记项目检查，保留原发布基线；具体入口见[版本生命周期合同](skills/git-sync/references/schema4.md)。不将未发布改动默认认证为已收口，不借安装说明自动写入真实下游。
+[子包开发收口与主程序发布](doc/0_architecture/design/package-version-lifecycle.md)要求 `package-development-v1`、`package-stability-v1` 和 `git-sync-development-closure-v1`。安装或骨架升级成功不等于项目已配置业务检查或完成版本收口。复用 schema 4 配置提案登记项目检查，保留原发布基线；具体入口见[版本生命周期合同](templates/skills/git-sync/references/schema4.md)。不将未发布改动默认认证为已收口，不借安装说明自动写入真实下游。
 
 ## 维护者协议
 

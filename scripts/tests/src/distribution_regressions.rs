@@ -1,4 +1,4 @@
-use bridgeforge_core::project_sync::{SyncMode, apply_plan, build_plan, build_plan_with_inputs};
+use bridgeforge_workflow::project_sync::{SyncMode, apply_plan, build_plan, build_plan_with_inputs};
 use bridgeforge_core::{ProcessOutput, ProcessRequest, ProcessRunner};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -140,7 +140,7 @@ fn distributed_roles_match_skill_references_and_dogfood() {
             .collect::<std::collections::BTreeSet<_>>();
         assert_eq!(actual, roles);
     }
-    let mut pending = vec![root.join("skills"), root.join(".codex/skills")];
+    let mut pending = vec![root.join("templates/skills"), root.join(".codex/skills")];
     let mut referenced = std::collections::BTreeSet::new();
     while let Some(directory) = pending.pop() {
         for entry in fs::read_dir(directory).unwrap() {
@@ -225,7 +225,7 @@ fn project_maps_are_not_fixed_managed_payloads() {
     }
     assert!(
         !root
-            .join("skills/find-doc/references/map-reminder-sop.md")
+            .join("templates/skills/find-doc/references/map-reminder-sop.md")
             .exists(),
         "manual map reminder SOP must be retired"
     );
@@ -430,7 +430,7 @@ fn doc_structure_accepts_directory_instructions() {
             &f.0.join("doc/AGENTS.md"),
             "# Documentation rules\n\n- Preserve project instructions.\n",
         );
-        let report = bridgeforge_core::project_structure::inspect(&f.0);
+        let report = bridgeforge_checks::project_structure::inspect(&f.0);
         assert!(report.errors.is_empty(), "{layout}: {report:?}");
     }
 }
@@ -452,9 +452,9 @@ fn structure_and_archive_agree_with_unfinished_independent_todos() {
     );
     let table = "| 编号 | 日期 | 内容 | 状态 | 归属 | 关联文档 |\n|---|---|---|---|---|---|\n| TODO-001 | 2026-10-11 | 后续验证 | 待验证 | 后续事项 | [来源](../1_delivery/demo/requirements_test.md) |\n";
     write(&f.0.join("doc/0_architecture/TODO-INDEX.md"), table);
-    let report = bridgeforge_core::project_structure::inspect(&f.0);
+    let report = bridgeforge_checks::project_structure::inspect(&f.0);
     assert!(report.errors.is_empty(), "{:?}", report.errors);
-    let candidates = bridgeforge_core::archive_scan::scan(&f.0).unwrap();
+    let candidates = bridgeforge_checks::archive_scan::scan(&f.0).unwrap();
     assert_eq!(candidates.len(), 1);
     assert_eq!(
         report
@@ -469,12 +469,12 @@ fn structure_and_archive_agree_with_unfinished_independent_todos() {
         table.replace("后续事项", "原需求"),
     );
     assert!(
-        bridgeforge_core::archive_scan::scan(&f.0)
+        bridgeforge_checks::archive_scan::scan(&f.0)
             .unwrap()
             .is_empty()
     );
     assert!(
-        !bridgeforge_core::project_structure::inspect(&f.0)
+        !bridgeforge_checks::project_structure::inspect(&f.0)
             .advisories
             .iter()
             .any(|item| item.code.ends_with("archive-candidate"))
@@ -499,7 +499,7 @@ fn doc_structure_rejects_unexpected_entries() {
         } else {
             write(&path, "# Unexpected document\n");
         }
-        let report = bridgeforge_core::project_structure::inspect(&f.0);
+        let report = bridgeforge_checks::project_structure::inspect(&f.0);
         assert!(
             report.errors.iter().any(|finding| {
                 finding.code == "unexpected-doc-entry" && finding.path == format!("doc/{name}")
@@ -526,7 +526,7 @@ fn knowledge_structure_accepts_old_and_new_layout_and_never_auto_archives_topics
         fs::create_dir_all(f.0.join("doc").join(layer)).unwrap();
     }
     assert!(
-        bridgeforge_core::project_structure::inspect(&f.0)
+        bridgeforge_checks::project_structure::inspect(&f.0)
             .errors
             .is_empty()
     );
@@ -535,18 +535,18 @@ fn knowledge_structure_accepts_old_and_new_layout_and_never_auto_archives_topics
         "---\nlifecycle: completed\n---\n# 2000-01-01 topic\n",
     );
     assert!(
-        bridgeforge_core::project_structure::inspect(&f.0)
+        bridgeforge_checks::project_structure::inspect(&f.0)
             .errors
             .is_empty()
     );
     assert!(
-        bridgeforge_core::archive_scan::scan(&f.0)
+        bridgeforge_checks::archive_scan::scan(&f.0)
             .unwrap()
             .is_empty()
     );
     fs::create_dir_all(f.0.join("doc/6_unknown")).unwrap();
     assert!(
-        bridgeforge_core::project_structure::inspect(&f.0)
+        bridgeforge_checks::project_structure::inspect(&f.0)
             .errors
             .iter()
             .any(|finding| finding.code == "unexpected-doc-entry")
@@ -618,102 +618,6 @@ fn knowledge_seed_initializes_and_upgrades_without_owning_topic_bytes() {
     }
 }
 
-fn knowledge_migration_fixture(f: &Fixture, invalid: bool) -> (PathBuf, PathBuf, Value) {
-    let (factory, project, mut manifest) = composite_fixture(f, invalid);
-    for decision in manifest["sources"][0]["decisions"].as_array_mut().unwrap() {
-        if decision["target"] == "doc/3_reference/migrated.md" {
-            decision["target"] = json!("doc/5_project_knowledgebase/topic/migrated.md");
-        }
-        if decision["target"] == "doc/README.md" {
-            decision["content_utf8"] = json!(decision["content_utf8"].as_str().unwrap().replace(
-                "3_reference/migrated.md",
-                "5_project_knowledgebase/topic/migrated.md"
-            ));
-        }
-    }
-    write(
-        &project.join("doc/5_project_knowledgebase/other.md"),
-        b"keep exactly\r\n",
-    );
-    (factory, project, manifest)
-}
-
-#[test]
-fn knowledge_migration_is_indexed_atomic_and_preserves_existing_topics() {
-    for invalid in [false, true] {
-        let f = Fixture::new();
-        let (factory, project, manifest) = knowledge_migration_fixture(&f, invalid);
-        let plan =
-            build_plan_with_inputs(&project, &factory, SyncMode::Adopt, Some(&manifest), None)
-                .unwrap();
-        let target = project.join("doc/5_project_knowledgebase/topic/migrated.md");
-        assert!(!target.exists());
-        let result = apply_plan(plan.clone(), &plan.aggregate_fingerprint, true);
-        if invalid {
-            assert!(result.unwrap_err().contains("rolled back"));
-            assert!(!target.exists());
-            assert!(!project.join(".codex/.bridgeforge_codex_version").exists());
-            assert!(!project.join("doc/README.md").exists());
-            assert_eq!(
-                fs::read(project.join(".codex/rules/legacy.md")).unwrap(),
-                b"legacy rule\r\n"
-            );
-        } else {
-            assert!(result.unwrap().stamp_written_last);
-            assert_eq!(fs::read(target).unwrap(), b"# migrated\n");
-            assert!(!project.join(".codex/rules/legacy.md").exists());
-            assert!(
-                fs::read_to_string(project.join("doc/README.md"))
-                    .unwrap()
-                    .contains("5_project_knowledgebase/topic/migrated.md")
-            );
-        }
-        assert_eq!(
-            fs::read(project.join("doc/5_project_knowledgebase/other.md")).unwrap(),
-            b"keep exactly\r\n"
-        );
-    }
-}
-
-#[test]
-fn knowledge_migration_rejects_unindexed_unsafe_or_unconfirmed_targets_before_writing() {
-    for case in ["index", "sibling", "traversal", "confirmation", "hash"] {
-        let f = Fixture::new();
-        let (factory, project, mut manifest) = knowledge_migration_fixture(&f, false);
-        let source = &mut manifest["sources"][0];
-        if case == "confirmation" {
-            source["confirmed"] = json!(false);
-        }
-        for decision in source["decisions"].as_array_mut().unwrap() {
-            if case == "index" && decision["target"] == "doc/README.md" {
-                decision["content_utf8"] = json!("# no index\n");
-            }
-            if decision["target"] == "doc/5_project_knowledgebase/topic/migrated.md" {
-                if case == "sibling" {
-                    decision["target"] = json!("doc/6_other/migrated.md");
-                }
-                if case == "traversal" {
-                    decision["target"] = json!("doc/5_project_knowledgebase/../../outside.md");
-                }
-                if case == "hash" {
-                    decision["target_before_sha256"] = json!(hash(b"missing"));
-                }
-            }
-        }
-        assert!(
-            build_plan_with_inputs(&project, &factory, SyncMode::Adopt, Some(&manifest), None)
-                .is_err(),
-            "{case}"
-        );
-        assert_eq!(
-            fs::read(project.join(".codex/rules/legacy.md")).unwrap(),
-            b"legacy rule\r\n"
-        );
-        assert!(!project.join("doc/README.md").exists());
-        assert!(!project.join(".codex/.bridgeforge_codex_version").exists());
-    }
-}
-
 #[test]
 fn legacy_identity_is_validated_and_retired_atomically() {
     let f = Fixture::new();
@@ -764,7 +668,7 @@ fn old_manifest_never_proves_deletion_ownership() {
     assert!(!plan.safe.iter().any(|a| a.operation == "delete"));
     let choices = json!({"preserve":["P:project-file:.codex/old.txt"],"delete":[]});
     let plan =
-        build_plan_with_inputs(&project, &factory, SyncMode::Update, None, Some(&choices)).unwrap();
+        build_plan_with_inputs(&project, &factory, SyncMode::Update, Some(&choices)).unwrap();
     let receipt = apply_plan(plan.clone(), &plan.aggregate_fingerprint, false).unwrap();
     assert_eq!(
         receipt.preserved_asset_ids,
@@ -774,163 +678,6 @@ fn old_manifest_never_proves_deletion_ownership() {
         fs::read(project.join(".codex/old.txt")).unwrap(),
         b"project data\n"
     );
-}
-
-fn composite_fixture(f: &Fixture, invalid: bool) -> (PathBuf, PathBuf, Value) {
-    let repository = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .ancestors()
-        .nth(2)
-        .unwrap();
-    let factory = f.0.join("factory");
-    let project = f.0.join("project");
-    let mut current: Value = serde_json::from_slice(
-        &fs::read(repository.join("templates/managed-skeleton.json")).unwrap(),
-    )
-    .unwrap();
-    current["assets"].as_array_mut().unwrap().retain(|a| {
-        matches!(
-            a["target"].as_str(),
-            Some("AGENTS.md" | ".codex/hooks.json" | "doc/README.md")
-        )
-    });
-    current["generated_assets"] = json!([]);
-    current["release_version"] = json!("1.8.2");
-    current["compatibility_baseline"] = json!("1.8.2");
-    let mut decisions = Vec::new();
-    for asset in current["assets"].as_array().unwrap() {
-        let source = asset["source"].as_str().unwrap();
-        let target = asset["target"].as_str().unwrap();
-        let bytes = fs::read(repository.join(source)).unwrap();
-        write(&factory.join(source), &bytes);
-        let text = String::from_utf8(bytes).unwrap();
-        let (kind, content) = match target {
-            "AGENTS.md" => (
-                "agents",
-                text.replace(
-                    "<!-- BRIDGEFORGE:PROJECT:END -->",
-                    "must preserve project rule\n<!-- BRIDGEFORGE:PROJECT:END -->",
-                )
-                .replace("## BridgeForge 公共区", "## obsolete public rule"),
-            ),
-            "doc/README.md" => (
-                "documentation",
-                format!("{text}\n[migrated](3_reference/migrated.md)\n"),
-            ),
-            _ => {
-                let mut hooks: Value = serde_json::from_str(&text).unwrap();
-                hooks["hooks"]["Stop"].as_array_mut().unwrap().push(json!({"hooks":[{"type":"command","command":"run .codex/hooks/project_sample/entrypoint.rs"}]}));
-                ("hook-registration", serde_json::to_string(&hooks).unwrap())
-            }
-        };
-        decisions.push(json!({"target":target,"asset_type":kind,"content_utf8":content,"target_before_sha256":null}));
-    }
-    decisions.push(json!({"target":"doc/3_reference/migrated.md","asset_type":"documentation","content_utf8":"# migrated\n","target_before_sha256":null}));
-    decisions.push(json!({"target":".codex/hooks/project_sample/entrypoint.rs","asset_type":"hook","content_utf8":"fn main() {}\n","target_before_sha256":null}));
-    if invalid {
-        current["assets"][0]["agents_zones"]["public"]["current_sha256"] = json!("sha256:invalid");
-    }
-    write(
-        &factory.join("templates/managed-skeleton.json"),
-        serde_json::to_vec_pretty(&current).unwrap(),
-    );
-    let source = b"legacy rule\r\n";
-    write(&project.join(".codex/rules/legacy.md"), source);
-    let manifest = json!({"schema_version":1,"sources":[{"asset_id":"legacy-rule:.codex/rules/legacy.md","source_path":".codex/rules/legacy.md","source_sha256":hash(source),"kind":"legacy-rule","confirmed":true,"retire_source":true,"decisions":decisions,"discarded":[]}]});
-    (factory, project, manifest)
-}
-
-#[test]
-fn composite_migration_preserves_project_content_and_latest_public_baseline() {
-    let f = Fixture::new();
-    let (factory, project, manifest) = composite_fixture(&f, false);
-    let plan =
-        build_plan_with_inputs(&project, &factory, SyncMode::Adopt, Some(&manifest), None).unwrap();
-    let receipt = apply_plan(plan.clone(), &plan.aggregate_fingerprint, true).unwrap();
-    assert!(receipt.asset_migration_manifest_sha256.is_some());
-    assert!(!project.join(".codex/rules/legacy.md").exists());
-    let agents = fs::read_to_string(project.join("AGENTS.md")).unwrap();
-    assert!(agents.contains("must preserve project rule"));
-    assert!(!agents.contains("obsolete public rule"));
-    let public = agents
-        .split("<!-- BRIDGEFORGE:PUBLIC:END -->")
-        .next()
-        .unwrap();
-    let template = fs::read_to_string(factory.join("templates/AGENTS.md")).unwrap();
-    let expected_public = template
-        .split("<!-- BRIDGEFORGE:PUBLIC:END -->")
-        .next()
-        .unwrap();
-    assert_eq!(
-        public.replace("\r\n", "\n"),
-        expected_public.replace("\r\n", "\n")
-    );
-    assert!(
-        fs::read_to_string(project.join("doc/README.md"))
-            .unwrap()
-            .contains("3_reference/migrated.md")
-    );
-    assert!(
-        fs::read_to_string(project.join(".codex/hooks.json"))
-            .unwrap()
-            .contains("project_sample/entrypoint.rs")
-    );
-}
-
-#[test]
-fn composite_migration_failure_restores_every_source_before_stamping() {
-    let f = Fixture::new();
-    let (factory, project, manifest) = composite_fixture(&f, true);
-    let plan =
-        build_plan_with_inputs(&project, &factory, SyncMode::Adopt, Some(&manifest), None).unwrap();
-    assert!(
-        apply_plan(plan.clone(), &plan.aggregate_fingerprint, true)
-            .unwrap_err()
-            .contains("rolled back")
-    );
-    assert_eq!(
-        fs::read(project.join(".codex/rules/legacy.md")).unwrap(),
-        b"legacy rule\r\n"
-    );
-    for path in [
-        "AGENTS.md",
-        ".codex/hooks.json",
-        "doc/README.md",
-        "doc/3_reference/migrated.md",
-        ".codex/.bridgeforge_codex_version",
-    ] {
-        assert!(!project.join(path).exists(), "{path}");
-    }
-}
-
-#[test]
-fn project_hook_registry_migration_receipt_matches_final_native_payload() {
-    let f = Fixture::new();
-    let (factory, project, mut manifest) = composite_fixture(&f, false);
-    let decision = manifest["sources"][0]["decisions"]
-        .as_array_mut()
-        .unwrap()
-        .iter_mut()
-        .find(|d| d["target"] == ".codex/hooks.json")
-        .unwrap();
-    let mut document: Value =
-        serde_json::from_str(decision["content_utf8"].as_str().unwrap()).unwrap();
-    document["bridgeforgeProjectHooks"] = json!({"schema_version":1,"hooks":[]});
-    decision["content_utf8"] = json!(document.to_string());
-    let plan =
-        build_plan_with_inputs(&project, &factory, SyncMode::Adopt, Some(&manifest), None).unwrap();
-    let target = plan.asset_migration["targets"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|t| t["target"] == ".codex/hooks.json")
-        .unwrap();
-    let expected = target["after_sha256"].as_str().unwrap().to_string();
-    apply_plan(plan.clone(), &plan.aggregate_fingerprint, true).unwrap();
-    assert_eq!(
-        hash(fs::read(project.join(".codex/hooks.json")).unwrap()),
-        expected
-    );
-    assert!(project.join(".codex/project-hooks.json").is_file());
 }
 
 #[test]
@@ -961,125 +708,8 @@ fn standalone_project_hook_registry_is_required_preserve_during_rebuild() {
 }
 
 #[test]
-fn legacy_hook_migration_accepts_explicit_standalone_registry() {
-    let f = Fixture::new();
-    let (_, project, mut manifest) = composite_fixture(&f, false);
-    let decisions = manifest["sources"][0]["decisions"].as_array_mut().unwrap();
-    let native = decisions
-        .iter_mut()
-        .find(|d| d["target"] == ".codex/hooks.json")
-        .unwrap();
-    let mut document: Value =
-        serde_json::from_str(native["content_utf8"].as_str().unwrap()).unwrap();
-    document["hooks"]["Stop"].as_array_mut().unwrap().pop();
-    native["content_utf8"] = json!(document.to_string());
-    decisions.push(json!({"target":".codex/project-hooks.json","asset_type":"hook-registration","target_before_sha256":null,"content_utf8":json!({"schema_version":1,"hooks":[{"id":"sample","events":[{"event":"Stop"}]}]}).to_string()}));
-    let validated =
-        bridgeforge_core::asset_migration::validate_manifest(&project, &manifest, &[]).unwrap();
-    assert!(
-        validated
-            .targets
-            .iter()
-            .any(|t| t.target == ".codex/project-hooks.json")
-    );
-}
-
-#[test]
-fn migration_cannot_register_a_hook_only_in_a_note() {
-    let f = Fixture::new();
-    let (factory, project, mut manifest) = composite_fixture(&f, false);
-    let decision = manifest["sources"][0]["decisions"]
-        .as_array_mut()
-        .unwrap()
-        .iter_mut()
-        .find(|d| d["target"] == ".codex/hooks.json")
-        .unwrap();
-    let mut document: Value =
-        serde_json::from_str(decision["content_utf8"].as_str().unwrap()).unwrap();
-    document["hooks"]["Stop"].as_array_mut().unwrap().pop();
-    document["note"] = json!(".codex/hooks/project_sample/entrypoint.rs");
-    decision["content_utf8"] = json!(document.to_string());
-    let error = build_plan_with_inputs(&project, &factory, SyncMode::Adopt, Some(&manifest), None)
-        .unwrap_err();
-    assert!(error.contains("not registered"));
-    assert!(project.join(".codex/rules/legacy.md").exists());
-}
-
-#[test]
-fn migrating_new_hook_does_not_resurrect_deleted_hook_registration() {
-    let f = Fixture::new();
-    let (factory, project, mut manifest) = composite_fixture(&f, false);
-    let target = ".codex/hooks/project_old/entrypoint.rs";
-    write(&project.join(target), b"fn main() {}\n");
-    let kept = ".codex/hooks/project_old_extra/entrypoint.rs";
-    write(&project.join(kept), b"fn main() {}\n");
-    let kept_handler = json!({"hooks":[{"type":"command","command":format!("run {kept}")}]});
-    let mut original: Value =
-        serde_json::from_slice(&fs::read(factory.join("templates/hooks.json")).unwrap()).unwrap();
-    let handler = json!({"hooks":[{"type":"command","command":format!("run {target}")}]});
-    original["hooks"]["Stop"]
-        .as_array_mut()
-        .unwrap()
-        .push(handler.clone());
-    original["hooks"]["Stop"]
-        .as_array_mut()
-        .unwrap()
-        .push(kept_handler.clone());
-    let bytes = serde_json::to_vec(&original).unwrap();
-    write(&project.join(".codex/hooks.json"), &bytes);
-    let decision = manifest["sources"][0]["decisions"]
-        .as_array_mut()
-        .unwrap()
-        .iter_mut()
-        .find(|d| d["target"] == ".codex/hooks.json")
-        .unwrap();
-    decision["target_before_sha256"] = json!(hash(&bytes));
-    let mut proposed: Value =
-        serde_json::from_str(decision["content_utf8"].as_str().unwrap()).unwrap();
-    proposed["hooks"]["Stop"]
-        .as_array_mut()
-        .unwrap()
-        .push(handler);
-    proposed["hooks"]["Stop"]
-        .as_array_mut()
-        .unwrap()
-        .push(kept_handler);
-    decision["content_utf8"] = json!(proposed.to_string());
-    let choices = json!({"preserve":["P:project-hook-bundle:.codex/hooks/project_old_extra"],"delete":["P:project-hook-bundle:.codex/hooks/project_old"]});
-    let plan = build_plan_with_inputs(
-        &project,
-        &factory,
-        SyncMode::Adopt,
-        Some(&manifest),
-        Some(&choices),
-    )
-    .unwrap();
-    apply_plan(plan.clone(), &plan.aggregate_fingerprint, true).unwrap();
-    assert!(!project.join(target).exists());
-    let hooks = fs::read_to_string(project.join(".codex/hooks.json")).unwrap();
-    assert!(!hooks.contains("project_old/entrypoint.rs"));
-    assert!(hooks.contains("project_old_extra/entrypoint.rs"));
-    assert!(project.join(kept).is_file());
-    assert!(!project.join(".codex/hooks/project_old").exists());
-    assert!(hooks.contains("project_sample"));
-    let manifest_path = factory.join("templates/managed-skeleton.json");
-    let mut current: Value = serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
-    current["release_version"] = json!("1.8.3");
-    write(&manifest_path, current.to_string());
-    let next = build_plan(&project, &factory, SyncMode::Update).unwrap();
-    assert_eq!(next.preservation_manifest["destructive_rebuild"], false);
-    assert!(next.blockers.is_empty(), "{:?}", next.blockers);
-    apply_plan(next.clone(), &next.aggregate_fingerprint, true).unwrap();
-    let hooks = fs::read_to_string(project.join(".codex/hooks.json")).unwrap();
-    assert!(!hooks.contains("project_old/entrypoint.rs"));
-    assert!(hooks.contains("project_old_extra/entrypoint.rs"));
-    assert!(hooks.contains("project_sample/entrypoint.rs"));
-    assert!(project.join(kept).is_file());
-}
-
-#[test]
 fn concurrent_launchers_reclaim_one_dead_worker_exactly_once() {
-    use bridgeforge_core::memory::worker::*;
+    use bridgeforge_memory::worker::*;
     let f = Fixture::new();
     write(&f.0.join("worker.json"),json!({"schemaVersion":1,"token":"dead","pid":0,"launcherPid":0,"startedUtc":"2000-01-01T00:00:00Z"}).to_string());
     let stale_queue = f.0.join("queue/reconcile.lock");
@@ -1185,7 +815,7 @@ fn product_preflight_uses_product_workspace_and_enforces_toolchain_and_lock() {
 
 #[test]
 fn lifecycle_queue_drains_events_arriving_during_sync() {
-    use bridgeforge_core::memory::worker::*;
+    use bridgeforge_memory::worker::*;
     let f = Fixture::new();
     mark_pending(&f.0, "SessionStart").unwrap();
     let WorkerReservation::Acquired(worker) = reserve_worker(&f.0).unwrap() else {
@@ -1256,7 +886,7 @@ impl ProcessRunner for CredentialRunner {
 
 #[test]
 fn git_credentials_verify_private_api_without_exposing_secrets() {
-    use bridgeforge_core::memory::MemoryRemoteClient;
+    use bridgeforge_memory::MemoryRemoteClient;
     let f = Fixture::new();
     let remote = "https://github.com/owner/bridgeforge-codex-memories";
     MemoryRemoteClient::new(&CredentialRunner { private: true })

@@ -71,16 +71,23 @@ pub(super) fn repo() -> Repo {
 }
 pub(super) fn plan(root: &Path) -> Result<Option<FileReleasePlan>, String> {
     struct ReadOnlyPreview;
-    impl ProcessRunner for ReadOnlyPreview{
-        fn run(&self,request:&ProcessRequest)->std::io::Result<crate::ProcessOutput>{
-            let index=request.cwd.join(".git/index");let before=fs::read(&index).ok();let output=SystemProcessRunner.run(request)?;assert!(fs::read(&index).ok()==before,"release inspection changed index: {:?}",request.args);Ok(output)
+    impl ProcessRunner for ReadOnlyPreview {
+        fn run(&self, request: &ProcessRequest) -> std::io::Result<crate::ProcessOutput> {
+            let index = request.cwd.join(".git/index");
+            let before = fs::read(&index).ok();
+            let output = SystemProcessRunner.run(request)?;
+            assert!(
+                fs::read(&index).ok() == before,
+                "release inspection changed index: {:?}",
+                request.args
+            );
+            Ok(output)
         }
     }
     if super::super::schema4::load(root)?.is_none() {
         super::super::schema4::fixture::migrate(root, &SystemProcessRunner)?;
     }
-    let request =
-        super::super::schema4::fixture::analysis(root, &ReadOnlyPreview, "patch", &[])?;
+    let request = super::super::schema4::fixture::analysis(root, &ReadOnlyPreview, "patch", &[])?;
     super::super::build_explicit_release_plan_with_request(
         root,
         "fix: explicit fixture repair",

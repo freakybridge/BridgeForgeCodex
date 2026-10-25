@@ -96,7 +96,7 @@ fn r06_snapshot_child() {
                 assert_eq!(files.len(), manifest.files.len());
                 assert_eq!(files.values().map(Vec::len).sum::<usize>(), total);
                 for entry in &manifest.files {
-                    assert_eq!(crate::memory::sha256_hex(&files[&entry.path]), entry.sha256);
+                    assert_eq!(crate::sha256_hex(&files[&entry.path]), entry.sha256);
                 }
                 elapsed
             }
@@ -176,7 +176,7 @@ fn r06_snapshot_baseline() {
         }
     }
     let report = json!({"schema":1,"build":"release","platform":std::env::consts::OS,
-        "arch":std::env::consts::ARCH,"binary_sha256":crate::memory::sha256_hex(&fs::read(&executable).unwrap()),
+        "arch":std::env::consts::ARCH,"binary_sha256":crate::sha256_hex(&fs::read(&executable).unwrap()),
         "sampling":"first + 1 warmup + 10 samples; no OS cache purge; construction/assertions/drop excluded",
         "cases":cases});
     atomic_write_json(&output.join("snapshot-baseline.json"), &report).unwrap();

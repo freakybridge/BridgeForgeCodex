@@ -184,8 +184,15 @@ fn write_graph(root: &Path, language: &str, graph: &[Node<'_>], events: Vec<Valu
             cfg["schema_version"] = json!(4);
             cfg["baseline"] = old["baseline"].clone();
             cfg["git_sync_setup"] = old["git_sync_setup"].clone();
-            for key in ["release_model", "product_manifests", "development", "python_environment"] {
-                if let Some(value) = old.get(key) { cfg[key] = value.clone(); }
+            for key in [
+                "release_model",
+                "product_manifests",
+                "development",
+                "python_environment",
+            ] {
+                if let Some(value) = old.get(key) {
+                    cfg[key] = value.clone();
+                }
             }
         }
     }
@@ -359,9 +366,23 @@ fn schema4_all_breaking_lifecycle_operations_require_explicit_acceptance() {
     for language in ["rust", "python"] {
         for operation in ["rename", "remove", "split", "merge"] {
             let root = lifecycle_case(language, operation, true);
-            let request=super::super::schema4::fixture::development_analysis(&root.0,&crate::SystemProcessRunner,&[],false).unwrap();
-            let result=super::super::schema4::development::preview(&root.0,&request,&crate::SystemProcessRunner);
-            assert!(result.stderr.contains("breaking lifecycle"),"{}",result.stderr);
+            let request = super::super::schema4::fixture::development_analysis(
+                &root.0,
+                &crate::SystemProcessRunner,
+                &[],
+                false,
+            )
+            .unwrap();
+            let result = super::super::schema4::development::preview(
+                &root.0,
+                &request,
+                &crate::SystemProcessRunner,
+            );
+            assert!(
+                result.stderr.contains("breaking lifecycle"),
+                "{}",
+                result.stderr
+            );
             let p = accepted_lifecycle_plan(&root.0);
             assert_eq!(p.new_version.to_string(), "2.0.0");
             finish_and_repeat(&root.0, &p);
@@ -370,12 +391,27 @@ fn schema4_all_breaking_lifecycle_operations_require_explicit_acceptance() {
 }
 
 fn accepted_lifecycle_plan(root: &Path) -> FileReleasePlan {
-    super::super::schema4::fixture::close_packages_accepted(root,&crate::SystemProcessRunner,&[],true).unwrap();
-    let request=super::super::schema4::fixture::analysis(root,&crate::SystemProcessRunner,"major",&[]).unwrap();
-    let path=root.join(request.analysis_file.as_ref().unwrap());
-    let mut value:Value=serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
-    let acceptance=json!({"fingerprint":value["fingerprint"],"scope":["product"],"reason":"fixture accepts cumulative lifecycle migration","source":"existing fixture user decision"});
-    value["product"]=json!({"level":"major","reason":"cumulative breaking lifecycle","compatibility":"breaking","acceptance":acceptance});
-    fs::write(path,serde_json::to_vec(&value).unwrap()).unwrap();
-    super::super::schema4::build(root,"feat!: accepted lifecycle",&request,&crate::SystemProcessRunner).unwrap().unwrap()
+    super::super::schema4::fixture::close_packages_accepted(
+        root,
+        &crate::SystemProcessRunner,
+        &[],
+        true,
+    )
+    .unwrap();
+    let request =
+        super::super::schema4::fixture::analysis(root, &crate::SystemProcessRunner, "major", &[])
+            .unwrap();
+    let path = root.join(request.analysis_file.as_ref().unwrap());
+    let mut value: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    let acceptance = json!({"fingerprint":value["fingerprint"],"scope":["product"],"reason":"fixture accepts cumulative lifecycle migration","source":"existing fixture user decision"});
+    value["product"] = json!({"level":"major","reason":"cumulative breaking lifecycle","compatibility":"breaking","acceptance":acceptance});
+    fs::write(path, serde_json::to_vec(&value).unwrap()).unwrap();
+    super::super::schema4::build(
+        root,
+        "feat!: accepted lifecycle",
+        &request,
+        &crate::SystemProcessRunner,
+    )
+    .unwrap()
+    .unwrap()
 }

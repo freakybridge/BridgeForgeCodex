@@ -1,5 +1,5 @@
 use super::*;
-use crate::memory::{
+use crate::{
     build_snapshot, record_conflict, record_native_memories_consent, snapshot_files, worker,
 };
 use serde_json::json;

@@ -1,28 +1,75 @@
+#[path = "../support/factory_root.rs"]
+mod factory_repository;
+
 use super::*;
 
 #[test]
+fn strict_attribute_inspection_accepts_proven_defaults_and_never_falls_back() {
+    for payload in [
+        b"# defaults\n* text=auto eol=lf\n".as_slice(),
+        b"* eol=lf text=auto\r\n",
+    ] {
+        verify_gitattributes_read_only(payload).unwrap();
+    }
+    for payload in [
+        b"# no rule\n".as_slice(),
+        b"* text=auto eol=lf\n*.bin -text\n",
+        b"* text=auto eol=lf\nnested/* -text\n",
+        b"[attr]default text=auto eol=lf\n* default\n",
+    ] {
+        assert!(verify_gitattributes_read_only(payload).is_err());
+    }
+}
+
+#[test]
 fn markdown_characterization_projection_boundaries_and_keys() {
-    assert_eq!(heading_section("前言\n## 索引\n正文\n# 尾部".as_bytes(), "## 索引").unwrap(),
-        "## 索引\n正文\n".as_bytes());
-    assert_eq!(heading_section(b"```md\n## Index\ninside\n```\n", "## Index").unwrap(),
-        b"## Index\ninside\n```\n");
-    let unicode_rows = table_rows("| K | V |\n|---|---|\n| [`标题`](文档/Ä.md) | 保留 |\n".as_bytes()).unwrap();
-    assert_eq!(unicode_rows["文档/ä.md"], "| [`标题`](文档/Ä.md) | 保留 |\n".as_bytes());
+    assert_eq!(
+        heading_section("前言\n## 索引\n正文\n# 尾部".as_bytes(), "## 索引").unwrap(),
+        "## 索引\n正文\n".as_bytes()
+    );
+    assert_eq!(
+        heading_section(b"```md\n## Index\ninside\n```\n", "## Index").unwrap(),
+        b"## Index\ninside\n```\n"
+    );
+    let unicode_rows =
+        table_rows("| K | V |\n|---|---|\n| [`标题`](文档/Ä.md) | 保留 |\n".as_bytes()).unwrap();
+    assert_eq!(
+        unicode_rows["文档/ä.md"],
+        "| [`标题`](文档/Ä.md) | 保留 |\n".as_bytes()
+    );
     for ending in ["\n", "\r\n", "\r"] {
         let text = "# Root\n## Index\nbody\n### Child\nnested\n# End\ntail".replace('\n', ending);
-        assert_eq!(heading_section(text.as_bytes(), "## Index").unwrap(),
-            b"## Index\nbody\n### Child\nnested\n");
+        assert_eq!(
+            heading_section(text.as_bytes(), "## Index").unwrap(),
+            b"## Index\nbody\n### Child\nnested\n"
+        );
     }
-    assert_eq!(heading_section(b"## Index\nlast", "## Index").unwrap(), b"## Index\nlast");
-    assert_eq!(heading_section(b"## Index\nx\n  ## Next\ny", "## Index").unwrap(), b"## Index\nx\n");
-    assert_eq!(heading_section(b"## Index\n## Index", "## Index").unwrap_err(),
-        "Markdown heading is missing or duplicated: ## Index");
-    assert_eq!(heading_section(&[0xff], "## Index").unwrap_err(), "managed Markdown is not UTF-8");
+    assert_eq!(
+        heading_section(b"## Index\nlast", "## Index").unwrap(),
+        b"## Index\nlast"
+    );
+    assert_eq!(
+        heading_section(b"## Index\nx\n  ## Next\ny", "## Index").unwrap(),
+        b"## Index\nx\n"
+    );
+    assert_eq!(
+        heading_section(b"## Index\n## Index", "## Index").unwrap_err(),
+        "Markdown heading is missing or duplicated: ## Index"
+    );
+    assert_eq!(
+        heading_section(&[0xff], "## Index").unwrap_err(),
+        "managed Markdown is not UTF-8"
+    );
     let rows = table_rows(b"| Name | Value |\n|---|---|\n| [`Label`](Target) | x |\n| [Label](Other) | y |\n| `MiXeD` | z |\n| | empty |\n").unwrap();
-    assert_eq!(rows.keys().map(String::as_str).collect::<Vec<_>>(), vec!["", "[label](other)", "mixed", "target"]);
+    assert_eq!(
+        rows.keys().map(String::as_str).collect::<Vec<_>>(),
+        vec!["", "[label](other)", "mixed", "target"]
+    );
     assert_eq!(rows["target"], b"| [`Label`](Target) | x |\n");
-    assert_eq!(table_rows(b"| K | V |\n|---|---|\n| A | x |\n| a | y |").unwrap_err(),
-        "managed Markdown table key is duplicated: a");
+    assert_eq!(
+        table_rows(b"| K | V |\n|---|---|\n| A | x |\n| a | y |").unwrap_err(),
+        "managed Markdown table key is duplicated: a"
+    );
 }
 
 #[test]
@@ -36,8 +83,13 @@ fn markdown_characterization_projection_multitable_and_hash() {
         "current_projection_sha256":canonical_sha(&expected).unwrap()
     }});
     verify_asset_payload(&asset, payload).unwrap();
-    let drifted = String::from_utf8(payload.to_vec()).unwrap().replace("managed | new", "managed | changed");
-    assert_eq!(verify_asset_payload(&asset, drifted.as_bytes()).unwrap_err(), "managed Markdown projection drifted: fixture");
+    let drifted = String::from_utf8(payload.to_vec())
+        .unwrap()
+        .replace("managed | new", "managed | changed");
+    assert_eq!(
+        verify_asset_payload(&asset, drifted.as_bytes()).unwrap_err(),
+        "managed Markdown projection drifted: fixture"
+    );
 }
 
 #[test]
@@ -123,11 +175,7 @@ fn project_hook_index_reads_package_only_from_index() {
 }
 
 fn factory_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .ancestors()
-        .nth(4)
-        .unwrap()
-        .to_path_buf()
+    factory_repository::from_manifest_dir(env!("CARGO_MANIFEST_DIR")).to_path_buf()
 }
 
 fn contract_and_asset(id: &str) -> (Value, Value) {
@@ -154,7 +202,11 @@ fn contract_schema_is_exact_and_asset_identities_are_unique() {
     contract["release_model"] = Value::String("product-packages".into());
     assert!(validate_contract(&contract).is_ok());
     contract["release_model"] = Value::String("synchronized".into());
-    assert!(validate_contract(&contract).unwrap_err().contains("release_model"));
+    assert!(
+        validate_contract(&contract)
+            .unwrap_err()
+            .contains("release_model")
+    );
     let (mut contract, _) = contract_and_asset("codex.hooks-config");
     contract["unexpected"] = Value::Bool(true);
     assert!(validate_contract(&contract).is_err());

@@ -15,6 +15,23 @@
 
 > **追溯说明**：v0.1.0 - v0.7.0 基于 git log 历史回溯标记，**git tag 仅从 v0.8.0 开始打**。早期未启用版本号管理是 setup_agent 自打脸问题（要求下游用但自己没用），v0.8.0 修补。
 
+## [7.0.0] - 2026-10-25
+
+### Changed
+
+- [product][repo][meta] 拆分源码子包并统一版本收口与分发 **BREAKING:**
+
+### Release analysis
+
+- Product: Extract the accepted nine-package source workspace, change public Rust import and build paths, relocate Skills, isolate public and factory distribution, and retire legacy semantic asset migration.
+- `checks`: unreleased -> 0.1.0 (New independent package for existing checks plus extracted instruction and encoding rules.; Revalidate unchanged package against the updated core projection dependency; no independent package implementation or interface change.)
+- `core`: 6.0.0 -> 7.0.1 (Extract former core business modules into dedicated packages; public Rust import paths and API ownership change.; Read the unchanged downstream hook ignore template from templates/hooks/.gitignore.)
+- `factory`: unreleased -> 0.1.1 (New private factory package for manifests, source projection, dogfood, runtime preparation and Git transaction adaptation.; Bind manifest generation and factory Git plans to the relocated hook ignore template; preserve asset identity and install target.)
+- `lifecycle`: unreleased -> 0.1.0 (New independent package for native package discovery, mixed version roles, provenance, development closure and release planning.; Revalidate unchanged package against the updated core projection dependency; no independent package implementation or interface change.)
+- `memory`: unreleased -> 0.1.0 (New independent package preserving native Memory synchronization, remote ownership and background worker behavior.; Revalidate unchanged package against the updated core projection dependency; no independent package implementation or interface change.)
+- `skeleton`: unreleased -> 0.1.0 (New independent package preserving skeleton baselines, merge semantics and project Hook isolation.; Revalidate unchanged package against the updated core projection dependency; no independent package implementation or interface change.)
+- `workflow`: unreleased -> 0.1.0 (New independent package preserving public Git/project synchronization, artifact preparation and retirement transactions.; Revalidate unchanged package against the updated core projection dependency; no independent package implementation or interface change.)
+
 ## [6.0.0] - 2026-10-24
 
 ### Added

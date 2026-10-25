@@ -44,6 +44,6 @@ Agent 路由不使用中央映射文件。根 `AGENTS.md` 是默认执行与委�
 | `meta_rule_design.md` | `AGENTS.md`“文件与文档管理”“骨架与 Memory”；本文档 | 保留单一事实源/可机判交 hook/说明进 doc；删除伪 path 加载模型 |
 | `bridgeforgecodex-product-change.md` | 根 `AGENTS.md` 项目专区“项目架构红线” | 工厂发布红线真正常驻，且不下沉普通项目 |
 
-## 下游退役
+## 历史语义迁移退役
 
-所有 legacy Markdown Rule 必须逐源文件读取并确认完整迁移包；禁止依据历史 hash 自动删除或改扩展名冒充命令策略。全部确认前零写入，确认后的目标与最新基线、源删除在同一可回滚事务完成；有未解决 gap 时禁止写新版本戳。
+2026-10-24 起，旧 Markdown Rule／项目 Memory 的语义迁移手册与程序已退役。上表只保留既有架构和历史归位依据，不作为自动迁移流程。旧文件兼容更新时保留，重建时按普通项目自有资产确认保留或删除，不再生成迁移目标或固定删除派生文件；不影响原生 Memory。实施与验证见[退役记录](../../1_delivery/legacy-asset-migration-retirement/requirements_2026-10-24_retirement.md)。

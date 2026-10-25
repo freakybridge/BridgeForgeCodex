@@ -22,3 +22,6 @@ __pycache__/
 # 草稿）——全是本机临时产物，含个人绝对路径（C:\Users\bridg）与 transcript 文件名，
 # 绝不可进公开库。整目录忽略，避免 spinoff/ 等新子目录漏网误提交。
 .runtime/
+
+# Cargo build output in the source workspace and generated runtime workspaces.
+target/

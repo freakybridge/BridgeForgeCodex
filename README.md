@@ -10,7 +10,7 @@ bridgeforge-codex 让 Codex 在不同项目中使用一致的基础规则、工�
 
 - 为项目安装或更新 `AGENTS.md`、`.codex/`、文档结构和提交前检查等协作设施。
 - 为用户安装 `confirm`、`develop`、`summary`、`git-sync` 等通用 Skills。
-- 每次以最新正式版为完整基线；旧 Rule / 项目 Memory 逐文件确认迁移，无法安全判断时停止，验证失败则不写入或完整回滚。
+- 每次以最新正式版为完整基线；项目自有资产按明确归属保留或确认处理，无法安全判断时停止，验证失败则不写入或回滚并报告未恢复项。
 
 bridgeforge-codex 只支持 Windows、Rust/Cargo 1.88+ 和 Codex。安装、同步、校验、Git、
 Native Memory 与受管项目 Hook 全部由 Rust 承载，不要求 Python 或项目 `.venv`。
@@ -22,7 +22,7 @@ Native Memory 与受管项目 Hook 全部由 Rust 承载，不要求 Python 或�
 ```powershell
 git clone https://github.com/freakybridge/BridgeForgeCodex.git "$env:USERPROFILE\tools\bridgeforge-codex"
 Set-Location "$env:USERPROFILE\tools\bridgeforge-codex"
-cargo build --locked --release --manifest-path .\templates\hooks\Cargo.toml
+cargo build --locked --release --manifest-path .\Cargo.toml --bin bridgeforge
 & powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install-shared-skills.ps1
 ```
 
@@ -38,7 +38,7 @@ $bridgeforge-codex
 
 普通 `$git-sync` 只提交和同步，不主动升版。已确认的新分工是：develop 完成且验证通过后升级受影响子包，程序自动判断是否进入 `1.0.0`；`$git-sync release` 核验子包均已收口，只升级主程序，并完整公告上次正式发布以来的子包版本变化。
 
-使用前核验受管 CLI 的开发收口、自动稳定与发布硬闸能力；旧能力标识不能证明支持新分工。`develop --preview/--apply` 管子包，`git-sync --release` 管主程序。规则与验证状态见[版本生命周期设计](doc/0_architecture/design/package-version-lifecycle.md)，配置和实际入口见[版本生命周期合同](skills/git-sync/references/schema4.md)；[旧 schema4 接入合同](doc/1_delivery/git-sync-release-rewrite/schema4-contract.md)仅保留历史参考。
+使用前核验受管 CLI 的开发收口、自动稳定与发布硬闸能力；旧能力标识不能证明支持新分工。`develop --preview/--apply` 管子包，`git-sync --release` 管主程序。规则与验证状态见[版本生命周期设计](doc/0_architecture/design/package-version-lifecycle.md)，配置和实际入口见[版本生命周期合同](templates/skills/git-sync/references/schema4.md)；[旧 schema4 接入合同](doc/1_delivery/git-sync-release-rewrite/schema4-contract.md)仅保留历史参考。
 
 单项目长任务或多个已讨论任务需要托管时，在该项目的新对话中输入：
 
@@ -51,9 +51,9 @@ $autopilot
 也可在 `autopilot` 后直接描述需求。Agent 汇总已有决定、预检权限与环境，与你一次确认任务包和
 整体 token 预算后，在新对话统一实施和验收。时间只作估算；原生预算达到阈值后停止，在途调用
 可能超额。默认交付本地未提交改动。需要当前客户端的对话读取与 Goal 能力；详细流程见
-[autopilot Skill](skills/autopilot/SKILL.md)。
+[autopilot Skill](templates/skills/autopilot/SKILL.md)。
 
-重构已有项目时，使用 [refactor-scan Skill](skills/refactor-scan/SKILL.md)：
+重构已有项目时，使用 [refactor-scan Skill](templates/skills/refactor-scan/SKILL.md)：
 
 ```text
 $refactor-scan 扫描当前项目，允许现有定向测试和离线性能基准，先给重构清单。
@@ -85,12 +85,12 @@ $refactor-scan 扫描当前项目，允许现有定向测试和离线性能基�
 - `.githooks/pre-commit`：执行提交前机器检查。
 - `doc/`：以 `doc/README.md` 为索引的六层文档结构，包含项目自有知识库。
 - 项目自己的嵌套 `AGENTS.md`、项目规则和明确保留的定制资产仍归项目所有。
-- 旧项目的 `.codex/rules/*.md` 与 `.codex/memory/`：不再运行；`$bridgeforge-codex` 逐文件确认后迁往正确资产并在同一事务退役旧源。
+- 旧项目的 `.codex/rules/*.md` 与 `.codex/memory/`：不再运行或语义迁移；兼容更新保留，重建时按普通项目自有资产确认保留或删除，不影响原生 Memory。
 
 ## 更新时怎样保护项目
 
 - 新项目直接安装当前骨架。
-- 已有项目直接面向最新完整基线生成计划；每个 legacy Rule / Memory 源只确认一次，确认前零写入，不会静默替用户做选择。
+- 已有项目直接面向最新完整基线生成计划；需要决定的项目资产统一展示确认，确认前项目零写入，不会静默替用户做选择。
 - 无戳空项目初始化；无戳已有资产进入受控接入。双戳、非法戳、更新期间文件漂移或最终基线验证失败时停止或回滚。
 - 同版本骨架需要修复时仍可生成计划；覆盖已有整文件资产需要确认，始终使用可信产品目录的当前基线。
 
@@ -101,10 +101,11 @@ $refactor-scan 扫描当前项目，允许现有定向测试和离线性能基�
 
 ```text
 BridgeForgeCodex/
-├── .codex/                  # 本仓库 dogfood 配置、Rust 源码与生成资产
-├── skills/bridgeforge-codex/ # $bridgeforge-codex 产品入口
-├── skills/                   # 通用 Skills
-├── templates/               # 唯一活跃下游模板根
+├── Cargo.toml / Cargo.lock  # 九个包的受管 Rust workspace
+├── source/                  # 唯一维护源码；core/skeleton/lifecycle/workflow/memory/checks/factory/cli/hook
+├── .codex/                  # 本仓库 dogfood 配置、公共源码投影与生成资产
+├── templates/               # 分发资产与通用 Skills
+│   └── skills/bridgeforge-codex/ # $bridgeforge-codex 产品入口
 ├── scripts/                 # PowerShell 用户级安装入口
 ├── doc/                     # 架构、交付、Bug、参考与归档
 ├── bridgeforge-codex-manifest.json # Codex-only 正式分发清单
@@ -112,7 +113,7 @@ BridgeForgeCodex/
 └── CHANGELOG.md
 ```
 
-`templates/`、`skills/` 属于产品层；`.codex/` 是本仓库的自用镜像；`doc/` 和 README
+`source/`、`templates/` 属于产品层；`.codex/` 是本仓库的自用镜像；`doc/` 和 README
 属于元文档。产品层变化需要同步版本、CHANGELOG、分发清单与自用镜像。
 
 ## 兼容边界

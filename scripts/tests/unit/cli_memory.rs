@@ -32,7 +32,7 @@ fn explicit_memory_parameters_cannot_bypass_consent_or_scope() {
         json!({"schema_version":1,"platform":"codex","records":{}}).to_string(),
     )
     .unwrap();
-    bridgeforge_core::memory::user_config::configure(
+    bridgeforge_memory::user_config::configure(
         &home,
         &std::env::current_exe().unwrap(),
         remote,
@@ -61,7 +61,7 @@ fn explicit_memory_parameters_cannot_bypass_consent_or_scope() {
 
 #[test]
 fn every_lifecycle_event_queues_and_reuses_worker_without_network() {
-    use bridgeforge_core::memory::{user_config, worker};
+    use bridgeforge_memory::{user_config, worker};
     let token = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
@@ -140,8 +140,7 @@ fn memory_session_start_notifies_failure_once_and_rearms_after_recovery() {
         "--codex-home".into(),
         home.display().to_string(),
     ];
-    bridgeforge_core::memory::record_health(&state, "failed", Some("network failure"), None)
-        .unwrap();
+    bridgeforge_memory::record_health(&state, "failed", Some("network failure"), None).unwrap();
     assert!(
         memory_hook_notice(&args, &state, "Stop")
             .unwrap()
@@ -167,16 +166,15 @@ fn memory_session_start_notifies_failure_once_and_rearms_after_recovery() {
         home.display().to_string(),
     ];
     assert_eq!(memory_sync(&query).receipt.unwrap()["syncHealth"], "failed");
-    bridgeforge_core::memory::record_health(&state, "healthy", None, Some("noop")).unwrap();
-    bridgeforge_core::memory::record_health(&state, "failed", Some("network failure"), None)
-        .unwrap();
+    bridgeforge_memory::record_health(&state, "healthy", None, Some("noop")).unwrap();
+    bridgeforge_memory::record_health(&state, "failed", Some("network failure"), None).unwrap();
     assert!(
         memory_hook_notice(&args, &state, "SessionStart")
             .unwrap()
             .receipt
             .is_some()
     );
-    bridgeforge_core::memory::record_health(&state, "healthy", None, Some("noop")).unwrap();
+    bridgeforge_memory::record_health(&state, "healthy", None, Some("noop")).unwrap();
     assert!(
         memory_hook_notice(&args, &state, "SessionStart")
             .unwrap()
@@ -282,11 +280,9 @@ fn memory_conflict_and_stale_pending_notices_respect_acknowledgement() {
             )
             .unwrap();
         } else {
-            let mut pending =
-                bridgeforge_core::memory::worker::mark_pending(&state, "stop").unwrap();
+            let mut pending = bridgeforge_memory::worker::mark_pending(&state, "stop").unwrap();
             pending.first_pending_utc = "2000-01-01T00:00:00Z".into();
-            bridgeforge_core::memory::atomic_write_json(&state.join("pending.json"), &pending)
-                .unwrap();
+            bridgeforge_memory::atomic_write_json(&state.join("pending.json"), &pending).unwrap();
         }
         let args = vec![
             "hook-run".into(),
@@ -315,11 +311,8 @@ fn memory_conflict_and_stale_pending_notices_respect_acknowledgement() {
         .unwrap();
         assert_eq!(status["syncHealth"], kind);
         fs::remove_file(state.join("alert-state.json")).unwrap();
-        bridgeforge_core::memory::acknowledge_alert(
-            &state,
-            status["activeAlertId"].as_str().unwrap(),
-        )
-        .unwrap();
+        bridgeforge_memory::acknowledge_alert(&state, status["activeAlertId"].as_str().unwrap())
+            .unwrap();
         assert!(
             memory_hook_notice(&args, &state, "SessionStart")
                 .unwrap()
@@ -398,7 +391,7 @@ fn memory_status_agrees_for_windows_path_separator_aliases_without_writing() {
     let home = std::env::temp_dir().join(format!("memory-cli-path-alias-{token}"));
     fs::create_dir_all(&home).unwrap();
     let binary = std::env::current_exe().unwrap();
-    let document = bridgeforge_core::memory::user_config::expected_document(&binary, &home);
+    let document = bridgeforge_memory::user_config::expected_document(&binary, &home);
     let payload = serde_json::to_vec_pretty(&document).unwrap();
     fs::write(home.join("hooks.json"), &payload).unwrap();
     let mut receipts = Vec::new();
@@ -433,8 +426,7 @@ fn memory_status_is_read_only_and_alert_remains_until_acknowledged() {
     let home = std::env::temp_dir().join(format!("bridgeforge-memory-health-{token}"));
     let state = home.join(".bridgeforge-codex/native-memory-sync");
     fs::create_dir_all(&state).unwrap();
-    bridgeforge_core::memory::record_health(&state, "failed", Some("simulated failure"), None)
-        .unwrap();
+    bridgeforge_memory::record_health(&state, "failed", Some("simulated failure"), None).unwrap();
     let args = vec![
         "memory-sync".into(),
         "status".into(),
@@ -471,30 +463,29 @@ fn memory_status_is_read_only_and_alert_remains_until_acknowledged() {
         0
     );
     assert_eq!(run(&args).receipt.as_ref().unwrap()["alertId"], Value::Null);
-    bridgeforge_core::memory::record_health(&state, "healthy", None, Some("recovered")).unwrap();
-    bridgeforge_core::memory::record_health(&state, "failed", Some("simulated failure"), None)
-        .unwrap();
+    bridgeforge_memory::record_health(&state, "healthy", None, Some("recovered")).unwrap();
+    bridgeforge_memory::record_health(&state, "failed", Some("simulated failure"), None).unwrap();
     let recurring = run(&args);
     assert!(recurring.receipt.as_ref().unwrap()["alertId"].is_string());
-    assert!(!bridgeforge_core::memory::runtime_receipt_healthy(
+    assert!(!bridgeforge_memory::runtime_receipt_healthy(
         &json!({"schema": 1})
     ));
-    assert!(bridgeforge_core::memory::runtime_receipt_healthy(&json!({
+    assert!(bridgeforge_memory::runtime_receipt_healthy(&json!({
         "schema": 1,
         "lastEvent": "SessionStart",
-        "handlerRevision": bridgeforge_core::memory::user_config::HOOK_ID,
-        "verifiedUtc": bridgeforge_core::memory::utc_now(),
+        "handlerRevision": bridgeforge_memory::user_config::HOOK_ID,
+        "verifiedUtc": bridgeforge_memory::utc_now(),
     })));
-    assert!(!bridgeforge_core::memory::runtime_receipt_healthy(&json!({
+    assert!(!bridgeforge_memory::runtime_receipt_healthy(&json!({
         "schema": 1,
         "lastEvent": "SessionStart",
         "handlerRevision": "obsolete-handler",
-        "verifiedUtc": bridgeforge_core::memory::utc_now(),
+        "verifiedUtc": bridgeforge_memory::utc_now(),
     })));
-    assert!(!bridgeforge_core::memory::runtime_receipt_healthy(&json!({
+    assert!(!bridgeforge_memory::runtime_receipt_healthy(&json!({
         "schema": 1,
         "lastEvent": "SessionStart",
-        "handlerRevision": bridgeforge_core::memory::user_config::HOOK_ID,
+        "handlerRevision": bridgeforge_memory::user_config::HOOK_ID,
         "verifiedUtc": "2000-01-01T00:00:00Z",
     })));
     fs::remove_dir_all(home).unwrap();

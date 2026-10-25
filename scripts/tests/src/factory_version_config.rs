@@ -1,4 +1,4 @@
-use bridgeforge_core::release::{apply_file_release_plan, schema4};
+use bridgeforge_lifecycle::release::{apply_file_release_plan, schema4};
 use bridgeforge_core::{ProcessOutput, ProcessRequest, ProcessRunner, SystemProcessRunner};
 use serde_json::{json, Value};
 use std::fs;
@@ -52,20 +52,11 @@ fn copy_native_manifests(source: &Path, target: &Path, directory: &Path) {
 }
 
 #[test]
-fn factory_release_updates_all_three_cargo_manifests_and_locks() {
+fn legacy_factory_release_updates_all_three_cargo_manifests_and_locks() {
     let source = factory();
-    let config = fs::read(source.join(".codex/bridgeforge-version.json")).unwrap();
-    let document: Value = serde_json::from_slice(&config).unwrap();
-    assert_eq!(document["schema_version"], 4);
-    let paths = document["synchronized_manifests"].as_array().unwrap();
-    assert_eq!(
-        paths,
-        &vec![
-            Value::from("templates/hooks/Cargo.toml"),
-            Value::from(".codex/hooks/Cargo.toml"),
-            Value::from("scripts/tests/Cargo.toml"),
-        ]
-    );
+    // Frozen pre-refactor schema-1 mapping remains a supported migration input.
+    let native = source.join("scripts/tests/fixtures/legacy-product-workspace");
+    let paths = vec![Value::from("templates/hooks/Cargo.toml"),Value::from(".codex/hooks/Cargo.toml"),Value::from("scripts/tests/Cargo.toml")];
     let root = std::env::temp_dir().join(format!(
         "bf-factory-version-{}-{}",
         std::process::id(),
@@ -88,19 +79,19 @@ fn factory_release_updates_all_three_cargo_manifests_and_locks() {
     for name in ["VERSION", "CHANGELOG.md"] {
         fs::copy(source.join(name), temp.0.join(name)).unwrap();
     }
-    for path in paths {
+    for path in &paths {
         let relative = Path::new(path.as_str().unwrap());
         fs::create_dir_all(temp.0.join(relative).parent().unwrap()).unwrap();
         for name in ["Cargo.toml", "Cargo.lock"] {
             fs::copy(
-                source.join(relative).with_file_name(name),
+                native.join(if relative.starts_with("scripts") { format!("consumer-{name}") } else {name.to_string()}),
                 temp.0.join(relative).with_file_name(name),
             )
             .unwrap();
         }
     }
     for directory in ["templates/hooks", ".codex/hooks"] {
-        copy_native_manifests(&source, &temp.0, Path::new(directory));
+        copy_native_manifests(&native, &temp.0.join(directory), Path::new("crates"));
     }
     for args in [
         vec!["init"],

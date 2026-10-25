@@ -1,11 +1,11 @@
-use bridgeforge_core::memory::ownership::{
+use bridgeforge_memory::ownership::{
     ExpectedHooksState, MANAGED_ID_KEY, canonicalize, expected_groups, hooks_file_healthy,
     load_document, managed_document_healthy, merge_hooks_file, merge_managed_document,
 };
-use bridgeforge_core::memory::worker::{
+use bridgeforge_memory::worker::{
     ReconcileLock, WorkerReservation, mark_pending, read_pending, reserve_worker,
 };
-use bridgeforge_core::memory::{
+use bridgeforge_memory::{
     atomic_write, atomic_write_json, build_snapshot, capture_manifest, managed_ledger,
     memory_files, record_conflict, snapshot_files, three_way_merge, validate_authorization,
 };

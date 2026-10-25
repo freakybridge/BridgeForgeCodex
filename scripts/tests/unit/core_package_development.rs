@@ -2,6 +2,643 @@
 use super::*;
 use std::sync::Mutex;
 
+/// The native crate predates registration and inherits version 6 from its
+/// workspace. The immutable schema-4 baseline deliberately has no packages.
+fn adoption_fixture(broken_source_lock: bool) -> Repo {
+    let r = fixture("legacy", true);
+    write(&r.0, "pkg/Cargo.toml", b"[package]\nname='a'\nversion.workspace=true\nedition='2021'\n[workspace]\n[workspace.package]\nversion='6.0.0'\n");
+    write(
+        &r.0,
+        "pkg/Cargo.lock",
+        if broken_source_lock {
+            b"version=4\n[[package]]\nname='a'\nversion='5.0.0'\n"
+        } else {
+            b"version=4\n[[package]]\nname='a'\nversion='6.0.0'\n"
+        },
+    );
+    let cfg = json!({"schema_version":3,"release_policy":"explicit_release","strategy":"independent",
+        "adapters":{},"packages":[],"product_inputs":["README.md",".gitignore"]});
+    write(&r.0, CONFIG, &serde_json::to_vec(&cfg).unwrap());
+    git(&r.0, &["add", "."]);
+    git(&r.0, &["commit", "--amend", "--no-edit"]);
+    migrate(&r.0);
+    git(&r.0, &["add", "."]);
+    git(&r.0, &["commit", "-m", "chore: empty package registry"]);
+    let revision = git(&r.0, &["rev-parse", "HEAD"]);
+    let mut cfg: Value = serde_json::from_slice(&fs::read(r.0.join(CONFIG)).unwrap()).unwrap();
+    assert_eq!(cfg["baseline"]["packages"], json!({}));
+    cfg["adapters"] = json!({"rust":{"workspaces":["Cargo.toml"]}});
+    cfg["product_inputs"] = json!([
+        "README.md",
+        ".gitignore",
+        "Cargo.toml",
+        "source/cli/",
+        "source/hook/"
+    ]);
+    cfg["package_adoptions"] = json!([{"id":"core","revision":revision,"version":"6.0.0",
+        "source":{"id":"core","language":"rust","manifest":"pkg/Cargo.toml","name":"a","workspace":"pkg/Cargo.toml"}}]);
+    cfg["packages"] = json!([]);
+    cfg["development"] = json!({});
+    let mut members = Vec::new();
+    let mut lock = String::from("version=4\n");
+    for id in ["core", "b", "c", "d", "e", "f", "g", "cli", "hook"] {
+        let name = if id == "core" { "a" } else { id };
+        let product = matches!(id, "cli" | "hook");
+        let version = if id == "core" {
+            "6.0.0"
+        } else if product {
+            "1.0.0"
+        } else {
+            "0.1.0"
+        };
+        let path = format!("source/{id}/Cargo.toml");
+        members.push(format!("'source/{id}'"));
+        let version_line = if product {
+            "version.workspace=true".into()
+        } else {
+            format!("version='{version}'")
+        };
+        write(
+            &r.0,
+            &path,
+            format!("[package]\nname='{name}'\n{version_line}\nedition='2021'\n").as_bytes(),
+        );
+        write(
+            &r.0,
+            &format!("source/{id}/src/lib.rs"),
+            b"pub fn extracted()->u8{2}\n",
+        );
+        lock.push_str(&format!(
+            "[[package]]\nname='{name}'\nversion='{version}'\n"
+        ));
+        let identity = json!({"id":id,"language":"rust","manifest":path,"name":name});
+        if !product {
+            cfg["packages"].as_array_mut().unwrap().push(identity);
+            cfg["development"][id] = policy(false);
+        }
+    }
+    cfg["product_packages"] = json!([
+        {"id":"cli","language":"rust","manifest":"source/cli/Cargo.toml","name":"cli"},
+        {"id":"hook","language":"rust","manifest":"source/hook/Cargo.toml","name":"hook"}]);
+    write(
+        &r.0,
+        "Cargo.toml",
+        format!(
+            "[workspace]\nmembers=[{}]\nresolver='2'\n[workspace.package]\nversion='1.0.0'\n",
+            members.join(",")
+        )
+        .as_bytes(),
+    );
+    write(&r.0, "Cargo.lock", lock.as_bytes());
+    for path in ["pkg/Cargo.toml", "pkg/Cargo.lock", "pkg/src/lib.rs"] {
+        fs::remove_file(r.0.join(path)).unwrap();
+    }
+    write(&r.0, CONFIG, &serde_json::to_vec(&cfg).unwrap());
+    r
+}
+
+fn adoption_request(root: &Path, runner: &dyn ProcessRunner) -> Request {
+    let q = request(root, "major", true, runner);
+    let mut analysis: Value =
+        serde_json::from_slice(&fs::read(root.join(".runtime/develop.json")).unwrap()).unwrap();
+    for id in ["b", "c", "d", "e", "f", "g"] {
+        analysis["packages"][id] = json!({"level":"patch","reason":"new independently versioned package","compatibility":"compatible"});
+    }
+    write(
+        root,
+        ".runtime/develop.json",
+        &serde_json::to_vec(&analysis).unwrap(),
+    );
+    q
+}
+
+#[test]
+fn package_adoption_native_continuity_and_new_identities_close_once() {
+    let r = adoption_fixture(false);
+    let runner = Checks::new();
+    let before: Value = serde_json::from_slice(&fs::read(r.0.join(CONFIG)).unwrap()).unwrap();
+    let mut proposal = before.clone();
+    proposal.as_object_mut().unwrap().remove("baseline");
+    write(
+        &r.0,
+        ".runtime/adoption-proposal.json",
+        &serde_json::to_vec(&proposal).unwrap(),
+    );
+    let plan = migration_plan(&r.0, &runner, Some(".runtime/adoption-proposal.json"));
+    assert_eq!(plan.code, 0, "{}", plan.stderr);
+    assert_eq!(
+        plan.receipt.unwrap()["configuration"]["baseline"],
+        before["baseline"]
+    );
+    let q = adoption_request(&r.0, &runner);
+    let closed = close(&r.0, &q, &runner);
+    assert_eq!(closed.code, 0, "{}", closed.stderr);
+    let ledger: Value =
+        serde_json::from_slice(&fs::read(r.0.join(development::RECORD)).unwrap()).unwrap();
+    let entries = ledger["entries"].as_array().unwrap();
+    assert_eq!(entries.len(), 7);
+    let core = entries.iter().find(|e| e["id"] == "core").unwrap();
+    assert_eq!(core["before"], "6.0.0");
+    assert_eq!(core["after"], "7.0.0");
+    for entry in entries.iter().filter(|e| e["id"] != "core") {
+        assert!(entry["before"].is_null());
+        assert_eq!(entry["after"], "0.1.0");
+    }
+    assert_eq!(fs::read(r.0.join("VERSION")).unwrap(), b"1.0.0\n");
+    let after: Value = serde_json::from_slice(&fs::read(r.0.join(CONFIG)).unwrap()).unwrap();
+    assert_eq!(after["baseline"], before["baseline"]);
+    for committed in [false, true] {
+        if committed {
+            git(&r.0, &["add", "."]);
+            git(
+                &r.0,
+                &[
+                    "commit",
+                    "-m",
+                    "feat!: register extracted packages with native provenance",
+                ],
+            );
+        }
+        let repeat = development::preview(&r.0, &Request::default(), &runner);
+        assert_eq!(repeat.code, 0, "{}", repeat.stderr);
+        assert_eq!(repeat.receipt.unwrap()["status"], "nothing-to-close");
+        assert_eq!(
+            fs::read(r.0.join(development::RECORD)).unwrap(),
+            serde_json::to_vec_pretty(&ledger).unwrap()
+        );
+    }
+    let q = release_request(&r.0, "major");
+    let mut analysis: Value =
+        serde_json::from_slice(&fs::read(r.0.join(".runtime/release.json")).unwrap()).unwrap();
+    analysis["product"]["compatibility"] = json!("breaking");
+    analysis["product"]["acceptance"] = json!({"fingerprint":analysis["fingerprint"],"scope":["product"],"reason":"accepted native API extraction","source":"explicit isolated fixture decision"});
+    write(
+        &r.0,
+        ".runtime/release.json",
+        &serde_json::to_vec(&analysis).unwrap(),
+    );
+    let release = build(&r.0, "feat!: product announcement", &q, &runner)
+        .unwrap()
+        .unwrap();
+    let core = release
+        .package_changes
+        .iter()
+        .find(|p| p.name == "a")
+        .unwrap();
+    assert_eq!(core.version_before, "6.0.0");
+    assert_eq!(core.version_after, "7.0.0");
+    assert_eq!(release.package_changes.len(), 7);
+    assert!(
+        !release
+            .writes
+            .contains_key(&r.0.join("source/core/Cargo.toml"))
+    );
+}
+
+#[test]
+fn package_adoption_rejects_forged_versions_duplicate_roles_and_manual_bumps() {
+    let r = adoption_fixture(false);
+    let original: Value = serde_json::from_slice(&fs::read(r.0.join(CONFIG)).unwrap()).unwrap();
+    for case in [
+        "version",
+        "duplicate",
+        "name",
+        "product",
+        "stale",
+        "unrelated",
+    ] {
+        let mut cfg = original.clone();
+        match case {
+            "version" => cfg["package_adoptions"][0]["version"] = json!("5.0.0"),
+            "duplicate" => {
+                let duplicate = cfg["package_adoptions"][0].clone();
+                cfg["package_adoptions"]
+                    .as_array_mut()
+                    .unwrap()
+                    .push(duplicate);
+            }
+            "name" => cfg["package_adoptions"][0]["source"]["name"] = json!("unrelated"),
+            "product" => {
+                cfg["package_adoptions"][0]["source"]["manifest"] = json!("source/cli/Cargo.toml")
+            }
+            "stale" => {
+                cfg["package_adoptions"][0]["revision"] = json!(git(&r.0, &["rev-parse", "HEAD^"]))
+            }
+            "unrelated" => {
+                let tree = git(&r.0, &["rev-parse", "HEAD^{tree}"]);
+                cfg["package_adoptions"][0]["revision"] =
+                    json!(git(&r.0, &["commit-tree", &tree, "-m", "unrelated root"]));
+            }
+            _ => unreachable!(),
+        }
+        write(&r.0, CONFIG, &serde_json::to_vec(&cfg).unwrap());
+        let p = development::preview(&r.0, &Request::default(), &Checks::new());
+        assert_ne!(p.code, 0, "{case}: {}", p.stdout);
+        assert!(p.stderr.contains("adoption"), "{case}: {}", p.stderr);
+        assert!(!r.0.join(development::RECORD).exists());
+    }
+    write(&r.0, CONFIG, &serde_json::to_vec(&original).unwrap());
+    let manifest = fs::read_to_string(r.0.join("source/core/Cargo.toml"))
+        .unwrap()
+        .replace("6.0.0", "7.0.0");
+    write(&r.0, "source/core/Cargo.toml", manifest.as_bytes());
+    let lock = fs::read_to_string(r.0.join("Cargo.lock"))
+        .unwrap()
+        .replace("6.0.0", "7.0.0");
+    write(&r.0, "Cargo.lock", lock.as_bytes());
+    let p = development::preview(&r.0, &Request::default(), &Checks::new());
+    assert_ne!(p.code, 0);
+    assert!(
+        p.stderr.contains("outside managed development closure"),
+        "{}",
+        p.stderr
+    );
+}
+
+#[test]
+fn package_adoption_requires_consistent_historical_lock_and_unregistered_source() {
+    let r = adoption_fixture(true);
+    let p = development::preview(&r.0, &Request::default(), &Checks::new());
+    assert_ne!(p.code, 0);
+    assert!(p.stderr.contains("lock"), "{}", p.stderr);
+    let r = fixture("independent", true);
+    let mut cfg: Value = serde_json::from_slice(&fs::read(r.0.join(CONFIG)).unwrap()).unwrap();
+    cfg["package_adoptions"] = json!([{"id":"a","revision":git(&r.0,&["rev-parse","HEAD"]),"version":"1.0.0",
+        "source":{"id":"a","name":"a","manifest":"pkg/Cargo.toml","language":"rust","workspace":"pkg/Cargo.toml"}}]);
+    write(&r.0, CONFIG, &serde_json::to_vec(&cfg).unwrap());
+    let p = development::preview(&r.0, &Request::default(), &Checks::new());
+    assert_ne!(p.code, 0);
+    assert!(p.stderr.contains("already registered"), "{}", p.stderr);
+}
+
+#[test]
+fn package_adoption_committed_provenance_cannot_be_removed_or_replaced() {
+    let r = adoption_fixture(false);
+    let runner = Checks::new();
+    let q = adoption_request(&r.0, &runner);
+    let result = close(&r.0, &q, &runner);
+    assert_eq!(result.code, 0, "{}", result.stderr);
+    git(&r.0, &["add", "."]);
+    git(&r.0, &["commit", "-m", "feat!: adopt native package"]);
+    let original: Value = serde_json::from_slice(&fs::read(r.0.join(CONFIG)).unwrap()).unwrap();
+    for remove in [true, false] {
+        let mut cfg = original.clone();
+        if remove {
+            cfg.as_object_mut().unwrap().remove("package_adoptions");
+        } else {
+            cfg["package_adoptions"][0]["version"] = json!("5.0.0");
+        }
+        write(&r.0, CONFIG, &serde_json::to_vec(&cfg).unwrap());
+        let p = development::preview(&r.0, &Request::default(), &runner);
+        assert_ne!(p.code, 0);
+        assert!(p.stderr.contains("adoption"), "{}", p.stderr);
+    }
+}
+
+#[test]
+fn package_adoption_preserves_later_managed_identity_moves() {
+    let r = adoption_fixture(false);
+    let runner = Checks::new();
+    let q = adoption_request(&r.0, &runner);
+    let result = close(&r.0, &q, &runner);
+    assert_eq!(result.code, 0, "{}", result.stderr);
+    git(&r.0, &["add", "."]);
+    git(&r.0, &["commit", "-m", "feat!: adopt native package"]);
+    fs::rename(r.0.join("source/core"), r.0.join("source/renamed")).unwrap();
+    let workspace = fs::read_to_string(r.0.join("Cargo.toml"))
+        .unwrap()
+        .replace("source/core", "source/renamed");
+    write(&r.0, "Cargo.toml", workspace.as_bytes());
+    let mut cfg: Value = serde_json::from_slice(&fs::read(r.0.join(CONFIG)).unwrap()).unwrap();
+    let from = cfg["packages"][0].clone();
+    cfg["packages"][0]["manifest"] = json!("source/renamed/Cargo.toml");
+    let to = cfg["packages"][0].clone();
+    cfg["lifecycle"] = json!([{"id":"move-core","base":cfg["baseline"]["revision"],"operation":"move","compatibility":"compatible","from":[from],"to":[to]}]);
+    write(&r.0, CONFIG, &serde_json::to_vec(&cfg).unwrap());
+    let q = request(&r.0, "patch", false, &runner);
+    let result = close(&r.0, &q, &runner);
+    assert_eq!(result.code, 0, "{}", result.stderr);
+    let ledger: Value =
+        serde_json::from_slice(&fs::read(r.0.join(development::RECORD)).unwrap()).unwrap();
+    let latest = ledger["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .rev()
+        .find(|e| e["id"] == "core")
+        .unwrap();
+    assert_eq!(latest["before"], "7.0.0");
+    assert_eq!(latest["after"], "7.0.1");
+}
+
+fn scoped_rust_build_fixture() -> Repo {
+    let r = mixed_product_repo();
+    let mut cfg: Value = serde_json::from_slice(&fs::read(r.0.join(CONFIG)).unwrap()).unwrap();
+    cfg["development"] = json!({"library":policy(false)});
+    write(&r.0, CONFIG, &serde_json::to_vec(&cfg).unwrap());
+    let manifest = fs::read_to_string(r.0.join("source/library/Cargo.toml")).unwrap();
+    write(
+        &r.0,
+        "source/library/Cargo.toml",
+        format!("{manifest}\n[dependencies]\nremote='1'\n").as_bytes(),
+    );
+    let mut lock = fs::read_to_string(r.0.join("Cargo.lock"))
+        .unwrap()
+        .parse::<toml_edit::DocumentMut>()
+        .unwrap();
+    let packages = lock["package"].as_array_of_tables_mut().unwrap();
+    let library = packages
+        .iter_mut()
+        .find(|p| p["name"].as_str() == Some("library"))
+        .unwrap();
+    let mut dependencies = toml_edit::Array::new();
+    dependencies.push("remote");
+    library["dependencies"] = toml_edit::value(dependencies);
+    for name in ["remote", "unrelated"] {
+        let mut table = toml_edit::Table::new();
+        table["name"] = toml_edit::value(name);
+        table["version"] = toml_edit::value("1.0.0");
+        table["source"] = toml_edit::value("registry+https://github.com/rust-lang/crates.io-index");
+        packages.push(table);
+    }
+    write(&r.0, "Cargo.lock", lock.to_string().as_bytes());
+    let runner = Checks::new();
+    let q = request(&r.0, "minor", false, &runner);
+    let result = close(&r.0, &q, &runner);
+    assert_eq!(result.code, 0, "{}", result.stderr);
+    r
+}
+
+fn change_locked_version(root: &Path, name: &str, version: &str) {
+    let mut lock = fs::read_to_string(root.join("Cargo.lock"))
+        .unwrap()
+        .parse::<toml_edit::DocumentMut>()
+        .unwrap();
+    let package = lock["package"]
+        .as_array_of_tables_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|p| p["name"].as_str() == Some(name))
+        .unwrap();
+    package["version"] = toml_edit::value(version);
+    write(root, "Cargo.lock", lock.to_string().as_bytes());
+}
+
+#[test]
+fn package_development_scoped_rust_build_preserves_product_release_evidence() {
+    let r = scoped_rust_build_fixture();
+    let ledger = fs::read(r.0.join(development::RECORD)).unwrap();
+    let q = release_request(&r.0, "minor");
+    let release = build(&r.0, "fix: product announcement", &q, &Checks::new())
+        .unwrap()
+        .unwrap();
+    assert_eq!(release.new_version.to_string(), "1.1.0");
+    for (path, bytes) in &release.writes {
+        fs::write(path, bytes).unwrap();
+    }
+    // A version write before the release commit remains a manual-version gate;
+    // only a committed formal release establishes the new product boundary.
+    let uncommitted = development::preview(&r.0, &Request::default(), &Checks::new());
+    assert_ne!(uncommitted.code, 0);
+    assert!(
+        uncommitted.stderr.contains("VERSION differs"),
+        "{}",
+        uncommitted.stderr
+    );
+    git(&r.0, &["add", "."]);
+    git(&r.0, &["commit", "-m", "fix: product release"]);
+    let p = development::preview(&r.0, &Request::default(), &Checks::new());
+    assert_eq!(p.code, 0, "{}", p.stderr);
+    assert_eq!(p.receipt.unwrap()["status"], "nothing-to-close");
+    assert_eq!(fs::read(r.0.join(development::RECORD)).unwrap(), ledger);
+}
+
+#[test]
+fn package_development_scoped_rust_build_revalidates_profile_and_real_dependencies() {
+    let r = scoped_rust_build_fixture();
+    let runner = Checks::new();
+    let manifest = fs::read_to_string(r.0.join("Cargo.toml")).unwrap();
+    write(
+        &r.0,
+        "Cargo.toml",
+        format!("{manifest}\n[profile.release]\nlto=true\n").as_bytes(),
+    );
+    for dependency_change in [false, true] {
+        if dependency_change {
+            change_locked_version(&r.0, "remote", "1.0.1");
+        }
+        let q = request(&r.0, "patch", false, &runner);
+        let result = close(&r.0, &q, &runner);
+        assert_eq!(result.code, 0, "{}", result.stderr);
+        let ledger = development::Ledger::load(&r.0).unwrap();
+        let entry = ledger.latest("library").unwrap();
+        assert_eq!(entry.before.as_deref(), Some("0.5.0"));
+        assert_eq!(entry.after.as_deref(), Some("0.5.0"));
+        assert_eq!(entry.level, 0);
+    }
+    assert_eq!(runner.calls.lock().unwrap().len(), 2);
+}
+
+#[test]
+fn package_development_scoped_rust_build_preserves_explicit_check_input_scope() {
+    let r = scoped_rust_build_fixture();
+    let runner = Checks::new();
+    change_locked_version(&r.0, "unrelated", "1.0.1");
+    let p = development::preview(&r.0, &Request::default(), &runner);
+    assert_eq!(p.code, 0, "{}", p.stderr);
+    assert_eq!(p.receipt.unwrap()["status"], "nothing-to-close");
+    let mut cfg: Value = serde_json::from_slice(&fs::read(r.0.join(CONFIG)).unwrap()).unwrap();
+    cfg["development"]["library"]["checks"][0]["inputs"] = json!(["Cargo.lock"]);
+    write(&r.0, CONFIG, &serde_json::to_vec(&cfg).unwrap());
+    let q = request(&r.0, "patch", false, &runner);
+    assert_eq!(close(&r.0, &q, &runner).code, 0);
+    change_locked_version(&r.0, "unrelated", "1.0.2");
+    let p = development::preview(&r.0, &Request::default(), &runner);
+    assert_eq!(p.code, 0, "{}", p.stderr);
+    assert_eq!(p.receipt.unwrap()["affected_packages"], json!(["library"]));
+}
+
+#[test]
+fn package_development_scoped_rust_build_revalidates_actual_core_consumers() {
+    let r = adoption_fixture(false);
+    let manifest = fs::read_to_string(r.0.join("source/b/Cargo.toml")).unwrap();
+    write(
+        &r.0,
+        "source/b/Cargo.toml",
+        format!("{manifest}\n[dependencies]\na={{path='../core',version='^6'}}\n").as_bytes(),
+    );
+    let mut lock = fs::read_to_string(r.0.join("Cargo.lock"))
+        .unwrap()
+        .parse::<toml_edit::DocumentMut>()
+        .unwrap();
+    let b = lock["package"]
+        .as_array_of_tables_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|p| p["name"].as_str() == Some("b"))
+        .unwrap();
+    let mut dependencies = toml_edit::Array::new();
+    dependencies.push("a");
+    b["dependencies"] = toml_edit::value(dependencies);
+    write(&r.0, "Cargo.lock", lock.to_string().as_bytes());
+    let runner = Checks::new();
+    let q = adoption_request(&r.0, &runner);
+    let result = close(&r.0, &q, &runner);
+    assert_eq!(result.code, 0, "{}", result.stderr);
+    write(
+        &r.0,
+        "source/core/src/lib.rs",
+        b"pub fn extracted()->u8{3}\n",
+    );
+    let q = request(&r.0, "patch", false, &runner);
+    let result = close(&r.0, &q, &runner);
+    assert_eq!(result.code, 0, "{}", result.stderr);
+    let ledger = development::Ledger::load(&r.0).unwrap();
+    assert_eq!(
+        ledger.latest("core").unwrap().after.as_deref(),
+        Some("7.0.1")
+    );
+    assert_eq!(ledger.latest("b").unwrap().after.as_deref(), Some("0.1.0"));
+    assert_eq!(ledger.latest("b").unwrap().level, 0);
+    for id in ["c", "d", "e", "f", "g"] {
+        assert_eq!(ledger.entries.iter().filter(|e| e.id == id).count(), 1);
+    }
+}
+
+fn candidate_projection(
+    _root: &Path,
+    writes: &BTreeMap<String, Vec<u8>>,
+) -> Result<BTreeMap<String, Vec<u8>>, String> {
+    Ok(BTreeMap::from([(
+        ".runtime/candidate-projection.txt".into(),
+        writes.get("pkg/Cargo.toml").cloned().unwrap_or_default(),
+    )]))
+}
+
+#[test]
+fn package_development_projection_preview_is_readonly_and_final_outputs_are_closed_together() {
+    let r = fixture("independent", true);
+    configure(&r.0, false);
+    change(&r.0, true);
+    write(
+        &r.0,
+        ".runtime/candidate-projection.txt",
+        b"original projection",
+    );
+    let runner = Checks::new();
+    let q = request(&r.0, "patch", false, &runner);
+    let p = development::preview_with_materializer(&r.0, &q, &runner, Some(&candidate_projection));
+    assert_eq!(p.code, 0, "{}", p.stderr);
+    assert_eq!(
+        fs::read(r.0.join(".runtime/candidate-projection.txt")).unwrap(),
+        b"original projection"
+    );
+    let result = development::apply_with_materializer(
+        &r.0,
+        &q,
+        p.receipt.unwrap()["fingerprint"].as_str().unwrap(),
+        &runner,
+        Some(&candidate_projection),
+    );
+    assert_eq!(result.code, 0, "{}", result.stderr);
+    assert_eq!(
+        fs::read(r.0.join(".runtime/candidate-projection.txt")).unwrap(),
+        fs::read(r.0.join("pkg/Cargo.toml")).unwrap()
+    );
+    let repeat = development::preview_with_materializer(
+        &r.0,
+        &Request::default(),
+        &runner,
+        Some(&candidate_projection),
+    );
+    assert_eq!(repeat.receipt.unwrap()["status"], "nothing-to-close");
+}
+
+#[test]
+fn package_development_projection_is_rolled_back_when_validation_fails() {
+    let r = fixture("independent", true);
+    configure(&r.0, false);
+    change(&r.0, true);
+    write(
+        &r.0,
+        ".runtime/candidate-projection.txt",
+        b"original projection",
+    );
+    let mut runner = Checks::new();
+    runner.fail = Some("normal".into());
+    let before = fs::read(r.0.join("pkg/Cargo.toml")).unwrap();
+    let q = request(&r.0, "patch", false, &runner);
+    let p = development::preview_with_materializer(&r.0, &q, &runner, Some(&candidate_projection));
+    assert_eq!(p.code, 0, "{}", p.stderr);
+    let result = development::apply_with_materializer(
+        &r.0,
+        &q,
+        p.receipt.unwrap()["fingerprint"].as_str().unwrap(),
+        &runner,
+        Some(&candidate_projection),
+    );
+    assert_ne!(result.code, 0);
+    assert_eq!(
+        fs::read(r.0.join(".runtime/candidate-projection.txt")).unwrap(),
+        b"original projection"
+    );
+    assert_eq!(fs::read(r.0.join("pkg/Cargo.toml")).unwrap(), before);
+    assert!(!r.0.join(development::RECORD).exists());
+}
+
+#[test]
+fn package_development_projection_cannot_change_product_version_or_configuration() {
+    let r = fixture("independent", true);
+    configure(&r.0, false);
+    change(&r.0, true);
+    let runner = Checks::new();
+    let q = request(&r.0, "patch", false, &runner);
+    let renderer = |_root: &Path, _writes: &BTreeMap<String, Vec<u8>>| {
+        Ok(BTreeMap::from([("VERSION".into(), b"9.0.0\n".to_vec())]))
+    };
+    let p = development::preview_with_materializer(&r.0, &q, &runner, Some(&renderer));
+    assert_ne!(p.code, 0);
+    assert!(p.stderr.contains("protected state"));
+    assert_eq!(fs::read(r.0.join("VERSION")).unwrap(), b"1.0.0\n");
+}
+
+#[test]
+fn package_development_projection_recovers_after_process_interruption() {
+    let r = fixture("independent", true);
+    configure(&r.0, false);
+    change(&r.0, true);
+    write(
+        &r.0,
+        ".runtime/candidate-projection.txt",
+        b"original projection",
+    );
+    let mut runner = Checks::new();
+    runner.action = Some("crash".into());
+    let q = request(&r.0, "patch", false, &runner);
+    let before = fs::read(r.0.join("pkg/Cargo.toml")).unwrap();
+    let p = development::preview_with_materializer(&r.0, &q, &runner, Some(&candidate_projection));
+    let fingerprint = p.receipt.unwrap()["fingerprint"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let interrupted = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        development::apply_with_materializer(
+            &r.0,
+            &q,
+            &fingerprint,
+            &runner,
+            Some(&candidate_projection),
+        )
+    }));
+    assert!(interrupted.is_err());
+    assert_eq!(development::recover(&r.0).code, 0);
+    assert_eq!(
+        fs::read(r.0.join(".runtime/candidate-projection.txt")).unwrap(),
+        b"original projection"
+    );
+    assert_eq!(fs::read(r.0.join("pkg/Cargo.toml")).unwrap(), before);
+}
+
 #[test]
 fn package_development_release_reports_more_than_three_changed_packages() {
     let r = fixture("legacy", true);
@@ -770,15 +1407,10 @@ fn package_development_recovers_interrupted_candidate_and_preserves_external_con
         assert!(interrupted.is_err());
         let head = git(&r.0, &["rev-parse", "HEAD"]);
         let index = fs::read(r.0.join(".git/index")).unwrap();
-        let synced = crate::git_sync::sync(
-            &r.0,
-            &SystemProcessRunner,
-            crate::git_sync::GitSyncOptions::default(),
-        );
         assert!(
-            synced.stderr.contains("develop --recover"),
-            "{}",
-            synced.stderr
+            development::require_completed_transaction(&r.0)
+                .unwrap_err()
+                .contains("develop --recover")
         );
         assert_eq!(git(&r.0, &["rev-parse", "HEAD"]), head);
         assert_eq!(fs::read(r.0.join(".git/index")).unwrap(), index);

@@ -1,0 +1,639 @@
+pub use bridgeforge_core::build_manifest::{
+    canonical_sha, generated_build_recipe, generated_source_sha, generated_sources,
+};
+use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
+use std::collections::{BTreeMap, BTreeSet};
+use std::fs;
+use std::path::{Component, Path, PathBuf};
+
+fn sha_raw(payload: &[u8]) -> String {
+    format!("sha256:{:x}", Sha256::digest(payload))
+}
+
+fn sha_git(payload: &[u8]) -> String {
+    if payload.contains(&0) {
+        sha_raw(payload)
+    } else {
+        sha_raw(
+            String::from_utf8_lossy(payload)
+                .replace("\r\n", "\n")
+                .replace('\r', "\n")
+                .as_bytes(),
+        )
+    }
+}
+
+fn safe_join(root: &Path, relative: &str) -> Result<PathBuf, String> {
+    let path = Path::new(relative);
+    if relative.is_empty()
+        || relative.contains('\\')
+        || path.is_absolute()
+        || path.components().any(|part| {
+            matches!(
+                part,
+                Component::ParentDir | Component::RootDir | Component::Prefix(_)
+            )
+        })
+    {
+        return Err(format!("unsafe manifest path: {relative}"));
+    }
+    Ok(root.join(path))
+}
+
+fn marker_block(payload: &[u8], begin: &str, end: &str) -> Result<Vec<u8>, String> {
+    let text =
+        String::from_utf8(payload.to_vec()).map_err(|_| "managed marker source is not UTF-8")?;
+    let lines = text.split_inclusive('\n').collect::<Vec<_>>();
+    let starts = lines
+        .iter()
+        .enumerate()
+        .filter(|(_, line)| line.trim_end_matches(['\r', '\n']) == begin)
+        .map(|(index, _)| index)
+        .collect::<Vec<_>>();
+    let stops = lines
+        .iter()
+        .enumerate()
+        .filter(|(_, line)| line.trim_end_matches(['\r', '\n']) == end)
+        .map(|(index, _)| index)
+        .collect::<Vec<_>>();
+    if starts.len() != 1 || stops.len() != 1 || starts[0] >= stops[0] {
+        return Err(format!(
+            "managed markers must appear exactly once: {begin} / {end}"
+        ));
+    }
+    Ok(lines[starts[0]..=stops[0]].concat().into_bytes())
+}
+
+fn hook_asset_id(relative: &str) -> String {
+    let mut slug = String::new();
+    let mut dash = false;
+    for character in relative.to_lowercase().chars() {
+        if character.is_ascii_alphanumeric() {
+            slug.push(character);
+            dash = false;
+        } else if !dash && !slug.is_empty() {
+            slug.push('-');
+            dash = true;
+        }
+    }
+    while slug.ends_with('-') {
+        slug.pop();
+    }
+    format!("codex.hooks.{slug}")
+}
+
+fn hook_sources(root: &Path) -> Result<Vec<String>, String> {
+    generated_sources(&root.join("templates/hooks"))
+}
+
+fn source_tree_sha(root: &Path, sources: &[String]) -> Result<String, String> {
+    generated_source_sha(&root.join("templates/hooks"), sources)
+}
+
+fn generated_asset(
+    binary: &str,
+    receipt: &str,
+    sources_sha: &str,
+    lock_sha: &str,
+) -> Result<Value, String> {
+    let build = generated_build_recipe(binary);
+    let expected_name = binary;
+    let self_test = json!({
+        "args": ["self-test", "--json"],
+        "expected_json": {"schema": 1, "name": expected_name, "status": "ok"},
+    });
+    let file = binary;
+    Ok(json!({
+        "id": if binary == "bridgeforge-hook" { "codex.hooks" } else { "codex.bridgeforge-cli" },
+        "source_root": "templates/hooks",
+        "target_source_root": ".codex/hooks",
+        "manifest": "Cargo.toml",
+        "lockfile": "Cargo.lock",
+        "binary_targets": {
+            "windows-x86_64": format!(".codex/bin/{file}.exe"),
+            "linux-x86_64": format!(".codex/bin/{file}"),
+            "macos-x86_64": format!(".codex/bin/{file}"),
+        },
+        "receipt_target": receipt,
+        "build": build,
+        "self_test": self_test,
+        "source_tree_sha256": sources_sha,
+        "lockfile_sha256": lock_sha,
+        "build_recipe_sha256": canonical_sha(&build)?,
+        "self_test_sha256": canonical_sha(&self_test)?,
+    }))
+}
+
+/// Add the private factory executable only to a local build contract. The
+/// distributed managed contract deliberately continues to expose two binaries.
+pub fn runtime_contract(root: &Path, public: &Value) -> Result<Value, String> {
+    let mut contract = public.clone();
+    if !crate::source_projection::available(root) {
+        return Ok(contract);
+    }
+    let files = crate::source_projection::render(root, false)?;
+    let package = std::str::from_utf8(
+        files
+            .get("source/factory/Cargo.toml")
+            .ok_or("factory package manifest missing from source projection")?,
+    )
+    .map_err(|e| e.to_string())?
+    .parse::<toml_edit::DocumentMut>()
+    .map_err(|e| e.to_string())?;
+    let version = package["package"]["version"]
+        .as_str()
+        .ok_or("factory package must own its native version")?;
+    let product = fs::read_to_string(root.join("VERSION"))
+        .map_err(|e| e.to_string())?
+        .trim()
+        .to_owned();
+    let build = generated_build_recipe("bridgeforge-factory");
+    let self_test = json!({"args":["self-test","--json"],"expected_json":{
+        "schema":1,"name":"bridgeforge-factory","status":"ok","version":version,"product_version":product}});
+    let asset = json!({
+        "id":"codex.factory-cli",
+        "source_root":".","target_source_root":".","source_projection":crate::source_projection::FACTORY,
+        "manifest":"Cargo.toml","lockfile":"Cargo.lock",
+        "binary_targets":{
+            "windows-x86_64":".codex/bin/bridgeforge-factory.exe",
+            "linux-x86_64":".codex/bin/bridgeforge-factory",
+            "macos-x86_64":".codex/bin/bridgeforge-factory"},
+        "receipt_target":".codex/bin/build-receipt-factory.json",
+        "source_tree_sha256":crate::source_projection::tree_sha(&files)?,
+        "lockfile_sha256":sha_git(files.get("Cargo.lock").ok_or("factory lockfile missing")?),
+        "build_recipe_sha256":canonical_sha(&build)?,"build":build,
+        "self_test_sha256":canonical_sha(&self_test)?,"self_test":self_test,
+    });
+    let assets = contract["generated_assets"]
+        .as_array_mut()
+        .ok_or("runtime generated assets missing")?;
+    if assets.iter().any(|entry| entry["id"] == asset["id"]) {
+        return Err("public contract must not contain the private factory executable".into());
+    }
+    assets.push(asset);
+    Ok(contract)
+}
+
+pub fn render_managed_contract(root: &Path) -> Result<Vec<u8>, String> {
+    render_managed_contract_with_overlay(root, &BTreeMap::new())
+}
+
+fn render_managed_contract_with_overlay(
+    root: &Path,
+    overlay: &BTreeMap<String, Vec<u8>>,
+) -> Result<Vec<u8>, String> {
+    let path = root.join("templates/managed-skeleton.json");
+    let mut contract: Value = serde_json::from_slice(
+        &fs::read(&path).map_err(|error| format!("cannot read managed contract: {error}"))?,
+    )
+    .map_err(|error| format!("invalid managed contract: {error}"))?;
+    if contract["schema_version"].as_u64() != Some(4)
+        || contract["baseline_model"].as_str() != Some("current-only")
+    {
+        return Err("managed contract must use schema 4 current-only".into());
+    }
+    contract["release_version"] = Value::String(
+        fs::read_to_string(root.join("VERSION"))
+            .map_err(|error| error.to_string())?
+            .trim()
+            .to_string(),
+    );
+    crate::baseline::compatibility_baseline(&contract)?;
+    let projected = if crate::source_projection::available(root) {
+        Some(crate::source_projection::render_with_overlay(
+            root, true, overlay,
+        )?)
+    } else {
+        None
+    };
+    let layout = if projected.is_some() {
+        let bytes =
+            fs::read(root.join("templates/source-layout.json")).map_err(|e| e.to_string())?;
+        let layout = crate::json::parse_unique_json(&bytes, "source layout")?;
+        if layout["schema"] != 1
+            || layout["format"] != "bridgeforge-source-layout-v1"
+            || !layout["relocations"].is_array()
+        {
+            return Err("invalid source layout contract".into());
+        }
+        Some(layout)
+    } else {
+        None
+    };
+    if let Some(layout) = &layout {
+        contract["retired_assets"] = json!(
+            layout["relocations"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|r| r["target"] != r["previous_target"])
+                .map(|r| json!({"id":r["id"],"target":r["previous_target"],
+                "known_hashes":r["known_hashes"].as_array().into_iter().flatten()
+                    .map(|h| h["sha256"].clone()).collect::<Vec<_>>() }))
+                .collect::<Vec<_>>()
+        );
+    }
+    let sources = if let Some(files) = &projected {
+        files.keys().cloned().collect()
+    } else {
+        hook_sources(root)?
+    };
+    let existing = contract["assets"]
+        .as_array()
+        .ok_or("contract assets are missing")?;
+    let mut assets = existing
+        .iter()
+        .filter(|asset| {
+            let source = asset["source"].as_str().unwrap_or("");
+            let target = asset["target"].as_str().unwrap_or("");
+            !source.ends_with(".py")
+                && !target.ends_with(".py")
+                && !source.starts_with("templates/hooks/")
+                && !target.starts_with(".codex/hooks/")
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    for relative in &sources {
+        let source = if projected.is_some() && relative == ".gitignore" {
+            "templates/hooks/.gitignore".into()
+        } else if projected.is_some() {
+            relative.clone()
+        } else {
+            format!("templates/hooks/{relative}")
+        };
+        let existing_id = layout
+            .as_ref()
+            .and_then(|l| l["relocations"].as_array())
+            .and_then(|entries| entries.iter().find(|a| a["source"] == source))
+            .or_else(|| existing.iter().find(|a| a["source"] == source))
+            .and_then(|a| a["id"].as_str())
+            .map(str::to_owned);
+        let mut asset = json!({
+            "id": existing_id.unwrap_or_else(|| hook_asset_id(relative)),
+            "source": source,
+            "target": format!(".codex/hooks/{relative}"),
+            "strategy": "whole",
+            "current_sha256": "",
+        });
+        if projected.is_some() && matches!(relative.as_str(), "Cargo.toml" | "Cargo.lock") {
+            asset["render"] = json!(if relative == "Cargo.toml" {
+                "public-runtime-workspace"
+            } else {
+                "public-runtime-lock"
+            });
+        }
+        assets.push(asset);
+    }
+    for asset in &mut assets {
+        let source = asset["source"].as_str().ok_or("asset source is missing")?;
+        let payload = if let Some(bytes) = projected.as_ref().and_then(|files| files.get(source)) {
+            bytes.clone()
+        } else if let Some(bytes) = overlay.get(source) {
+            bytes.clone()
+        } else {
+            fs::read(safe_join(root, source)?).map_err(|error| format!("{source}: {error}"))?
+        };
+        asset["current_sha256"] = Value::String(sha_git(&payload));
+        if let Some(blocks) = asset
+            .get_mut("managed_blocks")
+            .filter(|value| value.is_object())
+        {
+            let projection = crate::baseline::markdown_projection(&payload, blocks)?;
+            blocks["current_projection_sha256"] = Value::String(canonical_sha(&projection)?);
+        }
+        if asset["merge_policy"].as_str() == Some("codex-hooks") {
+            let document = crate::json::parse_unique_json(&payload, "hooks.json")?;
+            let handlers = crate::baseline::hook_handlers(&document)?;
+            let mut required = Vec::new();
+            for (id, record) in handlers {
+                if !id.starts_with("bridgeforge-codex.project-hook.v1:") {
+                    continue;
+                }
+                let mut projected = asset["merge_validation"]["required_handlers"]
+                    .as_array()
+                    .and_then(|entries| entries.iter().find(|entry| entry["id"] == id))
+                    .cloned()
+                    .unwrap_or_else(|| json!({}));
+                projected["id"] = Value::String(id);
+                projected["event"] = record["event"].clone();
+                projected["matcher"] = record["matcher"].clone();
+                projected["sha256"] = Value::String(canonical_sha(&record["handler"])?);
+                required.push(projected);
+            }
+            if required.is_empty() {
+                return Err("hooks.json has no managed project handlers".into());
+            }
+            asset["merge_validation"]["required_handlers"] = Value::Array(required);
+        }
+        if let Some(public) = asset
+            .get_mut("agents_zones")
+            .and_then(|zones| zones.get_mut("public"))
+        {
+            let block = marker_block(
+                &payload,
+                public["begin"]
+                    .as_str()
+                    .ok_or("AGENTS public begin is missing")?,
+                public["end"]
+                    .as_str()
+                    .ok_or("AGENTS public end is missing")?,
+            )?;
+            public["current_sha256"] = Value::String(sha_git(&block));
+        }
+        if let Some(region) = asset.get_mut("region") {
+            let block = marker_block(
+                &payload,
+                region["begin"].as_str().ok_or("region begin is missing")?,
+                region["end"].as_str().ok_or("region end is missing")?,
+            )?;
+            region["current_sha256"] = Value::String(sha_git(&block));
+        }
+    }
+    contract["assets"] = Value::Array(assets);
+    let tree_sha = if let Some(files) = &projected {
+        crate::source_projection::tree_sha(files)?
+    } else {
+        source_tree_sha(root, &sources)?
+    };
+    let lock_bytes = if let Some(files) = &projected {
+        files["Cargo.lock"].clone()
+    } else {
+        fs::read(root.join("templates/hooks/Cargo.lock")).map_err(|error| error.to_string())?
+    };
+    let lock_sha = sha_git(&lock_bytes);
+    contract["generated_assets"] = Value::Array(vec![
+        generated_asset(
+            "bridgeforge-hook",
+            ".codex/bin/build-receipt-hook.json",
+            &tree_sha,
+            &lock_sha,
+        )?,
+        generated_asset(
+            "bridgeforge",
+            ".codex/bin/build-receipt-cli.json",
+            &tree_sha,
+            &lock_sha,
+        )?,
+    ]);
+    if projected.is_some() {
+        for item in contract["generated_assets"].as_array_mut().unwrap() {
+            item["source_root"] = json!(".");
+            item["source_projection"] = json!(crate::source_projection::PUBLIC);
+        }
+    }
+    let mut encoded = serde_json::to_vec_pretty(&contract).map_err(|error| error.to_string())?;
+    encoded.push(b'\n');
+    Ok(encoded)
+}
+
+pub fn render_distribution_manifest(root: &Path) -> Result<Vec<u8>, String> {
+    let path = root.join("bridgeforge-codex-manifest.json");
+    let mut manifest: Value =
+        serde_json::from_slice(&fs::read(&path).map_err(|error| error.to_string())?)
+            .map_err(|error| error.to_string())?;
+    let platforms = manifest["platforms"]
+        .as_object_mut()
+        .ok_or("distribution manifest platforms are missing")?;
+    for platform in platforms.values_mut() {
+        let skills = platform["skills"]
+            .as_array_mut()
+            .ok_or("platform skills are missing")?;
+        for skill in skills {
+            let files = skill["files"]
+                .as_array_mut()
+                .ok_or("skill files are missing")?;
+            for item in files {
+                let source = item["source"].as_str().ok_or("skill source is missing")?;
+                let payload = fs::read(safe_join(root, source)?)
+                    .map_err(|error| format!("{source}: {error}"))?;
+                item["sha256"] = Value::String(sha_git(&payload));
+            }
+        }
+    }
+    let mut encoded = serde_json::to_vec_pretty(&manifest).map_err(|error| error.to_string())?;
+    encoded.push(b'\n');
+    Ok(encoded)
+}
+
+fn render_targets(root: &Path) -> Result<Vec<(PathBuf, Vec<u8>)>, String> {
+    let contract = render_managed_contract(root)?;
+    let distribution = render_distribution_manifest(root)?;
+    let mut targets = vec![
+        (
+            root.join("templates/managed-skeleton.json"),
+            contract.clone(),
+        ),
+        (root.join(".codex/managed-skeleton.json"), contract),
+        (root.join("bridgeforge-codex-manifest.json"), distribution),
+        (
+            root.join(crate::user_agents::MANIFEST),
+            crate::user_agents::render_manifest(root)?,
+        ),
+    ];
+    if crate::source_projection::available(root) {
+        targets.extend(
+            crate::dogfood::render(root)?
+                .into_iter()
+                .map(|(p, b)| (root.join(p), b)),
+        );
+        targets.extend(
+            crate::source_projection::render(root, true)?
+                .into_iter()
+                .map(|(p, b)| (root.join(".codex/hooks").join(p), b)),
+        );
+    }
+    if crate::source_projection::available(root) && root.join("scripts/tests/Cargo.toml").is_file()
+    {
+        targets.push((
+            root.join("scripts/tests/Cargo.lock"),
+            consumer_lock(root, &BTreeMap::new())?,
+        ));
+    }
+    Ok(targets)
+}
+
+pub fn rebuild(root: &Path, check: bool) -> Result<bool, String> {
+    let targets = render_targets(root)?;
+    let mut before = BTreeMap::new();
+    for (path, _) in &targets {
+        for ancestor in path.ancestors().filter(|p| p.exists()) {
+            if crate::persistence::is_link_or_reparse(ancestor).map_err(|e| e.to_string())? {
+                return Err(format!(
+                    "manifest target traverses a link: {}",
+                    path.display()
+                ));
+            }
+        }
+        before.insert(
+            path.clone(),
+            crate::managed_paths::read_metadata(path, 32 * 1024 * 1024)?,
+        );
+    }
+    let changed = targets
+        .iter()
+        .any(|(path, payload)| before[path].as_deref() != Some(payload));
+    if changed && !check {
+        install_targets(&targets, &before, &|index| {
+            if (index == 0 || index == targets.len()) && render_targets(root)? != targets {
+                return Err("manifest inputs changed during generation".into());
+            }
+            Ok(())
+        })?;
+    }
+    Ok(changed)
+}
+
+fn install_targets(
+    targets: &[(PathBuf, Vec<u8>)],
+    before: &BTreeMap<PathBuf, Option<Vec<u8>>>,
+    observer: &dyn Fn(usize) -> Result<(), String>,
+) -> Result<(), String> {
+    let mut installed = Vec::new();
+    let result = (|| -> Result<(), String> {
+        for (index, (path, payload)) in targets.iter().enumerate() {
+            observer(index)?;
+            if before[path].as_deref() == Some(payload) {
+                continue;
+            }
+            if crate::managed_paths::read_metadata(path, 32 * 1024 * 1024)? != before[path] {
+                return Err(format!(
+                    "manifest target changed before write: {}",
+                    path.display()
+                ));
+            }
+            crate::persistence::atomic_write(path, payload).map_err(|e| e.to_string())?;
+            installed.push((path, payload));
+        }
+        observer(targets.len())?;
+        Ok(())
+    })();
+    if let Err(error) = result {
+        let mut failures = Vec::new();
+        for (path, payload) in installed.into_iter().rev() {
+            let current = match crate::managed_paths::read_metadata(path, 32 * 1024 * 1024) {
+                Ok(current) => current,
+                Err(error) => {
+                    failures.push(format!(
+                        "external rollback state preserved at {}: {error}",
+                        path.display()
+                    ));
+                    continue;
+                }
+            };
+            if current.as_deref() != Some(payload) {
+                failures.push(format!("external change preserved: {}", path.display()));
+                continue;
+            }
+            let rollback = match &before[path] {
+                Some(bytes) => {
+                    crate::persistence::atomic_write(path, bytes).map_err(|e| e.to_string())
+                }
+                None => fs::remove_file(path).map_err(|e| e.to_string()),
+            };
+            if let Err(e) = rollback {
+                failures.push(format!("{}: {e}", path.display()));
+            }
+        }
+        return Err(if failures.is_empty() {
+            error
+        } else {
+            format!("{error}; rollback: {}", failures.join("; "))
+        });
+    }
+    Ok(())
+}
+
+/// Pure candidate materialization, shared by factory development and installation.
+/// The caller owns drift checks, journaling, writes and rollback.
+pub fn development_projection(
+    root: &Path,
+    native: &BTreeMap<String, Vec<u8>>,
+) -> Result<BTreeMap<String, Vec<u8>>, String> {
+    if !crate::source_projection::available(root) {
+        return Ok(BTreeMap::new());
+    }
+    let mut outputs = crate::source_projection::render_with_overlay(root, true, native)?
+        .into_iter()
+        .map(|(p, b)| (format!(".codex/hooks/{p}"), b))
+        .collect::<BTreeMap<_, _>>();
+    outputs.extend(crate::dogfood::render(root)?);
+    let contract = render_managed_contract_with_overlay(root, native)?;
+    outputs.insert("templates/managed-skeleton.json".into(), contract.clone());
+    outputs.insert(".codex/managed-skeleton.json".into(), contract);
+    outputs.insert(
+        "bridgeforge-codex-manifest.json".into(),
+        render_distribution_manifest(root)?,
+    );
+    outputs.insert(
+        crate::user_agents::MANIFEST.into(),
+        crate::user_agents::render_manifest(root)?,
+    );
+    if root.join("scripts/tests/Cargo.toml").is_file() {
+        outputs.insert(
+            "scripts/tests/Cargo.lock".into(),
+            consumer_lock(root, native)?,
+        );
+    }
+    outputs.retain(|p, b| fs::read(root.join(p)).ok().as_ref() != Some(b));
+    Ok(outputs)
+}
+
+fn consumer_lock(root: &Path, native: &BTreeMap<String, Vec<u8>>) -> Result<Vec<u8>, String> {
+    use toml_edit::{DocumentMut, Item};
+    let parse = |bytes: &[u8]| -> Result<DocumentMut, String> {
+        std::str::from_utf8(bytes)
+            .map_err(|e| e.to_string())?
+            .parse::<DocumentMut>()
+            .map_err(|e| e.to_string())
+    };
+    let bytes = native
+        .get("Cargo.lock")
+        .cloned()
+        .map(Ok)
+        .unwrap_or_else(|| fs::read(root.join("Cargo.lock")).map_err(|e| e.to_string()))?;
+    let mut combined = parse(&bytes)?;
+    let consumer =
+        parse(&fs::read(root.join("scripts/tests/Cargo.lock")).map_err(|e| e.to_string())?)?;
+    let manifest =
+        parse(&fs::read(root.join("scripts/tests/Cargo.toml")).map_err(|e| e.to_string())?)?;
+    let name = manifest["package"]["name"]
+        .as_str()
+        .ok_or("test harness package name missing")?
+        .to_owned();
+    let key = |t: &toml_edit::Table| -> Result<(String, String, Option<String>), String> {
+        Ok((
+            t["name"].as_str().ok_or("lock name missing")?.into(),
+            t["version"].as_str().ok_or("lock version missing")?.into(),
+            t.get("source").and_then(Item::as_str).map(str::to_owned),
+        ))
+    };
+    let entries = combined
+        .get_mut("package")
+        .and_then(Item::as_array_of_tables_mut)
+        .ok_or("native lock packages missing")?;
+    for entry in consumer
+        .get("package")
+        .and_then(Item::as_array_of_tables)
+        .ok_or("consumer lock packages missing")?
+        .iter()
+    {
+        let candidate = key(entry)?;
+        let existing = entries.iter().map(&key).collect::<Result<Vec<_>, _>>()?;
+        // Canonical native versions and local dependency edges replace consumers.
+        if candidate.2.is_none() && existing.iter().any(|k| k.0 == candidate.0 && k.2.is_none()) {
+            continue;
+        }
+        if !existing.contains(&candidate) {
+            entries.push(entry.clone());
+        }
+    }
+    crate::source_projection::lock_dependency_closure(
+        combined.to_string().as_bytes(),
+        &BTreeSet::from([name]),
+    )
+}
+
+#[cfg(all(test, bridgeforge_factory_tests))]
+#[path = "../../../scripts/tests/unit/core_manifest.rs"]
+mod tests;
