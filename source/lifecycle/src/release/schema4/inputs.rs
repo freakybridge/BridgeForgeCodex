@@ -29,6 +29,7 @@ pub(super) struct Capture {
     pub environment: String,
     pub development_environment: String,
     pub build_directories: BTreeMap<String, BTreeSet<String>>,
+    pub normalization: Option<content_identity::Rules>,
     pub modes: BTreeMap<String, String>,
 }
 
@@ -115,6 +116,17 @@ fn validation_fingerprint(
     environment: &str,
     runner: &dyn ProcessRunner,
 ) -> Result<String, String> {
+    // Also inspect untracked/ignored native inputs before Git can invoke filters.
+    let rules = content_identity::Rules::capture(
+        root,
+        inputs.keys().filter_map(|p| {
+            p.strip_prefix(root)
+                .ok()
+                .map(|p| p.to_string_lossy().replace('\\', "/"))
+        }),
+        runner,
+    )?;
+    let identity = content_identity::Identity::new(root, rules, runner);
     let mut tree = BTreeMap::<String, (String, String)>::new();
     for entry in history::git(root, runner, &["ls-tree", "-r", "-z", head])?
         .split('\0')
@@ -161,7 +173,10 @@ fn validation_fingerprint(
             .to_string_lossy()
             .replace('\\', "/");
         if !inventory.contains(&relative) {
-            extras.insert(relative.clone(), bytes.as_deref().map(digest));
+            extras.insert(
+                relative.clone(),
+                identity.hash(&relative, bytes.as_deref())?,
+            );
         }
         let Some(bytes) = bytes else {
             tree.remove(&relative);
@@ -205,6 +220,7 @@ fn validation_fingerprint(
             && !cfg.record_inputs.contains(path)
             && !matches!(path.as_str(), "VERSION" | "CHANGELOG.md")
     });
+    identity.rules.verify(root, runner)?;
     Ok(digest(
         &serde_json::to_vec(
             &json!({"tree":tree,"native_extra_inputs":extras,"environment":environment}),
@@ -598,5 +614,6 @@ fn capture_with_reader(
         environment,
         development_environment: environment_snapshot.development,
         build_directories: BTreeMap::new(),
+        normalization: None,
     })
 }

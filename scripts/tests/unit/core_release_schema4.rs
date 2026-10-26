@@ -1612,7 +1612,10 @@ fn analyze(root: &Path, product: &str, package: Option<&str>) -> Request {
         fixture::close_packages(root, &SystemProcessRunner, &[("a", level)]).unwrap();
     }
     let cfg = load(root).unwrap().unwrap();
-    let captured = capture(root, &cfg, &SystemProcessRunner).unwrap();
+    let mut captured = capture(root, &cfg, &SystemProcessRunner).unwrap();
+    // Match the public release preview, including normalization rules. Some
+    // callers deliberately leave packages open to assert build's gate error.
+    let _ = development::release_gate(root, &cfg, &mut captured, &SystemProcessRunner);
     write(root,".runtime/analysis.json",&serde_json::to_vec(&json!({"schema":1,"fingerprint":captured.fingerprint,"product":{"level":product,"reason":"actual final release changes","compatibility":"compatible"}})).unwrap());
     Request {
         analysis_file: Some(PathBuf::from(".runtime/analysis.json")),

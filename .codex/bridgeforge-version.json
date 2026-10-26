@@ -151,6 +151,7 @@
             "source/lifecycle/src/release/rust_discovery.rs",
             "source/lifecycle/src/release/rust_sources.rs",
             "source/lifecycle/src/release/schema4.rs",
+            "source/lifecycle/src/release/schema4/content_identity.rs",
             "source/lifecycle/src/release/schema4/adoption.rs",
             "source/lifecycle/src/release/schema4/analysis.rs",
             "source/lifecycle/src/release/schema4/configuration.rs",
@@ -357,13 +358,15 @@
             "--target-dir",
             ".runtime/source-workspace-refactor/cargo",
             "--",
-            "--test-threads=4"
+            "--test-threads=4",
+            "--nocapture"
           ],
           "id": "lifecycle-unit",
           "inputs": [
             "scripts/tests/factory-cargo.toml",
             "scripts/tests/support/schema4_agent.rs",
             "scripts/tests/unit/core_package_development.rs",
+            "scripts/tests/unit/core_package_eol.rs",
             "scripts/tests/unit/core_release.rs",
             "scripts/tests/unit/core_release_lifecycle.rs",
             "scripts/tests/unit/core_release_polyglot.rs",

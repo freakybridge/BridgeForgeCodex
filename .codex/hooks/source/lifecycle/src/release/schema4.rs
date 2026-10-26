@@ -6,6 +6,7 @@ mod analysis;
 mod configuration;
 mod environment;
 mod inputs;
+mod content_identity;
 pub use environment::{EnvironmentGuard, PythonEnvironment};
 pub mod development;
 mod development_inputs;

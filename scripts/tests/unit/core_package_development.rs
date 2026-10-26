@@ -2,6 +2,9 @@
 use super::*;
 use std::sync::Mutex;
 
+#[path = "core_package_eol.rs"]
+mod eol_tests;
+
 // Reconstruct the published 6.0.0 serializer independently of the production
 // compatibility branch. This fixture has one standalone Rust package, no
 // dependencies, no extra check inputs and no stability contracts.
@@ -193,7 +196,7 @@ fn package_legacy_closure_mixed_history_preserves_prefix_and_modern_unmarked_rec
             .last()
             .unwrap()
             .evidence_schema,
-        Some(3)
+        Some(4)
     );
     use_host_closure(&r.0, &runner, true);
     let p = development::preview(&r.0, &Request::default(), &runner);
@@ -212,7 +215,7 @@ fn package_legacy_closure_mixed_history_preserves_prefix_and_modern_unmarked_rec
         serde_json::to_value(&new.entries[..old.entries.len()]).unwrap(),
         serde_json::to_value(&old.entries).unwrap()
     );
-    assert_eq!(new.entries.last().unwrap().evidence_schema, Some(3));
+    assert_eq!(new.entries.last().unwrap().evidence_schema, Some(4));
     assert_eq!(new.entries.last().unwrap().after.as_deref(), Some("0.3.2"));
     assert_eq!(
         development::preview(&r.0, &Request::default(), &runner)
@@ -394,8 +397,8 @@ fn package_portable_evidence_diagnoses_inputs_and_preserves_chain() {
     let ledger = fs::read(r.0.join(development::RECORD)).unwrap();
     let parsed = development::Ledger::parse(Some(&ledger)).unwrap();
     let entry = parsed.entries.last().unwrap();
-    assert_eq!(entry.evidence_schema, Some(3));
-    assert_eq!(entry.evidence_components.as_ref().unwrap().len(), 8);
+    assert_eq!(entry.evidence_schema, Some(4));
+    assert_eq!(entry.evidence_components.as_ref().unwrap().len(), 9);
     let alternate = AlternateClosureHost(&runner);
     let result = preview(&r.0, "fix: env", &Request::default(), &alternate);
     assert!(
@@ -530,6 +533,7 @@ fn package_release_external_analysis_is_preview_only_and_tracks_drift() {
 
     let cfg = load(&r.0).unwrap().unwrap();
     let mut captured = capture(&r.0, &cfg, &runner).unwrap();
+    development::release_gate(&r.0, &cfg, &mut captured, &runner).unwrap();
     analysis::read_preview(&r.0, &q, &mut captured).unwrap();
     fs::write(&external.0, b"changed after capture").unwrap();
     assert!(verify_release_inputs(&captured.inputs).is_err());

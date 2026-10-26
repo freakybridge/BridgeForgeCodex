@@ -206,6 +206,7 @@ fn self_test() -> CommandOutcome {
                 "package-adoption-v1",
                 "scoped-rust-evidence-v1",
                 "portable-development-evidence-v1",
+                "git-eol-development-evidence-v1",
                 "release-external-analysis-preview-v1",
                 "public-source-projection-v1",
             ]

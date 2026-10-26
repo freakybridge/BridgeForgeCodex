@@ -4,15 +4,25 @@ use super::*;
 #[derive(Clone, Debug, Default)]
 pub struct BuildDirectoryGuard {
     directories: BTreeMap<String, BTreeSet<String>>,
+    normalization: Option<content_identity::Rules>,
 }
 
 impl BuildDirectoryGuard {
-    pub(super) fn new(directories: BTreeMap<String, BTreeSet<String>>) -> Self {
-        Self { directories }
+    pub(super) fn new(
+        directories: BTreeMap<String, BTreeSet<String>>,
+        normalization: Option<content_identity::Rules>,
+    ) -> Self {
+        Self {
+            directories,
+            normalization,
+        }
     }
 
     /// Keep membership pinned through plan reuse and the final release write boundary.
     pub fn verify(&self, root: &Path) -> Result<(), String> {
+        if let Some(rules) = &self.normalization {
+            rules.verify(root, &crate::SystemProcessRunner)?;
+        }
         for (prefix, expected) in &self.directories {
             if members(root, prefix)? != *expected {
                 return Err(format!(
@@ -68,6 +78,7 @@ pub(super) fn capture(
     cfg: &Config,
     snapshot: &mut Capture,
     legacy_files: &BTreeMap<String, Option<String>>,
+    identity: Option<&content_identity::Identity<'_>>,
 ) -> Result<(BTreeMap<String, Option<String>>, bool), String> {
     let mut inputs = BTreeMap::new();
     let mut legacy_complete = true;
@@ -96,7 +107,13 @@ pub(super) fn capture(
         };
         for file in files {
             let bytes = config::read_current(root, &file)?;
-            inputs.insert(file.clone(), bytes.as_deref().map(digest));
+            inputs.insert(
+                file.clone(),
+                match identity {
+                    Some(i) => i.hash(&file, bytes.as_deref())?,
+                    None => bytes.as_deref().map(digest),
+                },
+            );
             snapshot.inputs.entry(root.join(&file)).or_insert(bytes);
         }
     }
@@ -108,6 +125,9 @@ pub(super) fn verify(
     snapshot: &Capture,
     expected: &BTreeMap<PathBuf, Option<Vec<u8>>>,
 ) -> Result<(), String> {
+    if let Some(rules) = &snapshot.normalization {
+        rules.verify(root, &crate::SystemProcessRunner)?;
+    }
     for (prefix, before) in &snapshot.build_directories {
         let mut allowed = before.clone();
         allowed.retain(|p| {

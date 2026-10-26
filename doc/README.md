@@ -8,6 +8,8 @@ delivery_layout: flat
 
 ## 从这里开始
 
+- 已验收：[LF/CRLF 开发证据误判修复](1_delivery/source-workspace-refactor/requirements_2026-10-26_eol-evidence.md#用户验收与发布授权2026-10-27)（两项目零写入预览、七包受管收口及最终产物核验；已授权 Forge release，实际发布以收据为准。TODO-035 诊断问题保留，TODO-041 跟踪预览开销）。
+
 已验收：[跨对话开发证据与发布预览](1_delivery/package-version-lifecycle/requirements_2026-10-26_portable-closure-evidence.md#用户验收与发布授权2026-10-26)（TODO-038；Forge 修复和受管收口、Stratus 八包补验及两轮零写入 release dry-run 已通过，用户已授权 Forge release，实际发布以受管收据为准）。[TODO-039：跨目录解释器解析](1_delivery/package-version-lifecycle/requirements_2026-10-26_portable-closure-evidence.md#todo-039-windows-跨目录相对检查程序解析)与[TODO-040：绝对分析路径](1_delivery/package-version-lifecycle/requirements_2026-10-26_portable-closure-evidence.md#todo-040-windows-项目内绝对分析路径归一化)单独登记为待确认，未在本轮修复。
 
 已验收：[develop 完成状态与受管收口](1_delivery/package-version-lifecycle/requirements_2026-10-26_develop-completion-state.md#用户验收与发布授权2026-10-26)（TODO-037；七项程序 fixture、factory 受管重验及最终 nothing-to-close 通过，子包未升版；自然 Agent 对话效果未验证；已授权 Forge release，实际发布结果以受管收据为准）。
