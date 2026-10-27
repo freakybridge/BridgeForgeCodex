@@ -8,6 +8,12 @@ delivery_layout: flat
 
 ## 从这里开始
 
+- 已确认、待实施：[Forge 骨架职责与版本工作流简化](1_delivery/forge-simplification/requirements_2026-10-27_workflow-and-versioning.md)（TODO-044；保留 R1–R12、Native Memory、全部 Hook 和已审核 AGENTS；保留自动版本管理，取消长期验证证书硬门槛。含保留/重构/候选退役清单及分段验收；仅需求方案落盘，未实施、未验收、未发布）。
+
+- 本地止血与收口待续：[develop 按本次任务收口与验证复用](1_delivery/develop-demand-discovery/requirements_2026-10-27_task-closure.md)（TODO-043；第 14 节记录四对话循环返工原因、已写入 AGENTS 的方案 A、简化 develop 分工及 F1–F5 待执行方案。factory 并行检查、lifecycle 漏升版修正与定向证据保留；正式收口和最终运行时未完成，未验收、未发布）。
+
+- 当前开发：[跨电脑验证证据复用、发布检查范围与发布提速](1_delivery/package-version-lifecycle/requirements_2026-10-27_cross-machine-release.md)（TODO-042；已补当前进度快照、经验和接续步骤；源码及投影已更新、末批定向验证通过，完整收口失败回滚，最终运行时未就绪，开发未完成）。
+
 - 已验收：[LF/CRLF 开发证据误判修复](1_delivery/source-workspace-refactor/requirements_2026-10-26_eol-evidence.md#用户验收与发布授权2026-10-27)（两项目零写入预览、七包受管收口及最终产物核验；已授权 Forge release，实际发布以收据为准。TODO-035 诊断问题保留，TODO-041 跟踪预览开销）。
 
 已验收：[跨对话开发证据与发布预览](1_delivery/package-version-lifecycle/requirements_2026-10-26_portable-closure-evidence.md#用户验收与发布授权2026-10-26)（TODO-038；Forge 修复和受管收口、Stratus 八包补验及两轮零写入 release dry-run 已通过，用户已授权 Forge release，实际发布以受管收据为准）。[TODO-039：跨目录解释器解析](1_delivery/package-version-lifecycle/requirements_2026-10-26_portable-closure-evidence.md#todo-039-windows-跨目录相对检查程序解析)与[TODO-040：绝对分析路径](1_delivery/package-version-lifecycle/requirements_2026-10-26_portable-closure-evidence.md#todo-040-windows-项目内绝对分析路径归一化)单独登记为待确认，未在本轮修复。
@@ -141,7 +147,7 @@ R07：[TODO 管理与归档收口一致性](1_delivery/todo-lifecycle/requiremen
 
 | Topic | 主要记录 |
 |---|---|
-| `package-version-lifecycle` | [需求与实施验证记录](1_delivery/package-version-lifecycle/requirements_2026-10-24_package-version-lifecycle.md)：TODO-025，开发收口升子包、自动稳定判定及主程序发布累计公告 |
+| `package-version-lifecycle` | [跨电脑证据与快速发布](1_delivery/package-version-lifecycle/requirements_2026-10-27_cross-machine-release.md)：TODO-042；[需求与实施验证记录](1_delivery/package-version-lifecycle/requirements_2026-10-24_package-version-lifecycle.md)：TODO-025，开发收口升子包、自动稳定判定及主程序发布累计公告 |
 | `git-sync-release-rewrite` | [schema4 两种策略确认卡与工程结果](1_delivery/git-sync-release-rewrite/requirements_2026-10-21_schema4.md)、[用户验收：TODO-015](1_delivery/git-sync-release-rewrite/requirements_2026-10-21_schema4.md#用户验收2026-10-22)、[接入合同](1_delivery/git-sync-release-rewrite/schema4-contract.md)、[autopilot 交接](1_delivery/git-sync-release-rewrite/handoff_2026-10-22_schema4.md)：2026-10-22 用户已验收，TODO-015 已完成；两种策略共用 Rust/Python、复用 Stratus；7/7 检查、538 tests passed、33 项 CLI 补验及目标 3.0.0 隔离准备通过；条件项与真实下游未验证，未提交推送发布 |
 | `refactor-scan` | [Skill 开发验收](1_delivery/refactor-scan/requirements_2026-10-09_refactor-scan.md)已完成；[工厂重构候选与经验](1_delivery/refactor-scan/scan_2026-10-09_factory-refactor.md)记录扫描时事实；[R01 清理](1_delivery/refactor-scan/requirements_2026-10-09_r01-cleanup.md)、[R02 公共持久化](1_delivery/refactor-scan/requirements_2026-10-09_r02-persistence.md)、[R03 Memory CLI](1_delivery/refactor-scan/requirements_2026-10-09_r03-memory-cli.md)及 [R04 独立缓存](1_delivery/refactor-scan/requirements_2026-10-10_r04-artifact-cache.md)均工程验证通过并于 2026-10-10 获用户验收；累计收据与验收边界见 R04；[扫描换机交接](1_delivery/refactor-scan/handoff_2026-10-09_factory-refactor.md)为历史记录；真实项目试用见 TODO-004 |
 | `summary-workflow` | [Summary 三模式与会话状态快照退役](1_delivery/summary-workflow/requirements_2026-10-08_summary-workflow.md)；[本轮经验教训](1_delivery/summary-workflow/lessons_2026-10-08.md) |

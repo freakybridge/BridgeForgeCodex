@@ -63,6 +63,11 @@ pub(super) struct CheckCommand {
     inputs: Vec<String>,
     #[serde(default)]
     kind: String,
+    #[serde(default, skip_serializing_if = "is_false")]
+    reusable: bool,
+}
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 fn default_timeout() -> u64 {
     300
@@ -81,6 +86,10 @@ pub(in crate::release) struct Policy {
     checks: Vec<CheckCommand>,
     #[serde(default)]
     stability: Option<Stability>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    environment: Option<portable_environment::Contract>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    release_artifacts: Vec<String>,
 }
 impl Policy {
     pub(super) fn validate(&self, id: &str) -> Result<(), String> {
@@ -113,6 +122,55 @@ impl Policy {
                 safe_relative(Path::new("."), path)?;
             }
         }
+        if let Some(environment) = &self.environment {
+            environment.validate(
+                self.checks
+                    .iter()
+                    .chain(self.stability.iter().flat_map(|s| &s.checks))
+                    .map(|check| check.program.as_str()),
+            )?;
+            for check in self
+                .checks
+                .iter()
+                .chain(self.stability.iter().flat_map(|s| &s.checks))
+            {
+                environment.validate_arguments(&check.args)?;
+            }
+        } else if !self.release_artifacts.is_empty() {
+            return Err(
+                "release_artifacts requires an explicit portable environment contract".into(),
+            );
+        }
+        if self
+            .checks
+            .iter()
+            .chain(self.stability.iter().flat_map(|s| &s.checks))
+            .any(|check| {
+                check.reusable
+                    && (self.environment.is_none()
+                        || check
+                            .inputs
+                            .iter()
+                            .any(|path| check.artifacts.contains(path)))
+            })
+        {
+            return Err(format!(
+                "{id}: reusable checks require an explicit environment and disjoint inputs/outputs"
+            ));
+        }
+        for path in &self.release_artifacts {
+            safe_relative(Path::new("."), path)?;
+            if !self
+                .checks
+                .iter()
+                .chain(self.stability.iter().flat_map(|s| &s.checks))
+                .any(|check| check.artifacts.contains(path))
+            {
+                return Err(format!(
+                    "{id}: release artifact is not produced by a declared check: {path}"
+                ));
+            }
+        }
         Ok(())
     }
 }
@@ -140,6 +198,8 @@ pub(super) struct Entry {
     pub evidence_schema: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub evidence_components: Option<BTreeMap<String, String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evidence_details: Option<BTreeMap<String, String>>,
 }
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -160,7 +220,7 @@ impl Ledger {
         for entry in &ledger.entries {
             if entry
                 .evidence_schema
-                .is_some_and(|schema| !matches!(schema, 2 | 3 | 4))
+                .is_some_and(|schema| !matches!(schema, 2 | 3 | 4 | 5))
             {
                 return Err(format!(
                     "{}: unsupported closure evidence schema {:?}; upgrade the tool before release",
@@ -168,11 +228,14 @@ impl Ledger {
                 ));
             }
             match (entry.evidence_schema, &entry.evidence_components) {
-                (Some(3 | 4), Some(parts))
+                (Some(3 | 4 | 5), Some(parts))
                     if parts
                         .keys()
                         .map(String::as_str)
-                        .filter(|k| entry.evidence_schema != Some(4) || *k != "normalization")
+                        .filter(|k| {
+                            !matches!(entry.evidence_schema, Some(4 | 5)) || *k != "normalization"
+                        })
+                        .filter(|k| entry.evidence_schema != Some(5) || *k != "details")
                         .collect::<BTreeSet<_>>()
                         == BTreeSet::from([
                             "adapters",
@@ -184,12 +247,22 @@ impl Ledger {
                             "environment",
                             "policy",
                         ])
-                        && (entry.evidence_schema != Some(4)
+                        && (!matches!(entry.evidence_schema, Some(4 | 5))
                             || parts.contains_key("normalization"))
+                        && (entry.evidence_schema != Some(5)
+                            || entry.evidence_details.as_ref().is_some_and(|d| {
+                                hash(d).ok().as_ref() == parts.get("details")
+                            }))
                         && parts.get("content") == Some(&entry.content)
                         && hash(parts)? == entry.evidence => {}
                 (None | Some(2), None) => {}
                 _ => return Err(format!("{}: invalid closure evidence components", entry.id)),
+            }
+            if entry.evidence_schema != Some(5) && entry.evidence_details.is_some() {
+                return Err(format!(
+                    "{}: unexpected portable evidence details",
+                    entry.id
+                ));
             }
             let mut unhashed = entry.clone();
             unhashed.hash.clear();
@@ -327,6 +400,94 @@ fn dependency_scope(capture: &Capture, id: &str) -> BTreeSet<String> {
     }
 }
 
+fn parse_task_packages(value: &str) -> Result<BTreeSet<String>, String> {
+    let mut packages = BTreeSet::new();
+    for id in value.split(',').map(str::trim) {
+        if id.is_empty() || !packages.insert(id.to_string()) {
+            return Err("task packages must be nonempty, unique registered package ids".into());
+        }
+    }
+    Ok(packages)
+}
+
+/// Reject malformed task selection before any project discovery or forwarding.
+pub fn task_packages_argument(args: &[String]) -> Result<Option<String>, String> {
+    if args.iter().any(|arg| arg.starts_with("--packages=")) {
+        return Err("use --packages followed by one comma-separated list".into());
+    }
+    let positions = args
+        .iter()
+        .enumerate()
+        .filter(|(_, arg)| arg.as_str() == "--packages")
+        .map(|(index, _)| index)
+        .collect::<Vec<_>>();
+    if positions.is_empty() {
+        return Ok(None);
+    }
+    if positions.len() != 1 || args.iter().any(|arg| arg == "--recover") {
+        return Err(
+            "--packages requires one comma-separated list and cannot be combined with --recover"
+                .into(),
+        );
+    }
+    let value = args
+        .get(positions[0] + 1)
+        .filter(|value| !value.starts_with("--"))
+        .ok_or("--packages requires one comma-separated list")?;
+    parse_task_packages(value)?;
+    Ok(Some(value.clone()))
+}
+
+// A task cannot opt out of its consumers, dependencies or identity transitions.
+// Upstream dependencies do not pull in unrelated sibling consumers.
+pub(super) fn task_scope(
+    cfg: &Config,
+    capture: &Capture,
+    requested: &BTreeSet<String>,
+) -> Result<BTreeSet<String>, String> {
+    let known = |id: &str| {
+        capture.current.packages.contains_key(id) || capture.baseline.packages.contains_key(id)
+    };
+    if requested.is_empty() || requested.iter().any(|id| !known(id)) {
+        return Err("task scope contains an empty or unknown registered package".into());
+    }
+    let mut scope = requested.clone();
+    let mut impact = requested.clone();
+    loop {
+        let before = (scope.len(), impact.len());
+        for transition in cfg
+            .native
+            .lifecycle
+            .iter()
+            .filter(|t| t.base == capture.boundary)
+        {
+            let ids = transition.from.iter().chain(&transition.to).map(|p| &p.id);
+            if ids.clone().any(|id| scope.contains(id)) {
+                let endpoints = ids.cloned().collect::<BTreeSet<_>>();
+                scope.extend(endpoints.iter().cloned());
+                impact.extend(endpoints);
+            }
+        }
+        for edge in capture
+            .current
+            .dependencies
+            .iter()
+            .chain(&capture.baseline.dependencies)
+        {
+            if impact.contains(&edge.target) && known(&edge.owner) {
+                scope.insert(edge.owner.clone());
+                impact.insert(edge.owner.clone());
+            }
+            if scope.contains(&edge.owner) && known(&edge.target) {
+                scope.insert(edge.target.clone());
+            }
+        }
+        if (scope.len(), impact.len()) == before {
+            return Ok(scope);
+        }
+    }
+}
+
 fn product_workspaces(
     root: &Path,
     cfg: &Config,
@@ -367,6 +528,56 @@ fn rust_build_evidence_from(
     scope: &BTreeSet<String>,
     products: &BTreeSet<String>,
     read: &mut impl FnMut(&str) -> Result<Option<Vec<u8>>, String>,
+) -> Result<BTreeMap<String, Option<String>>, String> {
+    rust_build_evidence_mode(capture, scope, products, read, false)
+}
+
+// Only impact selection uses semantic TOML. Historical certificate hashes keep
+// their original serializer, so enabling precise scope cannot rebind old proof.
+fn toml_semantics(bytes: &[u8]) -> Result<Value, String> {
+    fn value(v: &toml_edit::Value) -> Value {
+        match v {
+            toml_edit::Value::String(v) => json!(v.value()),
+            toml_edit::Value::Integer(v) => json!(v.value()),
+            toml_edit::Value::Float(v) => json!({"float":v.value().to_string()}),
+            toml_edit::Value::Boolean(v) => json!(v.value()),
+            toml_edit::Value::Datetime(v) => json!({"datetime":v.value().to_string()}),
+            toml_edit::Value::Array(v) => Value::Array(v.iter().map(value).collect()),
+            toml_edit::Value::InlineTable(v) => json!(
+                v.iter()
+                    .map(|(k, v)| (k, value(v)))
+                    .collect::<BTreeMap<_, _>>()
+            ),
+        }
+    }
+    fn item(i: &toml_edit::Item) -> Value {
+        match i {
+            toml_edit::Item::None => Value::Null,
+            toml_edit::Item::Value(v) => value(v),
+            toml_edit::Item::Table(t) => table(t),
+            toml_edit::Item::ArrayOfTables(a) => Value::Array(a.iter().map(table).collect()),
+        }
+    }
+    fn table(t: &toml_edit::Table) -> Value {
+        json!(
+            t.iter()
+                .map(|(k, v)| (k, item(v)))
+                .collect::<BTreeMap<_, _>>()
+        )
+    }
+    let document = std::str::from_utf8(bytes)
+        .map_err(|e| e.to_string())?
+        .parse::<toml_edit::DocumentMut>()
+        .map_err(|e| e.to_string())?;
+    Ok(table(document.as_table()))
+}
+
+fn rust_build_evidence_mode(
+    capture: &Capture,
+    scope: &BTreeSet<String>,
+    products: &BTreeSet<String>,
+    read: &mut impl FnMut(&str) -> Result<Option<Vec<u8>>, String>,
+    semantic: bool,
 ) -> Result<BTreeMap<String, Option<String>>, String> {
     let mut workspaces = BTreeMap::<String, BTreeSet<String>>::new();
     for id in scope {
@@ -412,7 +623,19 @@ fn rust_build_evidence_from(
             .as_deref()
             .map(|bytes| crate::source_projection::lock_dependency_closure(bytes, &names))
             .transpose()?;
-        evidence.insert(lock, normalized.as_deref().map(digest));
+        evidence.insert(
+            lock,
+            normalized
+                .as_deref()
+                .map(|bytes| {
+                    if semantic {
+                        hash(&toml_semantics(bytes)?)
+                    } else {
+                        Ok(digest(bytes))
+                    }
+                })
+                .transpose()?,
+        );
     }
     Ok(evidence)
 }
@@ -428,12 +651,13 @@ struct Fingerprints {
     #[serde(skip)]
     raw: Option<Box<Fingerprints>>,
     portable_evidence: String,
+    details: Option<BTreeMap<String, String>>,
 }
 
 impl Fingerprints {
     fn content_matches(&self, entry: &Entry) -> bool {
         entry.content == self.content
-            || (entry.evidence_schema != Some(4)
+            || (!matches!(entry.evidence_schema, Some(4 | 5))
                 && self
                     .raw
                     .as_ref()
@@ -443,7 +667,7 @@ impl Fingerprints {
     fn matches(&self, entry: &Entry) -> bool {
         (entry.content == self.content
             && match entry.evidence_schema {
-                Some(4) => entry.evidence == self.evidence,
+                Some(4 | 5) => entry.evidence == self.evidence,
                 Some(3) => entry.evidence == self.portable_evidence,
                 Some(2) => self.legacy_complete && entry.evidence == self.host_evidence,
                 None => {
@@ -453,7 +677,7 @@ impl Fingerprints {
                 }
                 _ => false,
             })
-            || (entry.evidence_schema != Some(4)
+            || (!matches!(entry.evidence_schema, Some(4 | 5))
                 && self.raw.as_ref().is_some_and(|raw| raw.matches(entry)))
     }
 
@@ -461,10 +685,27 @@ impl Fingerprints {
         let Some(entry) = entry else {
             return "missing closure record".into();
         };
+        if let (Some(before), Some(after)) = (&entry.evidence_details, &self.details) {
+            let changed = before
+                .keys()
+                .chain(after.keys())
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .filter(|key| before.get(*key) != after.get(*key))
+                .take(12)
+                .cloned()
+                .collect::<Vec<_>>();
+            if !changed.is_empty() {
+                return format!(
+                    "validation evidence changed (inputs: {}; run managed develop)",
+                    changed.join(", ")
+                );
+            }
+        }
         if !self.content_matches(entry) {
             return "package content changed".into();
         }
-        if !matches!(entry.evidence_schema, Some(3 | 4)) && !self.legacy_complete {
+        if !matches!(entry.evidence_schema, Some(3 | 4 | 5)) && !self.legacy_complete {
             return "validation evidence changed (legacy proof does not cover declared global build inputs; run managed develop to verify those inputs)".into();
         }
         if let Some(parts) = &entry.evidence_components {
@@ -477,7 +718,7 @@ impl Fingerprints {
                 .components
                 .iter()
                 .filter(|(name, _)| {
-                    entry.evidence_schema == Some(4) || name.as_str() != "normalization"
+                    matches!(entry.evidence_schema, Some(4 | 5)) || name.as_str() != "normalization"
                 })
                 .filter(|(name, value)| parts.get(*name) != Some(*value))
                 .map(|(name, _)| name.as_str())
@@ -497,23 +738,54 @@ fn fingerprints(
     capture: &mut Capture,
     runner: &dyn ProcessRunner,
 ) -> Result<BTreeMap<String, Fingerprints>, String> {
-    let raw = fingerprints_with_identity(root, cfg, capture, None)?;
+    fingerprints_scoped(root, cfg, capture, runner, None)
+}
+
+fn fingerprints_scoped(
+    root: &Path,
+    cfg: &Config,
+    capture: &mut Capture,
+    runner: &dyn ProcessRunner,
+    scope: Option<&BTreeSet<String>>,
+) -> Result<BTreeMap<String, Fingerprints>, String> {
+    let _profile = crate::release_metrics::span("evidence.fingerprints");
+    if scope.is_some_and(BTreeSet::is_empty) {
+        return Ok(BTreeMap::new());
+    }
+    capture.portable_guards.clear();
+    let mut environments = BTreeMap::new();
+    let raw = fingerprints_with_identity(root, cfg, capture, None, scope, &mut environments)?;
     let paths = capture.inputs.keys().filter_map(|p| {
         p.strip_prefix(root)
             .ok()
             .map(|p| p.to_string_lossy().replace('\\', "/"))
     });
     let rules = content_identity::Rules::capture(root, paths, runner)?;
+    if capture
+        .validation_normalization
+        .as_ref()
+        .is_some_and(|earlier| !rules.covers(earlier))
+    {
+        return Err(
+            "Git normalization rules changed during input capture; inspect inputs again".into(),
+        );
+    }
     let identity = content_identity::Identity::new(root, rules, runner);
     identity.prepare(&capture.inputs)?;
-    let mut normalized = fingerprints_with_identity(root, cfg, capture, Some(&identity))?;
+    let mut normalized = fingerprints_with_identity(
+        root,
+        cfg,
+        capture,
+        Some(&identity),
+        scope,
+        &mut environments,
+    )?;
     for (id, entry) in raw {
         let current = normalized
             .get_mut(&id)
             .ok_or("normalization package inventory changed")?;
         current.raw = Some(Box::new(entry));
     }
-    identity.rules.verify(root, runner)?;
     if let Some(previous) = &capture.normalization {
         previous.verify(root, runner)?;
     } else {
@@ -522,6 +794,8 @@ fn fingerprints(
         )?;
     }
     capture.normalization = Some(identity.rules);
+    verify_release_inputs(&capture.inputs)?;
+    development_inputs::verify(root, capture, &capture.inputs)?;
     Ok(normalized)
 }
 
@@ -530,6 +804,8 @@ fn fingerprints_with_identity(
     cfg: &Config,
     capture: &mut Capture,
     identity: Option<&content_identity::Identity<'_>>,
+    scope: Option<&BTreeSet<String>>,
+    environments: &mut BTreeMap<String, BTreeMap<String, String>>,
 ) -> Result<BTreeMap<String, Fingerprints>, String> {
     let file_hash = |path: &str, bytes: Option<&[u8]>| match identity {
         Some(identity) => identity.hash(path, bytes),
@@ -540,10 +816,34 @@ fn fingerprints_with_identity(
         .packages
         .keys()
         .chain(capture.baseline.packages.keys())
+        .filter(|id| scope.is_none_or(|scope| scope.contains(*id)))
         .cloned()
         .collect::<BTreeSet<_>>();
     if ids.is_empty() {
         return Ok(BTreeMap::new());
+    }
+    let content_scope = ids
+        .iter()
+        .flat_map(|id| dependency_scope(capture, id))
+        .chain(ids.iter().cloned())
+        .collect::<BTreeSet<_>>();
+    let mut needed = BTreeSet::new();
+    for id in &ids {
+        if let Some(policy) = cfg.development.get(id) {
+            for check in policy
+                .checks
+                .iter()
+                .chain(policy.stability.iter().flat_map(|s| &s.checks))
+            {
+                needed.extend(check.inputs.iter().cloned());
+            }
+            needed.extend(
+                policy
+                    .stability
+                    .iter()
+                    .flat_map(|s| s.contracts.iter().cloned()),
+            );
+        }
     }
     let mut files = BTreeMap::<String, Option<String>>::new();
     for path in &capture.inventory {
@@ -553,7 +853,23 @@ fn fingerprints_with_identity(
         {
             continue;
         }
-        let bytes = config::read_current(root, path)?;
+        if scope.is_some()
+            && !needed.contains(path)
+            && !content_scope
+                .iter()
+                .any(|id| uses_build(cfg, capture, id, path))
+            && !polyglot::owner(&capture.current, path, &cfg.native)
+                .unwrap_or_default()
+                .iter()
+                .any(|id| content_scope.contains(id))
+        {
+            continue;
+        }
+        let _profile = crate::release_metrics::span("evidence.file");
+        let bytes = match capture.inputs.get(&root.join(path)) {
+            Some(bytes) => bytes.clone(),
+            None => config::read_current(root, path)?,
+        };
         files.insert(path.clone(), file_hash(path, bytes.as_deref())?);
         capture.inputs.entry(root.join(path)).or_insert(bytes);
     }
@@ -568,7 +884,7 @@ fn fingerprints_with_identity(
     let (declared_build, legacy_complete) =
         development_inputs::capture(root, cfg, capture, &files, identity)?;
     let mut contents = BTreeMap::new();
-    for id in &ids {
+    for id in &content_scope {
         let mut owned = BTreeMap::new();
         for (path, digest) in &files {
             if digest.is_none() || is_build(cfg, path) {
@@ -709,8 +1025,71 @@ fn fingerprints_with_identity(
             paths.extend(rust_build.keys().cloned());
             paths.extend(check_inputs.keys().map(|p| (*p).clone()));
             paths.extend(contracts.keys().map(|p| (*p).clone()));
-            components.insert("normalization".into(), identity.rules.digest(&paths)?);
+            components.insert(
+                "normalization".into(),
+                if cfg
+                    .development
+                    .get(&id)
+                    .is_some_and(|p| p.environment.is_some())
+                {
+                    identity.rules.portable_digest(&paths)?
+                } else {
+                    identity.rules.digest(&paths)?
+                },
+            );
         }
+        let details = if let Some(contract) = cfg
+            .development
+            .get(&id)
+            .and_then(|p| p.environment.as_ref())
+        {
+            let key = hash(contract)?;
+            if !environments.contains_key(&key) {
+                let facts = contract.snapshot(root, capture)?;
+                capture
+                    .portable_guards
+                    .push(portable_environment::Guard::new(
+                        contract,
+                        facts.clone(),
+                        capture,
+                    ));
+                environments.insert(key.clone(), facts);
+            }
+            let environment = &environments[&key];
+            components.insert("environment".into(), hash(environment)?);
+            let mut details = environment
+                .iter()
+                .map(|(k, v)| (format!("environment:{k}"), v.clone()))
+                .collect::<BTreeMap<_, _>>();
+            for (path, value) in &files {
+                if check_inputs.contains_key(path)
+                    || contracts.contains_key(path)
+                    || polyglot::owner(&capture.current, path, &cfg.native)
+                        .unwrap_or_default()
+                        .iter()
+                        .any(|id| dependencies.contains(id))
+                {
+                    details.insert(
+                        format!("file:{path}"),
+                        hash(&(
+                            value,
+                            capture
+                                .modes
+                                .get(path)
+                                .map(String::as_str)
+                                .unwrap_or("100644"),
+                        ))?,
+                    );
+                }
+            }
+            for (path, value) in &check_inputs {
+                details.insert(format!("check:{path}"), hash(value)?);
+            }
+            components.insert("details".into(), hash(&details)?);
+            Some(details)
+        } else {
+            None
+        };
         let evidence = hash(&components)?;
         result.insert(
             id.clone(),
@@ -723,11 +1102,10 @@ fn fingerprints_with_identity(
                 legacy_complete,
                 raw: None,
                 portable_evidence,
+                details,
             },
         );
     }
-    verify_release_inputs(&capture.inputs)?;
-    development_inputs::verify(root, capture, &capture.inputs)?;
     Ok(result)
 }
 
@@ -748,6 +1126,12 @@ fn published_unchanged(
         Ledger::parse(revision_payload(root, &capture.boundary, RECORD, &reader)?.as_deref())?;
     ledger.extends(&published)?;
     let mut reusable = BTreeSet::new();
+    if hashes
+        .iter()
+        .all(|(id, current)| ledger.latest(id).is_none_or(|entry| current.matches(entry)))
+    {
+        return Ok(reusable);
+    }
     let Some(old_config) = revision_payload(root, &capture.boundary, CONFIG, &reader)? else {
         return Ok(reusable);
     };
@@ -768,13 +1152,19 @@ fn published_unchanged(
     }
     let products = product_workspaces(root, cfg, capture)?;
     for (id, current) in hashes {
+        if ledger
+            .latest(id)
+            .is_some_and(|entry| current.matches(entry))
+        {
+            continue;
+        }
         let (Some(entry), Some(old)) = (ledger.latest(id), published.latest(id)) else {
             continue;
         };
         // Portable certificates describe the validation environment. Publication
         // may bridge Git EOL conversion, never a real tool/build environment change.
-        if (!matches!(entry.evidence_schema, Some(3 | 4)) && !current.legacy_complete)
-            || (matches!(entry.evidence_schema, Some(3 | 4))
+        if (!matches!(entry.evidence_schema, Some(3 | 4 | 5)) && !current.legacy_complete)
+            || (matches!(entry.evidence_schema, Some(3 | 4 | 5))
                 && entry
                     .evidence_components
                     .as_ref()
@@ -782,7 +1172,7 @@ fn published_unchanged(
                     != current.components.get("environment"))
             || entry.hash != old.hash
             || !current.content_matches(entry)
-            || (entry.evidence_schema == Some(4)
+            || (matches!(entry.evidence_schema, Some(4 | 5))
                 && entry
                     .evidence_components
                     .as_ref()
@@ -916,21 +1306,171 @@ fn published_unchanged(
 }
 
 fn pending(
-    cfg: &Config,
-    capture: &Capture,
     ledger: &Ledger,
     hashes: &BTreeMap<String, Fingerprints>,
     published: &BTreeSet<String>,
+    validation_scope: &BTreeSet<String>,
 ) -> BTreeSet<String> {
-    let affected = plan::affected(cfg, capture);
     hashes
         .iter()
         .filter(|(id, current)| match ledger.latest(id) {
             Some(entry) => !current.matches(entry) && !published.contains(*id),
-            None => affected.contains(*id),
+            None => validation_scope.contains(*id),
         })
         .map(|(id, _)| id.clone())
         .collect()
+}
+
+fn release_scope(
+    root: &Path,
+    cfg: &Config,
+    capture: &Capture,
+    ledger: &Ledger,
+    published: &Ledger,
+    runner: &dyn ProcessRunner,
+) -> Result<BTreeSet<String>, String> {
+    let mut scope = plan::affected(cfg, capture);
+    scope.extend(
+        ledger.entries[published.entries.len()..]
+            .iter()
+            .map(|e| e.id.clone()),
+    );
+    let products = product_workspaces(root, cfg, capture)?;
+    let old_config = if capture.changes.iter().any(|c| c.path == CONFIG) {
+        if capture.boundary == cfg.baseline.revision {
+            Some(cfg.baseline.initial_configuration.clone())
+        } else {
+            revision_payload(root, &capture.boundary, CONFIG, runner)?
+                .map(|bytes| crate::json::parse_unique_json(&bytes, "published configuration"))
+                .transpose()?
+        }
+    } else {
+        None
+    };
+    let new_config = if old_config.is_some() {
+        Some(crate::json::parse_unique_json(
+            &config::read_current(root, CONFIG)?.ok_or("configuration missing")?,
+            "configuration",
+        )?)
+    } else {
+        None
+    };
+    let dependencies = capture
+        .current
+        .packages
+        .keys()
+        .map(|id| (id.clone(), dependency_scope(capture, id)))
+        .collect::<BTreeMap<_, _>>();
+    for change in &capture.changes {
+        if change.role == "record" {
+            continue;
+        }
+        for id in capture.current.packages.keys() {
+            if scope.contains(id) {
+                continue;
+            }
+            let check_input = cfg.development.get(id).is_some_and(|p| {
+                p.checks
+                    .iter()
+                    .chain(p.stability.iter().flat_map(|s| &s.checks))
+                    .any(|c| c.inputs.contains(&change.path))
+                    || p.stability
+                        .as_ref()
+                        .is_some_and(|s| s.contracts.contains(&change.path))
+            });
+            let configuration_changed = if change.path == CONFIG {
+                match (&old_config, &new_config) {
+                    (Some(old), Some(new)) => {
+                        old["development"][id] != new["development"][id]
+                            || [
+                                "adapters",
+                                "build_inputs",
+                                "record_inputs",
+                                "shared_inputs",
+                                "python_environment",
+                                "product_manifests",
+                                "product_packages",
+                            ]
+                            .iter()
+                            .any(|key| old[key] != new[key])
+                            || serde_json::to_value(capture.baseline.packages.get(id)).ok()
+                                != serde_json::to_value(capture.current.packages.get(id)).ok()
+                    }
+                    _ => true,
+                }
+            } else {
+                false
+            };
+            let mut build_changed = dependencies[id]
+                .iter()
+                .any(|dep| uses_build(cfg, capture, dep, &change.path));
+            if build_changed
+                && Path::new(&change.path)
+                    .file_name()
+                    .is_some_and(|n| n == "Cargo.lock")
+                && !cfg
+                    .build_inputs
+                    .iter()
+                    .any(|p| polyglot::owns(p, &change.path))
+                && capture.current.packages[id].language == Language::Rust
+            {
+                let before = revision_payload(root, &capture.boundary, &change.path, runner)?;
+                let now = rust_build_evidence_mode(
+                    capture,
+                    &dependencies[id],
+                    &products,
+                    &mut |path| config::read_current(root, path),
+                    true,
+                )?;
+                let old = rust_build_evidence_mode(
+                    capture,
+                    &dependencies[id],
+                    &products,
+                    &mut |path| {
+                        if path == change.path {
+                            Ok(before.clone())
+                        } else {
+                            config::read_current(root, path)
+                        }
+                    },
+                    true,
+                )?;
+                build_changed = old != now;
+            }
+            let environment_input = cfg
+                .development
+                .get(id)
+                .and_then(|p| p.environment.as_ref())
+                .is_some_and(|e| e.affects_path(root, &change.path));
+            let cargo_config =
+                matches!(change.path.as_str(), ".cargo/config" | ".cargo/config.toml")
+                    && capture.current.packages[id].language == Language::Rust;
+            if configuration_changed
+                || check_input
+                || build_changed
+                || environment_input
+                || cargo_config
+            {
+                scope.insert(id.clone());
+            }
+        }
+    }
+    loop {
+        let before = scope.len();
+        for edge in capture
+            .current
+            .dependencies
+            .iter()
+            .chain(&capture.baseline.dependencies)
+        {
+            if scope.contains(&edge.target) {
+                scope.insert(edge.owner.clone());
+            }
+        }
+        if before == scope.len() {
+            return Ok(scope);
+        }
+    }
 }
 
 pub(super) fn release_gate(
@@ -945,9 +1485,60 @@ pub(super) fn release_gate(
         );
     }
     let ledger = Ledger::load(root)?;
-    let hashes = fingerprints(root, cfg, capture, runner)?;
+    let published_ledger =
+        Ledger::parse(revision_payload(root, &capture.boundary, RECORD, runner)?.as_deref())?;
+    ledger.extends(&published_ledger)?;
+    if capture.changes.iter().all(|c| c.role == "record") {
+        return Ok(ledger);
+    }
+    let scope = release_scope(root, cfg, capture, &ledger, &published_ledger, runner)?;
+    if scope.is_empty() {
+        // Product-only releases still write files. Reuse the rules captured for
+        // their validation identity without scanning unrelated package contents.
+        let initial = capture
+            .validation_normalization
+            .clone()
+            .ok_or("release validation rules missing")?;
+        let (declared_build, _) =
+            development_inputs::capture(root, cfg, capture, &BTreeMap::new(), None)?;
+        let rules = if declared_build.is_empty() {
+            initial
+        } else {
+            let paths = capture.inputs.keys().filter_map(|p| {
+                p.strip_prefix(root)
+                    .ok()
+                    .map(|p| p.to_string_lossy().replace('\\', "/"))
+            });
+            let rules = content_identity::Rules::capture(root, paths, runner)?;
+            if !rules.covers(&initial) {
+                return Err("Git normalization rules changed during input capture".into());
+            }
+            // Product-level check receipts must also expire if a declared global
+            // input changed before a fresh preview, including ignored inputs.
+            capture.validation_fingerprint = hash(
+                &json!({"validation":capture.validation_fingerprint,"declared_build":declared_build}),
+            )?;
+            rules
+        };
+        capture.fingerprint = hash(
+            &json!({"capture":capture.fingerprint,"normalization":rules.planning_digest()?,"declared_build":declared_build}),
+        )?;
+        capture.normalization = Some(rules);
+        verify_release_inputs(&capture.inputs)?;
+        development_inputs::verify(root, capture, &capture.inputs)?;
+        return Ok(ledger);
+    }
+    let hashes = fingerprints_scoped(root, cfg, capture, runner, Some(&scope))?;
     let published = published_unchanged(root, cfg, capture, &ledger, &hashes, runner)?;
-    let pending = pending(cfg, capture, &ledger, &hashes, &published);
+    capture.release_packages = scope.clone();
+    let pending = hashes
+        .iter()
+        .filter(|(id, current)| match ledger.latest(id) {
+            Some(entry) => !current.matches(entry) && !published.contains(*id),
+            None => scope.contains(*id),
+        })
+        .map(|(id, _)| id.clone())
+        .collect::<BTreeSet<_>>();
     if !pending.is_empty() {
         let reasons = pending
             .iter()
@@ -961,9 +1552,17 @@ pub(super) fn release_gate(
             "package development closure required: {reasons}; complete validation and managed version closure before release (release does not run develop)"
         ));
     }
-    for id in plan::affected(cfg, capture) {
+    for id in scope {
         if let Some(entry) = ledger.latest(&id) {
             for (path, expected) in &entry.artifacts {
+                if entry.evidence_schema == Some(5)
+                    && !cfg
+                        .development
+                        .get(&id)
+                        .is_some_and(|p| p.release_artifacts.contains(path))
+                {
+                    continue;
+                }
                 let bytes = config::read_current(root, path)?.ok_or_else(|| {
                     format!("{id}: development artifact missing: {path}; run develop")
                 })?;
@@ -992,6 +1591,9 @@ struct Prepared {
     direct_changes: BTreeSet<String>,
     writes: model::Writes,
     receipt: Value,
+    task_scope: Option<BTreeSet<String>>,
+    check_keys: BTreeMap<String, String>,
+    analysis_path: Option<PathBuf>,
 }
 fn unstable(package: &NativePackage) -> bool {
     unstable_version(package, &package.version)
@@ -1099,6 +1701,7 @@ fn prepare(
     request: &Request,
     runner: &dyn ProcessRunner,
     renderer: Option<&Materializer>,
+    requested: Option<&BTreeSet<String>>,
 ) -> Result<Result<Prepared, Value>, String> {
     require_ignored_runtime(root, runner)?;
     if root.join(JOURNAL).exists() {
@@ -1108,16 +1711,40 @@ fn prepare(
     let mut capture = capture(root, &cfg, runner)?;
     let ledger = Ledger::load(root)?;
     let products = product_workspaces(root, &cfg, &capture)?;
-    let hashes = fingerprints(root, &cfg, &mut capture, runner)?;
+    let task_scope = requested
+        .map(|ids| task_scope(&cfg, &capture, ids))
+        .transpose()?;
+    let hashes = if task_scope.is_some() {
+        fingerprints_scoped(root, &cfg, &mut capture, runner, task_scope.as_ref())?
+    } else {
+        fingerprints(root, &cfg, &mut capture, runner)?
+    };
     // Declared ignored inputs are discovered above and must bind the preview too.
     capture.fingerprint = hash(&json!({"capture":capture.fingerprint,"packages":hashes,
         "inputs":capture.inputs.iter().map(|(p,b)|(p.to_string_lossy().into_owned(),b.as_deref().map(digest))).collect::<BTreeMap<_,_>>()}))?;
+    if let Some(scope) = &task_scope {
+        capture.fingerprint = hash(
+            &json!({"capture":capture.fingerprint,"task_packages":requested,"effective_task_packages":scope}),
+        )?;
+    }
     let published = published_unchanged(root, &cfg, &capture, &ledger, &hashes, runner)?;
-    let mut affected = pending(&cfg, &capture, &ledger, &hashes, &published);
+    let published_ledger =
+        Ledger::parse(revision_payload(root, &capture.boundary, RECORD, runner)?.as_deref())?;
+    ledger.extends(&published_ledger)?;
+    let validation_scope = release_scope(root, &cfg, &capture, &ledger, &published_ledger, runner)?;
+    let mut affected = pending(&ledger, &hashes, &published, &validation_scope);
     // Lost or modified generated artifacts require revalidation, never a second bump.
     for (id, _) in &hashes {
         if let Some(entry) = ledger.latest(id) {
             if entry.artifacts.iter().any(|(p, h)| {
+                if entry.evidence_schema == Some(5)
+                    && !cfg
+                        .development
+                        .get(id)
+                        .is_some_and(|policy| policy.release_artifacts.contains(p))
+                {
+                    return false;
+                }
                 config::read_current(root, p)
                     .ok()
                     .flatten()
@@ -1133,6 +1760,14 @@ fn prepare(
     let mut receipt = json!({"schema":1,"status":"development-analysis-required","fingerprint":capture.fingerprint,
         "affected_packages":affected,"packages":capture.current.packages,"writes":[],"product_version":capture.product_version});
     receipt["reused_published_packages"] = json!(published);
+    receipt["readiness_scope"] = json!(if task_scope.is_some() {
+        "task"
+    } else {
+        "repository"
+    });
+    receipt["task_packages"] = json!(requested);
+    receipt["effective_task_packages"] = json!(task_scope);
+    receipt["outside_task_evidence_checked"] = json!(task_scope.is_none());
     receipt["pending_reasons"] = json!(affected.iter().map(|id| {
         let reason = if ledger.latest(id).is_some_and(|entry| hashes[id].matches(entry))
             || published.contains(id) {
@@ -1143,7 +1778,11 @@ fn prepare(
         (id.clone(), reason)
     }).collect::<BTreeMap<_, _>>());
     if affected.is_empty() {
-        receipt["status"] = json!("nothing-to-close");
+        receipt["status"] = json!(if task_scope.is_some() {
+            "task-development-current"
+        } else {
+            "nothing-to-close"
+        });
         return Ok(Err(receipt));
     }
     receipt["python_environment_required"] = json!(
@@ -1182,7 +1821,7 @@ fn prepare(
                         && entry.after.as_deref() == Some(now.version.as_str())
                 });
             if same_published_package
-                && entry.evidence_schema != Some(4)
+                && !matches!(entry.evidence_schema, Some(4 | 5))
                 && !hashes[id].content_matches(entry)
                 && !capture
                     .git_content_changes
@@ -1203,13 +1842,22 @@ fn prepare(
             }
         }
     }
+    let lifecycle_affected = plan::lifecycle_affected(&cfg, &capture);
+    let unchanged_content = |id: &String| match ledger.latest(id) {
+        Some(entry) => hashes[id].content_matches(entry),
+        None => {
+            !lifecycle_affected.contains(id)
+                && capture.baseline.packages.contains_key(id)
+                && serde_json::to_value(capture.baseline.packages.get(id)).ok()
+                    == serde_json::to_value(capture.current.packages.get(id)).ok()
+                && !capture.changes.iter().any(|c| {
+                    c.role != "record" && c.packages.contains(id) && !is_build(&cfg, &c.path)
+                })
+        }
+    };
     let mut direct_changes = affected
         .iter()
-        .filter(|id| {
-            ledger
-                .latest(id)
-                .is_none_or(|e| !hashes[*id].content_matches(e))
-        })
+        .filter(|id| !unchanged_content(id))
         .cloned()
         .collect::<BTreeSet<_>>();
     plan::interface_impacts(&capture, &analysis, &mut direct_changes, true)?;
@@ -1226,6 +1874,12 @@ fn prepare(
     let mut levels = BTreeMap::new();
     let mut writes = BTreeMap::new();
     for round in 0..=capture.current.packages.len() + 1 {
+        if task_scope
+            .as_ref()
+            .is_some_and(|scope| !affected.is_subset(scope))
+        {
+            return Err("development impact expanded outside the captured task scope; inspect the required packages again".into());
+        }
         for id in &affected {
             let a = analysis.packages.get(id).ok_or_else(|| {
                 format!(
@@ -1258,11 +1912,8 @@ fn prepare(
             if !capture.current.packages.contains_key(id) {
                 continue;
             }
-            let revalidation = !force_bump.contains(id)
-                && (mechanical.contains(id)
-                    || ledger
-                        .latest(id)
-                        .is_some_and(|e| hashes[id].content_matches(e)));
+            let revalidation =
+                !force_bump.contains(id) && (mechanical.contains(id) || unchanged_content(id));
             if revalidation {
                 levels.insert(id.clone(), 0);
             }
@@ -1375,6 +2026,13 @@ fn prepare(
     {
         return Err("development analysis includes unchanged or unknown packages".into());
     }
+    if task_scope
+        .as_ref()
+        .is_some_and(|scope| !affected.is_subset(scope))
+    {
+        return Err("development impact expanded outside the captured task scope; inspect the required packages again".into());
+    }
+    validate_cache_artifacts(root, &cfg, &affected, runner)?;
     materialize(root, &mut writes, renderer)?;
     for path in writes.keys() {
         capture
@@ -1407,6 +2065,18 @@ fn prepare(
         direct_changes,
         writes,
         receipt,
+        task_scope,
+        check_keys: hashes
+            .iter()
+            .map(|(id, value)| (id.clone(), value.evidence.clone()))
+            .collect(),
+        analysis_path: request.analysis_file.as_ref().map(|path| {
+            if path.is_absolute() {
+                path.clone()
+            } else {
+                root.join(path)
+            }
+        }),
     }))
 }
 
@@ -1417,6 +2087,56 @@ struct Journal {
     head: String,
     before: model::Inputs,
     after: model::Writes,
+}
+
+fn validate_cache_artifacts(
+    root: &Path,
+    cfg: &Config,
+    affected: &BTreeSet<String>,
+    runner: &dyn ProcessRunner,
+) -> Result<(), String> {
+    let policies = affected
+        .iter()
+        .filter_map(|id| cfg.development.get(id))
+        .collect::<Vec<_>>();
+    if !policies.iter().any(|p| {
+        p.checks
+            .iter()
+            .chain(p.stability.iter().flat_map(|s| &s.checks))
+            .any(|c| c.reusable)
+    }) {
+        return Ok(());
+    }
+    let artifacts = policies
+        .iter()
+        .flat_map(|p| {
+            p.checks
+                .iter()
+                .chain(p.stability.iter().flat_map(|s| &s.checks))
+        })
+        .flat_map(|check| &check.artifacts)
+        .collect::<BTreeSet<_>>();
+    let inspection = InspectionRunner(runner);
+    for path in artifacts {
+        // A cached check may observe Git status. Only ignored outputs can change
+        // without invalidating that identity; never silently relax the Git guard.
+        let mut command = ProcessRequest::new("git", root);
+        command.args = ["check-ignore", "--quiet", "--", path.as_str()]
+            .iter()
+            .map(Into::into)
+            .collect();
+        command.timeout = Duration::from_secs(30);
+        let output = inspection.run(&command).map_err(|e| e.to_string())?;
+        if output.timed_out || !matches!(output.code, 0 | 1) {
+            return Err("cannot establish ignored output identity for reusable checks".into());
+        }
+        if output.code != 0 {
+            return Err(format!(
+                "reusable development checks require ignored artifacts throughout the transaction; disable reuse for tracked or unignored output: {path}"
+            ));
+        }
+    }
+    Ok(())
 }
 fn atomic(root: &Path, path: &str, bytes: &[u8]) -> Result<(), String> {
     let path = safe_relative(root, path)?;
@@ -1507,7 +2227,9 @@ pub fn recover(root: &Path) -> CommandOutcome {
 fn run_check(
     root: &Path,
     check: &CheckCommand,
+    environment: Option<&portable_environment::Contract>,
     runner: &dyn ProcessRunner,
+    logs: Option<&mut (Vec<u8>, Vec<u8>)>,
 ) -> Result<(Value, BTreeMap<String, String>), String> {
     for path in &check.inputs {
         if config::read_current(root, path)?.is_none() {
@@ -1520,6 +2242,9 @@ fn run_check(
     let mut command = ProcessRequest::new(&check.program, root);
     command.args = check.args.iter().map(Into::into).collect();
     command.timeout = Duration::from_secs(check.timeout_seconds);
+    if let Some(environment) = environment {
+        environment.configure_process(root, &mut command)?;
+    }
     let output = runner
         .run(&command)
         .map_err(|e| format!("{}: cannot run check: {e}", check.id))?;
@@ -1538,10 +2263,204 @@ fn run_check(
             .ok_or_else(|| format!("{}: required final artifact missing: {path}", check.id))?;
         artifacts.insert(path.clone(), digest(&bytes));
     }
+    if let Some(logs) = logs {
+        *logs = (output.stdout.clone(), output.stderr.clone());
+    }
     Ok((
         json!({"id":check.id,"status":"passed","command":check,"stdout_sha256":digest(&output.stdout),"stderr_sha256":digest(&output.stderr)}),
         artifacts,
     ))
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct CachedCheck {
+    schema: u32,
+    key: String,
+    proof: Value,
+    artifacts: BTreeMap<String, String>,
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+    checksum: String,
+}
+
+fn cache_input_snapshot(
+    root: &Path,
+    p: &Prepared,
+    check: &CheckCommand,
+) -> Result<BTreeMap<String, Option<String>>, String> {
+    let mut inputs = BTreeMap::new();
+    for path in p.capture.inputs.keys() {
+        let Ok(relative) = path.strip_prefix(root) else {
+            continue;
+        };
+        let relative = relative.to_string_lossy().replace('\\', "/");
+        if check.artifacts.contains(&relative) {
+            continue;
+        }
+        if (relative == RECORD || p.analysis_path.as_ref() == Some(path))
+            && !check.inputs.contains(&relative)
+        {
+            continue;
+        }
+        inputs.insert(
+            relative.clone(),
+            config::read_current(root, &relative)?
+                .as_deref()
+                .map(digest),
+        );
+    }
+    Ok(inputs)
+}
+
+fn run_candidate_check(
+    root: &Path,
+    p: &Prepared,
+    id: &str,
+    check: &CheckCommand,
+    runner: &dyn ProcessRunner,
+) -> Result<(Value, BTreeMap<String, String>), String> {
+    let environment = p.cfg.development[id].environment.as_ref();
+    if !check.reusable {
+        return run_check(root, check, environment, runner, None);
+    }
+    let environment = environment.ok_or("reusable check environment is missing")?;
+    let host = inputs::environment(root, &p.cfg, p.capture.environment_guard.as_ref(), runner)?;
+    if host != p.capture.environment {
+        return Err("validation environment changed before reusable check".into());
+    }
+    let facts = environment.snapshot(root, &p.capture)?;
+    let inputs = cache_input_snapshot(root, p, check)?;
+    let inventory = independent::inventory(root, &InspectionRunner(runner))?;
+    let git = check_git_identity(root, runner)?;
+    let key = hash(
+        &json!({"schema":1,"root":root.canonicalize().map_err(|e|e.to_string())?.to_string_lossy(),
+        "engine":env!("CARGO_PKG_VERSION"),"engine_binary":running_tool_identity()?,"package":id,"evidence":p.check_keys.get(id),"command":check,
+        "candidate":p.writes.iter().map(|(path,bytes)|(path,digest(bytes))).collect::<BTreeMap<_,_>>(),
+        "inputs":inputs,"inventory":inventory,"environment":facts,"host_environment":host,
+        "git":git,"plan":p.capture.fingerprint}),
+    )?;
+    let path = format!(
+        ".runtime/bridgeforge-codex/develop-check-cache/{}.json",
+        key.trim_start_matches("sha256:")
+    );
+    if let Some(bytes) = config::read_current(root, &path)? {
+        if let Ok(value) = crate::json::parse_unique_json(&bytes, "development check cache") {
+            if let Ok(cached) = serde_json::from_value::<CachedCheck>(value) {
+                let checksum = hash(&json!({"proof":cached.proof,"artifacts":cached.artifacts,
+                    "stdout":digest(&cached.stdout),"stderr":digest(&cached.stderr)}))?;
+                if cached.schema == 1
+                    && cached.key == key
+                    && checksum == cached.checksum
+                    && cached.proof["id"] == check.id
+                    && cached.proof["status"] == "passed"
+                    && cached.proof["command"]
+                        == serde_json::to_value(check).map_err(|e| e.to_string())?
+                    && cached.proof["stdout_sha256"] == digest(&cached.stdout)
+                    && cached.proof["stderr_sha256"] == digest(&cached.stderr)
+                    && cached.artifacts.keys().collect::<BTreeSet<_>>()
+                        == check.artifacts.iter().collect::<BTreeSet<_>>()
+                    && cached.artifacts.iter().all(|(path, expected)| {
+                        config::read_current(root, path)
+                            .ok()
+                            .flatten()
+                            .as_deref()
+                            .map(digest)
+                            .as_ref()
+                            == Some(expected)
+                    })
+                {
+                    let mut proof = cached.proof;
+                    proof["cache_reused"] = json!(true);
+                    proof["cache_key"] = json!(key);
+                    return Ok((proof, cached.artifacts));
+                }
+            }
+        }
+    }
+    let mut logs = (Vec::new(), Vec::new());
+    let (mut proof, artifacts) =
+        run_check(root, check, Some(environment), runner, Some(&mut logs))?;
+    if cache_input_snapshot(root, p, check)? != inputs
+        || independent::inventory(root, &InspectionRunner(runner))? != inventory
+        || check_git_identity(root, runner)? != git
+        || inputs::environment(root, &p.cfg, p.capture.environment_guard.as_ref(), runner)? != host
+        || environment.snapshot(root, &p.capture)? != facts
+    {
+        return Err(format!(
+            "{}: reusable check changed its validation inputs; no successful cache was saved",
+            check.id
+        ));
+    }
+    proof["cache_reused"] = json!(false);
+    proof["cache_key"] = json!(key);
+    let checksum = hash(
+        &json!({"proof":proof,"artifacts":artifacts,"stdout":digest(&logs.0),"stderr":digest(&logs.1)}),
+    )?;
+    let cached = CachedCheck {
+        schema: 1,
+        key,
+        proof: proof.clone(),
+        artifacts: artifacts.clone(),
+        stdout: logs.0,
+        stderr: logs.1,
+        checksum,
+    };
+    let destination = safe_relative(root, &path)?;
+    fs::create_dir_all(destination.parent().ok_or("check cache has no parent")?)
+        .map_err(|e| e.to_string())?;
+    atomic(
+        root,
+        &path,
+        &serde_json::to_vec(&cached).map_err(|e| e.to_string())?,
+    )?;
+    Ok((proof, artifacts))
+}
+
+fn running_tool_identity() -> Result<String, String> {
+    static IDENTITY: std::sync::OnceLock<Result<String, String>> = std::sync::OnceLock::new();
+    IDENTITY
+        .get_or_init(|| {
+            use std::io::Read;
+            let executable = std::env::current_exe().map_err(|e| e.to_string())?;
+            let mut file = fs::File::open(executable).map_err(|e| e.to_string())?;
+            let mut digest = Sha256::new();
+            let mut buffer = [0u8; 65536];
+            loop {
+                let count = file.read(&mut buffer).map_err(|e| e.to_string())?;
+                if count == 0 {
+                    break;
+                }
+                digest.update(&buffer[..count]);
+            }
+            Ok(format!("sha256:{:x}", digest.finalize()))
+        })
+        .clone()
+}
+
+fn check_git_identity(root: &Path, runner: &dyn ProcessRunner) -> Result<String, String> {
+    let runner = InspectionRunner(runner);
+    let mut state = BTreeMap::new();
+    for (role, args) in [
+        ("head", vec!["rev-parse", "HEAD"]),
+        ("branch", vec!["rev-parse", "--symbolic-full-name", "HEAD"]),
+        ("index", vec!["ls-files", "--stage", "-z"]),
+        (
+            "configuration",
+            vec!["config", "--null", "--list", "--show-origin"],
+        ),
+        (
+            "refs",
+            vec!["for-each-ref", "--format=%(refname)%00%(objectname)"],
+        ),
+    ] {
+        state.insert(role, digest(history::git(root, &runner, &args)?.as_bytes()));
+    }
+    state.insert(
+        "status",
+        digest(independent::status(root, &runner)?.as_bytes()),
+    );
+    hash(&state)
 }
 
 fn execute(
@@ -1567,15 +2486,38 @@ fn execute(
     }
     verify_release_inputs(&p.capture.inputs)?;
     development_inputs::verify(root, &p.capture, &p.capture.inputs)?;
+    let portable_before = p
+        .affected
+        .iter()
+        .filter_map(|id| {
+            p.cfg
+                .development
+                .get(id)
+                .and_then(|p| p.environment.as_ref())
+                .map(|contract| (id, contract))
+        })
+        .map(|(id, contract)| Ok((id.clone(), contract.snapshot(root, &p.capture)?)))
+        .collect::<Result<BTreeMap<_, _>, String>>()?;
     save_journal(root, &journal)?;
     let result: Result<Value, String> = (|| {
         let mut proofs = BTreeMap::<String, Vec<Value>>::new();
         let mut artifacts = BTreeMap::<String, BTreeMap<String, String>>::new();
+        let mut cached_git_guard = None;
         // Each failed stability contract downgrades only that package. Re-render and
         // rerun checks for the final dependency graph; successful packages may graduate.
         for round in 0..=p.affected.len() {
             for (path, bytes) in &p.writes {
                 atomic(root, path, bytes)?;
+            }
+            if p.affected.iter().any(|id| {
+                let policy = &p.cfg.development[id];
+                policy
+                    .checks
+                    .iter()
+                    .chain(policy.stability.iter().flat_map(|s| &s.checks))
+                    .any(|check| check.reusable)
+            }) {
+                cached_git_guard = Some(check_git_identity(root, runner)?);
             }
             proofs.clear();
             artifacts.clear();
@@ -1583,7 +2525,7 @@ fn execute(
             for id in &p.affected {
                 let policy = &p.cfg.development[id];
                 for check in &policy.checks {
-                    let (proof, files) = run_check(root, check, runner)?;
+                    let (proof, files) = run_candidate_check(root, &p, id, check, runner)?;
                     proofs.entry(id.clone()).or_default().push(proof);
                     artifacts.entry(id.clone()).or_default().extend(files);
                 }
@@ -1595,7 +2537,7 @@ fn execute(
                             .ok_or("stability policy missing")?
                             .checks
                         {
-                            match run_check(root, check, runner) {
+                            match run_candidate_check(root, &p, id, check, runner) {
                                 Ok((proof, files)) => {
                                     proofs.entry(id.clone()).or_default().push(proof);
                                     artifacts.entry(id.clone()).or_default().extend(files);
@@ -1717,6 +2659,19 @@ fn execute(
         if inventory != p.capture.inventory {
             return Err("project file inventory changed during development checks".into());
         }
+        for (id, expected) in &portable_before {
+            if p.cfg.development[id]
+                .environment
+                .as_ref()
+                .unwrap()
+                .snapshot(root, &p.capture)?
+                != *expected
+            {
+                return Err(format!(
+                    "{id}: portable environment changed during development checks"
+                ));
+            }
+        }
         p.capture.current = polyglot::snapshot(
             &p.cfg.native,
             p.capture.inventory.clone(),
@@ -1724,8 +2679,18 @@ fn execute(
             &mut |path| config::read_current(root, path),
         )?;
         p.capture.inputs = expected.clone();
-        let hashes = fingerprints(root, &p.cfg, &mut p.capture, runner)?;
+        let hashes = if p.task_scope.is_some() {
+            fingerprints_scoped(root, &p.cfg, &mut p.capture, runner, p.task_scope.as_ref())?
+        } else {
+            fingerprints(root, &p.cfg, &mut p.capture, runner)?
+        };
         let mut changes = Vec::new();
+        let reused_checks = proofs
+            .values()
+            .flatten()
+            .filter(|proof| proof["cache_reused"] == true)
+            .count();
+        let final_checks = proofs.values().map(Vec::len).sum::<usize>();
         for files in artifacts.values() {
             for (path, expected) in files {
                 let bytes = config::read_current(root, path)?
@@ -1762,7 +2727,7 @@ fn execute(
                 .cloned()
                 .unwrap_or_else(|| "retired".into());
             changes.push(json!({"id":id,"version_before":before,"version_after":after,"reason":a.reason,"stability":stability}));
-            p.ledger.append(Entry{id:id.clone(),before,after,content:current.content.clone(),evidence:current.evidence.clone(),evidence_schema:Some(4),evidence_components:Some(current.components.clone()),
+            p.ledger.append(Entry{id:id.clone(),before,after,content:current.content.clone(),evidence:current.evidence.clone(),evidence_schema:Some(if current.details.is_some(){5}else{4}),evidence_components:Some(current.components.clone()),evidence_details:current.details.clone(),
                 level:p.levels[id],compatibility:a.compatibility.clone(),acceptance:a.acceptance.as_ref().map(|v|json!({"fingerprint":v.fingerprint,"scope":v.scope,"reason":v.reason,"source":v.source})),reason:a.reason.clone(),stability,
                 checks:proofs.remove(id).unwrap_or_default(),artifacts:artifacts.remove(id).unwrap_or_default(),previous:String::new(),hash:String::new()})?;
         }
@@ -1775,10 +2740,18 @@ fn execute(
         save_journal(root, &journal)?;
         verify_release_inputs(&p.capture.inputs)?;
         development_inputs::verify(root, &p.capture, &expected)?;
+        if let Some(before) = &cached_git_guard {
+            if &check_git_identity(root, runner)? != before {
+                return Err("Git identity changed during reusable development checks".into());
+            }
+        }
         atomic(root, RECORD, &bytes)?;
         fs::remove_file(root.join(JOURNAL)).map_err(|e| e.to_string())?;
         Ok(
-            json!({"schema":1,"status":"development-closed","product_version":p.capture.product_version,"package_changes":changes,"git_written":false}),
+            json!({"schema":1,"status":"development-closed","product_version":p.capture.product_version,"package_changes":changes,"git_written":false,
+                "readiness_scope":p.receipt["readiness_scope"],"task_packages":p.receipt["task_packages"],"effective_task_packages":p.task_scope,
+                "outside_task_evidence_checked":p.receipt["outside_task_evidence_checked"],
+                "checks":{"scope":"final-candidate","executed":final_checks-reused_checks,"reused":reused_checks}}),
         )
     })();
     match result {
@@ -1805,10 +2778,35 @@ pub fn preview_with_materializer(
     runner: &dyn ProcessRunner,
     renderer: Option<&Materializer>,
 ) -> CommandOutcome {
-    outcome(prepare(root, request, runner, renderer).map(|p| match p {
-        Ok(p) => p.receipt,
-        Err(receipt) => receipt,
-    }))
+    preview_scoped(root, request, runner, renderer, None)
+}
+
+pub fn preview_for_packages(
+    root: &Path,
+    request: &Request,
+    packages: &str,
+    runner: &dyn ProcessRunner,
+    renderer: Option<&Materializer>,
+) -> CommandOutcome {
+    match parse_task_packages(packages) {
+        Ok(packages) => preview_scoped(root, request, runner, renderer, Some(&packages)),
+        Err(error) => outcome(Err(error)),
+    }
+}
+
+fn preview_scoped(
+    root: &Path,
+    request: &Request,
+    runner: &dyn ProcessRunner,
+    renderer: Option<&Materializer>,
+    packages: Option<&BTreeSet<String>>,
+) -> CommandOutcome {
+    outcome(
+        prepare(root, request, runner, renderer, packages).map(|p| match p {
+            Ok(p) => p.receipt,
+            Err(receipt) => receipt,
+        }),
+    )
 }
 pub fn apply(
     root: &Path,
@@ -1826,12 +2824,42 @@ pub fn apply_with_materializer(
     runner: &dyn ProcessRunner,
     renderer: Option<&Materializer>,
 ) -> CommandOutcome {
+    apply_scoped(root, request, expected, runner, renderer, None)
+}
+
+pub fn apply_for_packages(
+    root: &Path,
+    request: &Request,
+    expected: &str,
+    packages: &str,
+    runner: &dyn ProcessRunner,
+    renderer: Option<&Materializer>,
+) -> CommandOutcome {
+    match parse_task_packages(packages) {
+        Ok(packages) => apply_scoped(root, request, expected, runner, renderer, Some(&packages)),
+        Err(error) => outcome(Err(error)),
+    }
+}
+
+fn apply_scoped(
+    root: &Path,
+    request: &Request,
+    expected: &str,
+    runner: &dyn ProcessRunner,
+    renderer: Option<&Materializer>,
+    packages: Option<&BTreeSet<String>>,
+) -> CommandOutcome {
     outcome((|| {
         require_ignored_runtime(root, runner)?;
         let _sync_lock = crate::git_sync::lock_factory_runtime(root, runner)?;
         let _lock = crate::project_sync::ProjectLock::acquire(root)?;
-        match prepare(root, request, runner, renderer)? {
-            Err(receipt) if receipt["status"] == "nothing-to-close" => Ok(receipt),
+        match prepare(root, request, runner, renderer, packages)? {
+            Err(receipt)
+                if receipt["status"] == "nothing-to-close"
+                    || receipt["status"] == "task-development-current" =>
+            {
+                Ok(receipt)
+            }
             Err(_) => Err("development analysis is required".into()),
             Ok(p) => {
                 if expected.is_empty() || expected != p.capture.fingerprint {

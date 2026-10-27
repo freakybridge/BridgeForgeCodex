@@ -26,10 +26,15 @@ pub(super) struct Capture {
     pub validation_fingerprint: String,
     pub product_version: String,
     pub environment_guard: Option<EnvironmentGuard>,
+    pub portable_python: Option<String>,
     pub environment: String,
     pub development_environment: String,
+    pub tool_identities: BTreeMap<String, String>,
+    pub portable_guards: Vec<portable_environment::Guard>,
+    pub release_packages: BTreeSet<String>,
     pub build_directories: BTreeMap<String, BTreeSet<String>>,
     pub normalization: Option<content_identity::Rules>,
+    pub validation_normalization: Option<content_identity::Rules>,
     pub modes: BTreeMap<String, String>,
 }
 
@@ -115,7 +120,7 @@ fn validation_fingerprint(
     inputs: &BTreeMap<PathBuf, Option<Vec<u8>>>,
     environment: &str,
     runner: &dyn ProcessRunner,
-) -> Result<String, String> {
+) -> Result<(String, content_identity::Rules), String> {
     // Also inspect untracked/ignored native inputs before Git can invoke filters.
     let rules = content_identity::Rules::capture(
         root,
@@ -165,6 +170,59 @@ fn validation_fingerprint(
             ))
         })
         .collect::<Result<BTreeMap<_, _>, String>>()?;
+    // One Git process canonicalizes all existing inputs. Captured bytes are
+    // rechecked below, so a concurrent change cannot certify a different file.
+    let hash_paths = inputs
+        .iter()
+        .filter(|(_, bytes)| bytes.is_some())
+        .map(|(path, _)| {
+            path.strip_prefix(root)
+                .map(|p| p.to_string_lossy().replace('\\', "/"))
+                .map_err(|e| e.to_string())
+        })
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .filter(|p| {
+            p != development::RECORD
+                && !cfg.record_inputs.contains(p)
+                && !matches!(p.as_str(), "VERSION" | "CHANGELOG.md")
+        })
+        .collect::<Vec<_>>();
+    let mut canonical = BTreeMap::new();
+    if !hash_paths.is_empty() {
+        let mut request = ProcessRequest::new("git", root);
+        request.args = ["hash-object", "--stdin-paths"]
+            .iter()
+            .map(Into::into)
+            .collect();
+        for path in &hash_paths {
+            request.stdin.extend_from_slice(
+                serde_json::to_string(path)
+                    .map_err(|e| e.to_string())?
+                    .as_bytes(),
+            );
+            request.stdin.push(b'\n');
+        }
+        request.timeout = Duration::from_secs(45);
+        let output = runner.run(&request).map_err(|e| e.to_string())?;
+        if output.timed_out || output.code != 0 {
+            return Err("cannot hash validation inputs".into());
+        }
+        let stdout = String::from_utf8(output.stdout).map_err(|e| e.to_string())?;
+        let hashes = stdout.lines().collect::<Vec<_>>();
+        if hashes.len() != hash_paths.len()
+            || hashes
+                .iter()
+                .any(|h| !matches!(h.len(), 40 | 64) || !h.bytes().all(|b| b.is_ascii_hexdigit()))
+        {
+            return Err("invalid Git validation input hashes".into());
+        }
+        canonical.extend(
+            hash_paths
+                .into_iter()
+                .zip(hashes.into_iter().map(str::to_string)),
+        );
+    }
     let mut extras = BTreeMap::new();
     for (path, bytes) in inputs {
         let relative = path
@@ -178,7 +236,7 @@ fn validation_fingerprint(
                 identity.hash(&relative, bytes.as_deref())?,
             );
         }
-        let Some(bytes) = bytes else {
+        let Some(_) = bytes else {
             tree.remove(&relative);
             continue;
         };
@@ -188,21 +246,10 @@ fn validation_fingerprint(
         {
             continue;
         }
-        let mut request = ProcessRequest::new("git", root);
-        request.args = ["hash-object", "--stdin", "--path", &relative]
-            .iter()
-            .map(Into::into)
-            .collect();
-        request.stdin = bytes.clone();
-        request.timeout = Duration::from_secs(45);
-        let output = runner.run(&request).map_err(|e| e.to_string())?;
-        if output.timed_out || output.code != 0 {
-            return Err(format!("cannot hash validation input: {relative}"));
-        }
-        let oid = String::from_utf8(output.stdout)
-            .map_err(|e| e.to_string())?
-            .trim()
-            .to_string();
+        let oid = canonical
+            .get(&relative)
+            .ok_or("validation input hash missing")?
+            .clone();
         let mode = modes
             .get(&relative)
             .cloned()
@@ -221,11 +268,15 @@ fn validation_fingerprint(
             && !matches!(path.as_str(), "VERSION" | "CHANGELOG.md")
     });
     identity.rules.verify(root, runner)?;
-    Ok(digest(
-        &serde_json::to_vec(
-            &json!({"tree":tree,"native_extra_inputs":extras,"environment":environment}),
-        )
-        .map_err(|e| e.to_string())?,
+    verify_release_inputs(inputs)?;
+    Ok((
+        digest(
+            &serde_json::to_vec(
+                &json!({"tree":tree,"native_extra_inputs":extras,"environment":environment}),
+            )
+            .map_err(|e| e.to_string())?,
+        ),
+        identity.rules,
     ))
 }
 
@@ -241,6 +292,7 @@ pub(super) fn environment(
 pub(super) struct EnvironmentSnapshot {
     pub planning: String,
     pub development: String,
+    pub tools: BTreeMap<String, String>,
 }
 
 // These are transport/correlation identifiers, not build inputs. Keep every
@@ -264,6 +316,11 @@ pub(super) fn environment_fingerprints(
     Ok(EnvironmentSnapshot {
         planning: digest(&serde_json::to_vec(values).map_err(|e| e.to_string())?),
         development: digest(&serde_json::to_vec(&portable).map_err(|e| e.to_string())?),
+        tools: values
+            .iter()
+            .filter(|(key, _)| key.starts_with("tool:"))
+            .map(|(key, value)| (key.clone(), digest(value.as_bytes())))
+            .collect(),
     })
 }
 
@@ -320,6 +377,23 @@ pub(super) fn capture(
     cfg: &Config,
     runner: &dyn ProcessRunner,
 ) -> Result<Capture, String> {
+    capture_mode(root, cfg, runner, false)
+}
+
+pub(super) fn capture_release(
+    root: &Path,
+    cfg: &Config,
+    runner: &dyn ProcessRunner,
+) -> Result<Capture, String> {
+    capture_mode(root, cfg, runner, true)
+}
+
+fn capture_mode(
+    root: &Path,
+    cfg: &Config,
+    runner: &dyn ProcessRunner,
+    release: bool,
+) -> Result<Capture, String> {
     if !cfg.current_model {
         return Err("release requires the one-time product-packages cutover; update the skeleton or run --migration-plan".into());
     }
@@ -327,7 +401,7 @@ pub(super) fn capture(
     let _profile = crate::release_metrics::span("inputs.capture");
     crate::git_sync::verify_readonly_git(root, &inspection)?;
     let reader = history_cache::Reader::new(root, &inspection);
-    let result = capture_with_reader(root, cfg, &reader)?;
+    let result = capture_with_reader(root, cfg, &reader, release)?;
     reader.verify_unchanged()?;
     Ok(result)
 }
@@ -336,6 +410,7 @@ fn capture_with_reader(
     root: &Path,
     cfg: &Config,
     runner: &history_cache::Reader<'_>,
+    release: bool,
 ) -> Result<Capture, String> {
     let (head, boundary) = history::validate_baseline(root, runner, None, false)?;
     super::prefetch_history(cfg, &head, runner)?;
@@ -571,15 +646,36 @@ fn capture_with_reader(
             )
         })
         .collect::<BTreeMap<_, _>>();
-    let environment_guard = cfg
+    // No release payload means no build/runtime evidence is consumed. Classification,
+    // history, ownership, ledger and transaction checks still run on this path.
+    let needs_evidence = !release || changes.iter().any(|c| c.role != "record");
+    let python = cfg
         .python_environment
         .as_ref()
-        .map(|environment| environment.capture(root))
+        .filter(|_| needs_evidence)
+        .map(|environment| environment.capture_with_portable(root))
         .transpose()?;
-    let environment_snapshot = environment_snapshot(root, cfg, environment_guard.as_ref(), runner)?;
+    let (environment_guard, portable_python) = match python {
+        Some((guard, portable)) => (Some(guard), Some(portable)),
+        None => (None, None),
+    };
+    let environment_snapshot = if needs_evidence {
+        environment_snapshot(root, cfg, environment_guard.as_ref(), runner)?
+    } else {
+        EnvironmentSnapshot {
+            planning: String::new(),
+            development: String::new(),
+            tools: BTreeMap::new(),
+        }
+    };
     let environment = environment_snapshot.planning;
-    let validation_fingerprint =
-        validation_fingerprint(root, cfg, &head, &inventory, &inputs, &environment, runner)?;
+    let (validation_fingerprint, validation_normalization) = if needs_evidence {
+        let (fingerprint, rules) =
+            validation_fingerprint(root, cfg, &head, &inventory, &inputs, &environment, runner)?;
+        (fingerprint, Some(rules))
+    } else {
+        (String::new(), None)
+    };
     let fingerprint=digest(&serde_json::to_vec(&json!({"root":root.canonicalize().map_err(|e|e.to_string())?.to_string_lossy(),"head":head,"boundary":boundary,"history":planning_history_state(root,runner)?,"status":status,"inventory":inventory,"inputs":hashes,"changes":changes,"environment":environment,"validation_fingerprint":validation_fingerprint})).map_err(|e|e.to_string())?);
     verify_release_inputs(&inputs)?;
     if independent::status(root, runner)? != status
@@ -611,9 +707,14 @@ fn capture_with_reader(
         fingerprint,
         validation_fingerprint,
         environment_guard,
+        portable_python,
         environment,
         development_environment: environment_snapshot.development,
+        tool_identities: environment_snapshot.tools,
+        portable_guards: Vec::new(),
+        release_packages: BTreeSet::new(),
         build_directories: BTreeMap::new(),
         normalization: None,
+        validation_normalization,
     })
 }

@@ -31,9 +31,11 @@ pub(super) fn config() -> Value {
     json!({"schema_version":3,"release_policy":"explicit_release","strategy":"independent","adapters":{"python":{"projects":["a/pyproject.toml","b/pyproject.toml"],"local_sources":{"b/pyproject.toml":{"a":"a/pyproject.toml"}}}},"packages":[identity("a","a/pyproject.toml"),identity("b","b/pyproject.toml")],"product_inputs":["README.md",".gitignore"]})
 }
 pub(super) fn repo() -> Repo {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let dir = std::env::temp_dir().join(format!(
-        "bf-polyglot-{}-{}",
+        "bf-polyglot-{}-{}-{}",
         std::process::id(),
+        NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()

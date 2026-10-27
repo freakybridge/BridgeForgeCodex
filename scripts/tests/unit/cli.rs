@@ -28,9 +28,13 @@ fn development_capabilities_and_mutation_flags_are_explicit() {
     let identity = self_test().receipt.unwrap();
     for capability in [
         "package-development-v1",
+        "task-scoped-development-v1",
+        "resumable-development-checks-v1",
         "package-stability-v1",
         "git-sync-development-closure-v1",
         "portable-development-evidence-v1",
+        "cross-machine-development-evidence-v1",
+        "scoped-release-evidence-v1",
         "release-external-analysis-preview-v1",
     ] {
         assert!(
@@ -56,6 +60,24 @@ fn development_capabilities_and_mutation_flags_are_explicit() {
             "{}",
             result.stderr
         );
+    }
+}
+
+#[test]
+fn task_development_cli_rejects_malformed_selection_before_forwarding() {
+    for flags in [
+        vec!["--preview", "--packages"],
+        vec!["--preview", "--packages", "a", "--packages"],
+        vec!["--preview", "--packages", "--root", "missing"],
+        vec!["--preview", "--packages=a"],
+        vec!["--preview", "--packages", "a,a"],
+        vec!["--recover", "--packages", "a"],
+    ] {
+        let mut args = vec!["develop".to_string()];
+        args.extend(flags.into_iter().map(str::to_string));
+        let result = run(&args);
+        assert_eq!(result.code, EXIT_BLOCKED);
+        assert!(result.stderr.contains("packages"), "{}", result.stderr);
     }
 }
 

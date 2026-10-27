@@ -5,21 +5,27 @@ use super::*;
 pub struct BuildDirectoryGuard {
     directories: BTreeMap<String, BTreeSet<String>>,
     normalization: Option<content_identity::Rules>,
+    portable: Vec<portable_environment::Guard>,
 }
 
 impl BuildDirectoryGuard {
     pub(super) fn new(
         directories: BTreeMap<String, BTreeSet<String>>,
         normalization: Option<content_identity::Rules>,
+        portable: Vec<portable_environment::Guard>,
     ) -> Self {
         Self {
             directories,
             normalization,
+            portable,
         }
     }
 
     /// Keep membership pinned through plan reuse and the final release write boundary.
     pub fn verify(&self, root: &Path) -> Result<(), String> {
+        for guard in &self.portable {
+            guard.verify(root)?;
+        }
         if let Some(rules) = &self.normalization {
             rules.verify(root, &crate::SystemProcessRunner)?;
         }
@@ -125,6 +131,9 @@ pub(super) fn verify(
     snapshot: &Capture,
     expected: &BTreeMap<PathBuf, Option<Vec<u8>>>,
 ) -> Result<(), String> {
+    for guard in &snapshot.portable_guards {
+        guard.verify(root)?;
+    }
     if let Some(rules) = &snapshot.normalization {
         rules.verify(root, &crate::SystemProcessRunner)?;
     }

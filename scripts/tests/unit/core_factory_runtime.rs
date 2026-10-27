@@ -202,10 +202,12 @@ fn mixed_product_release_materializer_updates_consumer_lock_without_bumping_harn
 }
 impl Factory {
     fn new() -> Self {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let repository = factory_repository::from_manifest_dir(env!("CARGO_MANIFEST_DIR"));
         let root = std::env::temp_dir().join(format!(
-            "bf-factory-runtime-{}-{}",
+            "bf-factory-runtime-{}-{}-{}",
             std::process::id(),
+            NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap()

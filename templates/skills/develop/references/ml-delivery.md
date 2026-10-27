@@ -20,12 +20,13 @@
    开始实施时将 validation_status 改为 in_progress。
 2. 按主入口选择并执行验证；需要 Agent 时读取 agent-execution.md，
    项目声明特殊收口要求时读取 completion-release.md。
-3. 根据实际证据区分实现完成、验证待完成和等待用户验收，
+3. 根据本次任务的实际证据区分实现完成、验证待完成和等待用户验收，
    更新验收项、变更记录及相关既有设计文档。
    validation_status 使用 awaiting_validation 或 awaiting_user_acceptance；
    lifecycle 保持 active，只有 $summary accept 可结算为 completed。
    适用的受管收口未完成时，保留 awaiting_validation 并记录阻断与继续条件；
    不能因构建通过或得到预览计划而写为 awaiting_user_acceptance。完成判定统一见 completion-release。
+   无关历史问题单列，不将本次记录绑定全仓待收口项清零；同包或必要依赖中的真实缺口仍阻断。
 4. 真实范围或风险变化时，按主入口处理受影响的授权与预算；
    修复失败计数不因阶段切换而清零。
 

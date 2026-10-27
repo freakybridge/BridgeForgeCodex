@@ -207,6 +207,10 @@ fn self_test() -> CommandOutcome {
                 "scoped-rust-evidence-v1",
                 "portable-development-evidence-v1",
                 "git-eol-development-evidence-v1",
+                "cross-machine-development-evidence-v1",
+                "scoped-release-evidence-v1",
+                "task-scoped-development-v1",
+                "resumable-development-checks-v1",
                 "release-external-analysis-preview-v1",
                 "public-source-projection-v1",
             ]
@@ -562,6 +566,13 @@ fn batch(args: &[String]) -> CommandOutcome {
 }
 
 pub fn run(args: &[String]) -> CommandOutcome {
+    if args.first().is_some_and(|c| c == "develop") {
+        if let Err(error) =
+            bridgeforge_lifecycle::release::schema4::development::task_packages_argument(args)
+        {
+            return blocked("develop", error);
+        }
+    }
     if args.first().is_some_and(|c| c == "develop")
         && (["--preview", "--apply", "--recover"]
             .iter()
@@ -684,6 +695,19 @@ pub fn run(args: &[String]) -> CommandOutcome {
                 return blocked("develop","choose exactly one of --preview, --apply, --recover; preview flags cannot authorize writes");
             }
             let request=bridgeforge_lifecycle::release::schema4::Request{analysis_file:value(args,"--analysis-file").map(PathBuf::from)};
+            let task_packages = match bridgeforge_lifecycle::release::schema4::development::task_packages_argument(args) {
+                Ok(packages) => packages,
+                Err(error) => return blocked("develop", error),
+            };
+            if let Some(packages) = task_packages {
+                return if has(args, "--apply") {
+                    bridgeforge_lifecycle::release::schema4::development::apply_for_packages(context.root(), &request,
+                        &value(args, "--fingerprint").unwrap_or_default(), &packages, &SystemProcessRunner, None)
+                } else {
+                    bridgeforge_lifecycle::release::schema4::development::preview_for_packages(context.root(), &request,
+                        &packages, &SystemProcessRunner, None)
+                };
+            }
             if has(args,"--recover") { bridgeforge_lifecycle::release::schema4::development::recover(context.root()) }
             else if has(args,"--apply") { bridgeforge_lifecycle::release::schema4::development::apply(context.root(),&request,&value(args,"--fingerprint").unwrap_or_default(),&SystemProcessRunner) }
             else { bridgeforge_lifecycle::release::schema4::development::preview(context.root(),&request,&SystemProcessRunner) }

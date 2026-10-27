@@ -303,7 +303,8 @@ pub(super) fn validate_checks(
 }
 
 pub(super) fn requirements(cfg: &Config, capture: &Capture) -> Value {
-    let affected = super::plan::affected(cfg, capture);
+    let mut affected = super::plan::affected(cfg, capture);
+    affected.extend(capture.release_packages.iter().cloned());
     json!({"schema":1,"status":"analysis-required","fingerprint":capture.fingerprint,"validation_fingerprint":capture.validation_fingerprint,"version_strategy":cfg.strategy,
         "version_before":capture.product_version,
         "changes":capture.changes,"affected_packages":affected,"packages":capture.current.packages.iter().map(|(id,p)|json!({"id":id,"language":p.language,"manifest":p.manifest,"version":p.version})).collect::<Vec<_>>(),

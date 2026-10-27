@@ -43,6 +43,8 @@ pub fn release_status(root: &Path, runner: &dyn ProcessRunner) -> CommandOutcome
         },
         Ok(_) => CommandOutcome::with_receipt(json!({
             "schema":1,"status":"release-ready","development_checks_required":false,
+            "readiness_scope":"baseline-only","development_evidence_checked":false,
+            "release_preview_required":true,
             "version_before":fs::read_to_string(root.join("VERSION")).ok().map(|v|v.trim().to_string())
         })),
         Err(error) => CommandOutcome {

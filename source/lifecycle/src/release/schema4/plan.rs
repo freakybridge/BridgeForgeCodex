@@ -117,6 +117,12 @@ pub(super) fn affected(cfg: &Config, capture: &Capture) -> BTreeSet<String> {
         .filter(|c| c.role != "record")
         .flat_map(|c| c.packages.iter().cloned())
         .collect::<BTreeSet<_>>();
+    affected.extend(lifecycle_affected(cfg, capture));
+    affected
+}
+
+pub(super) fn lifecycle_affected(cfg: &Config, capture: &Capture) -> BTreeSet<String> {
+    let mut affected = BTreeSet::new();
     for transition in cfg
         .native
         .lifecycle
@@ -221,6 +227,7 @@ fn finish(
     cfg: &Config,
     mut capture: Capture,
     analysis: Analysis,
+    ledger: development::Ledger,
     runner: &dyn ProcessRunner,
 ) -> Result<Option<FileReleasePlan>, String> {
     let inspection = InspectionRunner(runner);
@@ -244,7 +251,6 @@ fn finish(
             ));
         }
     }
-    let ledger = development::release_gate(root, cfg, &mut capture, runner)?;
     if !analysis.packages.is_empty()
         || analysis.targets.keys().any(|id| id != "product")
         || !analysis.interface_impacts.is_empty()
@@ -308,6 +314,7 @@ fn finish(
     let versions = BTreeMap::<String, String>::new();
     let mut writes = BTreeMap::new();
     let mut evidence_scope = affected.clone();
+    evidence_scope.extend(capture.release_packages.iter().cloned());
     evidence_scope.insert("product".into());
     analysis::validate_checks(root, cfg, &mut capture, &analysis, &evidence_scope)?;
     if !cfg.product_manifests.is_empty() {
@@ -490,6 +497,7 @@ fn finish(
         build_directories: BuildDirectoryGuard::new(
             capture.build_directories,
             capture.normalization,
+            capture.portable_guards,
         ),
         old_version,
         new_version,
@@ -519,8 +527,8 @@ pub fn build(
     runner: &dyn ProcessRunner,
 ) -> Result<Option<FileReleasePlan>, String> {
     let cfg = load(root)?.ok_or("release requires schema 4 migration; run --migration-plan")?;
-    let mut capture = capture(root, &cfg, runner)?;
-    development::release_gate(root, &cfg, &mut capture, runner)?;
+    let mut capture = inputs::capture_release(root, &cfg, runner)?;
+    let ledger = development::release_gate(root, &cfg, &mut capture, runner)?;
     let analysis = analysis::read(root, request, &mut capture)?;
     if capture.changes.iter().all(|c| c.role == "record")
         && analysis.as_ref().is_none_or(|a| a.targets.is_empty())
@@ -528,7 +536,7 @@ pub fn build(
         return Ok(None);
     }
     let analysis=analysis.ok_or("schema 4 requires final-difference analysis; run --release-preview and supply --release-analysis-file")?;
-    finish(root, message, &cfg, capture, analysis, runner)
+    finish(root, message, &cfg, capture, analysis, ledger, runner)
 }
 
 pub fn preview(
@@ -539,8 +547,8 @@ pub fn preview(
 ) -> CommandOutcome {
     let result = (|| {
         let cfg = load(root)?.ok_or("release requires schema 4 migration; run --migration-plan")?;
-        let mut capture = capture(root, &cfg, runner)?;
-        development::release_gate(root, &cfg, &mut capture, runner)?;
+        let mut capture = inputs::capture_release(root, &cfg, runner)?;
+        let ledger = development::release_gate(root, &cfg, &mut capture, runner)?;
         let analysis = analysis::read_preview(root, request, &mut capture)?;
         if capture.changes.iter().all(|c| c.role == "record")
             && analysis.as_ref().is_none_or(|a| a.targets.is_empty())
@@ -553,7 +561,7 @@ pub fn preview(
         let Some(analysis) = analysis else {
             return Ok(analysis::requirements(&cfg, &capture));
         };
-        let p = finish(root, message, &cfg, capture, analysis, runner)?
+        let p = finish(root, message, &cfg, capture, analysis, ledger, runner)?
             .ok_or("release plan unexpectedly empty")?;
         Ok::<_, String>(
             json!({"schema":1,"status":"release-planned","version_before":p.old_version.to_string(),"version_after":p.new_version.to_string(),"version_strategy":cfg.strategy,"package_changes":p.package_changes,"package_events":p.package_events,"lifecycle_events":p.lifecycle_events,"details":p.details,"kind":p.kind,"writes":p.writes.keys().map(|p|p.strip_prefix(root).unwrap_or(p).to_string_lossy().replace('\\',"/")).collect::<Vec<_>>()}),

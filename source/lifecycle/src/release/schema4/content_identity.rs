@@ -151,6 +151,27 @@ impl Rules {
                 .map_err(|e| e.to_string())?,
         ))
     }
+
+    pub(super) fn covers(&self, earlier: &Self) -> bool {
+        self.config == earlier.config
+            && earlier
+                .attributes
+                .iter()
+                .all(|(path, attributes)| self.attributes.get(path) == Some(attributes))
+    }
+
+    pub(super) fn portable_digest(&self, paths: &BTreeSet<String>) -> Result<String, String> {
+        // Canonical content already proves each conversion. Checkout preferences
+        // are transaction guards, not a reason to invalidate portable certificates.
+        let attributes = self
+            .attributes
+            .iter()
+            .filter(|(path, _)| paths.contains(*path))
+            .collect::<BTreeMap<_, _>>();
+        Ok(digest(
+            &serde_json::to_vec(&attributes).map_err(|e| e.to_string())?,
+        ))
+    }
 }
 
 pub(super) struct Identity<'a> {

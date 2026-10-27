@@ -192,7 +192,8 @@
             "source/workflow/src/release_check_cache.rs",
             "source/workflow/src/release_preparation.rs",
             "source/workflow/src/source_retirement.rs",
-            "templates/hooks/.gitignore"
+            "templates/hooks/.gitignore",
+            "source/lifecycle/src/release/schema4/portable_environment.rs"
           ],
           "program": "cargo",
           "timeout_seconds": 3600
@@ -217,7 +218,9 @@
             "--target-dir",
             ".runtime/source-workspace-refactor/cargo",
             "--",
-            "--test-threads=1"
+            "--test-threads=4",
+            "--logfile",
+            "../../.runtime/bridgeforge-codex/factory-unit-tests.log"
           ],
           "id": "factory-unit",
           "inputs": [
@@ -359,7 +362,9 @@
             ".runtime/source-workspace-refactor/cargo",
             "--",
             "--test-threads=4",
-            "--nocapture"
+            "--nocapture",
+            "--logfile",
+            "../../.runtime/bridgeforge-codex/lifecycle-unit-tests.log"
           ],
           "id": "lifecycle-unit",
           "inputs": [
@@ -376,7 +381,8 @@
             "scripts/tests/unit/core_release_python_native.rs",
             "scripts/tests/unit/core_release_rust.rs",
             "scripts/tests/unit/core_release_schema4.rs",
-            "scripts/tests/unit/core_release_setup.rs"
+            "scripts/tests/unit/core_release_setup.rs",
+            "scripts/tests/unit/core_package_portability.rs"
           ],
           "program": "cargo",
           "timeout_seconds": 7200

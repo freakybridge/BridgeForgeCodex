@@ -5,6 +5,203 @@ use std::sync::Mutex;
 #[path = "core_package_eol.rs"]
 mod eol_tests;
 
+fn task_development_fixture(dependency: bool) -> Repo {
+    let r = fixture("legacy", true);
+    write(
+        &r.0,
+        "second/Cargo.toml",
+        b"[package]\nname='b'\nversion='0.2.0'\nedition='2021'\n[workspace]\n",
+    );
+    write(
+        &r.0,
+        "second/Cargo.lock",
+        b"version=4\n[[package]]\nname='b'\nversion='0.2.0'\n",
+    );
+    write(&r.0, "second/src/lib.rs", b"pub fn b(){}\n");
+    if dependency {
+        write(&r.0, "pkg/Cargo.toml", b"[package]\nname='a'\nversion='1.0.0'\nedition='2021'\n[dependencies]\nb={path='../second'}\n[workspace]\n");
+        write(&r.0, "pkg/Cargo.lock", b"version=4\n[[package]]\nname='a'\nversion='1.0.0'\ndependencies=['b']\n[[package]]\nname='b'\nversion='0.2.0'\n");
+    }
+    let mut cfg: Value = serde_json::from_slice(&fs::read(r.0.join(CONFIG)).unwrap()).unwrap();
+    cfg["adapters"]["rust"]["workspaces"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!("second/Cargo.toml"));
+    cfg["packages"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"id":"b","name":"b","language":"rust","manifest":"second/Cargo.toml"}));
+    cfg["product_inputs"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!("second/Cargo.lock"));
+    write(&r.0, CONFIG, &serde_json::to_vec(&cfg).unwrap());
+    git(&r.0, &["add", "."]);
+    git(&r.0, &["commit", "--amend", "--no-edit"]);
+    migrate(&r.0);
+    let mut cfg: Value = serde_json::from_slice(&fs::read(r.0.join(CONFIG)).unwrap()).unwrap();
+    cfg["development"] = json!({"a":policy(false),"b":policy(false)});
+    write(&r.0, CONFIG, &serde_json::to_vec(&cfg).unwrap());
+    write(&r.0, "pkg/src/lib.rs", b"pub fn value()->u8{2}\n");
+    write(&r.0, "second/src/lib.rs", b"pub fn b()->u8{2}\n");
+    let runner = Checks::new();
+    let q = request(&r.0, "patch", false, &runner);
+    let closed = close(&r.0, &q, &runner);
+    assert_eq!(closed.code, 0, "{}", closed.stderr);
+    r
+}
+
+#[test]
+fn task_development_ignores_unrelated_pending_and_preserves_repository_diagnostic() {
+    let r = task_development_fixture(false);
+    let runner = Checks::new();
+    write(&r.0, "second/src/lib.rs", b"pub fn b()->u8{3}\n");
+    let before = fs::read(r.0.join(development::RECORD)).unwrap();
+    let task = development::preview_for_packages(&r.0, &Request::default(), "a", &runner, None);
+    assert_eq!(task.code, 0, "{}", task.stderr);
+    let task = task.receipt.unwrap();
+    assert_eq!(task["status"], "task-development-current");
+    assert_eq!(task["readiness_scope"], "task");
+    assert_eq!(task["outside_task_evidence_checked"], false);
+    let global = development::preview(&r.0, &Request::default(), &runner);
+    assert_eq!(global.receipt.unwrap()["affected_packages"], json!(["b"]));
+    assert_eq!(fs::read(r.0.join(development::RECORD)).unwrap(), before);
+    assert!(runner.calls.lock().unwrap().is_empty());
+}
+
+#[test]
+fn task_development_closes_only_selected_independent_package() {
+    let r = task_development_fixture(false);
+    let runner = Checks::new();
+    write(&r.0, "pkg/src/lib.rs", b"pub fn value()->u8{3}\n");
+    write(&r.0, "second/src/lib.rs", b"pub fn b()->u8{3}\n");
+    let b_before = development::Ledger::load(&r.0)
+        .unwrap()
+        .latest("b")
+        .unwrap()
+        .hash
+        .clone();
+    let p = development::preview_for_packages(&r.0, &Request::default(), "a", &runner, None);
+    assert_eq!(p.code, 0, "{}", p.stderr);
+    let p = p.receipt.unwrap();
+    assert_eq!(p["affected_packages"], json!(["a"]));
+    write(&r.0, ".runtime/task.json", &serde_json::to_vec(&json!({"schema":1,"fingerprint":p["fingerprint"],"packages":{"a":{"level":"patch","reason":"selected task","compatibility":"compatible"}}})).unwrap());
+    let q = Request {
+        analysis_file: Some(".runtime/task.json".into()),
+    };
+    let p = development::preview_for_packages(&r.0, &q, "a", &runner, None);
+    assert_eq!(p.code, 0, "{}", p.stderr);
+    let done = development::apply_for_packages(
+        &r.0,
+        &q,
+        p.receipt.unwrap()["fingerprint"].as_str().unwrap(),
+        "a",
+        &runner,
+        None,
+    );
+    assert_eq!(done.code, 0, "{}", done.stderr);
+    assert_eq!(done.receipt.unwrap()["readiness_scope"], "task");
+    assert_eq!(runner.calls.lock().unwrap().as_slice(), ["normal"]);
+    assert_eq!(
+        development::Ledger::load(&r.0)
+            .unwrap()
+            .latest("b")
+            .unwrap()
+            .hash,
+        b_before
+    );
+    assert_eq!(
+        development::preview_for_packages(&r.0, &Request::default(), "a", &runner, None)
+            .receipt
+            .unwrap()["status"],
+        "task-development-current"
+    );
+    assert_eq!(
+        development::preview(&r.0, &Request::default(), &runner)
+            .receipt
+            .unwrap()["affected_packages"],
+        json!(["b"])
+    );
+}
+
+#[test]
+fn task_development_captures_dependencies_consumers_and_scope_identity() {
+    let r = task_development_fixture(true);
+    let runner = Checks::new();
+    write(&r.0, "second/src/lib.rs", b"pub fn b()->u8{3}\n");
+    let a = development::preview_for_packages(&r.0, &Request::default(), "a", &runner, None);
+    let b = development::preview_for_packages(&r.0, &Request::default(), "b", &runner, None);
+    assert_eq!(a.code, 0, "{}", a.stderr);
+    assert_eq!(b.code, 0, "{}", b.stderr);
+    let a = a.receipt.unwrap();
+    let b = b.receipt.unwrap();
+    assert_eq!(a["effective_task_packages"], json!(["a", "b"]));
+    assert_eq!(b["effective_task_packages"], json!(["a", "b"]));
+    assert_ne!(a["fingerprint"], b["fingerprint"]);
+    assert!(
+        a["affected_packages"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("b"))
+    );
+}
+
+#[test]
+fn task_development_rejects_unknown_duplicate_and_empty_selection() {
+    let r = task_development_fixture(false);
+    let runner = Checks::new();
+    let before = fs::read(r.0.join(development::RECORD)).unwrap();
+    for packages in ["", "a,a", "a,", "unknown"] {
+        let p =
+            development::preview_for_packages(&r.0, &Request::default(), packages, &runner, None);
+        assert_ne!(p.code, 0, "accepted {packages}");
+    }
+    assert_eq!(fs::read(r.0.join(development::RECORD)).unwrap(), before);
+    assert!(runner.calls.lock().unwrap().is_empty());
+}
+
+#[test]
+fn task_development_dependency_identity_transition_includes_endpoints_and_consumers() {
+    let r = fixture("independent", true);
+    let mut cfg = load(&r.0).unwrap().unwrap();
+    let mut c = capture(&r.0, &cfg, &SystemProcessRunner).unwrap();
+    let template = c.current.packages["a"].clone();
+    for id in ["b", "d", "e", "sibling"] {
+        let mut p = template.clone();
+        p.name = id.into();
+        p.manifest = format!("{id}/Cargo.toml");
+        c.current.packages.insert(id.into(), p);
+    }
+    for (owner, target) in [("a", "b"), ("e", "d"), ("sibling", "b")] {
+        c.current.dependencies.push(NativeDependency {
+            owner: owner.into(),
+            target: target.into(),
+            kind: "normal".into(),
+        });
+    }
+    let requested = BTreeSet::from(["a".into()]);
+    assert_eq!(
+        development::task_scope(&cfg, &c, &requested).unwrap(),
+        BTreeSet::from(["a".into(), "b".into()])
+    );
+    let b = json!({"id":"b","language":"rust","manifest":"b/Cargo.toml","name":"b"});
+    let d = json!({"id":"d","language":"rust","manifest":"d/Cargo.toml","name":"d"});
+    cfg.native.lifecycle.push(serde_json::from_value(json!({"id":"split-b","base":c.boundary,"operation":"split","compatibility":"compatible","from":[b.clone()],"to":[b,d]})).unwrap());
+    assert_eq!(
+        development::task_scope(&cfg, &c, &requested).unwrap(),
+        BTreeSet::from([
+            "a".into(),
+            "b".into(),
+            "d".into(),
+            "e".into(),
+            "sibling".into()
+        ])
+    );
+}
+
+#[path = "core_package_portability.rs"]
+mod portability_tests;
+
 // Reconstruct the published 6.0.0 serializer independently of the production
 // compatibility branch. This fixture has one standalone Rust package, no
 // dependencies, no extra check inputs and no stability contracts.

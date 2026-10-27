@@ -108,6 +108,34 @@ schema 4 保留 `release_model=product-packages`、原生适配和不可移动�
 
 显式 `build_inputs` 包含被 Git 忽略的文件及其存在状态；目录声明同时绑定所有成员和空目录，验证期间新增、删除或改动成员会阻断认证。只有计划内版本写入和声明的检查产物更新可进入最终证据。旧摘要未覆盖这些声明输入时不能直接复用，须受管补验，内容不变不重复升版。
 
+### 跨电脑合同与最小发布检查
+
+具备 `cross-machine-development-evidence-v1` 的工具允许在包的 `development` 策略中显式声明 `environment`。它表示项目已界定检查的工具和环境输入，不由骨架自动猜测业务合同。没有该声明的检查保留原保守环境规则，不能声称任意旧记录已可跨电脑复用。
+
+```json
+{
+  "environment": {
+    "tools": ["cargo", "rustc", "git"],
+    "variables": [],
+    "inputs": {"sdk": "${PROJECT_SDK_ROOT}"},
+    "cargo_configs": ["scripts/tests/cargo.toml"]
+  },
+  "release_artifacts": []
+}
+```
+
+以上是字段示例，SDK、配置文件和工具清单必须按项目实际填写，不能直接当作通用配置。`tools` 必须覆盖检查入口及其使用的编译器、linker、wrapper 和辅助程序；路径可由 PATH 解析、使用项目相对路径或 `${VARIABLE}/suffix`。证据比较文件身份，不比较安装目录。Rust 工具另外绑定实际版本输出；Cargo 的祖先配置、用户配置及 `cargo_configs` 文件一起核验。已知编译器/linker/wrapper 覆盖必须指向声明工具；无法建模的 alias、include、内联配置或 linker/sysroot 参数明确阻断，不能当作无关变量忽略。平台、SDK 和原生库等输入必须完整登记；不能只因 Rust 版本相同就保证原生构建条件相同。
+
+当前 portable Cargo 配置支持普通 `build`、`target`、`term` 表，以及受限的远程镜像配置：source 仅 registry/replace-with，registries 仅 index/protocol，registry 仅 default，net 仅 retry/offline/git-fetch-with-cli。远程索引不允许内嵌凭证、查询参数或片段；启用 Git 拉取时同时绑定实际 Git 程序身份。本地 directory/local-registry、path patch、env 注入、自定义 credential-provider/credential-alias 和其他未建模字段拒绝；这些配置节的 inline 表也不绕过检查。配置文件里的 linker/sysroot flags 同样拒绝；相对工具路径按 Cargo 的配置文件基准解析后核验。此限制不修改旧 host-bound 检查的执行方式，不应为接入 portable 自动删除项目已有配置。
+
+`variables` 仅用于非秘密的有效参数；不登记 token、密码等秘密。`inputs` 用稳定角色映射环境文件或目录，以文件内容和相对成员计算身份。`${VARIABLE}` 路径变量按所指输入身份核验，执行时保留其本机值，不将绝对路径作为跨机身份。检查进程只继承合同声明、明确构建参数和必要宿主定位变量；显示和语言默认值固定，其他应用变量不自动继承。检查不得隐式依赖未声明的机器身份或宿主文件；无法界定的检查应保留原环境模式。
+
+首次启用合同须通过受管配置迁移和真实 develop 检查，生成 `evidence_schema=5`，保存可诊断分项并保留历史链。旧记录不能补填字段冒充新认证。纯证据刷新不重复升子包；环境不等价时说明变更字段，不输出环境原值。
+
+schema 5 将源码验证记录与本机产物分开：普通 `checks.artifacts` 仍在实际检查及认证时核验，但换电脑后缺少这些产物不否定源码证据。`release_artifacts` 只能引用已声明检查产物，表示本次发布确实交付并依赖它们；缺失或改变时 release 阻断，develop 可按原检查无升版刷新。新生成的二进制不自动继承旧二进制的运行验证。
+
+具备 `scoped-release-evidence-v1` 的工具先判断累计业务发布需求，纯骨架且无业务目标时不计算包验证证据。实际发布只核验变化包、相关检查输入/共享规则及真实依赖传播范围；范围从上次正式发布累计，包含已提交未发布内容。release 不运行 develop 或业务回归，同次计划不重复执行相同收口门禁；保留账本、未完成事务、归属、版本、输入漂移和最终写入前的外部环境保护。`--release-status` 的 `readiness_scope=baseline-only`、`development_evidence_checked=false` 表示尚未经过完整发布预览。
+
 具备 `release-external-analysis-preview-v1` 时，`--release-preview --release-analysis-file <绝对路径>` 可读取目标项目以外的普通分析文件，仍核验唯一 JSON、当前项目 fingerprint、必需证据和输入漂移，用于不写目标项目的 dry-run。外部路径不得经过 link/reparse；项目内分析仍放在忽略的 `.runtime/`。此能力只适用于 release 预览，实际 release 和 develop 继续要求本项目 `.runtime` 分析文件；预览通过不证明后续提交、Hook、推送或网络成功。
 
 Cargo.lock、已声明 Python lock、明确全局构建输入和自动记录不因单独变化直接升包；业务生成源码与资源不属于自动记录。不得执行任意 setup.py、SCM 后端、安装脚本或动态宏来猜测元数据。未知格式、歧义归属或不支持的证据应报告缺口。
@@ -115,3 +143,21 @@ Cargo.lock、已声明 Python lock、明确全局构建输入和自动记录不�
 配置迁移只写配置，不改变业务版本或锁。无变化的既有包无需补造收口；存在未发布内容、未知版本变化或不可证明历史时必须先处理缺口。本合同不授权真实下游写入。
 
 发布准备 `development-checks.json` / `prepared` 仍是原有可选重路径，不自动成为普通开发或 release 的前置；新子包收口是独立职责，不能复活全量测试门槛。
+
+### 本次任务范围
+
+具备 `task-scoped-development-v1` 时，开发入口的 preview/apply 可携带 `--packages <id1,id2>`。值必须是唯一、非空的注册包 id；不支持等号形式，不与 recover 合用。无分析预览、分析预览和 apply 保持同一选择，选择及有效范围均绑定严格计划指纹。更换任务选择必须重新预览与分析。
+
+工具自动展开注册依赖、调用方和相关生命周期端点，以 `effective_task_packages` 显示有效范围；整包输入参与核验，不能绕过必要关联或只认证部分源码。当前展开保守纳入依赖，不承诺其检查均可省略。`readiness_scope=task`、`outside_task_evidence_checked=false` 明确全仓其他证据未检查；本次范围没有待处理项返回 `task-development-current`，不复用全仓 `nothing-to-close` 的状态名称。
+
+不携带 --packages 的旧入口保持全仓诊断与兼容语义。本次完成不要求无关历史待处理项清零；release 仍核验累计实际发布范围，任务成功不能替代发布门禁。任务范围能力本身不代表检查缓存能力。
+
+### 同机完整候选的检查恢复复用
+
+具备 `resumable-development-checks-v1` 时，项目可对具有完整显式 `environment` 的确定性检查声明 `reusable: true`。默认 false 且不写入序列化默认值，保留既有证据兼容。只有项目明确可复用的检查才能开启，不自动改写项目清单；在线、依赖未登记状态或需要实际执行副作用的检查保持关闭。检查的显式输入与自身输出不能重合。当前保守要求该开发事务中所有声明检查产物均被 Git 忽略；有 tracked 或未忽略产物时，在写候选前明确拒绝该缓存组合，应关闭 reuse 后按原流程验证，不能放松 Git 身份保护。
+
+缓存位于忽略的 `.runtime/bridgeforge-codex/develop-check-cache/`，保存完整 stdout/stderr、成功证明、产物摘要与完整性校验。只绑定同一本机根目录、实际运行工具二进制、完整候选和计划、严格宿主环境、Git HEAD/分支/索引/配置/refs/status、已捕获输入和目录成员。命中前核验记录、日志和产物；实际执行前后核对输入、环境、Git 和目录状态，写正式账本前再次核验相关 Git 身份。失败、超时或检查期间输入变化不保存成功缓存。
+
+后续检查失败并回滚版本后，恢复同一完整候选可复用前面已通过的检查；缓存不是部分收口账本，整组必需条件仍须满足。字段、内容、工具、环境或 Git 身份不匹配时实际重跑，不重绑旧证明。当前不承诺跨机器缓存或局部修正的最小失效范围，实际采用保守完整候选身份；跨机器长期证书继续遵守 schema 5，不能混淆两者。
+
+成功收据的 `checks.scope=final-candidate` 统计最终候选轮的 `executed`/`reused`，不包含之前失败或稳定回退轮的全部成本；逐项证明以 `cache_reused`、`cache_key` 标注。预览不创建缓存，不把人工 passed 作为缓存来源。

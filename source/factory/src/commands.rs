@@ -10,6 +10,26 @@ use std::path::{Path, PathBuf};
 fn blocked(label: &str, error: impl std::fmt::Display) -> CommandOutcome {
     CommandOutcome::blocked(format!("[{label}] BLOCKED: {error}\n"))
 }
+
+#[cfg(test)]
+mod task_package_tests {
+    #[test]
+    fn task_development_factory_rejects_malformed_selection_before_context() {
+        for flags in [
+            vec!["--preview", "--packages"],
+            vec!["--preview", "--packages", "a", "--packages"],
+            vec!["--preview", "--packages=a"],
+            vec!["--preview", "--packages", "a,a"],
+            vec!["--recover", "--packages", "a"],
+        ] {
+            let mut args = vec!["develop".to_string()];
+            args.extend(flags.into_iter().map(str::to_string));
+            let result = super::run(&args);
+            assert_ne!(result.code, 0);
+            assert!(result.stderr.contains("packages"), "{}", result.stderr);
+        }
+    }
+}
 fn value(args: &[String], flag: &str) -> Option<String> {
     args.windows(2)
         .find(|pair| pair[0] == flag)
@@ -61,7 +81,8 @@ pub fn self_test() -> CommandOutcome {
             "capabilities":["factory-runtime-prepare-v1","factory-transaction-v1","factory-source-projection-v1",
                 "package-development-v1","package-stability-v1","git-sync-development-closure-v1",
                 "rust-mixed-workspace-v1","package-adoption-v1","scoped-rust-evidence-v1",
-                "portable-development-evidence-v1","git-eol-development-evidence-v1","release-external-analysis-preview-v1"]
+                "portable-development-evidence-v1","git-eol-development-evidence-v1","release-external-analysis-preview-v1",
+                "cross-machine-development-evidence-v1","scoped-release-evidence-v1","task-scoped-development-v1","resumable-development-checks-v1"]
         })),
         Err(error) => blocked("factory-self-test", error),
     }
@@ -152,6 +173,11 @@ pub fn run_with_runner(args: &[String], inner: &dyn ProcessRunner) -> CommandOut
             Err(error) => blocked("git-sync", error),
         },
         "develop" => {
+            let task_packages =
+                match crate::release::schema4::development::task_packages_argument(args) {
+                    Ok(packages) => packages,
+                    Err(error) => return blocked("develop", error),
+                };
             let root = match factory_context(args) {
                 Ok(context) => context,
                 Err(error) => return blocked("develop", error),
@@ -172,6 +198,26 @@ pub fn run_with_runner(args: &[String], inner: &dyn ProcessRunner) -> CommandOut
             let request = crate::release::schema4::Request {
                 analysis_file: value(args, "--analysis-file").map(PathBuf::from),
             };
+            if let Some(packages) = task_packages {
+                return if has(args, "--apply") {
+                    crate::release::schema4::development::apply_for_packages(
+                        root.root(),
+                        &request,
+                        &value(args, "--fingerprint").unwrap_or_default(),
+                        &packages,
+                        &runner,
+                        Some(&manifest::development_projection),
+                    )
+                } else {
+                    crate::release::schema4::development::preview_for_packages(
+                        root.root(),
+                        &request,
+                        &packages,
+                        &runner,
+                        Some(&manifest::development_projection),
+                    )
+                };
+            }
             if has(args, "--recover") {
                 crate::release::schema4::development::recover(root.root())
             } else if has(args, "--apply") {

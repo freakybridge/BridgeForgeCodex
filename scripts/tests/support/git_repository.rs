@@ -52,13 +52,15 @@ pub(crate) fn git_ok(root: &Path, args: &[&str]) {
 }
 
 pub(crate) fn real_repository(name: &str) -> RealRepository {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let token = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_nanos();
     let root = std::env::temp_dir().join(format!(
-        "bridgeforge-git-sync-{name}-{}-{token}",
-        std::process::id()
+        "bridgeforge-git-sync-{name}-{}-{}-{token}",
+        std::process::id(),
+        NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     ));
     fs::create_dir_all(&root).unwrap();
     git_ok(&root, &["init"]);

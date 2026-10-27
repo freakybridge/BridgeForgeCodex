@@ -68,6 +68,13 @@ impl PythonEnvironment {
         Ok(())
     }
     pub(super) fn capture(&self, root: &Path) -> Result<EnvironmentGuard, String> {
+        self.capture_with_portable(root).map(|(guard, _)| guard)
+    }
+
+    pub(super) fn capture_with_portable(
+        &self,
+        root: &Path,
+    ) -> Result<(EnvironmentGuard, String), String> {
         self.validate()?;
         let interpreter = resolve(root, &self.interpreter)?;
         if !interpreter.is_file() {
@@ -77,7 +84,13 @@ impl PythonEnvironment {
             interpreter.to_string_lossy().into_owned(),
             hash_file(&interpreter)?,
         )]);
-        for configured in self.runtime_roots.iter().chain(&self.dependency_roots) {
+        let mut portable = BTreeMap::from([("interpreter".to_string(), hash_file(&interpreter)?)]);
+        for (index, configured) in self
+            .runtime_roots
+            .iter()
+            .chain(&self.dependency_roots)
+            .enumerate()
+        {
             let directory = resolve(root, configured)?;
             if !directory.is_dir() {
                 return Err("Python runtime/dependency roots must be directories".into());
@@ -87,6 +100,7 @@ impl PythonEnvironment {
                 format!("directory:{}", directory.display()),
                 "directory".into(),
             );
+            portable.insert(format!("root:{index}"), "directory".into());
             for entry in walkdir::WalkDir::new(&directory)
                 .follow_links(false)
                 .into_iter()
@@ -102,17 +116,43 @@ impl PythonEnvironment {
                     ));
                 }
                 if entry.file_type().is_file() {
-                    facts.insert(
-                        entry.path().to_string_lossy().into_owned(),
-                        hash_file(entry.path())?,
+                    let hash = hash_file(entry.path())?;
+                    facts.insert(entry.path().to_string_lossy().into_owned(), hash.clone());
+                    portable.insert(
+                        format!(
+                            "root:{index}/{}",
+                            entry
+                                .path()
+                                .strip_prefix(&directory)
+                                .map_err(|e| e.to_string())?
+                                .to_string_lossy()
+                                .replace('\\', "/")
+                        ),
+                        hash,
+                    );
+                } else if entry.file_type().is_dir() {
+                    portable.insert(
+                        format!(
+                            "root:{index}/{}",
+                            entry
+                                .path()
+                                .strip_prefix(&directory)
+                                .map_err(|e| e.to_string())?
+                                .to_string_lossy()
+                                .replace('\\', "/")
+                        ),
+                        "directory".into(),
                     );
                 }
             }
         }
-        Ok(EnvironmentGuard {
-            configuration: self.clone(),
-            fingerprint: crate::manifest::canonical_sha(&json!(facts))?,
-        })
+        Ok((
+            EnvironmentGuard {
+                configuration: self.clone(),
+                fingerprint: crate::manifest::canonical_sha(&json!(facts))?,
+            },
+            crate::manifest::canonical_sha(&json!(portable))?,
+        ))
     }
 }
 

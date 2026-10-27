@@ -1612,7 +1612,7 @@ fn analyze(root: &Path, product: &str, package: Option<&str>) -> Request {
         fixture::close_packages(root, &SystemProcessRunner, &[("a", level)]).unwrap();
     }
     let cfg = load(root).unwrap().unwrap();
-    let mut captured = capture(root, &cfg, &SystemProcessRunner).unwrap();
+    let mut captured = inputs::capture_release(root, &cfg, &SystemProcessRunner).unwrap();
     // Match the public release preview, including normalization rules. Some
     // callers deliberately leave packages open to assert build's gate error.
     let _ = development::release_gate(root, &cfg, &mut captured, &SystemProcessRunner);
@@ -1844,10 +1844,14 @@ fn schema4_dependency_upgrade_only_bumps_owner_when_requirement_changes() {
         if pinned {
             assert!(native.contains("1.0.1"));
         } else {
-            assert_eq!(
-                p.details.unwrap()["packages"][1]["reason"],
-                "no_package_version_change"
-            );
+            // Dependency evidence is now actually renewed even for an old
+            // package with no certificate; that must not invent a version bump.
+            let ledger = development::Ledger::load(&r.0).unwrap();
+            let entry = ledger.latest("b").unwrap();
+            assert_eq!(entry.level, 0);
+            assert_eq!(entry.before.as_deref(), Some("1.0.0"));
+            assert_eq!(entry.after, entry.before);
+            assert!(entry.checks.iter().all(|check| check["status"] == "passed"));
         }
     }
 }
@@ -1904,6 +1908,7 @@ fn schema4_stratus_style_build_recipe_and_ledger_do_not_bump_package() {
     cfg["build_inputs"] = json!(["scripts/build-recipes/common.json"]);
     write(&r.0, CONFIG, &serde_json::to_vec(&cfg).unwrap());
     write(&r.0, "pkg/versions.json", b"{\"template-one\":7}\n");
+    fixture::close_packages(&r.0, &SystemProcessRunner, &[]).unwrap();
     let config_request = analyze(&r.0, "patch", None);
     assert!(
         build(
@@ -1922,6 +1927,7 @@ fn schema4_stratus_style_build_recipe_and_ledger_do_not_bump_package() {
         "scripts/build-recipes/common.json",
         b"{\"opt-level\":3}\n",
     );
+    fixture::close_packages(&r.0, &SystemProcessRunner, &[]).unwrap();
     let request = analyze(&r.0, "patch", None);
     let p = build(
         &r.0,
@@ -2398,6 +2404,7 @@ fn schema4_real_configuration_changes_after_migration_are_product_changes() {
     let mut cfg: Value = serde_json::from_slice(&fs::read(r.0.join(CONFIG)).unwrap()).unwrap();
     cfg["build_inputs"] = json!(["scripts/recipe.json"]);
     write(&r.0, CONFIG, &serde_json::to_vec(&cfg).unwrap());
+    fixture::close_packages(&r.0, &SystemProcessRunner, &[]).unwrap();
     let request = analyze(&r.0, "patch", None);
     assert!(
         build(&r.0, "chore: role contract", &request, &SystemProcessRunner)

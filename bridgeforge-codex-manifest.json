@@ -162,17 +162,17 @@
             {
               "source": "templates/skills/develop/references/ml-delivery.md",
               "target": "references/ml-delivery.md",
-              "sha256": "sha256:4ea7a1a36cca38de1f65d51c5477048c6041f78a5e48258bf621c085f2634654"
+              "sha256": "sha256:2fbaaa0da92eb931d93b8e9151ffeef4621c68bd4ddf97a55710d4c3091bcd79"
             },
             {
               "source": "templates/skills/develop/references/completion-release.md",
               "target": "references/completion-release.md",
-              "sha256": "sha256:4b90ec3ad4a16ad59309b58a7634816ff192902d83e863a1f2287cae72dd9944"
+              "sha256": "sha256:8fcdc7a6649493a337e26efa1d3ae996710401d426af75e5bf18f8fe31e3fb3c"
             },
             {
               "source": "templates/skills/develop/SKILL.md",
               "target": "SKILL.md",
-              "sha256": "sha256:e6f70624ab1645ffe1c3271995bfdddc87e5ee82d3dfc409d82310c573866f17"
+              "sha256": "sha256:cf187ccaf54eb4feb6150d7b07e2c6034a8bb3b2eb1e6d262f87921b4cdd8ac5"
             }
           ]
         },
@@ -232,7 +232,7 @@
             {
               "source": "templates/skills/git-sync/references/schema4.md",
               "target": "references/schema4.md",
-              "sha256": "sha256:fd377fe0cb54fa5a3d5e2ef75e1b2f43036781decb47c09744eb616696caf6f7"
+              "sha256": "sha256:b915efa4eb0febc9a820ce78f769b785615fba023c2ee0e872e8baee54852226"
             },
             {
               "source": "templates/skills/git-sync/references/runtime-context.md",
