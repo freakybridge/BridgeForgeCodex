@@ -276,14 +276,32 @@ impl WritePlan {
         }
         plan.generated_built = pending_assets.len();
         if !pending_assets.is_empty() {
+            let mut captured = BTreeMap::new();
+            for asset in &pending_assets {
+                let cache_key = serde_json::to_string(&(
+                    asset["source_root"].clone(),
+                    asset["source_projection"].clone(),
+                ))
+                .map_err(|error| error.to_string())?;
+                if let Some((inputs, _, _)) = cache_contexts.get(&cache_key) {
+                    captured.insert(
+                        (
+                            source_root(&temporary.0, asset)?,
+                            asset["source_projection"].as_str().map(str::to_owned),
+                        ),
+                        inputs,
+                    );
+                }
+            }
             let mut pending_contract = contract_after;
             pending_contract["generated_assets"] = serde_json::Value::Array(pending_assets);
-            let (generated, _) = crate::generated_assets::generated_writes(
+            let (generated, _) = crate::generated_assets::generated_writes_captured(
                 &temporary.0,
                 "source_root",
                 root,
                 &pending_contract,
                 runner,
+                &captured,
             )?;
             writes.extend(generated);
         }

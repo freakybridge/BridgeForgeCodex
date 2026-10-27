@@ -1,6 +1,34 @@
 //! Real Git proves EOL equivalence; no downstream repository is mutated.
 use super::*;
 
+// Complete legacy schema-3 fixture. Keep its eight-part integrity contract;
+// merely changing a new three-part record's schema would create invalid data.
+fn schema3_parts(root: &Path, runner: &dyn ProcessRunner, entry: &mut development::Entry) {
+    let cfg = load(root).unwrap().unwrap();
+    let captured = capture(root, &cfg, runner).unwrap();
+    let parts = entry.evidence_components.as_mut().unwrap();
+    parts.remove("normalization");
+    parts.insert("environment".into(), captured.environment);
+    parts.insert(
+        "policy".into(),
+        digest(&serde_json::to_vec(&cfg.development.get(&entry.id)).unwrap()),
+    );
+    parts.insert("contracts".into(), digest(b"{}"));
+    let check_inputs = BTreeMap::from([(
+        "scripts/check.ps1",
+        Some(digest(&fs::read(root.join("scripts/check.ps1")).unwrap())),
+    )]);
+    parts.insert(
+        "check_inputs".into(),
+        digest(&serde_json::to_vec(&check_inputs).unwrap()),
+    );
+    parts.insert(
+        "adapters".into(),
+        digest(&serde_json::to_vec(&format!("{:?}", cfg.native.adapters)).unwrap()),
+    );
+    entry.evidence_schema = Some(3);
+}
+
 fn eol_fixture(crlf: bool) -> (Repo, Checks) {
     let r = zero_fixture();
     configure(&r.0, false);
@@ -99,12 +127,7 @@ fn eol_schema3_proof_is_reused_without_rewriting_or_bumping() {
     let (r, runner) = eol_fixture(false);
     let mut ledger = development::Ledger::load(&r.0).unwrap();
     let entry = ledger.entries.last_mut().unwrap();
-    entry.evidence_schema = Some(3);
-    entry
-        .evidence_components
-        .as_mut()
-        .unwrap()
-        .remove("normalization");
+    schema3_parts(&r.0, &runner, entry);
     entry.evidence =
         digest(&serde_json::to_vec(entry.evidence_components.as_ref().unwrap()).unwrap());
     entry.hash.clear();
@@ -172,7 +195,7 @@ fn eol_old_crlf_certificate_without_source_diff_cannot_invent_a_bump() {
         &serde_json::to_vec(&json!({"package":captured.current.packages["a"],"files":owned}))
             .unwrap(),
     );
-    entry.evidence_schema = Some(3);
+    schema3_parts(&r.0, &runner, entry);
     let parts = entry.evidence_components.as_mut().unwrap();
     parts.remove("normalization");
     parts.insert("content".into(), entry.content.clone());
@@ -236,11 +259,17 @@ fn eol_rules_and_raw_transaction_drift_remain_blocking() {
             .contains("normalization rules changed")
     );
     let p = development::preview(&r.0, &Request::default(), &runner);
+    assert_eq!(p.code, 0, "{}", p.stderr);
+    assert_eq!(p.receipt.unwrap()["status"], "nothing-to-close");
+    // A rules-only edit does not change already-LF version content, while the
+    // same CRLF bytes under -text are now a real content change.
+    write(&r.0, "pkg/src/lib.rs", b"pub fn value()->u8{2}\r\n");
+    let p = development::preview(&r.0, &Request::default(), &runner);
     assert!(
         p.receipt.unwrap()["pending_reasons"]["a"]
             .as_str()
             .unwrap()
-            .contains("normalization")
+            .contains("content")
     );
 }
 

@@ -167,12 +167,12 @@
             {
               "source": "templates/skills/develop/references/completion-release.md",
               "target": "references/completion-release.md",
-              "sha256": "sha256:8fcdc7a6649493a337e26efa1d3ae996710401d426af75e5bf18f8fe31e3fb3c"
+              "sha256": "sha256:eec5e747c69b3ee9291e7edad66f8242b97ec4cc5e99c8677d4ffaf1a78179dc"
             },
             {
               "source": "templates/skills/develop/SKILL.md",
               "target": "SKILL.md",
-              "sha256": "sha256:cf187ccaf54eb4feb6150d7b07e2c6034a8bb3b2eb1e6d262f87921b4cdd8ac5"
+              "sha256": "sha256:95d2661e28a1ebe7130e8c4ee18739af8c060c69c803935567e0c69ac44425f5"
             }
           ]
         },
@@ -222,7 +222,7 @@
             {
               "source": "templates/skills/git-sync/SKILL.md",
               "target": "SKILL.md",
-              "sha256": "sha256:c47b45dcf6419e54a11c399bfd9af9fbb9a3fb9610998a66db90fadcedfe3912"
+              "sha256": "sha256:a9f7aeb912b68f11a09f8d0143c094ed3b908c3064f5980dad9ecda0a0551d1d"
             },
             {
               "source": "templates/skills/git-sync/references/first-use.md",
@@ -232,7 +232,7 @@
             {
               "source": "templates/skills/git-sync/references/schema4.md",
               "target": "references/schema4.md",
-              "sha256": "sha256:b915efa4eb0febc9a820ce78f769b785615fba023c2ee0e872e8baee54852226"
+              "sha256": "sha256:e82a41cda8b2194535d240ea82dfb9fc9759503bd51a4163f392ef663eb4e64c"
             },
             {
               "source": "templates/skills/git-sync/references/runtime-context.md",

@@ -230,6 +230,9 @@ fn finish(
     ledger: development::Ledger,
     runner: &dyn ProcessRunner,
 ) -> Result<Option<FileReleasePlan>, String> {
+    if !analysis.validation.is_empty() {
+        return Err("release cannot execute development validation commands; complete develop separately".into());
+    }
     let inspection = InspectionRunner(runner);
     let runner: &dyn ProcessRunner = &inspection;
     let meaningful = capture

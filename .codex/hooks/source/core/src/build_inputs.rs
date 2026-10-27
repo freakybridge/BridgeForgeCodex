@@ -37,6 +37,7 @@ fn lock_sha(payload: &[u8]) -> String {
 
 impl BuildInputs {
     pub fn capture(original: &Path, snapshot: PathBuf, item: &Value) -> Result<Self, String> {
+        let _profile = crate::release_metrics::span("build_inputs.capture");
         if item["manifest"] != "Cargo.toml" || item["lockfile"] != "Cargo.lock" {
             return Err("generated build requires workspace Cargo.toml and Cargo.lock".into());
         }
@@ -106,6 +107,15 @@ impl BuildInputs {
             return Err("generated isolated build inputs changed during build".into());
         }
         Ok(())
+    }
+
+    /// A caller may share a captured workspace, never substitute a snapshot
+    /// captured from another source root or projection.
+    pub fn verify_source(&self, original: &Path, projection: Option<&str>) -> Result<(), String> {
+        if self.original != original || self.projection.as_deref() != projection {
+            return Err("captured build inputs belong to a different source or projection".into());
+        }
+        self.verify_unchanged()
     }
 
     pub fn verify_original_unchanged(&self) -> Result<(), String> {

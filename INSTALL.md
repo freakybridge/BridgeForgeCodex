@@ -101,7 +101,7 @@ Skills 由产品管理，避免覆盖来源不明或被人工修改的 Skill 文
 
 可选项目资产通过一次性 `PreservationManifest` 明确保留或删除；确认前项目零写入，不长期保存该 manifest。资产处理、最新基线及验证属于同一项目事务；可捕获失败恢复本事务能够证明归属的改动，外部编辑保留并报告未恢复项。同步器最后才写当前版本戳，`.codex/managed-skeleton.json` 只保存当次最新 schema 4 的资产归属和内容哈希。
 
-[子包开发收口与主程序发布](doc/0_architecture/design/package-version-lifecycle.md)要求 `package-development-v1`、`package-stability-v1` 和 `git-sync-development-closure-v1`。安装或骨架升级成功不等于项目已配置业务检查或完成版本收口。复用 schema 4 配置提案登记项目检查，保留原发布基线；具体入口见[版本生命周期合同](templates/skills/git-sync/references/schema4.md)。不将未发布改动默认认证为已收口，不借安装说明自动写入真实下游。
+[子包开发收口与主程序发布](doc/0_architecture/design/package-version-lifecycle.md)要求 `package-development-v1`、`package-stability-v1`、`git-sync-development-closure-v1`；当前任务检查选择和版本覆盖还须核验 `task-selected-development-checks-v1`、`version-coverage-v1`。安装或骨架升级成功不等于项目已配置业务检查或完成版本收口。配置及实际入口只维护在[版本生命周期合同](templates/skills/git-sync/references/schema4.md)，保留原发布基线和下游 Python 环境支持，不借安装说明自动收口或写入真实下游。
 
 ## 维护者协议
 

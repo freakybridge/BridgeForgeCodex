@@ -127,24 +127,6 @@ impl Rules {
         Ok(())
     }
 
-    pub(super) fn digest(&self, paths: &BTreeSet<String>) -> Result<String, String> {
-        let scoped = self
-            .attributes
-            .iter()
-            .filter(|(path, _)| paths.contains(*path))
-            .collect::<BTreeMap<_, _>>();
-        // Explicit attributes take precedence over machine checkout preferences.
-        let fallback = scoped
-            .values()
-            .any(|v| v[0] == "unspecified" && v[1] == "unspecified" && v[2] == "unspecified");
-        Ok(digest(
-            &serde_json::to_vec(
-                &json!({"attributes":scoped,"fallback":if fallback { &self.config } else { "" }}),
-            )
-            .map_err(|e| e.to_string())?,
-        ))
-    }
-
     pub(super) fn planning_digest(&self) -> Result<String, String> {
         Ok(digest(
             &serde_json::to_vec(&json!({"attributes":self.attributes,"config":self.config}))
@@ -158,19 +140,6 @@ impl Rules {
                 .attributes
                 .iter()
                 .all(|(path, attributes)| self.attributes.get(path) == Some(attributes))
-    }
-
-    pub(super) fn portable_digest(&self, paths: &BTreeSet<String>) -> Result<String, String> {
-        // Canonical content already proves each conversion. Checkout preferences
-        // are transaction guards, not a reason to invalidate portable certificates.
-        let attributes = self
-            .attributes
-            .iter()
-            .filter(|(path, _)| paths.contains(*path))
-            .collect::<BTreeMap<_, _>>();
-        Ok(digest(
-            &serde_json::to_vec(&attributes).map_err(|e| e.to_string())?,
-        ))
     }
 }
 

@@ -103,6 +103,10 @@ pub(super) struct Analysis {
     pub _retired_pure_version_reason: Option<String>,
     #[serde(default)]
     pub checks: Vec<Check>,
+    /// Necessary checks selected for this task and executed on its final
+    /// candidate; project stability checks remain an independent requirement.
+    #[serde(default)]
+    pub validation: BTreeMap<String, Vec<development::CheckCommand>>,
     #[serde(default)]
     pub interface_impacts: BTreeMap<String, InterfaceImpact>,
 }

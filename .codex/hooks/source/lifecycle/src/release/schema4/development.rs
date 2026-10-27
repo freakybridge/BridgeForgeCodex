@@ -5,6 +5,10 @@ use crate::CommandOutcome;
 pub(super) const RECORD: &str = ".codex/package-closures.json";
 const JOURNAL: &str = ".runtime/bridgeforge-codex/develop-transaction.json";
 
+#[cfg(all(test, bridgeforge_factory_tests))]
+#[path = "../../../../../scripts/tests/unit/core_task_check_selection.rs"]
+mod task_selection_tests;
+
 /// A trusted application-layer renderer. It must return candidate bytes without
 /// writing files; all returned outputs join this transaction and its rollback.
 pub type Materializer =
@@ -71,6 +75,77 @@ fn is_false(value: &bool) -> bool {
 }
 fn default_timeout() -> u64 {
     300
+}
+
+/// Keep the registered command and its execution boundaries. A task may add
+/// one Cargo test-name filter, but cannot replace flags, targets or runners.
+fn task_arguments_allowed(registered: &CheckCommand, selected: &CheckCommand) -> bool {
+    if registered.program != selected.program {
+        return false;
+    }
+    if registered.args == selected.args {
+        return true;
+    }
+    let cargo = Path::new(&registered.program)
+        .file_stem()
+        .and_then(|name| name.to_str())
+        == Some("cargo");
+    if !cargo || registered.args.first().map(String::as_str) != Some("test") {
+        return false;
+    }
+    let before = registered
+        .args
+        .iter()
+        .position(|arg| arg == "--")
+        .unwrap_or(registered.args.len());
+    let after = selected
+        .args
+        .iter()
+        .position(|arg| arg == "--")
+        .unwrap_or(selected.args.len());
+    if after != before + 1 || registered.args[before..] != selected.args[after..] {
+        return false;
+    }
+    let filter = &selected.args[before];
+    !filter.is_empty()
+        && !filter.starts_with('-')
+        && selected.args[..before] == registered.args[..before]
+}
+
+fn validate_task_selection(
+    id: &str,
+    policy: &Policy,
+    selected: &[CheckCommand],
+) -> Result<(), String> {
+    // User-authorized task selection does not alter the project's stability,
+    // environment or delivery requirements. Reuse their complete validation.
+    let task = Policy {
+        checks: selected.to_vec(),
+        stability: policy.stability.clone(),
+        environment: policy.environment.clone(),
+        release_artifacts: policy.release_artifacts.clone(),
+    };
+    task.validate(id)?;
+    for check in selected {
+        let registered = policy
+            .checks
+            .iter()
+            .find(|entry| entry.id == check.id)
+            .ok_or_else(|| format!("{id}: task check is not registered: {}", check.id))?;
+        if !task_arguments_allowed(registered, check)
+            || check.inputs != registered.inputs
+            || check.artifacts != registered.artifacts
+            || check.kind != registered.kind
+            || check.timeout_seconds > registered.timeout_seconds
+            || (check.reusable && !registered.reusable)
+        {
+            return Err(format!(
+                "{id}: task selection changed a registered command boundary: {}",
+                check.id
+            ));
+        }
+    }
+    Ok(())
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -220,7 +295,7 @@ impl Ledger {
         for entry in &ledger.entries {
             if entry
                 .evidence_schema
-                .is_some_and(|schema| !matches!(schema, 2 | 3 | 4 | 5))
+                .is_some_and(|schema| !matches!(schema, 2 | 3 | 4 | 5 | 6))
             {
                 return Err(format!(
                     "{}: unsupported closure evidence schema {:?}; upgrade the tool before release",
@@ -228,6 +303,11 @@ impl Ledger {
                 ));
             }
             match (entry.evidence_schema, &entry.evidence_components) {
+                (Some(6), Some(parts))
+                    if parts.keys().map(String::as_str).collect::<BTreeSet<_>>()
+                        == BTreeSet::from(["content", "dependencies", "build"])
+                        && parts.get("content") == Some(&entry.content)
+                        && hash(parts)? == entry.evidence => {}
                 (Some(3 | 4 | 5), Some(parts))
                     if parts
                         .keys()
@@ -383,8 +463,8 @@ pub(super) fn version_recorded(root: &Path, id: &str, version: &str) -> Result<b
         .is_some_and(|e| e.after.as_deref() == Some(version)))
 }
 
-// Content determines whether to bump; environment/build/dependency evidence determines
-// whether to revalidate. Unrelated package changes do not force another version bump.
+// Content determines version changes; dependency/build coverage detects work
+// requiring validation without forcing an unrelated second version bump.
 fn dependency_scope(capture: &Capture, id: &str) -> BTreeSet<String> {
     let mut scope = BTreeSet::from([id.to_string()]);
     loop {
@@ -640,24 +720,20 @@ fn rust_build_evidence_mode(
     Ok(evidence)
 }
 
+/// Version coverage deliberately excludes test policy and host identity.
 #[derive(Serialize)]
 struct Fingerprints {
     content: String,
     evidence: String,
-    legacy_evidence: String,
-    host_evidence: String,
     components: BTreeMap<String, String>,
-    legacy_complete: bool,
     #[serde(skip)]
     raw: Option<Box<Fingerprints>>,
-    portable_evidence: String,
-    details: Option<BTreeMap<String, String>>,
 }
 
 impl Fingerprints {
     fn content_matches(&self, entry: &Entry) -> bool {
         entry.content == self.content
-            || (!matches!(entry.evidence_schema, Some(4 | 5))
+            || (!matches!(entry.evidence_schema, Some(4 | 5 | 6))
                 && self
                     .raw
                     .as_ref()
@@ -665,70 +741,30 @@ impl Fingerprints {
     }
 
     fn matches(&self, entry: &Entry) -> bool {
-        (entry.content == self.content
-            && match entry.evidence_schema {
-                Some(4 | 5) => entry.evidence == self.evidence,
-                Some(3) => entry.evidence == self.portable_evidence,
-                Some(2) => self.legacy_complete && entry.evidence == self.host_evidence,
-                None => {
-                    self.legacy_complete
-                        && (entry.evidence == self.host_evidence
-                            || entry.evidence == self.legacy_evidence)
-                }
-                _ => false,
+        let current = if entry.content == self.content {
+            self
+        } else if !matches!(entry.evidence_schema, Some(4 | 5 | 6)) {
+            self.raw.as_deref().unwrap_or(self)
+        } else {
+            self
+        };
+        current.content == entry.content
+            && entry.evidence_components.as_ref().is_some_and(|old| {
+                current
+                    .components
+                    .iter()
+                    .all(|(key, value)| old.get(key) == Some(value))
             })
-            || (!matches!(entry.evidence_schema, Some(4 | 5))
-                && self.raw.as_ref().is_some_and(|raw| raw.matches(entry)))
     }
 
     fn mismatch(&self, entry: Option<&Entry>) -> String {
         let Some(entry) = entry else {
-            return "missing closure record".into();
+            return "missing version coverage record".into();
         };
-        if let (Some(before), Some(after)) = (&entry.evidence_details, &self.details) {
-            let changed = before
-                .keys()
-                .chain(after.keys())
-                .collect::<BTreeSet<_>>()
-                .into_iter()
-                .filter(|key| before.get(*key) != after.get(*key))
-                .take(12)
-                .cloned()
-                .collect::<Vec<_>>();
-            if !changed.is_empty() {
-                return format!(
-                    "validation evidence changed (inputs: {}; run managed develop)",
-                    changed.join(", ")
-                );
-            }
-        }
         if !self.content_matches(entry) {
             return "package content changed".into();
         }
-        if !matches!(entry.evidence_schema, Some(3 | 4 | 5)) && !self.legacy_complete {
-            return "validation evidence changed (legacy proof does not cover declared global build inputs; run managed develop to verify those inputs)".into();
-        }
-        if let Some(parts) = &entry.evidence_components {
-            let compared = if entry.content != self.content {
-                self.raw.as_deref().unwrap_or(self)
-            } else {
-                self
-            };
-            let changed = compared
-                .components
-                .iter()
-                .filter(|(name, _)| {
-                    matches!(entry.evidence_schema, Some(4 | 5)) || name.as_str() != "normalization"
-                })
-                .filter(|(name, value)| parts.get(*name) != Some(*value))
-                .map(|(name, _)| name.as_str())
-                .collect::<Vec<_>>();
-            return format!(
-                "validation evidence changed (components: {}; run managed develop checks for these inputs)",
-                changed.join(", ")
-            );
-        }
-        "validation evidence changed (legacy aggregate evidence cannot identify dependency/build/environment/policy differences; no portable input proof is stored; run managed develop once in a stable validation environment)".into()
+        "package dependency/build coverage changed or is not recorded".into()
     }
 }
 
@@ -752,9 +788,7 @@ fn fingerprints_scoped(
     if scope.is_some_and(BTreeSet::is_empty) {
         return Ok(BTreeMap::new());
     }
-    capture.portable_guards.clear();
-    let mut environments = BTreeMap::new();
-    let raw = fingerprints_with_identity(root, cfg, capture, None, scope, &mut environments)?;
+    let raw = fingerprints_with_identity(root, cfg, capture, None, scope)?;
     let paths = capture.inputs.keys().filter_map(|p| {
         p.strip_prefix(root)
             .ok()
@@ -772,14 +806,7 @@ fn fingerprints_scoped(
     }
     let identity = content_identity::Identity::new(root, rules, runner);
     identity.prepare(&capture.inputs)?;
-    let mut normalized = fingerprints_with_identity(
-        root,
-        cfg,
-        capture,
-        Some(&identity),
-        scope,
-        &mut environments,
-    )?;
+    let mut normalized = fingerprints_with_identity(root, cfg, capture, Some(&identity), scope)?;
     for (id, entry) in raw {
         let current = normalized
             .get_mut(&id)
@@ -805,7 +832,6 @@ fn fingerprints_with_identity(
     capture: &mut Capture,
     identity: Option<&content_identity::Identity<'_>>,
     scope: Option<&BTreeSet<String>>,
-    environments: &mut BTreeMap<String, BTreeMap<String, String>>,
 ) -> Result<BTreeMap<String, Fingerprints>, String> {
     let file_hash = |path: &str, bytes: Option<&[u8]>| match identity {
         Some(identity) => identity.hash(path, bytes),
@@ -827,24 +853,6 @@ fn fingerprints_with_identity(
         .flat_map(|id| dependency_scope(capture, id))
         .chain(ids.iter().cloned())
         .collect::<BTreeSet<_>>();
-    let mut needed = BTreeSet::new();
-    for id in &ids {
-        if let Some(policy) = cfg.development.get(id) {
-            for check in policy
-                .checks
-                .iter()
-                .chain(policy.stability.iter().flat_map(|s| &s.checks))
-            {
-                needed.extend(check.inputs.iter().cloned());
-            }
-            needed.extend(
-                policy
-                    .stability
-                    .iter()
-                    .flat_map(|s| s.contracts.iter().cloned()),
-            );
-        }
-    }
     let mut files = BTreeMap::<String, Option<String>>::new();
     for path in &capture.inventory {
         if path == RECORD
@@ -854,7 +862,6 @@ fn fingerprints_with_identity(
             continue;
         }
         if scope.is_some()
-            && !needed.contains(path)
             && !content_scope
                 .iter()
                 .any(|id| uses_build(cfg, capture, id, path))
@@ -865,7 +872,6 @@ fn fingerprints_with_identity(
         {
             continue;
         }
-        let _profile = crate::release_metrics::span("evidence.file");
         let bytes = match capture.inputs.get(&root.join(path)) {
             Some(bytes) => bytes.clone(),
             None => config::read_current(root, path)?,
@@ -873,7 +879,6 @@ fn fingerprints_with_identity(
         files.insert(path.clone(), file_hash(path, bytes.as_deref())?);
         capture.inputs.entry(root.join(path)).or_insert(bytes);
     }
-    // Include declared native inputs outside Git inventory, notably ignored native locks.
     for (path, bytes) in &capture.current.inputs {
         files.insert(path.clone(), file_hash(path, bytes.as_deref())?);
         capture
@@ -881,8 +886,7 @@ fn fingerprints_with_identity(
             .entry(root.join(path))
             .or_insert(bytes.clone());
     }
-    let (declared_build, legacy_complete) =
-        development_inputs::capture(root, cfg, capture, &files, identity)?;
+    let (declared_build, _) = development_inputs::capture(root, cfg, capture, &files, identity)?;
     let mut contents = BTreeMap::new();
     for id in &content_scope {
         let mut owned = BTreeMap::new();
@@ -890,103 +894,64 @@ fn fingerprints_with_identity(
             if digest.is_none() || is_build(cfg, path) {
                 continue;
             }
-            let owners = polyglot::owner(&capture.current, path, &cfg.native).unwrap_or_default();
-            // The content identity uses current ownership. Historical ownership
-            // belongs to impact detection, and must not change this hash when a
-            // newly extracted package becomes part of the next release baseline.
-            if owners.contains(id) {
+            if polyglot::owner(&capture.current, path, &cfg.native)
+                .unwrap_or_default()
+                .contains(id)
+            {
                 owned.insert(path, json!({"hash":digest,"mode":capture.modes.get(path).map(String::as_str).unwrap_or("100644")}));
             }
         }
-        let identity = capture.current.packages.get(id);
         contents.insert(
             id.clone(),
-            hash(&json!({"package":identity,"files":owned}))?,
+            hash(&json!({"package":capture.current.packages.get(id),"files":owned}))?,
         );
     }
     let build = files
         .iter()
-        .filter(|(p, _)| {
-            Path::new(p).file_name().and_then(|s| s.to_str()) == Some("Cargo.lock")
-                || cfg.build_inputs.iter().any(|r| polyglot::owns(r, p))
+        .filter(|(path, _)| {
+            Path::new(path).file_name().and_then(|s| s.to_str()) == Some("Cargo.lock")
+                || cfg
+                    .build_inputs
+                    .iter()
+                    .any(|rule| polyglot::owns(rule, path))
                 || cfg
                     .native
                     .adapters
                     .python
                     .as_ref()
-                    .is_some_and(|a| a.locks.iter().any(|l| &l.path == *p))
+                    .is_some_and(|adapter| adapter.locks.iter().any(|lock| &lock.path == *path))
         })
         .collect::<BTreeMap<_, _>>();
-    let mut result = BTreeMap::new();
     let products = product_workspaces(root, cfg, capture)?;
+    let mut result = BTreeMap::new();
     for id in ids {
         let dependencies = dependency_scope(capture, &id);
+        let dependency_inputs = dependencies
+            .iter()
+            .filter_map(|id| contents.get(id).map(|value| (id, value)))
+            .collect::<BTreeMap<_, _>>();
         let rust_build =
             rust_build_evidence_from(capture, &dependencies, &products, &mut |path| {
                 let bytes = config::read_current(root, path)?;
                 match identity {
-                    Some(identity) => bytes.map(|b| identity.bytes(path, &b)).transpose(),
+                    Some(identity) => bytes.map(|bytes| identity.bytes(path, &bytes)).transpose(),
                     None => Ok(bytes),
                 }
             })?;
-        let dependency_inputs = dependencies
-            .iter()
-            .filter_map(|id| contents.get(id).map(|v| (id, v)))
-            .collect::<BTreeMap<_, _>>();
-        let mut contracts = BTreeMap::new();
-        let mut check_inputs = BTreeMap::new();
-        if let Some(policy) = cfg.development.get(&id) {
-            for check in policy
-                .checks
-                .iter()
-                .chain(policy.stability.iter().flat_map(|s| &s.checks))
-            {
-                for path in &check.inputs {
-                    let bytes = config::read_current(root, path)?;
-                    check_inputs.insert(path, file_hash(path, bytes.as_deref())?);
-                    capture.inputs.entry(root.join(path)).or_insert(bytes);
-                }
-            }
-        }
-        if let Some(stability) = cfg.development.get(&id).and_then(|p| p.stability.as_ref()) {
-            for path in &stability.contracts {
-                let bytes = config::read_current(root, path)?;
-                contracts.insert(path, file_hash(path, bytes.as_deref())?);
-                capture.inputs.entry(root.join(path)).or_insert(bytes);
-            }
-        }
         let scoped_build = build
             .iter()
             .filter(|(path, _)| {
                 (!rust_build.contains_key(path.as_str())
-                    || cfg.build_inputs.iter().any(|p| polyglot::owns(p, path)))
+                    || cfg
+                        .build_inputs
+                        .iter()
+                        .any(|rule| polyglot::owns(rule, path)))
                     && dependencies
                         .iter()
                         .any(|id| uses_build(cfg, capture, id, path))
             })
             .collect::<BTreeMap<_, _>>();
-        // Replay the exact 6.x contract, including full locks, environment,
-        // dependency contents and check policy. This is comparison only: never
-        // rebind a historical digest or mark it as newly validated by 7.x.
-        let legacy_build = build
-            .iter()
-            .filter(|(path, _)| {
-                dependencies
-                    .iter()
-                    .any(|id| uses_build(cfg, capture, id, path))
-            })
-            .collect::<BTreeMap<_, _>>();
-        let legacy_evidence = hash(
-            &json!({"content":contents[&id],"dependencies":dependency_inputs,
-            "build":legacy_build,"environment":capture.environment,"policy":cfg.development.get(&id),
-            "contracts":contracts,"check_inputs":check_inputs,"adapters":format!("{:?}",cfg.native.adapters)}),
-        )?;
-        let host_evidence = hash(
-            &json!({"content":contents[&id],"dependencies":dependency_inputs,
-            "build":scoped_build,"rust_build":rust_build,"environment":capture.environment,"policy":cfg.development.get(&id),
-            "contracts":contracts,"check_inputs":check_inputs,"adapters":format!("{:?}",cfg.native.adapters)}),
-        )?;
-        let mut components = BTreeMap::from([
+        let components = BTreeMap::from([
             ("content".into(), contents[&id].clone()),
             ("dependencies".into(), hash(&dependency_inputs)?),
             (
@@ -995,123 +960,22 @@ fn fingerprints_with_identity(
                     &json!({"build":scoped_build,"rust_build":rust_build,"declared":declared_build}),
                 )?,
             ),
-            (
-                "environment".into(),
-                capture.development_environment.clone(),
-            ),
-            ("policy".into(), hash(&cfg.development.get(&id))?),
-            ("contracts".into(), hash(&contracts)?),
-            ("check_inputs".into(), hash(&check_inputs)?),
-            (
-                "adapters".into(),
-                hash(&format!("{:?}", cfg.native.adapters))?,
-            ),
         ]);
-        let portable_evidence = hash(&components)?;
-        if let Some(identity) = identity {
-            let mut paths = files
-                .iter()
-                .filter(|(_, value)| value.is_some())
-                .map(|(path, _)| path)
-                .filter(|path| {
-                    let owners =
-                        polyglot::owner(&capture.current, path, &cfg.native).unwrap_or_default();
-                    owners.iter().any(|owner| dependencies.contains(owner))
-                })
-                .cloned()
-                .collect::<BTreeSet<_>>();
-            paths.extend(declared_build.keys().cloned());
-            paths.extend(scoped_build.keys().map(|p| (**p).clone()));
-            paths.extend(rust_build.keys().cloned());
-            paths.extend(check_inputs.keys().map(|p| (*p).clone()));
-            paths.extend(contracts.keys().map(|p| (*p).clone()));
-            components.insert(
-                "normalization".into(),
-                if cfg
-                    .development
-                    .get(&id)
-                    .is_some_and(|p| p.environment.is_some())
-                {
-                    identity.rules.portable_digest(&paths)?
-                } else {
-                    identity.rules.digest(&paths)?
-                },
-            );
-        }
-        let details = if let Some(contract) = cfg
-            .development
-            .get(&id)
-            .and_then(|p| p.environment.as_ref())
-        {
-            let key = hash(contract)?;
-            if !environments.contains_key(&key) {
-                let facts = contract.snapshot(root, capture)?;
-                capture
-                    .portable_guards
-                    .push(portable_environment::Guard::new(
-                        contract,
-                        facts.clone(),
-                        capture,
-                    ));
-                environments.insert(key.clone(), facts);
-            }
-            let environment = &environments[&key];
-            components.insert("environment".into(), hash(environment)?);
-            let mut details = environment
-                .iter()
-                .map(|(k, v)| (format!("environment:{k}"), v.clone()))
-                .collect::<BTreeMap<_, _>>();
-            for (path, value) in &files {
-                if check_inputs.contains_key(path)
-                    || contracts.contains_key(path)
-                    || polyglot::owner(&capture.current, path, &cfg.native)
-                        .unwrap_or_default()
-                        .iter()
-                        .any(|id| dependencies.contains(id))
-                {
-                    details.insert(
-                        format!("file:{path}"),
-                        hash(&(
-                            value,
-                            capture
-                                .modes
-                                .get(path)
-                                .map(String::as_str)
-                                .unwrap_or("100644"),
-                        ))?,
-                    );
-                }
-            }
-            for (path, value) in &check_inputs {
-                details.insert(format!("check:{path}"), hash(value)?);
-            }
-            components.insert("details".into(), hash(&details)?);
-            Some(details)
-        } else {
-            None
-        };
-        let evidence = hash(&components)?;
         result.insert(
             id.clone(),
             Fingerprints {
                 content: contents[&id].clone(),
-                evidence,
-                legacy_evidence,
-                host_evidence,
+                evidence: hash(&components)?,
                 components,
-                legacy_complete,
                 raw: None,
-                portable_evidence,
-                details,
             },
         );
     }
     Ok(result)
 }
 
-// A published certificate is historical evidence, not a promise that every
-// future shell has the same environment. Reuse it only when the formal release
-// and all relevant inputs prove this is still the same delivered package.
+// Legacy aggregate records remain immutable historical data. Without separable
+// dependency/build components, only an unchanged published baseline can cover them.
 fn published_unchanged(
     root: &Path,
     cfg: &Config,
@@ -1120,189 +984,79 @@ fn published_unchanged(
     hashes: &BTreeMap<String, Fingerprints>,
     runner: &dyn ProcessRunner,
 ) -> Result<BTreeSet<String>, String> {
-    let inspection = InspectionRunner(runner);
-    let reader = history_cache::Reader::new(root, &inspection);
     let published =
-        Ledger::parse(revision_payload(root, &capture.boundary, RECORD, &reader)?.as_deref())?;
+        Ledger::parse(revision_payload(root, &capture.boundary, RECORD, runner)?.as_deref())?;
     ledger.extends(&published)?;
-    let mut reusable = BTreeSet::new();
-    if hashes
-        .iter()
-        .all(|(id, current)| ledger.latest(id).is_none_or(|entry| current.matches(entry)))
-    {
-        return Ok(reusable);
-    }
-    let Some(old_config) = revision_payload(root, &capture.boundary, CONFIG, &reader)? else {
-        return Ok(reusable);
-    };
-    let current_config =
-        config::read_current(root, CONFIG)?.ok_or("current release configuration missing")?;
-    // Deliberately conservative: configuration edits require current evidence.
-    if crate::json::parse_unique_json(&old_config, "published release configuration")?
-        != crate::json::parse_unique_json(&current_config, "current release configuration")?
-    {
-        return Ok(reusable);
-    }
-    // A directory declaration may include ignored files absent from Git's
-    // inventory. Without a stored inventory proof, keep requiring live evidence.
-    if cfg.build_inputs.iter().any(|path| path.ends_with('/'))
-        || capture.environment_guard.is_some()
-    {
-        return Ok(reusable);
-    }
-    let products = product_workspaces(root, cfg, capture)?;
+    let mut covered = BTreeSet::new();
     for (id, current) in hashes {
-        if ledger
-            .latest(id)
-            .is_some_and(|entry| current.matches(entry))
-        {
-            continue;
-        }
-        let (Some(entry), Some(old)) = (ledger.latest(id), published.latest(id)) else {
+        let (Some(entry), Some(old), Some(package), Some(baseline)) = (
+            ledger.latest(id),
+            published.latest(id),
+            capture.current.packages.get(id),
+            capture.baseline.packages.get(id),
+        ) else {
             continue;
         };
-        // Portable certificates describe the validation environment. Publication
-        // may bridge Git EOL conversion, never a real tool/build environment change.
-        if (!matches!(entry.evidence_schema, Some(3 | 4 | 5)) && !current.legacy_complete)
-            || (matches!(entry.evidence_schema, Some(3 | 4 | 5))
-                && entry
-                    .evidence_components
-                    .as_ref()
-                    .and_then(|p| p.get("environment"))
-                    != current.components.get("environment"))
+        if current.matches(entry)
+            || entry.evidence_components.is_some()
+            || !matches!(entry.evidence_schema, None | Some(2))
             || entry.hash != old.hash
             || !current.content_matches(entry)
-            || (matches!(entry.evidence_schema, Some(4 | 5))
-                && entry
-                    .evidence_components
-                    .as_ref()
-                    .and_then(|p| p.get("normalization"))
-                    != current.components.get("normalization"))
-            || entry.after.as_deref()
-                != capture.current.packages.get(id).map(|p| p.version.as_str())
-        {
-            continue;
-        }
-        let scope = dependency_scope(capture, id);
-        // Python interpreter/dependency bytes are runtime inputs, not merely
-        // historical Rust build-host identity. Retain their live evidence gate.
-        if scope.iter().any(|dep| {
-            capture
+            || serde_json::to_value(package).ok() != serde_json::to_value(baseline).ok()
+            || !cfg.build_inputs.is_empty()
+            || capture
                 .current
-                .packages
-                .get(dep)
-                .is_none_or(|p| p.language != Language::Rust)
-        }) {
-            continue;
-        }
-        if scope.iter().any(|dep| {
-            serde_json::to_value(capture.current.packages.get(dep)).ok()
-                != serde_json::to_value(capture.baseline.packages.get(dep)).ok()
-                || capture
-                    .changes
-                    .iter()
-                    .any(|c| c.role != "record" && c.packages.contains(dep))
-        }) {
-            continue;
-        }
-        let rust_now = rust_build_evidence(root, capture, &scope, &products, &BTreeMap::new())?;
-        reader.prefetch(
-            &capture.boundary,
-            &rust_now.keys().cloned().collect::<Vec<_>>(),
-        )?;
-        let mut old_rust_inputs = BTreeMap::new();
-        for path in rust_now.keys() {
-            old_rust_inputs.insert(
-                path.clone(),
-                revision_payload(root, &capture.boundary, path, &reader)?,
-            );
-        }
-        if old_rust_inputs.values().any(Option::is_none)
-            || rust_now
+                .inputs
                 .keys()
-                .any(|path| capture.git_mode_changes.contains(path))
+                .any(|path| !capture.inventory.contains(path))
         {
             continue;
         }
-        if rust_now
-            .keys()
-            .any(|path| capture.git_content_changes.contains(path))
-        {
-            // Historical blobs use LF; the checkout may use CRLF. Cargo TOML
-            // newline normalization must not masquerade as a dependency change.
-            let normalize = |bytes: Option<Vec<u8>>| -> Result<Option<Vec<u8>>, String> {
-                bytes
-                    .map(|b| {
-                        String::from_utf8(b)
-                            .map(|s| s.replace("\r\n", "\n").into_bytes())
-                            .map_err(|e| e.to_string())
-                    })
+        let dependencies = dependency_scope(capture, id);
+        let products = product_workspaces(root, cfg, capture)?;
+        let rules = capture
+            .normalization
+            .clone()
+            .ok_or("version normalization rules missing")?;
+        let identity = content_identity::Identity::new(root, rules, runner);
+        let current_build =
+            rust_build_evidence_from(capture, &dependencies, &products, &mut |path| {
+                config::read_current(root, path)?
+                    .map(|bytes| identity.bytes(path, &bytes))
                     .transpose()
-            };
-            let rust_old = rust_build_evidence_from(capture, &scope, &products, &mut |path| {
-                normalize(old_rust_inputs.get(path).cloned().flatten())
             })?;
-            let rust_current = rust_build_evidence_from(capture, &scope, &products, &mut |path| {
-                normalize(config::read_current(root, path)?)
+        let published_build =
+            rust_build_evidence_from(capture, &dependencies, &products, &mut |path| {
+                revision_payload(root, &capture.boundary, path, runner)?
+                    .map(|bytes| identity.bytes(path, &bytes))
+                    .transpose()
             })?;
-            if rust_current != rust_old {
-                continue;
-            }
+        if current_build != published_build {
+            continue;
         }
-        let mut paths = cfg.build_inputs.iter().cloned().collect::<BTreeSet<_>>();
-        // Explicit global build inputs apply even when no package owns them.
-        for path in capture
-            .inventory
+        let changed = capture
+            .changes
             .iter()
-            .chain(capture.current.inputs.keys())
-            .chain(capture.changes.iter().map(|c| &c.path))
-        {
-            if scope.iter().any(|dep| uses_build(cfg, capture, dep, path))
-                && (!rust_now.contains_key(path.as_str())
-                    || cfg.build_inputs.iter().any(|p| polyglot::owns(p, path)))
-            {
-                paths.insert(path.clone());
-            }
-        }
-        if let Some(policy) = cfg.development.get(id) {
-            for check in policy
-                .checks
-                .iter()
-                .chain(policy.stability.iter().flat_map(|s| &s.checks))
-            {
-                paths.extend(check.inputs.iter().cloned());
-            }
-            if let Some(stability) = &policy.stability {
-                paths.extend(stability.contracts.iter().cloned());
-            }
-        }
-        reader.prefetch(
-            &capture.boundary,
-            &paths.iter().cloned().collect::<Vec<_>>(),
-        )?;
-        let mut same = true;
-        for path in paths {
-            let old = revision_payload(root, &capture.boundary, &path, &reader)?;
-            let now = config::read_current(root, &path)?;
-            // An ignored input absent from Git history has no published proof.
-            // Git applies the repository's built-in text/encoding attributes.
-            // Comparing blob LF bytes to worktree CRLF bytes would invalidate
-            // unchanged Windows scripts. Use the unfiltered capture instead.
-            if old.is_none()
-                || now.is_none()
-                || capture.git_content_changes.contains(&path)
-                || capture.git_mode_changes.contains(&path)
-            {
-                same = false;
-                break;
-            }
-        }
-        if same {
-            reusable.insert(id.clone());
+            .filter(|change| change.role != "record")
+            // These exact native paths already have equal published/current
+            // build identities above. In particular, an unrelated lock member
+            // must not override the proven Rust dependency closure comparison.
+            .filter(|change| change.mode_changed || !current_build.contains_key(&change.path))
+            .any(|change| {
+                (change.mode_changed && current_build.contains_key(&change.path))
+                    || change
+                        .packages
+                        .iter()
+                        .any(|owner| dependencies.contains(owner))
+                    || dependencies
+                        .iter()
+                        .any(|owner| uses_build(cfg, capture, owner, &change.path))
+            });
+        if !changed {
+            covered.insert(id.clone());
         }
     }
-    reader.verify_unchanged()?;
-    Ok(reusable)
+    Ok(covered)
 }
 
 fn pending(
@@ -1330,6 +1084,17 @@ fn release_scope(
     runner: &dyn ProcessRunner,
 ) -> Result<BTreeSet<String>, String> {
     let mut scope = plan::affected(cfg, capture);
+    // These files are explicitly delivered by a release, including a product-
+    // only release with no new library source diff. Ignored file loss must not
+    // disappear merely because Git reports no package change.
+    scope.extend(
+        cfg.development
+            .iter()
+            .filter(|(id, policy)| {
+                !policy.release_artifacts.is_empty() && capture.current.packages.contains_key(*id)
+            })
+            .map(|(id, _)| id.clone()),
+    );
     scope.extend(
         ledger.entries[published.entries.len()..]
             .iter()
@@ -1369,25 +1134,16 @@ fn release_scope(
             if scope.contains(id) {
                 continue;
             }
-            let check_input = cfg.development.get(id).is_some_and(|p| {
-                p.checks
-                    .iter()
-                    .chain(p.stability.iter().flat_map(|s| &s.checks))
-                    .any(|c| c.inputs.contains(&change.path))
-                    || p.stability
-                        .as_ref()
-                        .is_some_and(|s| s.contracts.contains(&change.path))
-            });
             let configuration_changed = if change.path == CONFIG {
                 match (&old_config, &new_config) {
                     (Some(old), Some(new)) => {
-                        old["development"][id] != new["development"][id]
+                        old["development"][id]["release_artifacts"]
+                            != new["development"][id]["release_artifacts"]
                             || [
                                 "adapters",
                                 "build_inputs",
                                 "record_inputs",
                                 "shared_inputs",
-                                "python_environment",
                                 "product_manifests",
                                 "product_packages",
                             ]
@@ -1437,20 +1193,10 @@ fn release_scope(
                 )?;
                 build_changed = old != now;
             }
-            let environment_input = cfg
-                .development
-                .get(id)
-                .and_then(|p| p.environment.as_ref())
-                .is_some_and(|e| e.affects_path(root, &change.path));
             let cargo_config =
                 matches!(change.path.as_str(), ".cargo/config" | ".cargo/config.toml")
                     && capture.current.packages[id].language == Language::Rust;
-            if configuration_changed
-                || check_input
-                || build_changed
-                || environment_input
-                || cargo_config
-            {
+            if configuration_changed || build_changed || cargo_config {
                 scope.insert(id.clone());
             }
         }
@@ -1492,6 +1238,33 @@ pub(super) fn release_gate(
         return Ok(ledger);
     }
     let scope = release_scope(root, cfg, capture, &ledger, &published_ledger, runner)?;
+    // Explicit environments guard this release transaction, without making
+    // another host's test environment a durable version qualification.
+    let mut environments = BTreeMap::new();
+    for id in &scope {
+        if let Some(environment) = cfg
+            .development
+            .get(id)
+            .and_then(|policy| policy.environment.as_ref())
+        {
+            let facts = environment.snapshot(root, capture)?;
+            environments.insert(id.clone(), facts.clone());
+            capture
+                .portable_guards
+                .push(portable_environment::Guard::new(
+                    environment,
+                    facts,
+                    capture,
+                ));
+        }
+    }
+    if !environments.is_empty() {
+        capture.fingerprint =
+            hash(&json!({"capture":capture.fingerprint,"release_environments":environments}))?;
+        capture.validation_fingerprint = hash(
+            &json!({"validation":capture.validation_fingerprint,"release_environments":environments}),
+        )?;
+    }
     if scope.is_empty() {
         // Product-only releases still write files. Reuse the rules captured for
         // their validation identity without scanning unrelated package contents.
@@ -1554,15 +1327,15 @@ pub(super) fn release_gate(
     }
     for id in scope {
         if let Some(entry) = ledger.latest(&id) {
-            for (path, expected) in &entry.artifacts {
-                if entry.evidence_schema == Some(5)
-                    && !cfg
-                        .development
-                        .get(&id)
-                        .is_some_and(|p| p.release_artifacts.contains(path))
-                {
-                    continue;
-                }
+            for path in cfg
+                .development
+                .get(&id)
+                .iter()
+                .flat_map(|policy| &policy.release_artifacts)
+            {
+                let expected = entry.artifacts.get(path).ok_or_else(|| {
+                    format!("{id}: declared release artifact has no verified coverage: {path}; run develop")
+                })?;
                 let bytes = config::read_current(root, path)?.ok_or_else(|| {
                     format!("{id}: development artifact missing: {path}; run develop")
                 })?;
@@ -1719,9 +1492,42 @@ fn prepare(
     } else {
         fingerprints(root, &cfg, &mut capture, runner)?
     };
+    // This is a short-lived transaction guard, not part of durable version
+    // coverage. Retain the exact inputs/environment of the checks we will run.
+    let mut task_environments = BTreeMap::new();
+    for (id, policy) in &cfg.development {
+        if task_scope.as_ref().is_some_and(|scope| !scope.contains(id)) {
+            continue;
+        }
+        for path in policy
+            .checks
+            .iter()
+            .chain(policy.stability.iter().flat_map(|p| &p.checks))
+            .flat_map(|check| &check.inputs)
+            .chain(policy.stability.iter().flat_map(|p| &p.contracts))
+        {
+            capture
+                .inputs
+                .entry(root.join(path))
+                .or_insert(config::read_current(root, path)?);
+        }
+        if let Some(environment) = &policy.environment {
+            let facts = environment.snapshot(root, &capture)?;
+            task_environments.insert(id.clone(), facts.clone());
+            capture
+                .portable_guards
+                .push(portable_environment::Guard::new(
+                    environment,
+                    facts,
+                    &capture,
+                ));
+        }
+    }
     // Declared ignored inputs are discovered above and must bind the preview too.
-    capture.fingerprint = hash(&json!({"capture":capture.fingerprint,"packages":hashes,
-        "inputs":capture.inputs.iter().map(|(p,b)|(p.to_string_lossy().into_owned(),b.as_deref().map(digest))).collect::<BTreeMap<_,_>>()}))?;
+    capture.fingerprint = hash(
+        &json!({"capture":capture.fingerprint,"packages":hashes,"task_environments":task_environments,
+        "inputs":capture.inputs.iter().map(|(p,b)|(p.to_string_lossy().into_owned(),b.as_deref().map(digest))).collect::<BTreeMap<_,_>>()}),
+    )?;
     if let Some(scope) = &task_scope {
         capture.fingerprint = hash(
             &json!({"capture":capture.fingerprint,"task_packages":requested,"effective_task_packages":scope}),
@@ -1736,23 +1542,24 @@ fn prepare(
     // Lost or modified generated artifacts require revalidation, never a second bump.
     for (id, _) in &hashes {
         if let Some(entry) = ledger.latest(id) {
-            if entry.artifacts.iter().any(|(p, h)| {
-                if entry.evidence_schema == Some(5)
-                    && !cfg
-                        .development
-                        .get(id)
-                        .is_some_and(|policy| policy.release_artifacts.contains(p))
-                {
-                    return false;
-                }
-                config::read_current(root, p)
-                    .ok()
-                    .flatten()
-                    .as_deref()
-                    .map(digest)
-                    .as_ref()
-                    != Some(h)
-            }) {
+            if cfg
+                .development
+                .get(id)
+                .iter()
+                .flat_map(|policy| &policy.release_artifacts)
+                .any(|p| {
+                    let Some(h) = entry.artifacts.get(p) else {
+                        return true;
+                    };
+                    config::read_current(root, p)
+                        .ok()
+                        .flatten()
+                        .as_deref()
+                        .map(digest)
+                        .as_ref()
+                        != Some(h)
+                })
+            {
                 affected.insert(id.clone());
             }
         }
@@ -1797,6 +1604,12 @@ fn prepare(
     let Some(analysis) = analysis::read(root, request, &mut capture)? else {
         return Ok(Err(receipt));
     };
+    if !analysis.checks.is_empty() {
+        return Err(
+            "develop does not accept release evidence claims; select task validation commands"
+                .into(),
+        );
+    }
     if receipt["python_environment_required"] == true {
         return Err("Python development checks require explicit python_environment interpreter/runtime/dependency roots".into());
     }
@@ -1821,7 +1634,7 @@ fn prepare(
                         && entry.after.as_deref() == Some(now.version.as_str())
                 });
             if same_published_package
-                && !matches!(entry.evidence_schema, Some(4 | 5))
+                && !matches!(entry.evidence_schema, Some(4 | 5 | 6))
                 && !hashes[id].content_matches(entry)
                 && !capture
                     .git_content_changes
@@ -2022,6 +1835,7 @@ fn prepare(
         .packages
         .keys()
         .chain(analysis.targets.keys())
+        .chain(analysis.validation.keys())
         .any(|id| !affected.contains(id))
     {
         return Err("development analysis includes unchanged or unknown packages".into());
@@ -2032,7 +1846,13 @@ fn prepare(
     {
         return Err("development impact expanded outside the captured task scope; inspect the required packages again".into());
     }
-    validate_cache_artifacts(root, &cfg, &affected, runner)?;
+    for id in &affected {
+        let selected = analysis.validation.get(id).ok_or_else(|| {
+            format!("{id}: final-candidate task validation selection is required")
+        })?;
+        validate_task_selection(id, &cfg.development[id], selected)?;
+    }
+    validate_cache_artifacts(root, &cfg, &affected, &analysis.validation, runner)?;
     materialize(root, &mut writes, renderer)?;
     for path in writes.keys() {
         capture
@@ -2042,6 +1862,14 @@ fn prepare(
     }
     verify_release_inputs(&capture.inputs)?;
     receipt["status"] = json!("development-planned");
+    receipt["validation_mode"] = json!("task-selected-final-candidate");
+    receipt["validation_checks"] = json!(
+        analysis
+            .validation
+            .iter()
+            .map(|(id, checks)| (id, checks.iter().map(|check| &check.id).collect::<Vec<_>>()))
+            .collect::<BTreeMap<_, _>>()
+    );
     development_inputs::verify(root, &capture, &capture.inputs)?;
     receipt["affected_packages"] = json!(affected);
     receipt["versions"] = json!(versions);
@@ -2093,27 +1921,25 @@ fn validate_cache_artifacts(
     root: &Path,
     cfg: &Config,
     affected: &BTreeSet<String>,
+    validation: &BTreeMap<String, Vec<CheckCommand>>,
     runner: &dyn ProcessRunner,
 ) -> Result<(), String> {
-    let policies = affected
+    let checks = affected
         .iter()
-        .filter_map(|id| cfg.development.get(id))
+        .flat_map(|id| {
+            validation[id].iter().chain(
+                cfg.development[id]
+                    .stability
+                    .iter()
+                    .flat_map(|policy| &policy.checks),
+            )
+        })
         .collect::<Vec<_>>();
-    if !policies.iter().any(|p| {
-        p.checks
-            .iter()
-            .chain(p.stability.iter().flat_map(|s| &s.checks))
-            .any(|c| c.reusable)
-    }) {
+    if !checks.iter().any(|check| check.reusable) {
         return Ok(());
     }
-    let artifacts = policies
-        .iter()
-        .flat_map(|p| {
-            p.checks
-                .iter()
-                .chain(p.stability.iter().flat_map(|s| &s.checks))
-        })
+    let artifacts = checks
+        .into_iter()
         .flat_map(|check| &check.artifacts)
         .collect::<BTreeSet<_>>();
     let inspection = InspectionRunner(runner);
@@ -2228,6 +2054,7 @@ fn run_check(
     root: &Path,
     check: &CheckCommand,
     environment: Option<&portable_environment::Contract>,
+    filtered: bool,
     runner: &dyn ProcessRunner,
     logs: Option<&mut (Vec<u8>, Vec<u8>)>,
 ) -> Result<(Value, BTreeMap<String, String>), String> {
@@ -2257,6 +2084,7 @@ fn run_check(
             String::from_utf8_lossy(&output.stderr)
         ));
     }
+    verify_cargo_execution(check, &output.stdout, filtered)?;
     let mut artifacts = BTreeMap::new();
     for path in &check.artifacts {
         let bytes = config::read_current(root, path)?
@@ -2270,6 +2098,65 @@ fn run_check(
         json!({"id":check.id,"status":"passed","command":check,"stdout_sha256":digest(&output.stdout),"stderr_sha256":digest(&output.stderr)}),
         artifacts,
     ))
+}
+
+fn verify_cargo_execution(
+    check: &CheckCommand,
+    stdout: &[u8],
+    filtered: bool,
+) -> Result<(), String> {
+    if Path::new(&check.program)
+        .file_stem()
+        .and_then(|name| name.to_str())
+        != Some("cargo")
+        || check.args.first().map(String::as_str) != Some("test")
+    {
+        return Ok(());
+    }
+    if check
+        .args
+        .iter()
+        .any(|arg| matches!(arg.as_str(), "--list" | "--help" | "-h" | "--no-run"))
+    {
+        return Err(format!(
+            "{}: cargo test did not execute validation tests",
+            check.id
+        ));
+    }
+    let text = String::from_utf8_lossy(stdout);
+    let counts = text
+        .lines()
+        .filter_map(|line| {
+            let summary = line.trim().strip_prefix("test result: ")?;
+            let words = summary.split_whitespace().collect::<Vec<_>>();
+            if words.first() != Some(&"ok.")
+                || words.get(2) != Some(&"passed;")
+                || words.get(4) != Some(&"failed;")
+            {
+                return None;
+            }
+            Some(
+                words
+                    .get(1)?
+                    .parse::<u64>()
+                    .ok()?
+                    .saturating_add(words.get(3)?.parse::<u64>().ok()?),
+            )
+        })
+        .collect::<Vec<_>>();
+    if !counts.is_empty() && counts.iter().all(|count| *count == 0) {
+        return Err(format!(
+            "{}: cargo test executed zero tests; choose a meaningful validation filter",
+            check.id
+        ));
+    }
+    if filtered && counts.is_empty() {
+        return Err(format!(
+            "{}: cannot prove filtered cargo test executed tests; use a registered check with a supported test summary",
+            check.id
+        ));
+    }
+    Ok(())
 }
 
 #[derive(Deserialize, Serialize)]
@@ -2321,8 +2208,13 @@ fn run_candidate_check(
     runner: &dyn ProcessRunner,
 ) -> Result<(Value, BTreeMap<String, String>), String> {
     let environment = p.cfg.development[id].environment.as_ref();
+    let filtered = p.cfg.development[id]
+        .checks
+        .iter()
+        .find(|registered| registered.id == check.id)
+        .is_some_and(|registered| registered.args != check.args);
     if !check.reusable {
-        return run_check(root, check, environment, runner, None);
+        return run_check(root, check, environment, filtered, runner, None);
     }
     let environment = environment.ok_or("reusable check environment is missing")?;
     let host = inputs::environment(root, &p.cfg, p.capture.environment_guard.as_ref(), runner)?;
@@ -2335,7 +2227,7 @@ fn run_candidate_check(
     let git = check_git_identity(root, runner)?;
     let key = hash(
         &json!({"schema":1,"root":root.canonicalize().map_err(|e|e.to_string())?.to_string_lossy(),
-        "engine":env!("CARGO_PKG_VERSION"),"engine_binary":running_tool_identity()?,"package":id,"evidence":p.check_keys.get(id),"command":check,
+        "engine":env!("CARGO_PKG_VERSION"),"engine_binary":running_tool_identity()?,"package":id,"evidence":p.check_keys.get(id),"command":check,"filtered":filtered,
         "candidate":p.writes.iter().map(|(path,bytes)|(path,digest(bytes))).collect::<BTreeMap<_,_>>(),
         "inputs":inputs,"inventory":inventory,"environment":facts,"host_environment":host,
         "git":git,"plan":p.capture.fingerprint}),
@@ -2358,6 +2250,7 @@ fn run_candidate_check(
                         == serde_json::to_value(check).map_err(|e| e.to_string())?
                     && cached.proof["stdout_sha256"] == digest(&cached.stdout)
                     && cached.proof["stderr_sha256"] == digest(&cached.stderr)
+                    && verify_cargo_execution(check, &cached.stdout, filtered).is_ok()
                     && cached.artifacts.keys().collect::<BTreeSet<_>>()
                         == check.artifacts.iter().collect::<BTreeSet<_>>()
                     && cached.artifacts.iter().all(|(path, expected)| {
@@ -2379,8 +2272,14 @@ fn run_candidate_check(
         }
     }
     let mut logs = (Vec::new(), Vec::new());
-    let (mut proof, artifacts) =
-        run_check(root, check, Some(environment), runner, Some(&mut logs))?;
+    let (mut proof, artifacts) = run_check(
+        root,
+        check,
+        Some(environment),
+        filtered,
+        runner,
+        Some(&mut logs),
+    )?;
     if cache_input_snapshot(root, p, check)? != inputs
         || independent::inventory(root, &InspectionRunner(runner))? != inventory
         || check_git_identity(root, runner)? != git
@@ -2511,8 +2410,7 @@ fn execute(
             }
             if p.affected.iter().any(|id| {
                 let policy = &p.cfg.development[id];
-                policy
-                    .checks
+                p.analysis.validation[id]
                     .iter()
                     .chain(policy.stability.iter().flat_map(|s| &s.checks))
                     .any(|check| check.reusable)
@@ -2524,7 +2422,7 @@ fn execute(
             let mut failures = BTreeMap::new();
             for id in &p.affected {
                 let policy = &p.cfg.development[id];
-                for check in &policy.checks {
+                for check in &p.analysis.validation[id] {
                     let (proof, files) = run_candidate_check(root, &p, id, check, runner)?;
                     proofs.entry(id.clone()).or_default().push(proof);
                     artifacts.entry(id.clone()).or_default().extend(files);
@@ -2615,6 +2513,18 @@ fn execute(
                     .insert(path.clone(), config::read_current(root, path)?);
             }
             save_journal(root, &journal)?;
+        }
+        for id in &p.affected {
+            for path in &p.cfg.development[id].release_artifacts {
+                if !artifacts
+                    .get(id)
+                    .is_some_and(|files| files.contains_key(path))
+                {
+                    return Err(format!(
+                        "{id}: declared release artifact was not checked on the final candidate: {path}"
+                    ));
+                }
+            }
         }
         let mut expected = p.capture.inputs.clone();
         for (path, bytes) in &p.writes {
@@ -2727,7 +2637,7 @@ fn execute(
                 .cloned()
                 .unwrap_or_else(|| "retired".into());
             changes.push(json!({"id":id,"version_before":before,"version_after":after,"reason":a.reason,"stability":stability}));
-            p.ledger.append(Entry{id:id.clone(),before,after,content:current.content.clone(),evidence:current.evidence.clone(),evidence_schema:Some(if current.details.is_some(){5}else{4}),evidence_components:Some(current.components.clone()),evidence_details:current.details.clone(),
+            p.ledger.append(Entry{id:id.clone(),before,after,content:current.content.clone(),evidence:current.evidence.clone(),evidence_schema:Some(6),evidence_components:Some(current.components.clone()),evidence_details:None,
                 level:p.levels[id],compatibility:a.compatibility.clone(),acceptance:a.acceptance.as_ref().map(|v|json!({"fingerprint":v.fingerprint,"scope":v.scope,"reason":v.reason,"source":v.source})),reason:a.reason.clone(),stability,
                 checks:proofs.remove(id).unwrap_or_default(),artifacts:artifacts.remove(id).unwrap_or_default(),previous:String::new(),hash:String::new()})?;
         }
@@ -2748,7 +2658,7 @@ fn execute(
         atomic(root, RECORD, &bytes)?;
         fs::remove_file(root.join(JOURNAL)).map_err(|e| e.to_string())?;
         Ok(
-            json!({"schema":1,"status":"development-closed","product_version":p.capture.product_version,"package_changes":changes,"git_written":false,
+            json!({"schema":1,"status":"development-closed","validation_mode":"task-selected-final-candidate","product_version":p.capture.product_version,"package_changes":changes,"git_written":false,
                 "readiness_scope":p.receipt["readiness_scope"],"task_packages":p.receipt["task_packages"],"effective_task_packages":p.task_scope,
                 "outside_task_evidence_checked":p.receipt["outside_task_evidence_checked"],
                 "checks":{"scope":"final-candidate","executed":final_checks-reused_checks,"reused":reused_checks}}),

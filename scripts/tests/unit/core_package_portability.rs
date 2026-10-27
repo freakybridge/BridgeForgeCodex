@@ -433,6 +433,59 @@ fn portable_sdk_path_variables_are_passed_and_certified_by_content() {
 }
 
 #[test]
+fn portable_sdk_change_invalidates_required_release_checks_without_reopening_version() {
+    let r = zero_fixture();
+    configure_portable(&r.0, false);
+    change(&r.0, true);
+    let mut value: Value = serde_json::from_slice(&fs::read(r.0.join(CONFIG)).unwrap()).unwrap();
+    value["development"]["a"]["environment"]["inputs"] = json!({"sdk":".runtime/sdk"});
+    value["required_checks"] = json!(["sdk-check"]);
+    write(&r.0, CONFIG, &serde_json::to_vec(&value).unwrap());
+    write(&r.0, ".runtime/sdk/library.bin", b"first sdk");
+    let q = request(&r.0, "patch", false, &PortableChecks);
+    assert_eq!(close(&r.0, &q, &PortableChecks).code, 0);
+    let cfg = load(&r.0).unwrap().unwrap();
+    let snapshot = || {
+        let mut captured = capture(&r.0, &cfg, &PortableChecks).unwrap();
+        development::release_gate(&r.0, &cfg, &mut captured, &PortableChecks).unwrap();
+        captured
+    };
+    let make_analysis = |captured: &Capture| {
+        let proof = json!({"id":"sdk-check","status":"passed","fingerprint":captured.validation_fingerprint,
+            "scope":["a","product"],"reason":"fixture required SDK check"});
+        let bytes = serde_json::to_vec(&proof).unwrap();
+        write(&r.0, ".runtime/sdk-check.json", &bytes);
+        let mut check = proof;
+        check["artifact"] = json!(".runtime/sdk-check.json");
+        check["sha256"] = json!(digest(&bytes));
+        serde_json::from_value::<analysis::Analysis>(
+            json!({"schema":1,"fingerprint":captured.fingerprint,"checks":[check]}),
+        )
+        .unwrap()
+    };
+    let scope = BTreeSet::from(["a".into(), "product".into()]);
+    let mut before = snapshot();
+    let old = make_analysis(&before);
+    analysis::validate_checks(&r.0, &cfg, &mut before, &old, &scope).unwrap();
+    write(&r.0, ".runtime/sdk/library.bin", b"different sdk");
+    let mut after = snapshot();
+    assert_ne!(before.validation_fingerprint, after.validation_fingerprint);
+    assert!(
+        analysis::validate_checks(&r.0, &cfg, &mut after, &old, &scope)
+            .unwrap_err()
+            .contains("validation evidence is stale")
+    );
+    let refreshed = make_analysis(&after);
+    analysis::validate_checks(&r.0, &cfg, &mut after, &refreshed, &scope).unwrap();
+    assert_eq!(
+        development::preview(&r.0, &Request::default(), &PortableChecks)
+            .receipt
+            .unwrap()["status"],
+        "nothing-to-close"
+    );
+}
+
+#[test]
 fn portable_external_input_guard_reaches_release_apply() {
     let r = zero_fixture();
     configure_portable(&r.0, false);
@@ -493,7 +546,8 @@ fn scoped_shared_lock_only_invalidates_actual_dependency_closure() {
         &alternate,
     );
     assert!(
-        p.stderr.contains("library: validation evidence changed"),
+        p.stderr
+            .contains("library: package dependency/build coverage"),
         "{}",
         p.stderr
     );
@@ -516,6 +570,9 @@ fn portable_declared_project_tools_and_configs_participate_in_release_scope() {
         .unwrap()
         .push(json!("scripts/wrapper.exe"));
     cfg["development"]["a"]["environment"]["cargo_configs"] = json!(["scripts/check.toml"]);
+    // These fixture files model actual build inputs as well as tools used by
+    // validation; only the former creates durable version coverage impact.
+    cfg["build_inputs"] = json!(["scripts/wrapper.exe", "scripts/check.toml"]);
     write(&r.0, CONFIG, &serde_json::to_vec(&cfg).unwrap());
     let q = request(&r.0, "patch", false, &PortableChecks);
     let result = close(&r.0, &q, &PortableChecks);
@@ -631,14 +688,17 @@ fn portable_unmodeled_cargo_tool_override_is_rejected() {
         .inputs
         .insert("sdk".into(), ".runtime/../sdk".into());
     write(&r.0, "sdk/lib.bin", b"deleted SDK input");
+    let present = contract.snapshot(&r.0, &snapshot).unwrap();
     fs::remove_file(r.0.join("sdk/lib.bin")).unwrap();
     fs::remove_dir(r.0.join("sdk")).unwrap();
-    assert!(contract.affects_path(&r.0, "sdk/lib.bin"));
+    let missing = contract.snapshot(&r.0, &snapshot).unwrap();
+    assert_ne!(present["input:sdk"], missing["input:sdk"]);
     contract.inputs.clear();
     contract
         .inputs
         .insert("sdk".into(), r.0.join("sdk").to_string_lossy().into_owned());
-    assert!(contract.affects_path(&r.0, "sdk/lib.bin"));
+    let absolute_missing = contract.snapshot(&r.0, &snapshot).unwrap();
+    assert_eq!(absolute_missing["input:sdk"], missing["input:sdk"]);
 }
 
 #[test]
@@ -817,7 +877,7 @@ fn portable_machine_evidence_roundtrip_without_local_artifacts() {
     let ledger = fs::read(a.0.join(development::RECORD)).unwrap();
     assert_eq!(
         serde_json::from_slice::<Value>(&ledger).unwrap()["entries"][0]["evidence_schema"],
-        5
+        6
     );
     git(&a.0, &["add", "."]);
     git(&a.0, &["commit", "-m", "fix: certified source"]);
@@ -842,17 +902,10 @@ fn portable_machine_evidence_roundtrip_without_local_artifacts() {
     assert_eq!(p["release_code"], 0, "{p}");
     let changed = machine_probe(&b.0, Some("--cfg changed_build"));
     assert_eq!(
-        changed["develop"]["affected_packages"],
-        json!(["a"]),
+        changed["develop"]["status"], "nothing-to-close",
         "{changed}"
     );
-    assert_ne!(changed["release_code"], 0);
-    assert!(
-        changed["release_error"]
-            .as_str()
-            .unwrap()
-            .contains("environment:variable:RUSTFLAGS")
-    );
+    assert_eq!(changed["release_code"], 0, "{changed}");
     assert!(!changed.to_string().contains("--cfg changed_build"));
     write(&b.0, "pkg/src/lib.rs", b"pub fn value()->u8{3}\n");
     let q = request(&b.0, "patch", false, &PortableChecks);
@@ -894,6 +947,41 @@ fn portable_declared_delivery_artifacts_still_gate_release() {
         preview(&r.0, "fix: delivery", &Request::default(), &PortableChecks).code,
         0
     );
+}
+
+#[test]
+fn lightweight_new_and_replaced_delivery_declarations_require_coverage() {
+    let repo = zero_fixture();
+    configure_portable(&repo.0, false);
+    change(&repo.0, true);
+    let analysis = request(&repo.0, "patch", false, &PortableChecks);
+    assert_eq!(close(&repo.0, &analysis, &PortableChecks).code, 0);
+    let before = fs::read(repo.0.join(development::RECORD)).unwrap();
+    for path in [
+        ".runtime/new-delivery.bin",
+        ".runtime/replaced-delivery.bin",
+    ] {
+        let mut cfg: Value =
+            serde_json::from_slice(&fs::read(repo.0.join(CONFIG)).unwrap()).unwrap();
+        cfg["development"]["a"]["checks"][0]["artifacts"] = json!([path]);
+        cfg["development"]["a"]["release_artifacts"] = json!([path]);
+        write(&repo.0, CONFIG, &serde_json::to_vec(&cfg).unwrap());
+        let release = preview(
+            &repo.0,
+            "fix: delivery declaration",
+            &Request::default(),
+            &PortableChecks,
+        );
+        assert_ne!(release.code, 0);
+        assert!(
+            release.stderr.contains("no verified coverage"),
+            "{}",
+            release.stderr
+        );
+        let pending = development::preview(&repo.0, &Request::default(), &PortableChecks);
+        assert_eq!(pending.receipt.unwrap()["affected_packages"], json!(["a"]));
+        assert_eq!(fs::read(repo.0.join(development::RECORD)).unwrap(), before);
+    }
 }
 
 #[test]

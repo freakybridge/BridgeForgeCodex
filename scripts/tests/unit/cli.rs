@@ -32,8 +32,8 @@ fn development_capabilities_and_mutation_flags_are_explicit() {
         "resumable-development-checks-v1",
         "package-stability-v1",
         "git-sync-development-closure-v1",
-        "portable-development-evidence-v1",
-        "cross-machine-development-evidence-v1",
+        "task-selected-development-checks-v1",
+        "version-coverage-v1",
         "scoped-release-evidence-v1",
         "release-external-analysis-preview-v1",
     ] {
@@ -43,6 +43,19 @@ fn development_capabilities_and_mutation_flags_are_explicit() {
                 .unwrap()
                 .iter()
                 .any(|v| v == capability)
+        );
+    }
+    for retired in [
+        "portable-development-evidence-v1",
+        "git-eol-development-evidence-v1",
+        "cross-machine-development-evidence-v1",
+    ] {
+        assert!(
+            !identity["capabilities"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|value| value == retired)
         );
     }
     for flags in [

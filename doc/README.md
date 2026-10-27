@@ -8,7 +8,7 @@ delivery_layout: flat
 
 ## 从这里开始
 
-- 已确认、待实施：[Forge 骨架职责与版本工作流简化](1_delivery/forge-simplification/requirements_2026-10-27_workflow-and-versioning.md)（TODO-044；保留 R1–R12、Native Memory、全部 Hook 和已审核 AGENTS；保留自动版本管理，取消长期验证证书硬门槛。含保留/重构/候选退役清单及分段验收；仅需求方案落盘，未实施、未验收、未发布）。
+- 工程交付待验收：[Forge 骨架职责与版本工作流简化](1_delivery/forge-simplification/requirements_2026-10-27_workflow-and-versioning.md)（TODO-044；P1–P3与112项相关测试完成，七包已按必要检查正式收口；用户接受不兼容变化、旧重型默认流程永久退役并授权8.0.0发布。AGENTS/Hook未调整，用户验收尚未记录；发布与推送结果以正式CHANGELOG和受管收据为准。详见需求卡第14节）。
 
 - 本地止血与收口待续：[develop 按本次任务收口与验证复用](1_delivery/develop-demand-discovery/requirements_2026-10-27_task-closure.md)（TODO-043；第 14 节记录四对话循环返工原因、已写入 AGENTS 的方案 A、简化 develop 分工及 F1–F5 待执行方案。factory 并行检查、lifecycle 漏升版修正与定向证据保留；正式收口和最终运行时未完成，未验收、未发布）。
 

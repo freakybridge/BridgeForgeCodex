@@ -81,6 +81,7 @@ pub fn generated_writes(
         None,
         None,
         None,
+        None,
     )
 }
 
@@ -102,6 +103,33 @@ pub fn generated_writes_reusing(
         None,
         None,
         None,
+        None,
+    )
+}
+
+/// Reuse snapshots already captured for the same transaction's cache lookup.
+/// Original bytes, isolated bytes, source ownership and every asset contract
+/// are still verified. The caller retains ownership of the supplied snapshots.
+pub fn generated_writes_captured(
+    source_base: &Path,
+    source_key: &str,
+    project_root: &Path,
+    contract: &Value,
+    runner: &dyn ProcessRunner,
+    captured: &BTreeMap<(PathBuf, Option<String>), &build_inputs::BuildInputs>,
+) -> Result<(BTreeMap<PathBuf, Vec<u8>>, Vec<Value>), String> {
+    generated_writes_internal(
+        source_base,
+        source_key,
+        project_root,
+        contract,
+        runner,
+        false,
+        None,
+        None,
+        None,
+        None,
+        Some(captured),
     )
 }
 
@@ -132,6 +160,7 @@ pub fn prepare_public(
         bootstrap_cli,
         bootstrap_target,
         Some(&mut references),
+        None,
     )?;
     Ok((writes, receipts, references))
 }
@@ -147,6 +176,7 @@ fn generated_writes_internal(
     bootstrap_cli: Option<&Path>,
     bootstrap_target: Option<&Path>,
     mut public_references: Option<&mut BTreeMap<String, Value>>,
+    captured: Option<&BTreeMap<(PathBuf, Option<String>), &build_inputs::BuildInputs>>,
 ) -> Result<(BTreeMap<PathBuf, Vec<u8>>, Vec<Value>), String> {
     let generated = contract["generated_assets"]
         .as_array()
@@ -178,19 +208,27 @@ fn generated_writes_internal(
             let snapshot_key = (
                 source_root.clone(),
                 item.get("source_projection")
-                    .and_then(Value::as_str)
-                    .map(str::to_owned),
+                    .map(|value| {
+                        value
+                            .as_str()
+                            .map(str::to_owned)
+                            .ok_or("source_projection must be a string")
+                    })
+                    .transpose()?,
             );
             let snapshot = target_dir.join(format!("source-{}", snapshots.len()));
             // Reuse a verified snapshot for the Hook/CLI sharing one workspace.
-            if !snapshots.contains_key(&snapshot_key) {
+            let provided = captured
+                .and_then(|inputs| inputs.get(&snapshot_key))
+                .copied();
+            if provided.is_none() && !snapshots.contains_key(&snapshot_key) {
                 let inputs = build_inputs::BuildInputs::capture(&source_root, snapshot, item)?;
                 snapshots.insert(snapshot_key.clone(), inputs);
             }
-            let inputs = snapshots
-                .get(&snapshot_key)
+            let inputs = provided
+                .or_else(|| snapshots.get(&snapshot_key))
                 .ok_or("generated snapshot is missing")?;
-            inputs.verify_unchanged()?;
+            inputs.verify_source(&source_root, snapshot_key.1.as_deref())?;
             if bootstrap_cli.is_some()
                 && crate::artifact_cache::environment(&source_root, runner)
                     != crate::artifact_cache::environment(&inputs.snapshot, runner)
@@ -426,6 +464,9 @@ fn generated_writes_internal(
             receipts.push(receipt);
         }
         for inputs in snapshots.values() {
+            inputs.verify_unchanged()?;
+        }
+        for inputs in captured.into_iter().flat_map(|inputs| inputs.values()) {
             inputs.verify_unchanged()?;
         }
         Ok((writes, receipts))

@@ -372,17 +372,19 @@
             "scripts/tests/support/schema4_agent.rs",
             "scripts/tests/unit/core_package_development.rs",
             "scripts/tests/unit/core_package_eol.rs",
-            "scripts/tests/unit/core_release.rs",
+            "scripts/tests/unit/core_package_lightweight.rs",
+            "scripts/tests/unit/core_package_portability.rs",
             "scripts/tests/unit/core_release_lifecycle.rs",
-            "scripts/tests/unit/core_release_polyglot.rs",
             "scripts/tests/unit/core_release_polyglot_scenarios.rs",
-            "scripts/tests/unit/core_release_python.rs",
+            "scripts/tests/unit/core_release_polyglot.rs",
             "scripts/tests/unit/core_release_python_lock.rs",
             "scripts/tests/unit/core_release_python_native.rs",
+            "scripts/tests/unit/core_release_python.rs",
             "scripts/tests/unit/core_release_rust.rs",
             "scripts/tests/unit/core_release_schema4.rs",
             "scripts/tests/unit/core_release_setup.rs",
-            "scripts/tests/unit/core_package_portability.rs"
+            "scripts/tests/unit/core_release.rs",
+            "scripts/tests/unit/core_task_check_selection.rs"
           ],
           "program": "cargo",
           "timeout_seconds": 7200

@@ -20,7 +20,7 @@ argument: 可选：release
 
 ## 同步与发布
 
-版本生命周期统一见[子包开发收口与主程序发布合同](references/schema4.md)。release 要求 CLI 声明 `git-sync-development-closure-v1`，旧 `git-sync-product-packages-v1` 不足以证明新分工。能力不足时停止发布，不手工改号、伪造收口记录或用旧 CLI 冒充；普通同步不受此限制。
+版本生命周期统一见[子包开发收口与主程序发布合同](references/schema4.md)。release 要求 CLI 声明 `git-sync-development-closure-v1` 和 `version-coverage-v1`，旧 `git-sync-product-packages-v1` 不足以证明新分工。能力不足时停止发布，不手工改号、伪造收口记录或用旧 CLI 冒充；普通同步不受此限制。
 
 普通同步始终不自动升版。子包版本在已授权的 develop 完成且验证通过后由受管流程更新；只有用户显式调用 `release` 才升级主程序 VERSION、对应原生载体与正式发布记录，不再次升级子包。项目 `.codex/bridgeforge-version.json` 缺失、未填写 `release_policy` 或保留旧值 `per_commit` 时也不得擅自升版或改写配置。未知值、非法 schema 或重复字段仍须停止并报告。
 
@@ -28,7 +28,7 @@ argument: 可选：release
 
 普通同步不要求迁移配置。唯一模型为“主程序＋多语言包”：子包开发收口与正式产品发布分别管理基线，release 读取已收口版本。旧能力 `git-sync-product-packages-v1` 只覆盖既有模型；新分工须额外经实现后的能力与配置合同核验。配置缺失、旧格式或未完成受管衔接时读取[首次配置引导](references/first-use.md)。不再询问同步或独立策略；有效决定直接复用。配置和分界仅经受管 plan/apply，不手改基线，不修改已发布记录。
 
-普通同步不依赖子包开发收口。release 必须核验受影响子包的有效验证与升版收口，缺失或失效时指出包和补齐动作并停止，不自动补做 develop，也不静默退回普通同步。该核验不等于要求旧 development-checks.json、prepared、全量测试或用户验收收据；不得在本 Skill 运行 --development-status/--prepare-release 代替新收口检查。
+普通同步不依赖子包开发收口。环境或检查策略变化不自动重开已有版本记录；项目显式必要发布检查与实际 SDK/交付物保护仍保留。release 核验受影响子包的版本覆盖、连续历史及声明交付物，缺口时指出包和补齐动作并停止，不自动补做 develop，也不静默退回普通同步。该核验不等于要求旧 development-checks.json、prepared、全量测试或用户验收收据；不得在本 Skill 运行 --development-status/--prepare-release 代替新收口检查。
 
 --release-status 只读检查 VERSION、原生版本数据和发布历史，不构建或运行测试。版本非法或无法可靠计算时说明实际数据问题，保留现场，不猜 patch、不手改或降回已发布 VERSION。--development-status 仅供独立开发验证查看收据，与同步和升版使用无关。schema 4 预览提示历史归属与基线不一致时，按[首次配置引导](references/first-use.md)核验受管补正能力和计划，复用本次修复授权后继续 release；不能把包源码改为 product_inputs 或手改 baseline。
 
@@ -37,7 +37,7 @@ argument: 可选：release
 | `$git-sync` | 提交并同步；不自动修改版本、原生 manifest/lock 或 CHANGELOG |
 | `$git-sync release` | 核验子包收口、分析累计变化，只升级主程序并发布，完整公告累计子包版本变化 |
 
-显式发布比较最后正式发布与当前最终状态，包括已提交、暂存、未暂存和未忽略新文件，按累计实际影响判定主程序版本，不从提交标题或最后一次 develop 单独推导。子包判级与版本在 develop 收口中完成，release 核验其内容覆盖与连续性并汇总公告，不重新升版。Rust 核验归属、证据和漂移，不声称能从任意源码自动证明兼容性；未知或尚未接受的不兼容影响仍停止，已明确且仍适用的决定直接复用。
+显式发布比较最后正式发布与当前最终状态，包括已提交、暂存、未暂存和未忽略新文件，按累计实际影响判定主程序版本，不从提交标题或最后一次 develop 单独推导。子包判级与版本在 develop 收口中完成，release 核验源码、依赖和构建覆盖与连续性并汇总公告，不重新升版。Rust 核验归属、证据和漂移，不声称能从任意源码自动证明兼容性；未知或尚未接受的不兼容影响仍停止，已明确且仍适用的决定直接复用。
 
 工作区干净但有累计未发布变化且子包均有效收口时仍可发布。没有发布相关变化时 no-op，不创建空版本或空提交。release 的显式目标仅用于主程序，不能给子包补升版；子包目标归 develop。低于建议或复用已发布版本拒绝。依赖变化不自动带升全部调用方；实际调用方变化须先完成自身收口。锁文件、明确全局构建输入和自动记录不因单独变化直接升包，业务生成源码/资源不属于自动记录。
 
@@ -47,7 +47,7 @@ argument: 可选：release
 
 1. **先确定执行环境，再做一次前置读取。** 根据平台权限声明及当前项目已有具体拒绝证据，判断 Git 元数据写入所需环境；已知 `.git` 不可写时，在首次有效 release 预览前按下文权限规则取得所需权限，不先生成沙箱内分析再拿到沙箱外使用。不创建探针文件试写权限。若项目声明了运行时准备入口，先在相同环境执行；准备失败停止同步，不继续使用旧产物。随后在最终执行环境运行 `self-test --json`；有 `git-sync-preflight-v1` 时接续 `git-sync --preflight`，聚合配置、分支/HEAD、upstream/实际 push 目标、状态与差异。旧工具才用 `--setup-status` 和只读 Git 查询，不试未知参数，不把读取拆成多轮对话。
 2. **只补一次必要决策。** 普通同步不因 configuration-required 停止；release 按 first-use 处理策略与迁移，所有未决选择遵循调用级确认上限。预检是本地快照，`remote_state=not_fetched` 不代表远端一致。clean 不展开无关业务文件；dirty 审阅真实 diff，不能拿 diff_stat 代替内容。活动 clean/process filter 或子模块保守阻断，不运行未隔离的 helper；仅全局注册而未使用的 filter 不阻断。不绕过或禁用 filter。已有 Skill/约束和有效证据直接复用，不重读 Memory、历史、全量 TODO 或无关源码。
-3. **同一进程完成最终发布段。** 普通同步跳过预览；release 在只读审阅及必要决定完成后，必须于同一宿主进程连续执行最终无分析预览、完整分析生成、带分析预览和实际 `--release`，保持沙箱/权限、账户、环境变量和工具链不变。模块加载、序列化等初始化在最终预览前完成；按 runtime-context 核对本次实际差异与已审阅事实一致后生成完整分析，不携带跨宿主旧分析直接执行。只展示必要目标/理由/阻断项，成功后接续一次只读终态核验。进程未结束只等待同一进程，每次约 20–30 秒且不超过 60 秒；失败不能执行成功分支。
+3. **同一进程完成最终发布段。** 普通同步跳过预览；release 在只读审阅及必要决定完成后，必须于同一宿主进程连续执行最终无分析预览、完整分析生成和实际 `--release`，保持沙箱/权限、账户、环境变量和工具链不变。模块加载、序列化等初始化在最终预览前完成；按 runtime-context 核对本次实际差异与已审阅事实一致后生成完整分析，不携带跨宿主旧分析直接执行。实际 release 内部会重建并验证带分析计划再写入；通常省略外层重复带分析预览，只读审阅需要时可选用。只展示必要目标/理由/阻断项，成功后接续一次只读终态核验。进程未结束只等待同一进程，每次约 20–30 秒且不超过 60 秒；失败不能执行成功分支。
 4. **核验后立即答复。** 独立确认工作区、HEAD、实际 push 目标与 ahead/behind；与收据矛盾才追查。保留版本、commit、目标、干净状态/0/0、产物复用/重建及已固化效果。工具内部完成的自检和轻量保护不在外层重跑，不再读取完整 CHANGELOG 或追加待办结算。
 
 计时区分用户指令到最终回复的端到端时间与收据 `sync_elapsed_ms`：后者只覆盖受管 sync 函数内部（含锁/检查/Git/必要构建），不含进程启动、参数发现、输出发送及 Agent 前后处理。旧版本不提供该字段时注明未提供，不能猜值或当作 0。计时不新增日志文件、轮询服务或依赖，不减弱 Git 保护。下次真实对话使用同一时间戳口径复测；步骤减少和本地夹具不能宣称真实端到端已达标。
@@ -70,11 +70,10 @@ Codex 项目使用 `.codex/bin/bridgeforge[.exe] git-sync`。二进制存在时�
 
 ```text
 .codex/bin/bridgeforge git-sync --release-preview --message "<类型>: <描述>"
-.codex/bin/bridgeforge git-sync --release-preview --release-analysis-file .runtime/release-analysis.json --message "<类型>: <描述>"
 .codex/bin/bridgeforge git-sync --release --release-analysis-file .runtime/release-analysis.json --message "<类型>: <描述>"
 ```
 
-预览不再索取已有发布授权。新范围或兼容性疑问只有尚未使用确认机会时才能纳入唯一汇总确认；确认已使用则停止，不追加问题。analysis-required 不是功能通过，带分析预览须为 release-planned 才执行；nothing-to-release 时不升版，仍可按原授权同步。fetch/快进或执行环境变化使 fingerprint 失效时，在最终执行环境重新运行无分析预览，核对实际 diff、对象/级别/理由/目标、用户决定及证据适用性后重新生成完整分析；禁止只替换旧 JSON 的 fingerprint，也不降级普通同步。语义未变的决定复用，新实质风险按确认上限停止。多行消息使用 --message-file，预览与执行使用同一消息和最终分析文件。
+预览不再索取已有发布授权。新范围或兼容性疑问只有尚未使用确认机会时才能纳入唯一汇总确认；确认已使用则停止，不追加问题。analysis-required 不是功能通过；可选带分析预览须为 release-planned，实际 release 仍独立核验计划。nothing-to-release 时不升版，仍可按原授权同步。fetch/快进或执行环境变化使 fingerprint 失效时，在最终执行环境重新预览，核对实际 diff、级别、目标、决定及证据适用性后重新生成完整分析；禁止只替换旧 JSON 的 fingerprint，也不降级普通同步。语义未变的决定复用，新实质风险按确认上限停止。多行消息使用 --message-file，预览与执行使用同一消息和最终分析文件。
 
 release 更新主程序版本、正式 CHANGELOG 和对应原生 manifest/lock，不再次升级子包；若原生同步引入未收口的独立包变化则停止。受管 CLI/Hook 需要刷新时，同一入口自动构建并生成真实收据，优先复用有效缓存。必要构建不是业务测试。工具链、锁文件或构建实际失败必须说明原因，不回退解释器或伪造产物。时间报告以用户指令到最终回复为准，CLI 耗时单独标注。
 

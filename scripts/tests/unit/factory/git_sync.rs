@@ -352,6 +352,114 @@ fn factory_with_valid_generated_assets(name: &str) -> (RealRepository, PathBuf) 
 }
 
 #[test]
+fn factory_build_reuses_captured_snapshot() {
+    let (repo, remote) = factory_repository("snapshot-capture-baseline");
+    let runner = GeneratedRunner {
+        root: repo.0.clone(),
+        mode: "ok",
+    };
+    crate::release_metrics::begin();
+    let started = std::time::Instant::now();
+    let plan = write_plan::WritePlan::prepare(
+        &repo.0,
+        Default::default(),
+        Default::default(),
+        true,
+        &runner,
+    )
+    .unwrap();
+    let metrics = crate::release_metrics::finish();
+    assert_eq!(plan.generated_built, 2);
+    assert_eq!(metrics["counters"]["build_inputs.capture"]["calls"], 1);
+    println!(
+        "snapshot-capture reused: elapsed_ms={}, metrics={metrics}",
+        started.elapsed().as_millis()
+    );
+    fs::remove_dir_all(remote).unwrap();
+}
+
+#[test]
+fn factory_captured_snapshot_rejects_foreign_sources_and_isolated_drift() {
+    struct NoProcesses;
+    impl ProcessRunner for NoProcesses {
+        fn run(&self, _: &ProcessRequest) -> std::io::Result<ProcessOutput> {
+            panic!("invalid captured inputs must be rejected before any process");
+        }
+    }
+    let (repo, remote) = factory_repository("captured-input-guards");
+    let contract: serde_json::Value =
+        serde_json::from_slice(&fs::read(repo.0.join("templates/managed-skeleton.json")).unwrap())
+            .unwrap();
+    let asset = &contract["generated_assets"][0];
+    let source = repo.0.join(asset["source_root"].as_str().unwrap());
+    let snapshot = repo.0.join(".runtime/captured-source");
+    let inputs =
+        crate::build_inputs::BuildInputs::capture(&source, snapshot.clone(), asset).unwrap();
+    let runner = NoProcesses;
+    let foreign = repo.0.join(".runtime/foreign-base");
+    let mut captured = std::collections::BTreeMap::new();
+    captured.insert(
+        (foreign.join(asset["source_root"].as_str().unwrap()), None),
+        &inputs,
+    );
+    let error = crate::generated_assets::generated_writes_captured(
+        &foreign,
+        "source_root",
+        &repo.0,
+        &contract,
+        &runner,
+        &captured,
+    )
+    .unwrap_err();
+    assert!(error.contains("different source or projection"), "{error}");
+    captured.clear();
+    captured.insert((source.clone(), None), &inputs);
+    let mut projected = contract.clone();
+    projected["generated_assets"][0]["source_projection"] = json!(crate::source_projection::PUBLIC);
+    captured.insert(
+        (source, Some(crate::source_projection::PUBLIC.into())),
+        &inputs,
+    );
+    let error = crate::generated_assets::generated_writes_captured(
+        &repo.0,
+        "source_root",
+        &repo.0,
+        &projected,
+        &runner,
+        &captured,
+    )
+    .unwrap_err();
+    assert!(error.contains("different source or projection"), "{error}");
+    let mut malformed = contract.clone();
+    malformed["generated_assets"][0]["source_projection"] = json!(123);
+    let error = crate::generated_assets::generated_writes_captured(
+        &repo.0,
+        "source_root",
+        &repo.0,
+        &malformed,
+        &runner,
+        &captured,
+    )
+    .unwrap_err();
+    assert!(
+        error.contains("source_projection must be a string"),
+        "{error}"
+    );
+    fs::write(snapshot.join("Cargo.lock"), b"isolated external edit\n").unwrap();
+    let error = crate::generated_assets::generated_writes_captured(
+        &repo.0,
+        "source_root",
+        &repo.0,
+        &contract,
+        &runner,
+        &captured,
+    )
+    .unwrap_err();
+    assert!(error.contains("isolated build inputs changed"), "{error}");
+    fs::remove_dir_all(remote).unwrap();
+}
+
+#[test]
 fn factory_unchanged_generated_inputs_reuse_without_cargo_or_binary_writes() {
     let (repo, remote) = factory_with_valid_generated_assets("reuse");
     let runner = GeneratedRunner {

@@ -5,6 +5,9 @@ use std::sync::Mutex;
 #[path = "core_package_eol.rs"]
 mod eol_tests;
 
+#[path = "core_package_lightweight.rs"]
+mod lightweight_tests;
+
 fn task_development_fixture(dependency: bool) -> Repo {
     let r = fixture("legacy", true);
     write(
@@ -85,7 +88,7 @@ fn task_development_closes_only_selected_independent_package() {
     assert_eq!(p.code, 0, "{}", p.stderr);
     let p = p.receipt.unwrap();
     assert_eq!(p["affected_packages"], json!(["a"]));
-    write(&r.0, ".runtime/task.json", &serde_json::to_vec(&json!({"schema":1,"fingerprint":p["fingerprint"],"packages":{"a":{"level":"patch","reason":"selected task","compatibility":"compatible"}}})).unwrap());
+    write(&r.0, ".runtime/task.json", &serde_json::to_vec(&json!({"schema":1,"fingerprint":p["fingerprint"],"packages":{"a":{"level":"patch","reason":"selected task","compatibility":"compatible"}},"validation":{"a":policy(false)["checks"]}})).unwrap());
     let q = Request {
         analysis_file: Some(".runtime/task.json".into()),
     };
@@ -301,7 +304,7 @@ fn use_host_closure(root: &Path, runner: &dyn ProcessRunner, unmarked: bool) {
 }
 
 #[test]
-fn package_legacy_closure_survives_skeleton_upgrade_without_revalidation() {
+fn package_legacy_aggregate_gains_version_coverage_without_rewrite_or_bump() {
     let r = zero_fixture();
     configure(&r.0, false);
     write(&r.0, "pkg/src/lib.rs", b"pub fn value()->u8{2}\n");
@@ -316,14 +319,24 @@ fn package_legacy_closure_survives_skeleton_upgrade_without_revalidation() {
     let calls = runner.calls.lock().unwrap().len();
     let p = development::preview(&r.0, &Request::default(), &runner);
     assert_eq!(p.code, 0, "{}", p.stderr);
-    assert_eq!(p.receipt.unwrap()["status"], "nothing-to-close");
+    assert_eq!(p.receipt.unwrap()["affected_packages"], json!(["a"]));
+    let refresh = request(&r.0, "patch", false, &runner);
+    let refreshed = close(&r.0, &refresh, &runner);
+    assert_eq!(refreshed.code, 0, "{}", refreshed.stderr);
+    let change = &refreshed.receipt.unwrap()["package_changes"][0];
+    assert_eq!(change["version_before"], "0.3.1");
+    assert_eq!(change["version_after"], "0.3.1");
     let q = release_request(&r.0, "patch");
     let plan = build(&r.0, "fix: release after upgrade", &q, &runner)
         .unwrap()
         .unwrap();
     assert_eq!(plan.package_changes[0].version_after, "0.3.1");
-    assert_eq!(runner.calls.lock().unwrap().len(), calls);
-    assert_eq!(fs::read(r.0.join(development::RECORD)).unwrap(), before);
+    assert_eq!(runner.calls.lock().unwrap().len(), calls + 1);
+    let old = development::Ledger::parse(Some(&before)).unwrap();
+    development::Ledger::load(&r.0)
+        .unwrap()
+        .extends(&old)
+        .unwrap();
     // A real package edit still blocks and explains why, even with a valid old record.
     write(&r.0, "pkg/src/lib.rs", b"pub fn value()->u8{3}\n");
     let error = preview(&r.0, "fix: unpublished edit", &Request::default(), &runner).stderr;
@@ -351,7 +364,10 @@ fn package_legacy_closure_rejects_changed_validation_and_schema_downgrade() {
         .concat(),
     );
     let error = preview(&r.0, "fix: changed evidence", &Request::default(), &runner).stderr;
-    assert!(error.contains("a: validation evidence changed"), "{error}");
+    assert!(
+        error.contains("a: package dependency/build coverage"),
+        "{error}"
+    );
     write(&r.0, "pkg/Cargo.lock", &original_lock);
     let mut ledger = development::Ledger::load(&r.0).unwrap();
     let entry = ledger.entries.last_mut().unwrap();
@@ -393,11 +409,11 @@ fn package_legacy_closure_mixed_history_preserves_prefix_and_modern_unmarked_rec
             .last()
             .unwrap()
             .evidence_schema,
-        Some(4)
+        Some(6)
     );
     use_host_closure(&r.0, &runner, true);
     let p = development::preview(&r.0, &Request::default(), &runner);
-    assert_eq!(p.receipt.unwrap()["status"], "nothing-to-close");
+    assert_eq!(p.receipt.unwrap()["affected_packages"], json!(["a"]));
     use_legacy_closure(&r.0, &runner);
     let old = development::Ledger::load(&r.0).unwrap();
     git(&r.0, &["add", "."]);
@@ -412,7 +428,7 @@ fn package_legacy_closure_mixed_history_preserves_prefix_and_modern_unmarked_rec
         serde_json::to_value(&new.entries[..old.entries.len()]).unwrap(),
         serde_json::to_value(&old.entries).unwrap()
     );
-    assert_eq!(new.entries.last().unwrap().evidence_schema, Some(4));
+    assert_eq!(new.entries.last().unwrap().evidence_schema, Some(6));
     assert_eq!(new.entries.last().unwrap().after.as_deref(), Some("0.3.2"));
     assert_eq!(
         development::preview(&r.0, &Request::default(), &runner)
@@ -425,7 +441,7 @@ fn package_legacy_closure_mixed_history_preserves_prefix_and_modern_unmarked_rec
 struct AlternateClosureHost<'a>(&'a Checks);
 
 #[test]
-fn package_portable_environment_excludes_only_correlation_metadata() {
+fn package_transaction_environment_retains_strict_host_and_correlation_guards() {
     let baseline = BTreeMap::from([
         ("CODEX_THREAD_ID".into(), "thread-a".into()),
         ("CODEX_SESSION_ID".into(), "session-a".into()),
@@ -446,7 +462,6 @@ fn package_portable_environment_excludes_only_correlation_metadata() {
         changed.insert(key.into(), "other-identity".into());
         let after = inputs::environment_fingerprints(&changed).unwrap();
         assert_ne!(before.planning, after.planning, "{key}");
-        assert_eq!(before.development, after.development, "{key}");
     }
     for key in [
         "PATH",
@@ -458,7 +473,7 @@ fn package_portable_environment_excludes_only_correlation_metadata() {
         let mut changed = baseline.clone();
         changed.insert(key.into(), "changed-input".into());
         let after = inputs::environment_fingerprints(&changed).unwrap();
-        assert_ne!(before.development, after.development, "{key}");
+        assert_ne!(before.planning, after.planning, "{key}");
     }
 }
 
@@ -486,7 +501,6 @@ fn portable_closure_process_probe() {
             "development":development.receipt,"release":release.receipt,
             "release_code":release.code,"release_error":release.stderr,
             "planning_environment":snapshot.environment,
-            "development_environment":snapshot.development_environment,
         })
     );
 }
@@ -538,7 +552,7 @@ fn portable_probe(root: &Path, identity: &str, flags: Option<&str>) -> Value {
 }
 
 #[test]
-fn package_portable_closure_survives_new_process_and_thread_but_rejects_build_env() {
+fn package_version_coverage_survives_host_changes_without_rewriting_history() {
     let r = zero_fixture();
     configure(&r.0, false);
     change(&r.0, true);
@@ -552,10 +566,6 @@ fn package_portable_closure_survives_new_process_and_thread_but_rejects_build_en
         first["planning_environment"],
         second["planning_environment"]
     );
-    assert_eq!(
-        first["development_environment"],
-        second["development_environment"]
-    );
     assert_eq!(second["development"]["status"], "nothing-to-close");
     assert_eq!(second["release_code"], 0);
     assert_eq!(second["release"]["status"], "analysis-required");
@@ -564,14 +574,8 @@ fn package_portable_closure_survives_new_process_and_thread_but_rejects_build_en
         "release-conversation",
         Some("--cfg materially_different_build"),
     );
-    assert_eq!(third["development"]["affected_packages"], json!(["a"]));
-    assert_ne!(third["release_code"], 0);
-    assert!(
-        third["release_error"]
-            .as_str()
-            .unwrap()
-            .contains("components: environment")
-    );
+    assert_eq!(third["development"]["status"], "nothing-to-close");
+    assert_eq!(third["release_code"], 0);
     assert!(
         !third["release_error"]
             .as_str()
@@ -594,25 +598,17 @@ fn package_portable_evidence_diagnoses_inputs_and_preserves_chain() {
     let ledger = fs::read(r.0.join(development::RECORD)).unwrap();
     let parsed = development::Ledger::parse(Some(&ledger)).unwrap();
     let entry = parsed.entries.last().unwrap();
-    assert_eq!(entry.evidence_schema, Some(4));
-    assert_eq!(entry.evidence_components.as_ref().unwrap().len(), 9);
+    assert_eq!(entry.evidence_schema, Some(6));
+    assert_eq!(entry.evidence_components.as_ref().unwrap().len(), 3);
     let alternate = AlternateClosureHost(&runner);
     let result = preview(&r.0, "fix: env", &Request::default(), &alternate);
-    assert!(
-        result.stderr.contains("components: environment"),
-        "{}",
-        result.stderr
-    );
+    assert_eq!(result.code, 0, "{}", result.stderr);
     let config = fs::read(r.0.join(CONFIG)).unwrap();
     let mut changed: Value = serde_json::from_slice(&config).unwrap();
     changed["development"]["a"]["checks"][0]["timeout_seconds"] = json!(99);
     write(&r.0, CONFIG, &serde_json::to_vec(&changed).unwrap());
     let result = preview(&r.0, "fix: policy", &Request::default(), &runner);
-    assert!(
-        result.stderr.contains("components: policy"),
-        "{}",
-        result.stderr
-    );
+    assert_eq!(result.code, 0, "{}", result.stderr);
     write(&r.0, CONFIG, &config);
     // Even an internally rehashed record must carry matching component evidence.
     let mut invalid = parsed.clone();
@@ -636,9 +632,9 @@ fn package_portable_evidence_diagnoses_inputs_and_preserves_chain() {
 fn package_published_host_closure_scopes_unrelated_lock_but_keeps_real_inputs() {
     let r = scoped_rust_build_fixture();
     let runner = Checks::new();
-    use_host_closure(&r.0, &runner, false);
     let q = release_request(&r.0, "minor");
     let plan = build(&r.0, "feat: publish", &q, &runner).unwrap().unwrap();
+    use_host_closure(&r.0, &runner, false);
     for (path, bytes) in plan.writes {
         fs::write(path, bytes).unwrap();
     }
@@ -650,6 +646,16 @@ fn package_published_host_closure_scopes_unrelated_lock_but_keeps_real_inputs() 
     let p = development::preview(&r.0, &Request::default(), &alternate);
     assert_eq!(p.code, 0, "{}", p.stderr);
     assert_eq!(p.receipt.unwrap()["status"], "nothing-to-close");
+    for native in ["Cargo.toml", "Cargo.lock"] {
+        git(&r.0, &["update-index", "--chmod=+x", "--", native]);
+        let changed_mode = development::preview(&r.0, &Request::default(), &alternate);
+        assert_eq!(changed_mode.code, 0, "{}", changed_mode.stderr);
+        assert_eq!(
+            changed_mode.receipt.unwrap()["affected_packages"],
+            json!(["library"])
+        );
+        git(&r.0, &["update-index", "--chmod=-x", "--", native]);
+    }
     change_locked_version(&r.0, "remote", "1.0.1");
     let p = development::preview(&r.0, &Request::default(), &alternate);
     assert_eq!(p.receipt.unwrap()["affected_packages"], json!(["library"]));
@@ -657,7 +663,7 @@ fn package_published_host_closure_scopes_unrelated_lock_but_keeps_real_inputs() 
 }
 
 #[test]
-fn package_portable_publication_does_not_hide_real_environment_changes() {
+fn package_published_version_does_not_expire_with_another_host() {
     let r = zero_fixture();
     configure(&r.0, false);
     change(&r.0, true);
@@ -676,7 +682,7 @@ fn package_portable_publication_does_not_hide_real_environment_changes() {
     git(&r.0, &["commit", "-m", "published portable proof"]);
     let alternate = AlternateClosureHost(&runner);
     let p = development::preview(&r.0, &Request::default(), &alternate);
-    assert_eq!(p.receipt.unwrap()["affected_packages"], json!(["a"]));
+    assert_eq!(p.receipt.unwrap()["status"], "nothing-to-close");
 }
 
 #[test]
@@ -782,7 +788,7 @@ fn package_declared_ignored_build_file_binds_presence_bytes_and_legacy_coverage(
         p.receipt.unwrap()["pending_reasons"]["a"]
             .as_str()
             .unwrap()
-            .contains("components: build")
+            .contains("dependency/build coverage")
     );
     let q = request(&r.0, "patch", false, &runner);
     assert_eq!(close(&r.0, &q, &runner).code, 0);
@@ -798,7 +804,11 @@ fn package_declared_ignored_build_file_binds_presence_bytes_and_legacy_coverage(
             &Request::default(),
             &runner,
         );
-        assert!(p.stderr.contains("components: build"), "{}", p.stderr);
+        assert!(
+            p.stderr.contains("dependency/build coverage"),
+            "{}",
+            p.stderr
+        );
     }
     write(&r.0, ".runtime/global.txt", b"input-v1");
     use_host_closure(&r.0, &runner, false);
@@ -810,8 +820,7 @@ fn package_declared_ignored_build_file_binds_presence_bytes_and_legacy_coverage(
         &runner,
     );
     assert!(
-        p.stderr
-            .contains("legacy proof does not cover declared global build inputs"),
+        p.stderr.contains("dependency/build coverage"),
         "{}",
         p.stderr
     );
@@ -835,7 +844,7 @@ fn package_declared_build_directory_tracks_ignored_and_empty_members() {
         p.receipt.unwrap()["pending_reasons"]["a"]
             .as_str()
             .unwrap()
-            .contains("components: build")
+            .contains("dependency/build coverage")
     );
     write(&r.0, ".runtime/global/input.txt", b"global-v1");
     let q = request(&r.0, "patch", false, &runner);
@@ -850,7 +859,11 @@ fn package_declared_build_directory_tracks_ignored_and_empty_members() {
         }
         let p = preview(&r.0, "fix: changed directory", &Request::default(), &runner);
         assert_ne!(p.code, 0, "{action}");
-        assert!(p.stderr.contains("components: build"), "{}", p.stderr);
+        assert!(
+            p.stderr.contains("dependency/build coverage"),
+            "{}",
+            p.stderr
+        );
         write(&r.0, ".runtime/global/input.txt", b"global-v1");
         if action == "add" {
             fs::remove_file(r.0.join(".runtime/global/new.txt")).unwrap();
@@ -953,7 +966,7 @@ impl ProcessRunner for AlternateClosureHost<'_> {
 }
 
 #[test]
-fn package_published_closure_accepts_git_eol_conversion_but_rejects_real_script_edits() {
+fn package_published_aggregate_reuses_eol_check_inputs_but_rejects_real_source_edits() {
     let r = zero_fixture();
     configure(&r.0, false);
     let mut cfg: Value = serde_json::from_slice(&fs::read(r.0.join(CONFIG)).unwrap()).unwrap();
@@ -969,9 +982,11 @@ fn package_published_closure_accepts_git_eol_conversion_but_rejects_real_script_
     let runner = Checks::new();
     let q = request(&r.0, "patch", false, &runner);
     assert_eq!(close(&r.0, &q, &runner).code, 0);
-    use_host_closure(&r.0, &runner, false);
     let q = release_request(&r.0, "patch");
     let plan = build(&r.0, "fix: publish", &q, &runner).unwrap().unwrap();
+    // Model a publication by the old tool, not a new certification of an
+    // unpublished aggregate record by the current tool.
+    use_host_closure(&r.0, &runner, false);
     for (path, bytes) in plan.writes {
         fs::write(path, bytes).unwrap();
     }
@@ -1006,6 +1021,10 @@ fn package_published_closure_accepts_git_eol_conversion_but_rejects_real_script_
         b"Write-Output 'actually changed'\r\n",
     );
     let p = development::preview(&r.0, &Request::default(), &alternate);
+    assert_eq!(p.receipt.unwrap()["status"], "nothing-to-close");
+    assert_eq!(fs::read(r.0.join(development::RECORD)).unwrap(), ledger);
+    write(&r.0, "pkg/src/lib.rs", b"pub fn value()->u8{3}\n");
+    let p = development::preview(&r.0, &Request::default(), &alternate);
     assert_eq!(p.receipt.unwrap()["affected_packages"], json!(["a"]));
 }
 
@@ -1018,13 +1037,16 @@ fn package_published_closure_reuses_history_but_rejects_unpublished_or_changed_i
     let alternate = AlternateClosureHost(&runner);
     let q = request(&r.0, "patch", false, &runner);
     assert_eq!(close(&r.0, &q, &runner).code, 0);
+    // Obtain only the native/product publication payload while modern proof is
+    // available. Later fixture writes model an old tool's historical release;
+    // the current tool must never rewrite the already committed legacy chain.
+    let q = release_request(&r.0, "patch");
+    let plan = build(&r.0, "fix: publish", &q, &runner).unwrap().unwrap();
     use_legacy_closure(&r.0, &runner);
     git(&r.0, &["add", "."]);
     git(&r.0, &["commit", "-m", "unpublished package closure"]);
     let p = development::preview(&r.0, &Request::default(), &alternate);
     assert_eq!(p.receipt.unwrap()["affected_packages"], json!(["a"]));
-    let q = release_request(&r.0, "patch");
-    let plan = build(&r.0, "fix: publish", &q, &runner).unwrap().unwrap();
     for (path, bytes) in plan.writes {
         fs::write(path, bytes).unwrap();
     }
@@ -1070,9 +1092,11 @@ fn package_published_closure_reuses_history_but_rejects_unpublished_or_changed_i
 fn package_published_closure_checks_shared_workspace_inputs() {
     let r = scoped_rust_build_fixture();
     let runner = Checks::new();
-    use_host_closure(&r.0, &runner, false);
     let q = release_request(&r.0, "minor");
     let plan = build(&r.0, "feat: publish", &q, &runner).unwrap().unwrap();
+    // Model an already published historical record. The current version tool
+    // must not newly certify an unpublished aggregate legacy proof.
+    use_host_closure(&r.0, &runner, false);
     for (path, bytes) in plan.writes {
         fs::write(path, bytes).unwrap();
     }
@@ -1084,6 +1108,19 @@ fn package_published_closure_checks_shared_workspace_inputs() {
     assert_eq!(p.receipt.unwrap()["status"], "nothing-to-close");
     // Every package sharing a changed global Cargo profile requires validation.
     let manifest = fs::read(r.0.join("Cargo.toml")).unwrap();
+    write(&r.0, ".git/info/attributes", b"Cargo.toml text eol=lf\n");
+    write(
+        &r.0,
+        "Cargo.toml",
+        String::from_utf8(manifest.clone())
+            .unwrap()
+            .replace("\r\n", "\n")
+            .replace('\n', "\r\n")
+            .as_bytes(),
+    );
+    let equivalent = development::preview(&r.0, &Request::default(), &alternate);
+    assert_eq!(equivalent.code, 0, "{}", equivalent.stderr);
+    assert_eq!(equivalent.receipt.unwrap()["status"], "nothing-to-close");
     write(
         &r.0,
         "Cargo.toml",
@@ -1138,6 +1175,12 @@ fn package_published_closure_checks_declared_files_and_unproven_ignored_inputs()
                 "nothing-to-close"
             );
             write(&r.0, "README.md", b"changed explicit check input\n");
+            let check_only = development::preview(&r.0, &Request::default(), &alternate);
+            assert_eq!(check_only.receipt.unwrap()["status"], "nothing-to-close");
+            // A true global build-input declaration still requires coverage;
+            // the old aggregate cannot prove it by a check-input digest.
+            cfg["build_inputs"] = json!(["README.md"]);
+            write(&r.0, CONFIG, &serde_json::to_vec(&cfg).unwrap());
         }
         let p = development::preview(&r.0, &Request::default(), &alternate);
         assert_eq!(p.code, 0, "{}", p.stderr);
@@ -1585,7 +1628,7 @@ fn package_development_scoped_rust_build_revalidates_profile_and_real_dependenci
 }
 
 #[test]
-fn package_development_scoped_rust_build_preserves_explicit_check_input_scope() {
+fn package_development_check_inputs_do_not_replace_explicit_build_input_scope() {
     let r = scoped_rust_build_fixture();
     let runner = Checks::new();
     change_locked_version(&r.0, "unrelated", "1.0.1");
@@ -1594,10 +1637,19 @@ fn package_development_scoped_rust_build_preserves_explicit_check_input_scope() 
     assert_eq!(p.receipt.unwrap()["status"], "nothing-to-close");
     let mut cfg: Value = serde_json::from_slice(&fs::read(r.0.join(CONFIG)).unwrap()).unwrap();
     cfg["development"]["library"]["checks"][0]["inputs"] = json!(["Cargo.lock"]);
+    let ledger = fs::read(r.0.join(development::RECORD)).unwrap();
     write(&r.0, CONFIG, &serde_json::to_vec(&cfg).unwrap());
     let q = request(&r.0, "patch", false, &runner);
     assert_eq!(close(&r.0, &q, &runner).code, 0);
     change_locked_version(&r.0, "unrelated", "1.0.2");
+    let p = development::preview(&r.0, &Request::default(), &runner);
+    assert_eq!(p.code, 0, "{}", p.stderr);
+    assert_eq!(p.receipt.unwrap()["status"], "nothing-to-close");
+    assert_eq!(fs::read(r.0.join(development::RECORD)).unwrap(), ledger);
+    // Full-lock durable coverage is still available when the project actually
+    // declares it as a global build input, rather than only a task-check input.
+    cfg["build_inputs"] = json!(["Cargo.lock"]);
+    write(&r.0, CONFIG, &serde_json::to_vec(&cfg).unwrap());
     let p = development::preview(&r.0, &Request::default(), &runner);
     assert_eq!(p.code, 0, "{}", p.stderr);
     assert_eq!(p.receipt.unwrap()["affected_packages"], json!(["library"]));
@@ -1897,6 +1949,11 @@ fn package_development_validation_only_change_cannot_fake_interface_impact() {
     let mut cfg: Value = serde_json::from_slice(&fs::read(r.0.join(CONFIG)).unwrap()).unwrap();
     cfg["development"]["a"]["checks"][0]["timeout_seconds"] = json!(120);
     write(&r.0, CONFIG, &serde_json::to_vec(&cfg).unwrap());
+    let current = development::preview(&r.0, &Request::default(), &runner);
+    assert_eq!(current.receipt.unwrap()["status"], "nothing-to-close");
+    // Enter a real development task for b. A's policy-only edit cannot serve
+    // as the changed dependency that justifies b's public re-export claim.
+    write(&r.0, "consumer/b.py", b"VALUE=3\n");
     let q = request(&r.0, "patch", false, &runner);
     let mut a: Value =
         serde_json::from_slice(&fs::read(r.0.join(".runtime/develop.json")).unwrap()).unwrap();
@@ -2057,18 +2114,24 @@ pub(super) fn request(
     assert_eq!(p.code, 0, "{}", p.stderr);
     let v = p.receipt.unwrap();
     let mut packages = serde_json::Map::new();
+    let config: Value = serde_json::from_slice(&fs::read(root.join(CONFIG)).unwrap()).unwrap();
+    let mut validation = serde_json::Map::new();
     for id in v["affected_packages"].as_array().unwrap() {
         let mut a = json!({"level":level,"reason":"fixture change","compatibility":if breaking{"breaking"}else{"compatible"}});
         if breaking {
             a["acceptance"] = json!({"fingerprint":v["fingerprint"],"scope":[id],"reason":"authorized breaking fixture","source":"isolated test authorization"});
         }
         packages.insert(id.as_str().unwrap().into(), a);
+        validation.insert(
+            id.as_str().unwrap().into(),
+            config["development"][id.as_str().unwrap()]["checks"].clone(),
+        );
     }
     write(
         root,
         ".runtime/develop.json",
         &serde_json::to_vec(
-            &json!({"schema":1,"fingerprint":v["fingerprint"],"packages":packages}),
+            &json!({"schema":1,"fingerprint":v["fingerprint"],"packages":packages,"validation":validation}),
         )
         .unwrap(),
     );
@@ -2307,7 +2370,7 @@ fn package_development_rejects_artifact_drift_and_manual_version_edit() {
     );
 }
 #[test]
-fn package_development_configuration_change_revalidates_without_bump() {
+fn package_development_check_policy_change_does_not_reopen_version() {
     let r = fixture("independent", true);
     configure(&r.0, false);
     change(&r.0, true);
@@ -2315,21 +2378,22 @@ fn package_development_configuration_change_revalidates_without_bump() {
     let q = request(&r.0, "patch", false, &runner);
     let a = close(&r.0, &q, &runner);
     assert_eq!(a.code, 0, "{}", a.stderr);
+    let before = fs::read(r.0.join(development::RECORD)).unwrap();
     let mut cfg: Value = serde_json::from_slice(&fs::read(r.0.join(CONFIG)).unwrap()).unwrap();
     cfg["development"]["a"]["checks"][0]["timeout_seconds"] = json!(30);
     write(&r.0, CONFIG, &serde_json::to_vec(&cfg).unwrap());
     let q = request(&r.0, "patch", false, &runner);
     let a = close(&r.0, &q, &runner);
     assert_eq!(a.code, 0, "{}", a.stderr);
-    let change = &a.receipt.unwrap()["package_changes"][0];
-    assert_eq!(change["version_before"], "1.0.1");
-    assert_eq!(change["version_after"], "1.0.1");
+    assert_eq!(a.receipt.unwrap()["status"], "nothing-to-close");
+    assert_eq!(fs::read(r.0.join(development::RECORD)).unwrap(), before);
 }
 #[test]
 fn package_development_real_cargo_verifies_final_manifest_and_lock() {
     let r = fixture("independent", true);
     configure(&r.0, false);
     change(&r.0, true);
+    write(&r.0, "pkg/src/lib.rs", b"pub fn value()->u8{2}\n#[test] fn final_candidate(){assert_eq!(value(),2);assert_eq!(env!(\"CARGO_PKG_VERSION\"),\"1.0.1\");}\n");
     let mut cfg: Value = serde_json::from_slice(&fs::read(r.0.join(CONFIG)).unwrap()).unwrap();
     cfg["development"]["a"]["checks"] = json!([{"id":"cargo-test","program":"cargo","args":["test","--locked","--manifest-path","pkg/Cargo.toml","--target-dir",".runtime/target"]}]);
     write(&r.0, CONFIG, &serde_json::to_vec(&cfg).unwrap());

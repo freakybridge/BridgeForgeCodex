@@ -162,7 +162,8 @@ pub(crate) fn development_analysis(
     fs::write(
         root.join(".runtime/develop-fixture.json"),
         serde_json::to_vec(
-            &json!({"schema":1,"fingerprint":value["fingerprint"],"packages":packages}),
+            &json!({"schema":1,"fingerprint":value["fingerprint"],"validation":packages.keys().map(|id|
+                (id.clone(), cfg["development"][id]["checks"].clone())).collect::<serde_json::Map<_, _>>(),"packages":packages}),
         )
         .unwrap(),
     )
@@ -226,6 +227,7 @@ pub(crate) fn close_packages_accepted(
             return Err(p.stderr);
         }
         analysis["packages"][id] = json!({"level":"patch","reason":"fixture confirms effective dependency requirement update","compatibility":"compatible"});
+        analysis["validation"][id] = cfg["development"][id]["checks"].clone();
         fs::write(&path, serde_json::to_vec(&analysis).unwrap()).map_err(|e| e.to_string())?;
     }
     Err("fixture dependency closure did not converge".into())

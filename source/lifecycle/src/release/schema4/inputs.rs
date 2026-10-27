@@ -28,7 +28,6 @@ pub(super) struct Capture {
     pub environment_guard: Option<EnvironmentGuard>,
     pub portable_python: Option<String>,
     pub environment: String,
-    pub development_environment: String,
     pub tool_identities: BTreeMap<String, String>,
     pub portable_guards: Vec<portable_environment::Guard>,
     pub release_packages: BTreeSet<String>,
@@ -291,31 +290,16 @@ pub(super) fn environment(
 
 pub(super) struct EnvironmentSnapshot {
     pub planning: String,
-    pub development: String,
     pub tools: BTreeMap<String, String>,
 }
 
-// These are transport/correlation identifiers, not build inputs. Keep every
-// other variable (including unknown ones) and all tool/runtime probes. Plans
-// retain the original strict host identity; only durable evidence is portable.
+// Short-lived plans retain the strict host identity. Version coverage is
+// computed separately and does not persist an environment certificate.
 pub(super) fn environment_fingerprints(
     values: &BTreeMap<String, String>,
 ) -> Result<EnvironmentSnapshot, String> {
-    let portable = values
-        .iter()
-        .filter(|(key, _)| {
-            !matches!(
-                key.to_ascii_uppercase().as_str(),
-                "CODEX_TOOL_CALL_ID"
-                    | "CODEX_THREAD_ID"
-                    | "CODEX_SESSION_ID"
-                    | "CODEX_APP_TOOLS_PIPE_PATH"
-            )
-        })
-        .collect::<BTreeMap<_, _>>();
     Ok(EnvironmentSnapshot {
         planning: digest(&serde_json::to_vec(values).map_err(|e| e.to_string())?),
-        development: digest(&serde_json::to_vec(&portable).map_err(|e| e.to_string())?),
         tools: values
             .iter()
             .filter(|(key, _)| key.starts_with("tool:"))
@@ -664,7 +648,6 @@ fn capture_with_reader(
     } else {
         EnvironmentSnapshot {
             planning: String::new(),
-            development: String::new(),
             tools: BTreeMap::new(),
         }
     };
@@ -709,7 +692,6 @@ fn capture_with_reader(
         environment_guard,
         portable_python,
         environment,
-        development_environment: environment_snapshot.development,
         tool_identities: environment_snapshot.tools,
         portable_guards: Vec::new(),
         release_packages: BTreeSet::new(),

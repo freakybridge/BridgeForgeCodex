@@ -36,7 +36,7 @@ $bridgeforge-codex
 
 ## 文档入口
 
-普通 `$git-sync` 只提交和同步，不主动升版。已确认的新分工是：develop 完成且验证通过后升级受影响子包，程序自动判断是否进入 `1.0.0`；`$git-sync release` 核验子包均已收口，只升级主程序，并完整公告上次正式发布以来的子包版本变化。
+普通 `$git-sync` 只提交和同步，不主动升版。develop 按本次改动选择必要的已登记检查，在最终候选验证后处理子包版本；自动进入 `1.0.0` 仍须完整稳定检查。`$git-sync release` 核验累计版本覆盖和声明交付物，只升主程序并公告全部累计子包变化，不补做开发或业务回归。版本记录不承担长期环境证书，换会话或调整检查策略本身不触发重复收口。
 
 使用前核验受管 CLI 的开发收口、自动稳定与发布硬闸能力；旧能力标识不能证明支持新分工。`develop --preview/--apply` 管子包，`git-sync --release` 管主程序。规则与验证状态见[版本生命周期设计](doc/0_architecture/design/package-version-lifecycle.md)，配置和实际入口见[版本生命周期合同](templates/skills/git-sync/references/schema4.md)；[旧 schema4 接入合同](doc/1_delivery/git-sync-release-rewrite/schema4-contract.md)仅保留历史参考。
 

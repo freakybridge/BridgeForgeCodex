@@ -81,8 +81,10 @@ pub fn self_test() -> CommandOutcome {
             "capabilities":["factory-runtime-prepare-v1","factory-transaction-v1","factory-source-projection-v1",
                 "package-development-v1","package-stability-v1","git-sync-development-closure-v1",
                 "rust-mixed-workspace-v1","package-adoption-v1","scoped-rust-evidence-v1",
-                "portable-development-evidence-v1","git-eol-development-evidence-v1","release-external-analysis-preview-v1",
-                "cross-machine-development-evidence-v1","scoped-release-evidence-v1","task-scoped-development-v1","resumable-development-checks-v1"]
+                "release-external-analysis-preview-v1",
+                "scoped-release-evidence-v1","task-scoped-development-v1","resumable-development-checks-v1",
+                "task-selected-development-checks-v1","version-coverage-v1",
+                "git-sync-release-only-v1","git-sync-explicit-release-v1","git-sync-direct-release-v1","git-sync-preflight-v1"]
         })),
         Err(error) => blocked("factory-self-test", error),
     }

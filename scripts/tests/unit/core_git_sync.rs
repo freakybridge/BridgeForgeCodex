@@ -1080,7 +1080,7 @@ fn release_declared_directory_drift_blocks_reuse_and_final_write() {
             );
         } else {
             assert!(
-                result.stderr.contains("components: build"),
+                result.stderr.contains("dependency/build coverage"),
                 "{}",
                 result.stderr
             );
