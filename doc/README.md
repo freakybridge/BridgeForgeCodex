@@ -8,9 +8,9 @@ delivery_layout: flat
 
 ## 从这里开始
 
-- 工程交付待验收：[Forge 骨架职责与版本工作流简化](1_delivery/forge-simplification/requirements_2026-10-27_workflow-and-versioning.md)（TODO-044；P1–P3与112项相关测试完成，七包已按必要检查正式收口；用户接受不兼容变化、旧重型默认流程永久退役并授权8.0.0发布。AGENTS/Hook未调整，用户验收尚未记录；发布与推送结果以正式CHANGELOG和受管收据为准。详见需求卡第14节）。
+- 已验收：[Forge 骨架职责与版本工作流简化](1_delivery/forge-simplification/requirements_2026-10-27_workflow-and-versioning.md#用户验收2026-10-28)（TODO-044；P1–P3、112 项相关验证及七包必要检查收口完成，8.0.0 已以 c333caaf 推送；旧重型默认流程永久退役，临时方案 A 经单独授权删除，公共模板与 Hook 未改。真实下游、双机、用户级安装、自然 Hook 及端到端提速未验证；验收记录与发布后 AGENTS 清理尚未再次提交）。
 
-- 本地止血与收口待续：[develop 按本次任务收口与验证复用](1_delivery/develop-demand-discovery/requirements_2026-10-27_task-closure.md)（TODO-043；第 14 节记录四对话循环返工原因、已写入 AGENTS 的方案 A、简化 develop 分工及 F1–F5 待执行方案。factory 并行检查、lifecycle 漏升版修正与定向证据保留；正式收口和最终运行时未完成，未验收、未发布）。
+- 历史阶段与独立待续：[develop 按本次任务收口与验证复用](1_delivery/develop-demand-discovery/requirements_2026-10-27_task-closure.md)（TODO-043；保留第 14 节四对话诊断、当时的方案 A 和 F1–F5 方案；该卡当时的未收口状态与临时规则不代表当前现状，最新简化、正式收口及方案 A 删除见 TODO-044 验收。TODO-043 的完整原需求未由本轮自动结算）。
 
 - 当前开发：[跨电脑验证证据复用、发布检查范围与发布提速](1_delivery/package-version-lifecycle/requirements_2026-10-27_cross-machine-release.md)（TODO-042；已补当前进度快照、经验和接续步骤；源码及投影已更新、末批定向验证通过，完整收口失败回滚，最终运行时未就绪，开发未完成）。
 

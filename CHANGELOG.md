@@ -15,6 +15,23 @@
 
 > **追溯说明**：v0.1.0 - v0.7.0 基于 git log 历史回溯标记，**git tag 仅从 v0.8.0 开始打**。早期未启用版本号管理是 setup_agent 自打脸问题（要求下游用但自己没用），v0.8.0 修补。
 
+## [8.0.1] - 2026-10-28
+
+### Changed
+
+- [meta] 记录轻量流程验收并移除临时止血指引
+
+### Release analysis
+
+- Product: 记录 TODO-044 用户验收与 8.0.0 发布事实，删除已获单独授权的工厂临时止血指引，恢复已发布的新轻量开发流程；公共模板、Hook 和子包源码不变。
+- `checks`: 0.1.0 -> 0.1.0 (no_package_version_change)
+- `core`: 7.1.0 -> 7.1.0 (no_package_version_change)
+- `factory`: 0.2.0 -> 0.2.0 (no_package_version_change)
+- `lifecycle`: 0.2.0 -> 0.2.0 (no_package_version_change)
+- `memory`: 0.1.0 -> 0.1.0 (no_package_version_change)
+- `skeleton`: 0.1.0 -> 0.1.0 (no_package_version_change)
+- `workflow`: 0.1.2 -> 0.1.2 (no_package_version_change)
+
 ## [8.0.0] - 2026-10-28
 
 ### Changed
