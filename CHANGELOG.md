@@ -15,6 +15,23 @@
 
 > **追溯说明**：v0.1.0 - v0.7.0 基于 git log 历史回溯标记，**git tag 仅从 v0.8.0 开始打**。早期未启用版本号管理是 setup_agent 自打脸问题（要求下游用但自己没用），v0.8.0 修补。
 
+## [9.1.0] - 2026-10-29
+
+### Added
+
+- [product][repo][meta] 新增四项目旧骨架临时升级工具
+
+### Release analysis
+
+- Product: 新增工厂独立临时升级命令，仅允许四个已核实仓库从 7.0.4/7.0.5 升级至 9.x；复用同步事务并绑定来源与 Git 身份，保留普通入口 8.0.0 支持下限、项目配置、漂移检查及回滚。四个隔离 worktree 已验证升级、重复执行零改动和保护文件一致性，TODO-047 已获用户验收。factory 与 workflow 沿用已完成的兼容新增子包版本，本次仅升级主程序。
+- `checks`: 0.1.0 -> 0.1.0 (no_package_version_change)
+- `core`: 7.1.0 -> 7.1.0 (no_package_version_change)
+- `factory`: 0.5.0 -> 0.6.0 (Add a temporary four-repository upgrade command with explicit identity and confirmation checks.)
+- `lifecycle`: 0.6.0 -> 0.6.0 (no_package_version_change)
+- `memory`: 0.1.0 -> 0.1.0 (no_package_version_change)
+- `skeleton`: 0.2.0 -> 0.2.0 (no_package_version_change)
+- `workflow`: 0.3.0 -> 0.4.0 (Add explicitly scoped legacy update planning with source identity witnesses; retain normal support floor and transaction guards.)
+
 ## [9.0.0] - 2026-10-29
 
 ### Changed

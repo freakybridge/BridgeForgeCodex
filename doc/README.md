@@ -8,6 +8,8 @@ delivery_layout: flat
 
 ## 从这里开始
 
+- 已验收：[四项目 7.0.x 到 9.x 临时升级工具](1_delivery/legacy-seven-upgrade/requirements_2026-10-29_four-projects.md#用户验收与发布授权2026-10-29)（TODO-047；2026-10-29 用户验收并独立授权 release；四项目隔离升级、重复执行零改动及保护文件核验通过，factory 0.6.0、workflow 0.4.0 已受管收口。实际宿主发布预检通过，正式目录保持原版本，发布结果以受管收据为准）。
+
 - 待用户验收：[develop 共用工作流实施计划](1_delivery/forge-simplification/plan_2026-10-28_develop-common-path.md)（TODO-046；D1–D5、S/M/L 差异及 F01–F12 已实施，23 项定向验证、独立审查、3 项最终候选检查及受管收口通过；factory 0.4.0、lifecycle 0.5.0，workflow 0.2.0 仅刷新覆盖，最终工具产物已核对。未提交推送发布、未用户级安装，真实下游及自然调用未验证。前期动机见[收口要求](1_delivery/forge-simplification/notes_2026-10-28_develop-closure.md)）。
 
 - 最近验收：[summary 与 git-sync 共用流程精简](1_delivery/forge-simplification/plan_2026-10-28_command-paths.md#16-用户验收与发布授权2026-10-29)（2026-10-29 用户已验收并独立授权 release；59 项受管定向检查、三个子包收口、最终运行时及 3 项实际 CLI 测试通过；工程证据见第 15 节，实际发布以受管收据为准；用户级安装与真实下游未执行）。

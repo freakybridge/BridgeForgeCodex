@@ -15,6 +15,7 @@ mod dogfood;
 pub mod factory_runtime;
 pub mod factory_version;
 pub mod git_sync_plan;
+mod legacy_upgrade;
 pub mod manifest;
 pub mod runner;
 

@@ -74,6 +74,10 @@ pub struct SyncPlan {
     public_actions: Vec<SyncAction>,
     #[serde(skip)]
     release_upgrade: Option<crate::release::schema4::ReleaseUpgrade>,
+    #[serde(skip)]
+    legacy_source: bool,
+    #[serde(skip)]
+    identity_reads: BTreeMap<PathBuf, Option<Vec<u8>>>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -926,13 +930,107 @@ pub fn build_plan_with_inputs(
     requested_mode: SyncMode,
     preservation_decisions: Option<&Value>,
 ) -> Result<SyncPlan, String> {
+    build_plan_internal(
+        project_root,
+        template_root,
+        requested_mode,
+        preservation_decisions,
+        false,
+    )
+}
+
+/// Explicit migration API for a separately authorized caller. Ordinary CLI
+/// planning never uses this path; source identity is retained, not rewritten.
+pub fn build_legacy_upgrade_plan(
+    project_root: &Path,
+    template_root: &Path,
+) -> Result<SyncPlan, String> {
+    build_plan_internal(project_root, template_root, SyncMode::Update, None, true)
+}
+
+fn legacy_source_version(root: &Path) -> Result<String, String> {
+    if transaction_file_state(&root.join(".codex/.bridgeforge_version"))?.is_some() {
+        return Err("legacy upgrade requires exactly one current-format version stamp".into());
+    }
+    let stamp = transaction_file_state(&root.join(".codex/.bridgeforge_codex_version"))?
+        .ok_or("legacy upgrade version stamp is missing")?;
+    let version = std::str::from_utf8(&stamp)
+        .map_err(|e| e.to_string())?
+        .trim();
+    if !matches!(version, "7.0.4" | "7.0.5") {
+        return Err("temporary upgrade only accepts skeleton 7.0.4 or 7.0.5".into());
+    }
+    let bytes = transaction_file_state(&root.join(".codex/managed-skeleton.json"))?
+        .ok_or("legacy upgrade installed contract is missing")?;
+    let contract = crate::json::parse_unique_json(&bytes, "legacy upgrade identity")?;
+    if contract["schema_version"] != 4
+        || contract["baseline_model"] != "current-only"
+        || contract["release_version"].as_str() != Some(version)
+    {
+        return Err("legacy upgrade stamp and schema 4 contract disagree".into());
+    }
+    Ok(version.to_owned())
+}
+
+/// Bind caller-owned authorization inputs to both preview and apply. These are
+/// read-only witnesses, never additional write targets or ownership evidence.
+pub fn bind_identity_reads(plan: &mut SyncPlan, paths: &[PathBuf]) -> Result<(), String> {
+    for path in paths {
+        let bytes = transaction_file_state(path)?;
+        plan.generated_source_fingerprints.insert(
+            format!("identity:{}", path.display()),
+            bytes
+                .as_deref()
+                .map(sha_raw)
+                .unwrap_or_else(|| "absent".into()),
+        );
+        plan.identity_reads.insert(path.clone(), bytes);
+    }
+    plan.generated_source_fingerprints.insert(
+        "identity:project-root".into(),
+        sha_raw(plan.project_root.to_string_lossy().as_bytes()),
+    );
+    plan.aggregate_fingerprint = plan_fingerprint(
+        &plan.mode,
+        &plan.current_version,
+        &plan.safe,
+        &plan.risk,
+        &plan.preservation_manifest,
+        &plan.generated_source_fingerprints,
+    )?;
+    Ok(())
+}
+
+fn verify_identity_reads(plan: &SyncPlan) -> Result<(), String> {
+    for (path, expected) in &plan.identity_reads {
+        if transaction_file_state(path)? != *expected {
+            return Err(format!(
+                "upgrade identity drifted; regenerate plan: {}",
+                path.display()
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn build_plan_internal(
+    project_root: &Path,
+    template_root: &Path,
+    requested_mode: SyncMode,
+    preservation_decisions: Option<&Value>,
+    legacy_source: bool,
+) -> Result<SyncPlan, String> {
     let project_root = project_root
         .canonicalize()
         .map_err(|error| format!("project root is unavailable: {error}"))?;
     let template_root = template_root
         .canonicalize()
         .map_err(|error| format!("template root is unavailable: {error}"))?;
-    let mode = resolved_mode(&project_root, requested_mode)?;
+    let mode = if legacy_source {
+        SyncMode::Update
+    } else {
+        resolved_mode(&project_root, requested_mode)?
+    };
     let (contract, contract_bytes) = read_contract(&template_root)?;
     let independent_hooks = crate::project_hook_migration::enabled(&contract);
     let version = contract["release_version"]
@@ -958,8 +1056,15 @@ pub fn build_plan_with_inputs(
             .ok_or("contract target is missing")?,
         "contract target",
     )?;
-    crate::baseline::require_supported_project(&project_root)?;
-    let previous_version = crate::baseline::project_version(&project_root)?;
+    let previous_version = if legacy_source {
+        if current_semver.major != 9 {
+            return Err("temporary upgrade requires a 9.x target".into());
+        }
+        Some(legacy_source_version(&project_root)?)
+    } else {
+        crate::baseline::require_supported_project(&project_root)?;
+        crate::baseline::project_version(&project_root)?
+    };
     let previous_semver = previous_version
         .as_deref()
         .map(str::parse::<crate::release::SemVer>)
@@ -1298,12 +1403,26 @@ pub fn build_plan_with_inputs(
     project_hook_reads.extend(target_reads);
     // A fresh Init may not have a committed VERSION baseline yet. Its first
     // release setup establishes that proof; existing projects must not skip it.
-    let release_upgrade =
-        if contract["release_model"] == "product-packages" && mode != SyncMode::Init {
-            crate::release::schema4::prepare_project_upgrade(&project_root)?
-        } else {
-            None
-        };
+    let release_upgrade = if legacy_source && contract["release_model"] == "product-packages" {
+        // This narrow handover preserves an already-current release model;
+        // it cannot initialize, repair or migrate business version history.
+        let path = project_root.join(".codex/bridgeforge-version.json");
+        let bytes = transaction_file_state(&path)?
+            .ok_or("temporary upgrade requires existing release configuration")?;
+        let value = crate::json::parse_unique_json(&bytes, "legacy release configuration")?;
+        if value["schema_version"] != 4 || value["release_model"] != "product-packages" {
+            return Err(
+                "temporary upgrade requires existing schema 4 product-packages configuration"
+                    .into(),
+            );
+        }
+        project_hook_reads.insert(".codex/bridgeforge-version.json".into(), Some(bytes));
+        None
+    } else if contract["release_model"] == "product-packages" && mode != SyncMode::Init {
+        crate::release::schema4::prepare_project_upgrade(&project_root)?
+    } else {
+        None
+    };
     if let Some(upgrade) = &release_upgrade {
         let target = ".codex/bridgeforge-version.json";
         let path = project_root.join(target);
@@ -1337,7 +1456,7 @@ pub fn build_plan_with_inputs(
         &generated_source_fingerprints,
     )?;
     let confirmation_required = !risk.is_empty();
-    Ok(SyncPlan {
+    let mut plan = SyncPlan {
         build_metrics: Default::default(),
         schema: 1,
         status: if safe.is_empty()
@@ -1374,7 +1493,7 @@ pub fn build_plan_with_inputs(
                 .as_array()
                 .is_some_and(|a| !a.is_empty()),
         hook_migration,
-        project_root,
+        project_root: project_root.clone(),
         writes,
         deletes,
         generated_source_fingerprints,
@@ -1382,7 +1501,20 @@ pub fn build_plan_with_inputs(
         project_hook_reads,
         public_actions: Vec::new(),
         release_upgrade,
-    })
+        legacy_source,
+        identity_reads: BTreeMap::new(),
+    };
+    if legacy_source {
+        bind_identity_reads(
+            &mut plan,
+            &[
+                project_root.join(".codex/.bridgeforge_codex_version"),
+                project_root.join(".codex/.bridgeforge_version"),
+                project_root.join(".codex/managed-skeleton.json"),
+            ],
+        )?;
+    }
+    Ok(plan)
 }
 
 fn plan_project_hooks(
@@ -1674,7 +1806,14 @@ fn apply_plan_internal(
     confirmed_risk: bool,
     before_stamp: Option<&dyn Fn(&Path, &Path) -> Result<(), String>>,
 ) -> Result<SyncReceipt, String> {
-    crate::baseline::require_supported_project(&plan.project_root)?;
+    verify_identity_reads(&plan)?;
+    if plan.legacy_source {
+        if Some(legacy_source_version(&plan.project_root)?) != plan.previous_version {
+            return Err("legacy upgrade source identity drifted".into());
+        }
+    } else {
+        crate::baseline::require_supported_project(&plan.project_root)?;
+    }
     // Rejected confirmation must not even create a lock file in the project.
     if !plan.gaps.is_empty() || !plan.blockers.is_empty() {
         return Err("unresolved gap or blocker prevents apply".into());
@@ -1683,6 +1822,7 @@ fn apply_plan_internal(
         return Err("risk actions require --confirmed-risk".into());
     }
     let _lock = ProjectLock::acquire(&plan.project_root)?;
+    verify_identity_reads(&plan)?;
     if let Some(upgrade) = &plan.release_upgrade {
         upgrade.verify(&plan.project_root)?;
     }
