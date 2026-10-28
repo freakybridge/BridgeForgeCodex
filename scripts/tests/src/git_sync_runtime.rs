@@ -609,7 +609,7 @@ fn real_cli_release_flow(policy: &str) {
         .unwrap();
         fs::write(
             root.join("new/src/lib.rs"),
-            b"pub fn value() -> u32 { 7 }\n",
+            b"pub fn value() -> u32 { 7 }\n#[test] fn value_is_seven() { assert_eq!(value(), 7); }\n",
         )
         .unwrap();
         fs::write(
@@ -647,6 +647,16 @@ fn real_cli_release_flow(policy: &str) {
     }
     assert_eq!(fs::read(&policy_path).ok(), policy_bytes);
     let before = git(&root, &["rev-parse", "HEAD"]);
+    assert_eq!(call(&["git-sync", "--preflight"])["status"], "ready");
+    let integrated = call(&["git-sync", "--sync-remote"]);
+    assert_eq!(integrated["status"], "remote-ready");
+    assert_eq!(integrated["commit_performed"], false);
+    assert_eq!(integrated["push_performed"], false);
+    assert_eq!(integrated["version_bumped"], false);
+    assert_eq!(git(&root, &["rev-parse", "HEAD"]), before);
+    for (name, bytes) in version_files.iter().zip(&version_bytes) {
+        assert_eq!(&fs::read(root.join(name)).unwrap(), bytes);
+    }
     let index = fs::read(root.join(".git/index")).unwrap();
     let fetch = fs::read(root.join(".git/FETCH_HEAD")).unwrap();
     super::schema4_fixture::analyze(&cli, &root, "fix: release", "minor", &[], &[]);
@@ -676,9 +686,42 @@ fn real_cli_release_flow(policy: &str) {
         call(&["git-sync", "--release-status"])["status"],
         "release-ready"
     );
+    // Use a product-only input: a root package owns business.txt and changing
+    // it would correctly trip package coverage before analysis validation.
+    // Rejection must precede version/index writes and preserve user edits.
+    let release_version_bytes = version_files.map(|name| fs::read(root.join(name)).unwrap());
+    let changelog = fs::read(root.join("CHANGELOG.md")).unwrap();
+    let mut changed_changelog = changelog.clone();
+    changed_changelog.extend_from_slice(b"\n<!-- changed after preview -->\n");
+    fs::write(root.join("CHANGELOG.md"), &changed_changelog).unwrap();
+    let mut stale = ProcessRequest::new(cli.as_os_str(), &root);
+    stale.args = [
+        "git-sync", "--release", "--skip-fetch", "--message", "fix: release",
+        "--release-analysis-file", ".runtime/schema4-analysis.json",
+    ].iter().map(Into::into).collect();
+    stale.timeout = Duration::from_secs(120);
+    let rejected = SystemProcessRunner.run(&stale).unwrap();
+    assert!(!rejected.timed_out);
+    assert_eq!(rejected.code, 2, "{}", String::from_utf8_lossy(&rejected.stderr));
+    assert!(
+        String::from_utf8_lossy(&rejected.stderr).contains("stale"),
+        "policy={policy}: {}",
+        String::from_utf8_lossy(&rejected.stderr)
+    );
+    assert_eq!(git(&root, &["rev-parse", "HEAD"]), before);
+    assert_eq!(fs::read(root.join(".git/index")).unwrap(), index);
+    assert_eq!(fs::read(root.join(".git/FETCH_HEAD")).unwrap(), fetch);
+    for (name, bytes) in version_files.iter().zip(&release_version_bytes) {
+        if *name != "CHANGELOG.md" {
+            assert_eq!(&fs::read(root.join(name)).unwrap(), bytes);
+        }
+    }
+    assert_eq!(fs::read(root.join("CHANGELOG.md")).unwrap(), changed_changelog);
+    fs::write(root.join("CHANGELOG.md"), changelog).unwrap();
     let released = call(&[
         "git-sync",
         "--release",
+        "--skip-fetch",
         "--message",
         "fix: release",
         "--release-analysis-file",
@@ -692,6 +735,8 @@ fn real_cli_release_flow(policy: &str) {
     assert_eq!(released["ahead"], 0);
     assert_eq!(released["behind"], 0);
     assert_eq!(released["generated_assets_built"], 0);
+    assert_eq!(released["release_planning"], "once-after-remote");
+    assert_eq!(fs::read(root.join(".git/FETCH_HEAD")).unwrap(), fetch);
     if policy == "rust-independent" {
         assert_eq!(released["package_changes"][0]["version_after"], "0.5.0");
         assert_eq!(
@@ -706,14 +751,14 @@ fn real_cli_release_flow(policy: &str) {
             );
         }
     }
-    let repeated = call(&["git-sync", "--release", "--message", "feat!: ignored"]);
+    let repeated = call(&["git-sync", "--release", "--skip-fetch", "--message", "feat!: ignored"]);
     assert_eq!(repeated["version_bumped"], false);
     assert_eq!(repeated["version_strategy"], "independent");
     assert_eq!(repeated["commit"], released["commit"]);
     if additions {
         fs::write(
             root.join("new/src/lib.rs"),
-            b"pub fn value() -> u32 { 8 }\n",
+            b"pub fn value() -> u32 { 8 }\n#[test] fn value_is_eight() { assert_eq!(value(), 8); }\n",
         )
         .unwrap();
         super::schema4_fixture::analyze(

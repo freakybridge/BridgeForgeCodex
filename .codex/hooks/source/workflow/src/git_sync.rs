@@ -704,14 +704,6 @@ fn sync_impl(
             lifecycle_events = plan.lifecycle_events.clone();
             release_details = plan.details.clone();
         }
-        let _project_lock = if factory {
-            match crate::project_sync::ProjectLock::acquire(root) {
-                Ok(lock) => Some(lock),
-                Err(error) => return blocked(error),
-            }
-        } else {
-            None
-        };
         if factory {
             if let Err(error) = git.required(
                 &[

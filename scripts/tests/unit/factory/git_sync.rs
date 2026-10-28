@@ -330,6 +330,41 @@ fn factory_with_valid_generated_assets(name: &str) -> (RealRepository, PathBuf) 
 }
 
 #[test]
+fn factory_dirty_sync_and_release_do_not_acquire_maintenance_locks() {
+    for release in [false, true] {
+        let (repo, remote) = factory_with_valid_generated_assets("sync-without-project-lock");
+        let runner = GeneratedRunner {
+            root: repo.0.clone(),
+            mode: "ok",
+        };
+        let request = if release {
+            fixture::analysis(&repo.0, &crate::runner::FactoryRunner::new(&runner), "patch", &[])
+                .unwrap()
+        } else {
+            Default::default()
+        };
+        let runtime_lock = git_sync::lock_factory_runtime(&repo.0, &SystemProcessRunner).unwrap();
+        let project_lock = crate::project_sync::ProjectLock::acquire(&repo.0).unwrap();
+        let result = sync(&repo.0, &runner, GitSyncOptions {
+            release,
+            release_request: request,
+            message: Some("fix: synchronize factory change".into()),
+            ..Default::default()
+        });
+        assert_eq!(result.code, 0, "{}", result.stderr);
+        let receipt = result.receipt.unwrap();
+        assert_eq!(receipt["status"], "synced");
+        assert_eq!(receipt["working_tree"], "clean");
+        assert_eq!(receipt["version_bumped"], release);
+        // Maintenance consumers still serialize while sync itself does not.
+        assert!(crate::project_sync::ProjectLock::acquire(&repo.0).is_err());
+        drop(project_lock);
+        drop(runtime_lock);
+        fs::remove_dir_all(remote).unwrap();
+    }
+}
+
+#[test]
 fn factory_build_reuses_captured_snapshot() {
     let (repo, remote) = factory_repository("snapshot-capture-baseline");
     let runner = GeneratedRunner {

@@ -216,7 +216,7 @@
             "--target-dir",
             ".runtime/source-workspace-refactor/cargo",
             "--",
-            "--test-threads=4",
+            "--test-threads=1",
             "--logfile",
             "../../.runtime/bridgeforge-codex/factory-unit-tests.log"
           ],
@@ -324,7 +324,6 @@
             "templates/skills/refactor-scan/SKILL.md",
             "templates/skills/spinoff/SKILL.md",
             "templates/skills/summary/references/acceptance-mode.md",
-            "templates/skills/summary/references/deep-steps.md",
             "templates/skills/summary/references/ordinary-mode.md",
             "templates/skills/summary/references/switch-mode.md",
             "templates/skills/summary/SKILL.md",
@@ -360,7 +359,7 @@
             "--target-dir",
             ".runtime/source-workspace-refactor/cargo",
             "--",
-            "--test-threads=4",
+            "--test-threads=1",
             "--nocapture",
             "--logfile",
             "../../.runtime/bridgeforge-codex/lifecycle-unit-tests.log"

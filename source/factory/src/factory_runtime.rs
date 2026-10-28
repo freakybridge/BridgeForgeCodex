@@ -102,7 +102,7 @@ fn prepare_inner(root: &Path, check: bool, runner: &dyn ProcessRunner) -> Result
             json!({"schema":1,"status":"current","read_only":true,"self_test_executed":false,"reused":assets.len(),"built":0}),
         );
     }
-    // Same Git-common-dir lock as git-sync, including linked worktrees.
+    // Maintenance lock shared with develop, including linked worktrees.
     let _sync = crate::git_sync::lock_factory_runtime(&root, runner)?;
     let _project = project_sync::ProjectLock::acquire(&root)?;
     if identity(&root)?.1 != original {

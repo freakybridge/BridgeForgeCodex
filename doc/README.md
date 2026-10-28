@@ -10,7 +10,7 @@ delivery_layout: flat
 
 - 待用户验收：[develop 共用工作流实施计划](1_delivery/forge-simplification/plan_2026-10-28_develop-common-path.md)（TODO-046；D1–D5、S/M/L 差异及 F01–F12 已实施，23 项定向验证、独立审查、3 项最终候选检查及受管收口通过；factory 0.4.0、lifecycle 0.5.0，workflow 0.2.0 仅刷新覆盖，最终工具产物已核对。未提交推送发布、未用户级安装，真实下游及自然调用未验证。前期动机见[收口要求](1_delivery/forge-simplification/notes_2026-10-28_develop-closure.md)）。
 
-- 用户暂停：[summary 与 git-sync 共用流程精简](1_delivery/forge-simplification/plan_2026-10-28_command-paths.md)（2026-10-28 21:15 暂停，后台构建已停止；源码/Skill 与独立复核完成，资源故障影响的测试、最终运行时及版本收口未完成；进度、失败名单和接续顺序见第 14 节，未提交推送发布）。
+- 最近验收：[summary 与 git-sync 共用流程精简](1_delivery/forge-simplification/plan_2026-10-28_command-paths.md#16-用户验收与发布授权2026-10-29)（2026-10-29 用户已验收并独立授权 release；59 项受管定向检查、三个子包收口、最终运行时及 3 项实际 CLI 测试通过；工程证据见第 15 节，实际发布以受管收据为准；用户级安装与真实下游未执行）。
 
 - 待用户验收：[核心能力保留与非核心、过期实现退役](1_delivery/core-only-cleanup/requirements_2026-10-28_core-only-cleanup.md)（TODO-045；C01–C03 已退役，保留 C04/C05，仅支持骨架 8.0.0 及以后；实质代码净减 2291 行，选定验证、受管子包收口及最终产物核验通过；含实际文件清单与未验证边界。未提交推送发布）。
 

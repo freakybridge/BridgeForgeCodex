@@ -15,6 +15,23 @@
 
 > **追溯说明**：v0.1.0 - v0.7.0 基于 git log 历史回溯标记，**git tag 仅从 v0.8.0 开始打**。早期未启用版本号管理是 setup_agent 自打脸问题（要求下游用但自己没用），v0.8.0 修补。
 
+## [9.0.0] - 2026-10-29
+
+### Changed
+
+- [product][repo][meta] 精简骨架能力与开发同步流程 **BREAKING:**
+
+### Release analysis
+
+- Product: 自 8.0.1 以来累计退役 C01 发布候选准备、C02 批量升级、C03 提案专项检查及无消费者的公开规划接口，骨架支持下限收紧至 8.0.0，并移除同仓库并行 git-sync 互斥保证；这些已接受的不兼容变化要求主程序升级至 9.0.0。同期统一 summary、develop 和 git-sync 共用流程，增加先接入远端再分析发布的协议，减少重复准备和分析，同时保留版本覆盖、历史连续性、当前输入漂移及提交保护。子包沿用已完成的受管收口版本，本次 release 不再次升子包。
+- `checks`: 0.1.0 -> 0.1.0 (依赖构建覆盖随受影响包更新；checks 自身内容未变，仅重验，不申请功能升版)
+- `core`: 7.1.0 -> 7.1.0 (no_package_version_change)
+- `factory`: 0.2.0 -> 0.5.0 (Revalidate unchanged package against the cleaned lifecycle implementation and current dependency/build identity; do not repeat its version bump.; 退役批量升级和提案检查公开入口，受管投影支持已核验资产退役删除; Add staged validation and direct development apply routing; Expose remote-context synchronization capability and preserve factory materialization and failure paths)
+- `lifecycle`: 0.2.0 -> 0.6.0 (Remove retired public Rust planning exports and unreachable legacy preview orchestration; preserve active CLI, history guards and regression coverage.; 取消旧实时配置迁移和无消费者公开包装，保留历史校验并修正当前新项目首次配置角色; Share final-candidate task evidence and preserve scoped validation and transaction guards; Expose cumulative product constraints and reuse immutable history while ignoring only terminal session metadata)
+- `memory`: 0.1.0 -> 0.1.0 (no_package_version_change)
+- `skeleton`: 0.1.0 -> 0.2.0 (受支持骨架下限收紧为 8.0.0，旧项目与未知身份在写入前拒绝)
+- `workflow`: 0.1.2 -> 0.3.0 (Revalidate unchanged package against the cleaned lifecycle implementation and current dependency/build identity; do not repeat its version bump.; 退役发布准备与状态接口，保留直接同步发布的核心快照、漂移保护及单项目 8.x 流程; Refresh unchanged caller dependency coverage for lifecycle; no independent source change; Add remote-only integration, plan release once after remote integration, and retire git-sync mutual exclusion)
+
 ## [8.0.1] - 2026-10-28
 
 ### Changed

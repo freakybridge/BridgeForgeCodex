@@ -1,13 +1,13 @@
 ---
-lifecycle: active
-validation_status: awaiting_validation
+lifecycle: completed
+validation_status: verified
 ---
 
 # summary 与 git-sync 共用流程精简计划
 
 日期：2026-10-28。范围：`summary`、`summary accept`、`summary switch`、`git-sync`、`git-sync release`。
 
-**当前状态：用户于 2026-10-28 21:15（Asia/Shanghai）要求暂停。后台构建已停止，最终验证和版本收口尚未完成；恢复从第 14 节继续，不自动启动任务。**
+**当前状态：2026-10-29 用户明确调用 summary accept，已验收本计划，并独立调用 git-sync release 授权受管提交、推送和主程序发布。工程证据见第 15.3 节，验收边界见第 16 节；实际发布结果以受管收据为准。**
 
 ## 1. 决定、授权与计划边界
 
@@ -323,6 +323,86 @@ preflight_rejects_truncated_attributes_and_submodule_helper_scope
 7. 工程验证稳定后，使用新 develop 的任务范围/direct apply 完成实际受影响 workflow/lifecycle/factory 及必要连带包的受管收口。基线版本见 14.1，具体级别以实际差异和用户已接受的退役决定生成分析，不预写版本或旧证据指纹。
 8. 完成最终投影/manifest、必要版本后产物与零写入一致性核对，更新本卡为待用户验收并交付。安装、真实下游、提交推送或主程序 release 仍需各自授权。
 
-恢复提示：读取本文件第 14 节，先核对当前分支、代码与记录差异，沿用本轮已确认范围、取舍和剩余预算，从中断的受管构建及后续验证继续；未取得真实终态收据前不得宣称开发完成。
+恢复提示：读取本文件第 14、15 节，先核对当前分支、代码与记录差异，沿用本轮已确认范围、取舍和剩余预算，从剩余受管构建及后续验证继续；未取得真实终态收据前不得宣称开发完成。
+
+## 15. autopilot 接续（2026-10-28）
+
+用户在当前对话明确授权沿本计划继续开发并采用 autopilot，随后指定接续预算为 10,000,000 token。原生 Goal 已建立；覆盖本次主对话、必要审查、验证、合理修复与交付，原生计量是否包含全部委派成本尚未实测，不声称精确计费或整包计量已验证。前轮 token 未实测，历史成本保留，不将其记为零；本次额度为用户重新明确授权的接续额度。没有可用的本机周额度换算记录，周额度百分比未估算。时间仅估算，不设时间硬上限；在途调用和收尾可能超过原生停止阈值。
+
+本次保持原任务和文件边界：受管登记/投影与构建、资源故障项串行复测、隔离 CLI 全链路、同条件性能对照、workflow/lifecycle/factory 及真实必要连带包收口、同一文档交付。复用已有独立审查；新增实质修复确需复核时最多一名审查 Agent。失败升级规则保留；同一候选环境补跑不重计实质验证轮次。不提交、推送、主程序发布、用户级安装、真实下游写入或修改 Memory，不自动验收。
+
+接续预检：
+
+- 当前工作区为 `D:/Quant/BridgeForge`，`main`，HEAD `83969378f87720469805d07f254fd5ae1d6036c5`，开始时干净。暂停成果已由后续提交保存，不再按未提交修改处理；混合提交中的既有核心清理/develop 成果不计为本次成果。
+- 当前无原生 Goal 冲突、无 develop journal。只读进程核对未发现 cargo/rustc/bridgeforge 构建进程；提权只读内存查询显示约 12 GiB 可用物理内存、15 GiB 可用虚拟内存。后续构建与测试串行，构建任务数为 1。
+- `.codex/bin/bridgeforge-factory.exe build-assets --factory --project-root . --check` 返回 manifests stale；需先核对并受管重建派生内容，不能冒称 prepared。Hook 注册文件及本地产物存在；仅证明静态配置，未模拟原生事件。
+- `.runtime/sync-simplification/` 和此前配置提案在本机不存在；factory-unit.inputs 仍引用已退役 deep-steps，按当前配置重新生成单路径提案并经受管 plan/apply，保留 baseline。
+
+传播四问沿用本计划：Rust/Skill 行为为通用产品层，配置登记为工厂自身配置，进度为元文档；公共源码和 Skill 按实际登记投影，工厂细节不下沉。适用子包版本由受管 develop 处理，根 VERSION/正式 CHANGELOG 留待独立 release 授权；不更改既有 AGENTS/Hook 行为。
+
+### 15.1 已核实的修复与验证安排
+
+- 旧本机工厂 EXE 的 manifest 生成遗漏 `source-layout.json.retirements`。从当前锁定源码执行受管 manifest 后，派生清单恢复且无净差异；当前 manifest 源码无需修复。首次受管运行时准备取得 `prepared / prepared=3 / written_files=6 / self_test_executed=true`，后续源码修复及子包升版仍需最终产物核对，不能复用该收据冒称最终内容已准备。
+- 已完成受管配置 plan/apply，终态 `migrated`、`sync_performed=false`、`version_changes=false`。实际 diff 仅移除 deep-steps 输入、将 factory/lifecycle 检查线程数从 4 改 1（workflow 原已为 1）；检查集合、超时和 baseline 未变。第一次语义比较误将 JSON 字段顺序视为变化，核对字段后纠正；构建持锁时的 apply 拒绝零写入，待构建完成重算计划后成功。
+- 本次独立审查找到 G11 遗漏：factory 脏同步/release 仍获取 ProjectLock。现只移除同步中的调用，保留维护消费者，并新增同时持有 RuntimeLock/ProjectLock 的普通同步及 release 回归。该单线程定向回归已通过 `1 passed / 0 failed`（测试内含两个模式），日志 `.runtime/sync-simplification/factory-lock-regression.log`。
+- 增补实际 CLI 预检、sync-remote、不提交/推送、跨进程预览、输入漂移拒绝、skip-fetch 执行与重复行为断言。漂移前快照在合法子包收口后采集；独立复核两项发现已修正，增量无新增确定 P1/P2，实际 CLI 测试待执行。
+- 当前任务预览仅 factory/lifecycle/workflow 为 affected；checks/core/skeleton 为 context-only，不自动升版。计划选择 workflow 的 git_sync 模块检查覆盖原 11 项失败及性能场景，factory 的 git_sync_tests 覆盖维护锁分离、构建/缓存/提交回滚，lifecycle 的 release_host 检查覆盖会话元数据与显式项目变量；另串行补跑原失败 breaking 生命周期用例。历史读取 4 项及此前累计判级通过项因相关源码未再修改而复用。
+- 版本语义：workflow 以 minor/breaking 记录用户明确接受的同步互斥退役及新远端接入编排；lifecycle 以 minor/compatible 记录预览约束和同输入宿主元数据精简；factory 以 minor/compatible 记录新同步能力接入及相关集成行为。均从各自最新受管版本记录比较，不重复计入前轮核心清理/develop；最终数字和是否连带由受管计划决定。
+
+### 15.2 受管收口与性能结果（2026-10-29）
+
+受管命令 `develop --apply --packages workflow,lifecycle,factory --analysis-file .runtime/sync-simplification/develop-analysis.json` 已返回 `development-closed`、`validation_mode=task-selected-final-candidate`、`checks.executed=3`、`checks.reused=0`、`git_written=false`。原始终态输出保存在 `.runtime/sync-simplification/develop-apply.log`；版本、完整检查命令及摘要由工具追加到 `.codex/package-closures.json`。journal 已清除，manifest 零写入检查为 `changed=false`，工厂版本检查 healthy=true。
+
+| 包 | 旧版本 | 新版本 | 实际检查与结果 |
+|---|---|---|---|
+| factory | 0.4.0 | 0.5.0 | 注册 factory-unit 加 git_sync_tests 过滤，单线程，14 项通过；覆盖构建/缓存、Hook 拒绝回滚及同步不获取维护锁 |
+| lifecycle | 0.5.0 | 0.6.0 | 注册 lifecycle-unit 加 release_host 过滤，3 项通过；独立探针标 ignored，由跨进程父用例实际调用 |
+| workflow | 0.2.0 | 0.3.0 | 注册 workflow-unit 加 git_sync::tests 过滤，同步模块 42 个用例全部通过，含原资源故障失败名单 |
+
+主程序保持 8.0.1，正式 CHANGELOG 未修改；其他包没有升版。factory/lifecycle 未配置稳定合同，workflow 本次含已接受的不兼容退役，因此保持 0.x，不宣称达到自动 1.0.0 条件。上述只证明任务范围收口，`outside_task_evidence_checked=false`，不据此宣称全仓可发布。
+
+另已串行补验 `schema4_all_breaking_lifecycle_operations_require_explicit_acceptance`：`1 passed / 0 failed`，内部含 Rust/Python 的 rename/remove/split/merge 共 8 个场景，耗时 511.35 秒；日志 `.runtime/sync-simplification/breaking-lifecycle-regression.log`。轻量检查 skill-metadata issues/warnings 为空、project-structure errors 为空、diff --check 通过；既有归档提示未处理。
+
+性能使用同名、同单线程方法的 `release_reuses_plan_only_when_fetch_preserves_all_planning_inputs`，本次没有并发构建或其他测试；`1 passed / 0 failed`，主体 48.18 秒，对比原文基线 168.73 秒，观察值减少约 71.4%。原始日志 `.runtime/sync-simplification/release-performance.log`：正常/漂移两个 actual release 的 `release.plan.build.calls` 均为 1，所测 sync 内部耗时分别 15.247/11.564 秒。夹具总耗时还包含准备和重复调用，历史基线没有完整宿主元数据，因此不是严格宿主匹配的因果性能实验，也不代表自然对话端到端提速。
+
+阶段快照：当时 HEAD 为 8396937，修改未提交；原生 Goal 为 active，预算观察为 191,521/10,000,000 token（原生口径，委派覆盖未另行核实）。受管收口已完成，最终 build-assets 和实际 CLI 链路尚在后续队列；该阶段未宣称整个开发完成。最终结果见下节。
+
+### 15.3 最终交付与接续边界（2026-10-29）
+
+本节为交付时快照：当时开发已完成、等待用户验收，未代替用户执行验收，也未更新 TODO-044 的既有验收记录。后续用户验收见第 16 节。
+
+| 验证面 | 最终证据与结论 |
+|---|---|
+| 源码与独立复核 | G11 的 factory ProjectLock 遗漏已修复；维护锁消费者保留。复用前轮审查，本次同一独立审查 Agent 对实际增量及夹具修正完成复核，无剩余确定 P1/P2 |
+| 受管开发 | 第 15.2 节的三个包、三组最终候选检查已收口；最终 `develop --preview --packages workflow,lifecycle,factory` 返回 `task-development-current`、affected 为空；没有 develop journal |
+| 产物与 dogfood | 最终 `cargo run --locked --release --manifest-path Cargo.toml --bin bridgeforge-factory --jobs 1 -- build-assets --factory --project-root .` 返回 prepared=3、written_files=6、self_test_executed=true；最终零写入 build-assets --check 为 current/reused=3/built=0，manifest --check 为 changed=false |
+| 实际 CLI | 最终二进制执行 `cargo test --locked --offline --manifest-path scripts/tests/Cargo.toml real_cli_explicit_release -- --test-threads=1 --nocapture`：3 passed / 0 failed，232.93 秒。覆盖缺配置/显式配置、Rust 独立包和新增包；预检 → sync-remote → 零写入预览 → 输入漂移拒绝并保留用户修改 → release --skip-fetch → 重复调用；仅测试本地 bare 远端 |
+| 工厂入口 | 本仓库 `git-sync --preflight` 为 ready，tool.version=0.5.0、product_version=8.0.1，包含 git-sync-remote-context-v1；该只读预检没有执行同步或发布 |
+| 真实下游与自然运行 | 未执行用户级共享 Skill 安装、真实下游写入或真实远端发布；自然对话端到端耗时、完整原生 Hook 生命周期仍未验证，不以本机隔离 CLI 结果替代 |
+
+实际 CLI 首轮发现两个测试夹具问题，均已修正，没有放宽生产门禁：
+
+1. 新增 Rust 包原先只有 value 函数、没有测试，实际开发检查正确拒绝零执行并回滚版本。现为 7/8 两个阶段加入对应实际断言。
+2. 根独立包拥有 business.txt，修改它会先触发子包版本覆盖检查。诊断重跑取得完整错误后，改用始终属于 product 且不计入包内容指纹的 CHANGELOG.md 注释变化来测分析 stale；严格断言分析拒绝、其他版本文件/HEAD/index/FETCH_HEAD 未写、用户注入内容仍保留，再恢复原字节验证成功发布。原业务文件场景保持。
+
+失败日志保留在 `.runtime/sync-simplification/real-cli-chain.log`、`real-cli-rust-retest.log`，最终通过日志为 `real-cli-final.log`；最终构建日志为 `final-runtime-build.log`，入口与覆盖收据为 `final-preflight.json`、`final-development-status.json`。这些本机忽略文件不是跨电脑自动可用的证据；正式包版本记录保存在受管 `.codex/package-closures.json`，没有手工回填通过记录。
+
+本轮实际新增修改：同步路径移除残余 ProjectLock、维护锁注释及回归；实际 CLI 接续/漂移/重复测试和新增包夹具；退役输入登记及串行检查配置；受管子包版本、锁、投影与记录；本计划和索引。前轮已保存的 summary C1–C3、git-sync S1–S5 及其他精简实现不重复算作本轮新增成果。
+
+交付时仓库 `D:/Quant/BridgeForge`、分支 main、基准 HEAD 仍为 `83969378f87720469805d07f254fd5ae1d6036c5`，本轮修改未暂存、提交或推送；根 VERSION/正式 CHANGELOG 未改。独立审查已结束，本次构建和测试进程已取得终态。Goal 对应当前对话 `01a18321-9ece-7743-89e4-75817d627ad0`，最后一次交付前原生预算观察为 388,946/10,000,000 token、约 69 分钟；这是原生计量快照，前轮 token 和委派计量覆盖未独立实测，最终 Goal 终态与用量以对话报告为准。
+
+交付时接续提示：先核对当前代码、HEAD 与交付记录，再消费后续用户授权。换机时通过 INSTALL.md 的受管入口恢复本地产物，不将本机日志、进程或 Goal 状态假定为已自动恢复，也不为缺少本机忽略文件重写版本历史。
+
+## 16. 用户验收与发布授权（2026-10-29）
+
+用户明确调用 `$summary accept`，确认本次 summary/git-sync 精简交付符合需求；同一条消息独立调用 `$git-sync release`，授权当前交付及正式发布以来累计变化的受管提交、推送和主程序发布。两项授权分别执行，发布不补做 develop 或重复升级子包。
+
+验收覆盖本计划已确认的 summary 三模式共用流程、git-sync 两模式精简、G11 补修及既定失败保护。复用第 15 节真实证据：59 项受管定向检查、breaking 生命周期补验、3 项最终实际 CLI 测试、独立复核、三个子包收口、最终产物 current 与任务覆盖 current。没有因验收重跑构建、业务测试或审计。autopilot Goal 已完成，最终原生计量为 392,489/10,000,000 token、约 70 分钟。
+
+保留边界：用户级共享 Skill 安装、真实下游写入/发布、自然对话端到端性能与完整原生 Hook 生命周期未验证；本次验收不把这些项目记为通过，不授权安装或真实下游写入。性能仅保留第 15.2 节限定的夹具对照结论。
+
+TODO 总表没有与本计划唯一对应的既有条目，故本次不新增编号、不修改其他事项。TODO-044 保留原有验收；TODO-045、TODO-046 分属核心清理与 develop 共用流程，不由本次 summary/git-sync 验收结算；TODO-001、TODO-002 的用户级安装与换机验证仍保持未完成。验收记录及索引已更新，未新增规则、Hook、Memory 或归档操作。
+
+发布使用已安装 factory 工具的聚合预检，接入远端后再按实际累计范围生成 product 分析。主程序与累计子包公告、提交及真实推送目标以最终受管收据为准，不将计划版本或已验收状态当作发布成功。
 
 
