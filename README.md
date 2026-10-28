@@ -38,7 +38,7 @@ $bridgeforge-codex
 
 普通 `$git-sync` 只提交和同步，不主动升版。develop 按本次改动选择必要的已登记检查，在最终候选验证后处理子包版本；自动进入 `1.0.0` 仍须完整稳定检查。`$git-sync release` 核验累计版本覆盖和声明交付物，只升主程序并公告全部累计子包变化，不补做开发或业务回归。版本记录不承担长期环境证书，换会话或调整检查策略本身不触发重复收口。
 
-使用前核验受管 CLI 的开发收口、自动稳定与发布硬闸能力；旧能力标识不能证明支持新分工。`develop --preview/--apply` 管子包，`git-sync --release` 管主程序。规则与验证状态见[版本生命周期设计](doc/0_architecture/design/package-version-lifecycle.md)，配置和实际入口见[版本生命周期合同](templates/skills/git-sync/references/schema4.md)；[旧 schema4 接入合同](doc/1_delivery/git-sync-release-rewrite/schema4-contract.md)仅保留历史参考。
+从实际入口收据核验所需能力。develop 共用 D1–D5，默认一次 `--apply` 完成最终候选必要检查与子包记账；确需分开时使用 `--validate` 后 `--apply`，完整环境合同下复用有效证据。`--preview` 保持零写入，`git-sync --release` 管主程序。规则与验证状态见[版本生命周期设计](doc/0_architecture/design/package-version-lifecycle.md)，配置和实际入口见[版本生命周期合同](templates/skills/git-sync/references/schema4.md)；[旧 schema4 接入合同](doc/1_delivery/git-sync-release-rewrite/schema4-contract.md)仅保留历史参考。
 
 单项目长任务或多个已讨论任务需要托管时，在该项目的新对话中输入：
 
@@ -90,7 +90,7 @@ $refactor-scan 扫描当前项目，允许现有定向测试和离线性能基�
 ## 更新时怎样保护项目
 
 - 新项目直接安装当前骨架。
-- 已有项目直接面向最新完整基线生成计划；需要决定的项目资产统一展示确认，确认前项目零写入，不会静默替用户做选择。
+- 已有骨架项目最低支持 8.0.0，低于该版本在项目写入前拒绝；8.x 及以后面向最新完整基线生成计划，保留项目定制。新项目仍可初始化，旧格式项目迁移已退役。
 - 无戳空项目初始化；无戳已有资产进入受控接入。双戳、非法戳、更新期间文件漂移或最终基线验证失败时停止或回滚。
 - 同版本骨架需要修复时仍可生成计划；覆盖已有整文件资产需要确认，始终使用可信产品目录的当前基线。
 

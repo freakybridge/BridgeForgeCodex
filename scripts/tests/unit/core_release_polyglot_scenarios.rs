@@ -1,5 +1,5 @@
 //! End-to-end release planning over real Git histories; no remote or publication.
-use super::tests::{Repo, config, git, plan, repo, write};
+use super::tests::{Repo, config, git, plan, repo_uninitialized as repo, write};
 use super::*;
 
 #[derive(Clone)]

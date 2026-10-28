@@ -492,7 +492,7 @@ fn read_contract(template_root: &Path) -> Result<(Value, Vec<u8>), String> {
 }
 
 fn resolved_mode(project_root: &Path, requested: SyncMode) -> Result<SyncMode, String> {
-    let has_stamp = project_identity(project_root)?.is_some();
+    let has_stamp = crate::baseline::project_version(project_root)?.is_some();
     let has_assets =
         project_root.join(".codex").exists() || project_root.join("AGENTS.md").exists();
     match requested {
@@ -514,36 +514,6 @@ fn resolved_mode(project_root: &Path, requested: SyncMode) -> Result<SyncMode, S
         }
         mode => Ok(mode),
     }
-}
-
-fn project_identity(root: &Path) -> Result<Option<(String, bool)>, String> {
-    let mut identity = None;
-    for (name, legacy) in [
-        (".bridgeforge_codex_version", false),
-        (".bridgeforge_version", true),
-    ] {
-        let path = root.join(".codex").join(name);
-        let metadata = match fs::symlink_metadata(&path) {
-            Ok(value) => value,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(error) => return Err(error.to_string()),
-        };
-        if !metadata.is_file()
-            || crate::persistence::is_link_or_reparse(&path).map_err(|e| e.to_string())?
-        {
-            return Err("version stamp must be a plain file".into());
-        }
-        if identity.is_some() {
-            return Err("multiple version stamps are not allowed".into());
-        }
-        let version = fs::read_to_string(&path)
-            .map_err(|e| e.to_string())?
-            .trim()
-            .to_string();
-        version.parse::<crate::release::SemVer>()?;
-        identity = Some((version, legacy));
-    }
-    Ok(identity)
 }
 
 fn generated_asset_current(project_root: &Path, item: &Value) -> Result<bool, String> {
@@ -970,6 +940,9 @@ pub fn build_plan_with_inputs(
         .ok_or("managed contract release_version is missing")?
         .to_string();
     let current_semver = version.parse::<crate::release::SemVer>()?;
+    if current_semver < crate::baseline::MIN_SUPPORTED_VERSION.parse()? {
+        return Err("target skeleton is unsupported; minimum supported version is 8.0.0".into());
+    }
     let compatibility_baseline = crate::baseline::compatibility_baseline(&contract)?;
     let stamp_target = safe_join(
         &project_root,
@@ -985,9 +958,8 @@ pub fn build_plan_with_inputs(
             .ok_or("contract target is missing")?,
         "contract target",
     )?;
-    let identity = project_identity(&project_root)?;
-    let legacy_stamp = identity.as_ref().is_some_and(|(_, legacy)| *legacy);
-    let previous_version = identity.map(|(version, _)| version);
+    crate::baseline::require_supported_project(&project_root)?;
+    let previous_version = crate::baseline::project_version(&project_root)?;
     let previous_semver = previous_version
         .as_deref()
         .map(str::parse::<crate::release::SemVer>)
@@ -1002,7 +974,6 @@ pub fn build_plan_with_inputs(
         ));
     }
     let destructive_rebuild = mode == SyncMode::Adopt
-        || legacy_stamp
         || previous_semver
             .as_ref()
             .is_some_and(|value| value < &compatibility_baseline);
@@ -1261,23 +1232,6 @@ pub fn build_plan_with_inputs(
             risk: false,
             before_sha256: fs::read(&stamp_target).ok().as_deref().map(sha_git),
             after_sha256: sha_git(&stamp),
-        });
-    }
-    if legacy_stamp {
-        let path = safe_join(
-            &project_root,
-            ".codex/.bridgeforge_version",
-            "legacy version stamp",
-        )?;
-        let before = fs::read(&path).map_err(|e| e.to_string())?;
-        deletes.push(path);
-        safe.push(SyncAction {
-            id: "managed.legacy-stamp".into(),
-            target: ".codex/.bridgeforge_version".into(),
-            operation: "delete".into(),
-            risk: false,
-            before_sha256: Some(sha_git(&before)),
-            after_sha256: "sha256:deleted".into(),
         });
     }
     plan_legacy_receipt_retirement(&project_root, &mut safe, &mut deletes)?;
@@ -1720,6 +1674,7 @@ fn apply_plan_internal(
     confirmed_risk: bool,
     before_stamp: Option<&dyn Fn(&Path, &Path) -> Result<(), String>>,
 ) -> Result<SyncReceipt, String> {
+    crate::baseline::require_supported_project(&plan.project_root)?;
     // Rejected confirmation must not even create a lock file in the project.
     if !plan.gaps.is_empty() || !plan.blockers.is_empty() {
         return Err("unresolved gap or blocker prevents apply".into());
@@ -1977,7 +1932,9 @@ fn apply_plan_internal(
         } else {
             crate::baseline::verify(&plan.project_root, None, true)?;
         }
-        if project_identity(&plan.project_root)? != Some((plan.current_version.clone(), false)) {
+        if crate::baseline::project_version(&plan.project_root)?
+            != Some(plan.current_version.clone())
+        {
             return Err("final version identity does not match the installed baseline".into());
         }
         Ok::<(), String>(())
@@ -2299,6 +2256,7 @@ pub fn build_generated_assets(
     contract: &Value,
     runner: &dyn ProcessRunner,
 ) -> Result<Vec<Value>, String> {
+    crate::baseline::require_supported_project(project_root)?;
     let _lock = ProjectLock::acquire(project_root)?;
     let legacy = legacy_receipt(project_root)?;
     let (mut writes, mut receipts) = generated_writes(

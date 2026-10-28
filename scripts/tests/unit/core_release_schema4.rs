@@ -57,7 +57,7 @@ fn fixture(strategy: &str, rust: bool) -> Repo {
     write(
         &root,
         ".codex/managed-skeleton.json",
-        br#"{"schema_version":1,"assets":[]}"#,
+        br#"{"schema_version":1,"release_version":"8.0.0","assets":[]}"#,
     );
     let cfg = if rust {
         write(
@@ -84,28 +84,12 @@ fn fixture(strategy: &str, rust: bool) -> Repo {
     write(&root, CONFIG, &serde_json::to_vec(&cfg).unwrap());
     git(&root, &["add", "."]);
     git(&root, &["commit", "-m", "chore: baseline"]);
-    if strategy != "legacy" {
-        let proposal = if strategy == "synchronized" {
-            let mut v = cfg.clone();
-            v["schema_version"] = json!(4);
-            v["strategy"] = json!(strategy);
-            write(
-                &root,
-                ".runtime/proposal.json",
-                &serde_json::to_vec(&v).unwrap(),
-            );
-            Some(".runtime/proposal.json")
-        } else {
-            None
-        };
-        let planned = migration_plan(&root, &SystemProcessRunner, proposal);
-        assert_eq!(planned.code, 0, "{}", planned.stderr);
-        let fingerprint = planned.receipt.unwrap()["fingerprint"]
-            .as_str()
-            .unwrap()
-            .to_string();
-        let applied = migration_apply(&root, &SystemProcessRunner, proposal, &fingerprint, true);
-        assert_eq!(applied.code, 0, "{}", applied.stderr);
+    if strategy != "unconfigured" {
+        assert_eq!(
+            strategy, "independent",
+            "only the current model belongs in current fixtures"
+        );
+        super::fixture::migrate(&root, &SystemProcessRunner).unwrap();
     }
     Repo(root)
 }
@@ -123,12 +107,107 @@ fn change(root: &Path, rust: bool) {
 
 const MANAGED_CARGO: &str = ".codex/hooks/crates/bridgeforge-core/Cargo.toml";
 
+#[test]
+fn release_host_bookkeeping_is_not_a_toolchain_or_input_change() {
+    let base = BTreeMap::from([
+        ("PATH".into(), "stable-tools".into()),
+        ("RUSTFLAGS".into(), "-C opt-level=2".into()),
+        ("WT_SESSION".into(), "terminal-one".into()),
+        ("PSModuleAnalysisCachePath".into(), "first-shell-cache".into()),
+    ]);
+    let expected = inputs::release_environment_fingerprints(&base).unwrap().planning;
+    let mut other = base.clone();
+    other.insert("WT_SESSION".into(), "terminal-two".into());
+    other.insert("PSModuleAnalysisCachePath".into(), "another-shell-cache".into());
+    other.insert("CODEX_TOOL_CALL_ID".into(), "different-call".into());
+    assert_eq!(inputs::release_environment_fingerprints(&other).unwrap().planning, expected);
+    assert_ne!(inputs::environment_fingerprints(&other).unwrap().planning,
+        inputs::environment_fingerprints(&base).unwrap().planning, "develop keeps its strict host guard");
+    for key in ["PATH", "RUSTFLAGS", "CUSTOM_BUILD_INPUT"] {
+        let mut changed = other.clone();
+        changed.insert(key.into(), "changed".into());
+        assert_ne!(inputs::release_environment_fingerprints(&changed).unwrap().planning, expected);
+    }
+}
+
+#[test]
+#[ignore = "child process for the cross-host release regression"]
+fn release_host_context_probe() {
+    let root = PathBuf::from(std::env::var_os("BRIDGEFORGE_RELEASE_HOST_ROOT").unwrap());
+    let path = root.join(".runtime/host-analysis.json");
+    if !path.exists() {
+        let result = preview(&root, "fix: host fixture", &Request::default(), &SystemProcessRunner);
+        assert_eq!(result.code, 0, "{}", result.stderr);
+        let receipt = result.receipt.unwrap();
+        write(&root, ".runtime/host-analysis.json", &serde_json::to_vec(&json!({
+            "schema":1,"fingerprint":receipt["fingerprint"],
+            "product":{"level":"patch","reason":"isolated host regression","compatibility":"compatible"}
+        })).unwrap());
+    } else {
+        let result = build(&root, "fix: host fixture", &Request {
+            analysis_file: Some(".runtime/host-analysis.json".into())
+        }, &SystemProcessRunner);
+        if root.join(".runtime/expect-stale").exists() {
+            assert!(result.unwrap_err().contains("stale"));
+        } else {
+            assert_eq!(result.unwrap().unwrap().new_version.to_string(), "1.0.1");
+        }
+    }
+}
+
+#[test]
+fn release_host_context_cross_process_preserves_only_valid_analysis() {
+    let r = fixture("independent", false);
+    write(&r.0, "README.md", b"new product content\n");
+    for step in 0..3 {
+        if step == 2 { write(&r.0, ".runtime/expect-stale", b"yes"); }
+        let mut command = ProcessRequest::new(std::env::current_exe().unwrap(), &r.0);
+        command.args = vec!["--exact".into(),
+            format!("{}::release_host_context_probe", module_path!().split_once("::").unwrap().1).into(),
+            "--ignored".into(),"--nocapture".into()];
+        command.env.insert("BRIDGEFORGE_RELEASE_HOST_ROOT".into(), r.0.as_os_str().into());
+        command.env.insert("WT_SESSION".into(), format!("terminal-{step}").into());
+        command.env.insert("PSModuleAnalysisCachePath".into(), format!("shell-cache-{step}").into());
+        command.env.insert("CUSTOM_BUILD_INPUT".into(), if step == 2 {"changed"} else {"stable"}.into());
+        command.timeout = Duration::from_secs(180);
+        let result = SystemProcessRunner.run(&command).unwrap();
+        assert!(!result.timed_out);
+        assert_eq!(result.code, 0, "{}\n{}", String::from_utf8_lossy(&result.stdout), String::from_utf8_lossy(&result.stderr));
+    }
+}
+
+#[test]
+fn release_host_explicit_project_variable_still_invalidates_analysis() {
+    let r = fixture("independent", true);
+    change(&r.0, true);
+    super::fixture::close_packages(&r.0, &SystemProcessRunner, &[]).unwrap();
+    let path = r.0.join(CONFIG);
+    let mut cfg: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    cfg["development"]["a"]["environment"] = json!({
+        "tools":["cargo","rustc"],"variables":["WT_SESSION"],"inputs":{}
+    });
+    write(&r.0, CONFIG, &serde_json::to_vec(&cfg).unwrap());
+    for step in 0..2 {
+        if step == 1 { write(&r.0, ".runtime/expect-stale", b"yes"); }
+        let mut command = ProcessRequest::new(std::env::current_exe().unwrap(), &r.0);
+        command.args = vec!["--exact".into(),
+            format!("{}::release_host_context_probe", module_path!().split_once("::").unwrap().1).into(),
+            "--ignored".into(),"--nocapture".into()];
+        command.env.insert("BRIDGEFORGE_RELEASE_HOST_ROOT".into(), r.0.as_os_str().into());
+        command.env.insert("WT_SESSION".into(), format!("declared-input-{step}").into());
+        command.timeout = Duration::from_secs(180);
+        let result = SystemProcessRunner.run(&command).unwrap();
+        assert!(!result.timed_out);
+        assert_eq!(result.code, 0, "{}\n{}", String::from_utf8_lossy(&result.stdout), String::from_utf8_lossy(&result.stderr));
+    }
+}
+
 fn cumulative_skeleton(root: &Path, generation: u8, project: &str) {
     let cargo = format!("[package]\nname='managed-tool'\nversion='1.0.{generation}'\n");
     let public = format!("BEGIN\npublic {generation}\nEND\n");
     write(root, MANAGED_CARGO, cargo.as_bytes());
     write(root, "README.md", format!("{public}{project}\n").as_bytes());
-    let contract = json!({"contract_target":".codex/managed-skeleton.json","assets":[
+    let contract = json!({"release_version":"8.0.0","contract_target":".codex/managed-skeleton.json","assets":[
         {"id":"managed.cargo","target":MANAGED_CARGO,"strategy":"whole","current_sha256":digest(cargo.as_bytes())},
         {"id":"managed.readme","target":"README.md","strategy":"region",
          "region":{"begin":"BEGIN","end":"END","current_sha256":digest(public.as_bytes())}}
@@ -141,7 +220,7 @@ fn cumulative_skeleton(root: &Path, generation: u8, project: &str) {
 }
 
 fn cumulative_skeleton_fixture() -> Repo {
-    let r = fixture("legacy", true);
+    let r = fixture("unconfigured", true);
     cumulative_skeleton(&r.0, 0, "project original");
     git(&r.0, &["add", "."]);
     git(&r.0, &["commit", "--amend", "--no-edit"]);
@@ -240,12 +319,12 @@ fn schema4_relocated_skeleton_uses_formal_boundary_and_requires_business_closure
     const OLD: &str = ".codex/hooks/crates/bridgeforge-core/src/memory/ownership.rs";
     const NEW: &str = ".codex/hooks/source/memory/src/ownership.rs";
     let contract = |target: &str, bytes: &[u8]| {
-        json!({"assets":[{
+        json!({"release_version":"8.0.0","assets":[{
             "id":"managed.memory", "target":target, "strategy":"whole", "current_sha256":digest(bytes)
         }]})
     };
     for updated in [false, true] {
-        let r = fixture("legacy", true);
+        let r = fixture("unconfigured", true);
         write(&r.0, OLD, b"original\n");
         write(
             &r.0,
@@ -314,10 +393,15 @@ fn schema4_relocated_skeleton_uses_formal_boundary_and_requires_business_closure
 
 #[test]
 fn schema4_cutover_preserves_unreleased_changes_across_legacy_intermediate_commits() {
-    let r = fixture("legacy", true);
+    let r = fixture("unconfigured", true);
     let original = fs::read(r.0.join(CONFIG)).unwrap();
     let release = git(&r.0, &["rev-parse", "HEAD"]);
-    let planned = migration_plan(&r.0, &SystemProcessRunner, None);
+    let proposal = fixture::current_fixture::proposal(&r.0).unwrap();
+    let planned = migration_plan(
+        &r.0,
+        &SystemProcessRunner,
+        proposal.as_ref().map(|p| p.to_str().unwrap()),
+    );
     assert_eq!(planned.code, 0, "{}", planned.stderr);
     let mut old = planned.receipt.unwrap()["configuration"].clone();
     old.as_object_mut().unwrap().remove("release_model");
@@ -377,7 +461,7 @@ fn schema4_cutover_preserves_unreleased_changes_across_legacy_intermediate_commi
     assert!(
         prepare_project_upgrade(&r.0)
             .unwrap_err()
-            .contains("cannot move")
+            .contains("legacy configuration migration is retired")
     );
     write(&r.0, CONFIG, &payload);
     assert!(
@@ -393,26 +477,34 @@ fn schema4_cutover_preserves_unreleased_changes_across_legacy_intermediate_commi
 }
 
 #[test]
-fn schema4_cutover_rejects_retired_strategy_and_manual_package_versions() {
-    let r = fixture("legacy", true);
+fn schema4_current_config_rejects_retired_strategy_and_manual_package_versions() {
+    let r = fixture("independent", true);
     assert!(
         configuration_plan(&r.0, &SystemProcessRunner, None, Some("synchronized"))
             .stderr
             .contains("one model")
     );
     let before = fs::read(r.0.join(CONFIG)).unwrap();
+    let index = fs::read(r.0.join(".git/index")).unwrap();
     write(
         &r.0,
         "pkg/Cargo.toml",
         b"[package]\nname='a'\nversion='2.0.0'\nedition='2021'\n[workspace]\n",
     );
-    assert!(prepare_project_upgrade(&r.0).is_err());
+    let result = preview(
+        &r.0,
+        "fix: manual version",
+        &Request::default(),
+        &SystemProcessRunner,
+    );
+    assert_ne!(result.code, 0, "manual package version must be rejected");
     assert_eq!(fs::read(r.0.join(CONFIG)).unwrap(), before);
+    assert_eq!(fs::read(r.0.join(".git/index")).unwrap(), index);
 }
 
 #[test]
 fn schema4_product_mapping_cannot_implicitly_upgrade_registered_workspace_members() {
-    let r = fixture("legacy", true);
+    let r = fixture("unconfigured", true);
     write(
         &r.0,
         "Cargo.toml",
@@ -658,7 +750,7 @@ fn schema4_explicit_product_roles_reject_conflicts_missing_members_and_implicit_
 }
 
 fn mixed_product_repo() -> Repo {
-    let r = fixture("legacy", true);
+    let r = fixture("unconfigured", true);
     fs::remove_dir_all(r.0.join("pkg")).unwrap();
     let (_, files) = mixed_product_native();
     for (path, bytes) in files {
@@ -774,20 +866,22 @@ fn schema4_formal_boundary_cannot_reintroduce_old_release_model() {
 }
 
 fn external_cargo_fixture() -> Repo {
-    let r = fixture("legacy", true);
+    let r = fixture("unconfigured", true);
     write(&r.0, "pkg/Cargo.toml", b"[package]\nname='a'\nversion='1.0.0'\nedition='2021'\nbuild='../external/build.rs'\n[workspace]\n[lib]\npath='../external/lib.rs'\n[[bin]]\nname='inventory'\npath='../external/all_inventory.rs'\n[[test]]\nname='check'\npath='../external/check.rs'\n[[bench]]\nname='bench'\npath='../external/bench.rs'\n[[example]]\nname='example'\npath='../external/example.rs'\n");
     for name in ["lib", "build", "all_inventory", "check", "bench", "example"] {
         write(&r.0, &format!("external/{name}.rs"), b"fn main() {}\n");
     }
     git(&r.0, &["add", "."]);
     git(&r.0, &["commit", "--amend", "--no-edit"]);
-    let p = migration_plan(&r.0, &SystemProcessRunner, None);
+    let proposal = fixture::current_fixture::proposal(&r.0).unwrap();
+    let proposal = proposal.as_ref().map(|p| p.to_str().unwrap());
+    let p = migration_plan(&r.0, &SystemProcessRunner, proposal);
     assert_eq!(p.code, 0, "{}", p.stderr);
     let v = p.receipt.unwrap();
     let a = migration_apply(
         &r.0,
         &SystemProcessRunner,
-        None,
+        proposal,
         v["fingerprint"].as_str().unwrap(),
         true,
     );
@@ -807,7 +901,7 @@ fn legacy_source_roots(root: &Path) -> Value {
 }
 
 fn historical_sharing_fixture() -> Repo {
-    let r = fixture("legacy", true);
+    let r = fixture("unconfigured", true);
     write(&r.0, "pkg/src/gui.rs", b"pub fn gui() {}\n");
     write(&r.0, "pkg/src/helper.rs", b"pub fn helper() {}\n");
     write(&r.0, "tools/Cargo.toml", b"[package]\nname='b'\nversion='1.0.0'\nedition='2021'\n[workspace]\n[[test]]\nname='shared'\npath='../checks/main.rs'\n");
@@ -837,7 +931,9 @@ fn historical_sharing_fixture() -> Repo {
     write(&r.0, CONFIG, &serde_json::to_vec(&cfg).unwrap());
     git(&r.0, &["add", "."]);
     git(&r.0, &["commit", "--amend", "--no-edit"]);
-    let p = migration_plan(&r.0, &SystemProcessRunner, None);
+    let proposal = fixture::current_fixture::proposal(&r.0).unwrap();
+    let proposal = proposal.as_ref().map(|p| p.to_str().unwrap());
+    let p = migration_plan(&r.0, &SystemProcessRunner, proposal);
     assert_eq!(p.code, 0, "{}", p.stderr);
     let v = p.receipt.unwrap();
     assert_eq!(
@@ -851,7 +947,7 @@ fn historical_sharing_fixture() -> Repo {
         migration_apply(
             &r.0,
             &SystemProcessRunner,
-            None,
+            proposal,
             v["fingerprint"].as_str().unwrap(),
             true
         )
@@ -1045,7 +1141,7 @@ fn schema4_reused_classifier_binds_current_contract_bytes() {
     write(
         &r.0,
         ".codex/managed-skeleton.json",
-        br#"{"schema_version":1,"assets":[],"changed":true}"#,
+        br#"{"schema_version":1,"release_version":"8.0.0","assets":[],"changed":true}"#,
     );
     assert!(verify_release_inputs(&captured.inputs).is_err());
 }
@@ -1068,7 +1164,7 @@ fn schema4_reused_classifier_rejects_contract_drift_before_its_path_is_captured(
             {
                 fs::write(
                     request.cwd.join(".codex/managed-skeleton.json"),
-                    br#"{"schema_version":1,"assets":[],"note":"B"}"#,
+                    br#"{"schema_version":1,"release_version":"8.0.0","assets":[],"note":"B"}"#,
                 )?;
                 self.changed.set(true);
             }
@@ -1091,7 +1187,7 @@ fn schema4_reused_classifier_rejects_contract_drift_before_its_path_is_captured(
     write(
         &r.0,
         ".codex/managed-skeleton.json",
-        br#"{"schema_version":1,"assets":[],"note":"A"}"#,
+        br#"{"schema_version":1,"release_version":"8.0.0","assets":[],"note":"A"}"#,
     );
     let runner = ChangeContract {
         spec: format!("{boundary}:.codex/managed-skeleton.json"),
@@ -1504,7 +1600,7 @@ fn schema4_inline_cargo_targets_keep_the_same_ownership() {
 #[test]
 fn schema4_external_lib_module_history_is_repaired_before_module_move_release() {
     for exact_entry_already_recorded in [false, true] {
-        let r = fixture("legacy", true);
+        let r = fixture("unconfigured", true);
         write(&r.0, "pkg/Cargo.toml", b"[package]\nname='a'\nversion='1.0.0'\nedition='2021'\n[workspace]\n[lib]\npath='../legacy/lib.rs'\n");
         write(&r.0, "legacy/lib.rs", b"pub mod all_inventory;\n");
         write(
@@ -1520,14 +1616,16 @@ fn schema4_external_lib_module_history_is_repaired_before_module_move_release() 
         write(&r.0, "legacy/unrelated.rs", b"pub fn unrelated(){}\n");
         git(&r.0, &["add", "."]);
         git(&r.0, &["commit", "--amend", "--no-edit"]);
-        let p = migration_plan(&r.0, &SystemProcessRunner, None);
+        let proposal = fixture::current_fixture::proposal(&r.0).unwrap();
+        let proposal = proposal.as_ref().map(|p| p.to_str().unwrap());
+        let p = migration_plan(&r.0, &SystemProcessRunner, proposal);
         assert_eq!(p.code, 0, "{}", p.stderr);
         let p = p.receipt.unwrap();
         assert_eq!(
             migration_apply(
                 &r.0,
                 &SystemProcessRunner,
-                None,
+                proposal,
                 p["fingerprint"].as_str().unwrap(),
                 true
             )
@@ -1612,7 +1710,9 @@ fn analyze(root: &Path, product: &str, package: Option<&str>) -> Request {
         fixture::close_packages(root, &SystemProcessRunner, &[("a", level)]).unwrap();
     }
     let cfg = load(root).unwrap().unwrap();
-    let mut captured = inputs::capture_release(root, &cfg, &SystemProcessRunner).unwrap();
+    let inspection = InspectionRunner(&SystemProcessRunner);
+    let reader = history_cache::Reader::new(root, &inspection);
+    let mut captured = inputs::capture_release(root, &cfg, &reader).unwrap();
     // Match the public release preview, including normalization rules. Some
     // callers deliberately leave packages open to assert build's gate error.
     let _ = development::release_gate(root, &cfg, &mut captured, &SystemProcessRunner);
@@ -1646,12 +1746,14 @@ fn schema4_single_model_uses_both_language_adapters() {
 }
 #[test]
 fn schema4_migration_preview_is_zero_write_and_apply_rejects_drift() {
-    let r = fixture("legacy", false);
-    let before = fs::read(r.0.join(CONFIG)).unwrap();
+    let r = fixture("unconfigured", false);
+    let proposal = fixture::current_fixture::proposal(&r.0).unwrap();
+    let proposal = proposal.as_ref().map(|p| p.to_str().unwrap());
+    let before = fs::read(r.0.join(CONFIG)).ok();
     let index = fs::read(r.0.join(".git/index")).unwrap();
-    let p = migration_plan(&r.0, &SystemProcessRunner, None);
+    let p = migration_plan(&r.0, &SystemProcessRunner, proposal);
     assert_eq!(p.code, 0, "{}", p.stderr);
-    assert_eq!(fs::read(r.0.join(CONFIG)).unwrap(), before);
+    assert_eq!(fs::read(r.0.join(CONFIG)).ok(), before);
     assert_eq!(fs::read(r.0.join(".git/index")).unwrap(), index);
     write(
         &r.0,
@@ -1661,12 +1763,12 @@ fn schema4_migration_preview_is_zero_write_and_apply_rejects_drift() {
     let a = migration_apply(
         &r.0,
         &SystemProcessRunner,
-        None,
+        proposal,
         p.receipt.unwrap()["fingerprint"].as_str().unwrap(),
         true,
     );
     assert_ne!(a.code, 0);
-    assert_eq!(fs::read(r.0.join(CONFIG)).unwrap(), before);
+    assert_eq!(fs::read(r.0.join(CONFIG)).ok(), before);
 }
 #[test]
 fn schema4_final_difference_cancels_unpublished_commits() {
@@ -1760,17 +1862,9 @@ fn schema4_explicit_targets_reject_lower_and_unchanged_package_bumps() {
 }
 
 fn migrate(root: &Path) {
-    let p = migration_plan(root, &SystemProcessRunner, None);
-    assert_eq!(p.code, 0, "{}", p.stderr);
-    let p = migration_apply(
-        root,
-        &SystemProcessRunner,
-        None,
-        p.receipt.unwrap()["fingerprint"].as_str().unwrap(),
-        true,
-    );
-    assert_eq!(p.code, 0, "{}", p.stderr);
+    super::fixture::migrate(root, &SystemProcessRunner).unwrap();
 }
+
 fn analysis_value(root: &Path) -> Value {
     serde_json::from_slice(&fs::read(root.join(".runtime/analysis.json")).unwrap()).unwrap()
 }
@@ -1804,7 +1898,7 @@ fn python_environment_fixture(root: &Path) -> Value {
 #[test]
 fn schema4_dependency_upgrade_only_bumps_owner_when_requirement_changes() {
     for pinned in [false, true] {
-        let r = fixture("legacy", false);
+        let r = fixture("unconfigured", false);
         let mut cfg: Value = serde_json::from_slice(&fs::read(r.0.join(CONFIG)).unwrap()).unwrap();
         cfg["adapters"]["python"]["projects"] =
             json!(["pkg/pyproject.toml", "consumer/pyproject.toml"]);
@@ -1858,7 +1952,7 @@ fn schema4_dependency_upgrade_only_bumps_owner_when_requirement_changes() {
 
 #[test]
 fn schema4_mixed_languages_keep_per_package_impact() {
-    let r = fixture("legacy", true);
+    let r = fixture("unconfigured", true);
     let mut cfg: Value = serde_json::from_slice(&fs::read(r.0.join(CONFIG)).unwrap()).unwrap();
     cfg["adapters"]["python"] = json!({"projects":["py/pyproject.toml"]});
     cfg["packages"]
@@ -2013,28 +2107,6 @@ fn schema4_validation_binds_report_scope_and_bytes() {
 }
 
 #[test]
-fn schema4_schema1_migration_preserves_unpublished_program_change() {
-    let r = fixture("legacy", false);
-    write(
-        &r.0,
-        CONFIG,
-        br#"{"schema_version":1,"release_policy":"explicit_release","manifest_policy":"auto"}"#,
-    );
-    git(&r.0, &["add", "."]);
-    git(&r.0, &["commit", "--amend", "--no-edit"]);
-    write(&r.0, "README.md", b"new program documentation\n");
-    git(&r.0, &["add", "README.md"]);
-    git(&r.0, &["commit", "-m", "docs: unpublished"]);
-    migrate(&r.0);
-    let request = analyze(&r.0, "patch", None);
-    let p = build(&r.0, "docs: release", &request, &SystemProcessRunner)
-        .unwrap()
-        .unwrap();
-    assert_eq!(p.new_version.to_string(), "1.0.1");
-    assert!(p.package_changes.is_empty());
-}
-
-#[test]
 fn schema4_replays_multiple_moves_but_rates_only_final_change() {
     let r = fixture("independent", false);
     let base = load(&r.0).unwrap().unwrap().baseline.revision;
@@ -2112,7 +2184,7 @@ fn schema4_retirement_survives_release_and_cannot_reuse_identity() {
 
 #[test]
 fn schema4_single_model_splits_rust_workspace_version_for_changed_package() {
-    let r = fixture("legacy", true);
+    let r = fixture("unconfigured", true);
     write(
         &r.0,
         "Cargo.toml",
@@ -2137,6 +2209,7 @@ fn schema4_single_model_splits_rust_workspace_version_for_changed_package() {
         ".runtime/proposal.json",
         &serde_json::to_vec(&cfg).unwrap(),
     );
+    fs::remove_file(r.0.join(CONFIG)).unwrap();
     let p = configuration_plan(
         &r.0,
         &SystemProcessRunner,
@@ -2285,7 +2358,7 @@ fn schema4_stat_only_index_refresh_keeps_analysis_valid_without_weakening_drift_
 
 #[test]
 fn schema4_content_diff_retains_binary_empty_mode_and_delimited_paths() {
-    let r = fixture("legacy", false);
+    let r = fixture("unconfigured", false);
     git(&r.0, &["config", "core.autocrlf", "false"]);
     let mut paths = vec!["binary.asset", "empty.asset", "spaced name.asset"];
     if cfg!(unix) {
@@ -2415,7 +2488,7 @@ fn schema4_real_configuration_changes_after_migration_are_product_changes() {
 
 #[test]
 fn schema4_single_model_rejects_ambiguous_shared_package_source() {
-    let r = fixture("legacy", false);
+    let r = fixture("unconfigured", false);
     let mut cfg: Value = serde_json::from_slice(&fs::read(r.0.join(CONFIG)).unwrap()).unwrap();
     cfg["adapters"]["python"]["projects"] = json!(["pkg/pyproject.toml", "b/pyproject.toml"]);
     cfg["adapters"]["python"]["import_roots"] =
@@ -2433,12 +2506,14 @@ fn schema4_single_model_rejects_ambiguous_shared_package_source() {
     write(&r.0, "shared/data.py", b"VALUE=1\n");
     git(&r.0, &["add", "."]);
     git(&r.0, &["commit", "--amend", "--no-edit"]);
-    let p = configuration_plan(&r.0, &SystemProcessRunner, None, Some("independent"));
+    let proposal = fixture::current_fixture::proposal(&r.0).unwrap();
+    let proposal = proposal.as_ref().map(|p| p.to_str().unwrap());
+    let p = configuration_plan(&r.0, &SystemProcessRunner, proposal, Some("independent"));
     assert_eq!(p.code, 0, "{}", p.stderr);
     let p = configuration_apply(
         &r.0,
         &SystemProcessRunner,
-        None,
+        proposal,
         Some("independent"),
         p.receipt.unwrap()["fingerprint"].as_str().unwrap(),
         true,
@@ -2554,11 +2629,8 @@ fn schema4_python_environment_bytes_invalidate_evidence_and_apply_at_same_paths(
             .unwrap_err()
             .contains("environment changed")
     );
-    assert!(
-        build(&r.0, "fix: stale evidence", &request, &SystemProcessRunner)
-            .unwrap_err()
-            .contains("development closure required")
-    );
+    let stale = build(&r.0, "fix: stale evidence", &request, &SystemProcessRunner).unwrap_err();
+    assert!(stale.contains("release analysis is stale"), "{stale}");
     let request = analyze(&r.0, "patch", Some("patch"));
     let plan = build(&r.0, "fix: native change", &request, &SystemProcessRunner)
         .unwrap()
@@ -2578,7 +2650,7 @@ fn schema4_python_environment_bytes_invalidate_evidence_and_apply_at_same_paths(
 
 #[test]
 fn schema4_rust_patch_overflow_fails_without_touching_versions() {
-    let r = fixture("legacy", true);
+    let r = fixture("unconfigured", true);
     let maximum = u64::MAX.to_string();
     let version = format!("1.0.{maximum}");
     write(
@@ -2609,7 +2681,7 @@ fn schema4_rust_patch_overflow_fails_without_touching_versions() {
 
 #[test]
 fn schema4_runtime_guard_and_record_roles_fail_closed_without_writes() {
-    let r = fixture("legacy", false);
+    let r = fixture("unconfigured", false);
     let config = fs::read(r.0.join(CONFIG)).unwrap();
     let index = fs::read(r.0.join(".git/index")).unwrap();
     write(&r.0, ".gitignore", b"# runtime not ignored\n");
@@ -2641,22 +2713,24 @@ fn schema4_forwarded_public_interface_changes_are_explicit_and_do_not_propagate_
     let mut v: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
     let single = development::preview(&r.0, &q, &runner);
     assert_eq!(single.code, 0, "{}", single.stderr);
+    let versions = single.receipt.unwrap()["versions"].clone();
+    assert_eq!(versions["pkg/pyproject.toml"], "1.1.0");
     assert_eq!(
-        single.receipt.unwrap()["versions"]
-            .as_object()
-            .unwrap()
-            .len(),
-        1
+        versions["consumer/pyproject.toml"], "1.0.0",
+        "dependency validation must not imply a version bump"
     );
     v["packages"]["b"] =
         json!({"level":"minor","reason":"re-exported API","compatibility":"compatible"});
     fs::write(&path, serde_json::to_vec(&v).unwrap()).unwrap();
-    assert!(
-        development::preview(&r.0, &q, &runner)
-            .stderr
-            .contains("unchanged or unknown")
+    let unchanged = development::preview(&r.0, &q, &runner);
+    assert_eq!(unchanged.code, 0, "{}", unchanged.stderr);
+    assert_eq!(
+        unchanged.receipt.unwrap()["versions"]["consumer/pyproject.toml"],
+        "1.0.0"
     );
     v["interface_impacts"] = json!({"b":{"dependencies":["a"],"reason":"public re-export"}});
+    let config: Value = serde_json::from_slice(&fs::read(r.0.join(CONFIG)).unwrap()).unwrap();
+    v["validation"]["b"] = config["development"]["b"]["checks"].clone();
     fs::write(&path, serde_json::to_vec(&v).unwrap()).unwrap();
     let both = development::preview(&r.0, &q, &runner);
     assert_eq!(both.code, 0, "{}", both.stderr);
@@ -2696,7 +2770,7 @@ fn schema4_forwarded_public_interface_changes_are_explicit_and_do_not_propagate_
 
 #[test]
 fn schema4_required_checks_combine_their_declared_object_scopes() {
-    let r = fixture("legacy", false);
+    let r = fixture("unconfigured", false);
     let mut cfg: Value = serde_json::from_slice(&fs::read(r.0.join(CONFIG)).unwrap()).unwrap();
     cfg["adapters"]["python"]["projects"] = json!(["pkg/pyproject.toml", "other/pyproject.toml"]);
     cfg["packages"]

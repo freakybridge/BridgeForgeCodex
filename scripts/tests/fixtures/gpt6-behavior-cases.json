@@ -552,11 +552,24 @@
     },
     {
       "id": "git_sync_preflight_is_capability_gated",
-      "instructions": ["templates/AGENTS.md", "templates/skills/git-sync/SKILL.md"],
-      "context": "旧CLI自检有release-only与setup能力，但没有git-sync-preflight-v1。配置已确认，工作区干净。全部命令使用模拟工具，记录调用顺序和次数。",
-      "user": "$git-sync",
-      "expect": ["不试跑未知preflight参数，同批使用setup-status和只读状态/目标查询", "不重复读取首次配置手册或审计无改动业务文件", "受管同步成功后仅核验一次真实push目标与工作区并立即答复"],
-      "forbid": ["直接给旧CLI传--preflight", "重复配置访谈或多次同步", "省略终态核验或把内部耗时当端到端"]
+      "instructions": [
+        "templates/AGENTS.md",
+        "templates/skills/git-sync/SKILL.md"
+      ],
+      "context": "两个当前8.x模拟工具均可执行preflight：一份tool能力包含git-sync-remote-context-v1，另一份缺该能力。已有release授权，使用模拟工具记录调用序列；远端接入后返回可审阅累计范围。",
+      "user": "$git-sync release",
+      "expect": [
+        "仅一次preflight取得工具身份和仓库状态，不独立self-test或前置Cargo准备",
+        "缺少新能力时报告维护缺口停止，不调用未知sync-remote或隐式升级",
+        "能力完整时先sync-remote，再一次无分析预览，生成完整分析后release --skip-fetch；默认无外层带分析预览",
+        "成功后只核验一次真实推送目标与工作区并返回"
+      ],
+      "forbid": [
+        "缺能力时降级旧发布流程",
+        "每次独立self-test或构建工具",
+        "仅因换宿主进程整段重来",
+        "把预检not_fetched当远端一致"
+      ]
     },
     {
       "id": "summary_three_modes",
@@ -566,19 +579,21 @@
         "templates/skills/summary/references/switch-mode.md",
         "templates/skills/summary/references/acceptance-mode.md"
       ],
-      "context": "隔离项目 doc 有索引、当前需求和 TODO 总表；对话有一次误判、已验证修复及明确遗留问题。分别复制三个相同夹具，对三个调用独立观察文件差异。",
+      "context": "隔离项目 doc 有索引、当前需求和 TODO 总表；对话有一次误判、已验证修复及明确遗留问题。分别复制三个相同夹具，对三个调用独立观察文件差异。另设一个已有准确经验文档的夹具：先summary后summary accept，只观察新增验收/TODO内容。",
       "user": "分别对独立夹具执行 $summary、$summary switch、$summary accept。",
       "expect": [
         "三模式都将有证据经验写入doc并给出链接",
         "switch另存相对路径交接和下一步，不提交推送",
         "accept只完成有证据TODO并补入明确遗留问题",
-        "重复调用不重复文档或TODO"
+        "重复调用不重复文档或TODO",
+        "已有经验后的accept直接复用，只补验收与TODO增量，不重跑普通summary；无增量普通总结不写文件"
       ],
       "forbid": [
         "普通或switch修改验收状态或结算TODO",
         "重跑编译完整测试或审计",
         "自动采纳规则或写Memory",
-        "以聊天文本代替文档"
+        "以聊天文本代替文档",
+        "默认历史研究、规则候选或归档扫描、prepared前置"
       ]
     }
   ]

@@ -19,6 +19,17 @@ pub fn run_with_identity(
     runner: &dyn bridgeforge_core::ProcessRunner,
     identity: Option<Value>,
 ) -> CommandOutcome {
+    if args.iter().any(|arg| {
+        matches!(
+            arg.split('=').next(),
+            Some("--prepare-release" | "--development-status")
+        )
+    }) {
+        return blocked(
+            "git-sync",
+            "prepared-release commands are retired; use develop for validation and git-sync --release for publishing",
+        );
+    }
     if has(args, "--check") || has(args, "--dry-run") {
         return blocked(
             "git-sync",
@@ -30,16 +41,18 @@ pub fn run_with_identity(
         Ok(value) => value,
         Err(error) => return blocked("git-sync", error),
     };
+    if let Err(error) = crate::baseline::require_supported_project(context.root()) {
+        return blocked("git-sync", error);
+    }
     let modes = [
         "--preflight",
+        "--sync-remote",
         "--setup-status",
         "--setup-plan",
         "--setup-apply",
         "--release",
         "--release-preview",
-        "--prepare-release",
         "--release-status",
-        "--development-status",
         "--migration-plan",
         "--migration-apply",
         "--repair-baseline-plan",
@@ -100,6 +113,15 @@ pub fn run_with_identity(
         }
         return outcome;
     }
+    if has(args, "--sync-remote") {
+        if has(args, "--skip-fetch") || has(args, "--skip-push") || has(args, "--release-analysis-file") {
+            return blocked("git-sync", "--sync-remote only integrates remote changes; do not supply skip flags or a release analysis");
+        }
+        return crate::git_sync::sync_remote(context.root(), runner, crate::git_sync::GitSyncOptions {
+            remote: value(args, "--remote").unwrap_or_else(|| "origin".into()),
+            ..Default::default()
+        });
+    }
     if has(args, "--setup-status") {
         return bridgeforge_lifecycle::release::setup::status_with(
             context.root(),
@@ -153,29 +175,6 @@ pub fn run_with_identity(
     }
     if has(args, "--release-status") {
         return crate::git_sync::release_status(context.root(), runner);
-    }
-    if has(args, "--development-status") {
-        return crate::git_sync::development_status(context.root(), runner);
-    }
-    if has(args, "--prepare-release") {
-        let message = if let Some(path) = value(args, "--message-file") {
-            match fs::read_to_string(path) {
-                Ok(value) => value,
-                Err(error) => return blocked("git-sync", error),
-            }
-        } else {
-            value(args, "--message")
-                .or_else(|| value(args, "-m"))
-                .unwrap_or_default()
-        };
-        let audit = value(args, "--audit-file").map(PathBuf::from);
-        return crate::git_sync::prepare_release_with_request(
-            context.root(),
-            runner,
-            &message,
-            audit.as_deref(),
-            &release_request,
-        );
     }
     if has(args, "--release-preview") {
         let message = if let Some(path) = value(args, "--message-file") {

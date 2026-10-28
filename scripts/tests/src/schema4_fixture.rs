@@ -4,6 +4,9 @@ use bridgeforge_core::{ProcessRequest, ProcessRunner, SystemProcessRunner};
 use serde_json::{Value, json};
 use std::{fs, path::Path, time::Duration};
 
+#[path = "../support/current_fixture.rs"]
+mod current_fixture;
+
 pub(super) fn invoke(cli: &Path, root: &Path, args: &[&str], env: &[(&str, &str)]) -> Value {
     let mut request = ProcessRequest::new(cli.as_os_str(), root);
     request.args = args.iter().map(Into::into).collect();
@@ -20,19 +23,23 @@ pub(super) fn invoke(cli: &Path, root: &Path, args: &[&str], env: &[(&str, &str)
     serde_json::from_slice(&output.stdout).unwrap()
 }
 pub(super) fn migrate(cli: &Path, root: &Path) {
-    let p = invoke(cli, root, &["git-sync", "--migration-plan"], &[]);
-    invoke(
-        cli,
-        root,
-        &[
-            "git-sync",
-            "--migration-apply",
-            "--migration-fingerprint",
-            p["fingerprint"].as_str().unwrap(),
-            "--confirmed-choice",
-        ],
-        &[],
-    );
+    let proposal = current_fixture::proposal(root).unwrap();
+    let mut args = vec!["git-sync", "--migration-plan"];
+    if let Some(path) = &proposal {
+        args.extend(["--setup-config-file", path.to_str().unwrap()]);
+    }
+    let p = invoke(cli, root, &args, &[]);
+    let mut args = vec![
+        "git-sync",
+        "--migration-apply",
+        "--migration-fingerprint",
+        p["fingerprint"].as_str().unwrap(),
+        "--confirmed-choice",
+    ];
+    if let Some(path) = &proposal {
+        args.extend(["--setup-config-file", path.to_str().unwrap()]);
+    }
+    invoke(cli, root, &args, &[]);
 }
 pub(super) fn analyze(
     cli: &Path,
@@ -108,7 +115,12 @@ fn close_packages(
     fs::write(path, serde_json::to_vec(&cfg).unwrap()).unwrap();
     let p = invoke(cli, root, &["develop", "--preview"], env);
     let mut packages = serde_json::Map::new();
+    let mut validation = serde_json::Map::new();
     for id in p["affected_packages"].as_array().unwrap() {
+        validation.insert(
+            id.as_str().unwrap().into(),
+            cfg["development"][id.as_str().unwrap()]["checks"].clone(),
+        );
         packages.insert(id.as_str().unwrap().into(),json!({"level":level,"reason":"fixture declares the actual package change","compatibility":"compatible"}));
     }
     for (id, level) in additional {
@@ -117,7 +129,7 @@ fn close_packages(
     fs::create_dir_all(root.join(".runtime")).unwrap();
     fs::write(
         root.join(".runtime/develop-analysis.json"),
-        serde_json::to_vec(&json!({"schema":1,"fingerprint":p["fingerprint"],"packages":packages}))
+        serde_json::to_vec(&json!({"schema":1,"fingerprint":p["fingerprint"],"packages":packages,"validation":validation}))
             .unwrap(),
     )
     .unwrap();

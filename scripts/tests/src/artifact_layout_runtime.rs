@@ -66,11 +66,11 @@ fn setup(cli: &Path, label: &str, configured: bool, modern: bool) -> Fixture {
     use sha2::{Digest, Sha256};
     write(&root, "templates/seed.txt", b"seed\n");
     write(&root, "seed.txt", b"seed\n");
-    write(&root, ".codex/.bridgeforge_codex_version", b"1.0.0\n");
+    write(&root, ".codex/.bridgeforge_codex_version", b"8.0.0\n");
     write(&root, ".codex/managed-skeleton.json", &serde_json::to_vec(&json!({
-        "schema_version":4,"release_version":"1.0.0","host":"codex",
+        "schema_version":4,"release_version":"8.0.0","host":"codex",
         "stamp":".codex/.bridgeforge_codex_version","contract_target":".codex/managed-skeleton.json",
-        "baseline_model":"current-only","compatibility_baseline":"1.0.0","generated_assets":[],
+        "baseline_model":"current-only","compatibility_baseline":"8.0.0","generated_assets":[],
         "assets":[{"id":"fixture.seed","source":"templates/seed.txt","target":"seed.txt","strategy":"whole","current_sha256":format!("sha256:{:x}",Sha256::digest(b"seed\n"))}]
     })).unwrap());
     write(

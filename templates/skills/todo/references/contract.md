@@ -1,6 +1,6 @@
 # TODO 管理与收口合同
 
-> todo、confirm 落盘、summary accept 和 TODO 查询时读取。本文件拥有操作规则；字段、状态和归属的机器事实源是当前项目 `.codex/hooks/crates/bridgeforge-core/src/todo_contract.json`，也可用 `.codex/bin/bridgeforge.exe check todo --root . --contract` 只读输出。非 Windows 去掉 `.exe`。入口缺失时读取实际合同文件，不猜测接口或运行安装。
+> todo、confirm 落盘、summary accept 和 TODO 查询时读取。本文件拥有操作规则；字段、状态和归属的机器事实源是当前项目 `.codex/hooks/source/checks/src/todo_contract.json`，也可用 `.codex/bin/bridgeforge.exe check todo --root . --contract` 只读输出。非 Windows 去掉 `.exe`。入口缺失时读取实际合同文件，不猜测接口或运行安装。
 
 ## 记录与身份
 

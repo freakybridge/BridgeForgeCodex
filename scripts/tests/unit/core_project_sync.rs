@@ -2,6 +2,30 @@
 mod factory_repository;
 
 use super::*;
+
+#[test]
+fn unsupported_skeleton_plan_and_apply_do_not_write() {
+    let (root, project, factory) = upgrade_fixture("7.0.5", "8.1.0");
+    assert!(
+        build_plan(&project, &factory, SyncMode::Update)
+            .unwrap_err()
+            .contains("minimum supported")
+    );
+    assert!(!project.join(".runtime").exists());
+    assert!(!project.join("managed.txt").exists());
+    fs::remove_dir_all(root).unwrap();
+    let (root, plan) = transaction_fixture(true);
+    fs::write(root.join(".codex/.bridgeforge_codex_version"), b"7.0.5\n").unwrap();
+    let fp = plan.aggregate_fingerprint.clone();
+    assert!(
+        apply_plan(plan, &fp, true)
+            .unwrap_err()
+            .contains("minimum supported")
+    );
+    assert!(!root.join(".runtime").exists());
+    assert_eq!(fs::read(root.join("managed.txt")).unwrap(), b"old\n");
+    fs::remove_dir_all(root).unwrap();
+}
 use crate::ProcessRequest;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -144,12 +168,12 @@ fn upgrade_fixture(previous: &str, release: &str) -> (PathBuf, PathBuf, PathBuf)
     // Pre-baseline contracts may be arbitrary bytes; no compatibility parser may read them.
     fs::write(
         project.join(".codex/managed-skeleton.json"),
-        b"invalid legacy contract",
+        serde_json::to_vec(&json!({"release_version":previous})).unwrap(),
     )
     .unwrap();
     fs::write(factory.join("templates/managed.txt"), b"new\n").unwrap();
     let contract = json!({
-        "schema_version":4,"release_version":release,"compatibility_baseline":"1.8.6",
+        "schema_version":4,"release_version":release,"compatibility_baseline":"8.0.1",
         "baseline_model":"current-only","host":"codex",
         "stamp":".codex/.bridgeforge_codex_version","contract_target":".codex/managed-skeleton.json",
         "assets":[{"id":"managed.asset","source":"templates/managed.txt","target":"managed.txt",
@@ -165,8 +189,8 @@ fn upgrade_fixture(previous: &str, release: &str) -> (PathBuf, PathBuf, PathBuf)
 
 #[test]
 fn retired_legacy_assets_use_project_preservation_without_semantic_migration() {
-    for previous in ["1.8.5", "1.8.6"] {
-        let (root, project, factory) = upgrade_fixture(previous, "2.0.0");
+    for previous in ["8.0.0", "8.0.1"] {
+        let (root, project, factory) = upgrade_fixture(previous, "8.1.0");
         let paths = [
             ".codex/rules/old.md",
             ".codex/memory/old.md",
@@ -179,7 +203,7 @@ fn retired_legacy_assets_use_project_preservation_without_semantic_migration() {
         let plan = build_plan(&project, &factory, SyncMode::Update).unwrap();
         let serialized = serde_json::to_value(&plan).unwrap();
         assert!(serialized.get("asset_migration").is_none());
-        let plan = if previous == "1.8.5" {
+        let plan = if previous == "8.0.0" {
             assert!(!plan.gaps.is_empty() || !plan.blockers.is_empty());
             let fingerprint = plan.aggregate_fingerprint.clone();
             assert!(apply_plan(plan, &fingerprint, true).is_err());
@@ -208,7 +232,7 @@ fn retired_legacy_assets_use_project_preservation_without_semantic_migration() {
 #[test]
 fn retired_legacy_asset_explicit_delete_keeps_drift_and_rollback_guards() {
     for drift in [false, true] {
-        let (root, project, factory) = upgrade_fixture("1.8.5", "2.0.0");
+        let (root, project, factory) = upgrade_fixture("8.0.0", "8.1.0");
         let relative = ".codex/rules/old.md";
         let path = project.join(relative);
         fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -232,12 +256,12 @@ fn retired_legacy_asset_explicit_delete_keeps_drift_and_rollback_guards() {
         );
         assert_eq!(
             fs::read_to_string(project.join(".codex/.bridgeforge_codex_version")).unwrap(),
-            "1.8.5\n"
+            "8.0.0\n"
         );
         assert!(!project.join("managed.txt").exists());
         fs::remove_dir_all(root).unwrap();
     }
-    let (root, project, factory) = upgrade_fixture("1.8.5", "2.0.0");
+    let (root, project, factory) = upgrade_fixture("8.0.0", "8.1.0");
     fs::create_dir_all(project.join(".codex/memory")).unwrap();
     fs::write(project.join(".codex/memory/old.md"), b"old").unwrap();
     let choices = json!({"preserve":[], "delete":["P:project-file:.codex/memory/old.md"]});
@@ -250,18 +274,16 @@ fn retired_legacy_asset_explicit_delete_keeps_drift_and_rollback_guards() {
 }
 
 #[test]
-fn release_cutover_is_atomic_with_project_update_and_rejects_input_drift() {
+fn current_configuration_init_is_atomic_with_project_update_and_rejects_input_drift() {
     for scenario in ["success", "file-drift", "head-drift", "rollback"] {
-        let (root, project, factory) = upgrade_fixture("1.8.6", "1.8.7");
+        let (root, project, factory) = upgrade_fixture("8.0.1", "8.1.0");
         let contract_path = factory.join("templates/managed-skeleton.json");
         let mut contract: Value =
             serde_json::from_slice(&fs::read(&contract_path).unwrap()).unwrap();
         contract["release_model"] = json!("product-packages");
         fs::write(&contract_path, serde_json::to_vec(&contract).unwrap()).unwrap();
         let config_path = project.join(".codex/bridgeforge-version.json");
-        let original =
-            br#"{"schema_version":1,"release_policy":"explicit_release","manifest_policy":"auto"}"#;
-        fs::write(&config_path, original).unwrap();
+        let original = fs::read(&config_path).ok();
         fs::write(project.join("VERSION"), b"1.0.0\n").unwrap();
         fs::write(project.join("CHANGELOG.md"), b"# Changelog\n").unwrap();
         fs::write(project.join(".gitignore"), b".runtime/\n").unwrap();
@@ -285,7 +307,7 @@ fn release_cutover_is_atomic_with_project_update_and_rejects_input_drift() {
         git(&["commit", "-m", "chore: initial"]);
         let plan = build_plan(&project, &factory, SyncMode::Update).unwrap();
         assert!(plan.risk.iter().any(|a| a.id == "migration.release-model"));
-        assert_eq!(fs::read(&config_path).unwrap(), original);
+        assert_eq!(fs::read(&config_path).ok(), original);
         assert!(apply_plan(plan.clone(), &plan.aggregate_fingerprint, false).is_err());
         if scenario == "file-drift" {
             fs::write(project.join("app.txt"), b"after\n").unwrap();
@@ -314,10 +336,10 @@ fn release_cutover_is_atomic_with_project_update_and_rejects_input_drift() {
             assert_eq!(fs::read(&config_path).unwrap(), updated);
         } else {
             assert!(result.is_err(), "{scenario}");
-            assert_eq!(fs::read(&config_path).unwrap(), original);
+            assert_eq!(fs::read(&config_path).ok(), original);
             assert_eq!(
                 fs::read(project.join(".codex/.bridgeforge_codex_version")).unwrap(),
-                b"1.8.6\n"
+                b"8.0.1\n"
             );
         }
         fs::remove_dir_all(root).unwrap();
@@ -326,7 +348,7 @@ fn release_cutover_is_atomic_with_project_update_and_rejects_input_drift() {
 
 #[test]
 fn release_cutover_fresh_init_defers_until_committed_version_baseline_exists() {
-    let (root, _, factory) = upgrade_fixture("1.8.6", "1.8.7");
+    let (root, _, factory) = upgrade_fixture("8.0.1", "8.1.0");
     let fresh = root.join("fresh");
     fs::create_dir_all(&fresh).unwrap();
     fs::write(fresh.join("VERSION"), b"1.0.0\n").unwrap();
@@ -346,11 +368,10 @@ fn release_cutover_fresh_init_defers_until_committed_version_baseline_exists() {
 #[test]
 fn fixed_baseline_does_not_move_with_the_release() {
     for (previous, release, rebuild) in [
-        ("1.0.0", "1.8.6", true),
-        ("1.8.5", "1.8.6", true),
-        ("1.8.6", "1.8.6", false),
-        ("1.8.6", "1.8.7", false),
-        ("1.8.7", "1.9.0", false),
+        ("8.0.0", "8.0.1", true),
+        ("8.0.1", "8.0.1", false),
+        ("8.0.1", "8.1.0", false),
+        ("8.1.0", "8.2.0", false),
     ] {
         let (root, project, factory) = upgrade_fixture(previous, release);
         fs::write(
@@ -362,7 +383,7 @@ fn fixed_baseline_does_not_move_with_the_release() {
         assert_eq!(plan.preservation_manifest["destructive_rebuild"], rebuild);
         assert_eq!(
             plan.preservation_manifest["compatibility_baseline"],
-            "1.8.6"
+            "8.0.1"
         );
         assert_eq!(!plan.gaps.is_empty(), rebuild);
         if !rebuild {
@@ -385,7 +406,7 @@ fn fixed_baseline_does_not_move_with_the_release() {
 #[test]
 fn upgrade_keeps_skeleton_ready_and_preserves_project_release_checks() {
     for payload in [None, Some(br#"{"schema":1,"checks":[{"id":"project","program":"git","args":["diff","--check"],"timeout_seconds":30}]}"#.as_slice()), Some(b"invalid project config\r\n".as_slice())] {
-        let (root, project, factory) = upgrade_fixture("1.8.6", "1.8.7");
+        let (root, project, factory) = upgrade_fixture("8.0.1", "8.1.0");
         fs::write(project.join("VERSION"), b"1.0.0\n").unwrap();
         let config = project.join(".codex/development-checks.json");
         if let Some(bytes) = payload { fs::write(&config, bytes).unwrap(); }
@@ -415,7 +436,7 @@ fn upgrade_keeps_skeleton_ready_and_preserves_project_release_checks() {
 
 #[test]
 fn artifact_layout_policy_remains_project_owned_during_update_and_dry_plan() {
-    let (root, project, factory) = upgrade_fixture("1.8.6", "1.8.7");
+    let (root, project, factory) = upgrade_fixture("8.0.1", "8.1.0");
     let path = project.join(".codex/artifact-layout.json");
     let bytes = b"{\r\n  \"schema\": 1, \"source_roots\": [\"custom-src/\"]\r\n}\r\n";
     fs::write(&path, bytes).unwrap();
@@ -456,7 +477,7 @@ fn artifact_layout_policy_remains_project_owned_during_update_and_dry_plan() {
 
 #[test]
 fn compatible_update_retires_old_project_map_paths() {
-    let (root, project, factory) = upgrade_fixture("1.8.6", "1.8.7");
+    let (root, project, factory) = upgrade_fixture("8.0.1", "8.1.0");
     for target in [".codex/find-doc.map.md", ".codex/sync-docs.map.md"] {
         fs::write(project.join(target), b"old project map\n").unwrap();
     }
@@ -478,7 +499,7 @@ fn compatible_update_retires_old_project_map_paths() {
 
 #[test]
 fn fixed_baseline_rejects_missing_invalid_future_floor_and_downgrade() {
-    let (root, project, factory) = upgrade_fixture("1.8.8", "1.8.7");
+    let (root, project, factory) = upgrade_fixture("8.1.1", "8.1.0");
     assert!(
         build_plan(&project, &factory, SyncMode::Update)
             .unwrap_err()
@@ -486,7 +507,7 @@ fn fixed_baseline_rejects_missing_invalid_future_floor_and_downgrade() {
     );
     let path = factory.join("templates/managed-skeleton.json");
     let original: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
-    for floor in [Value::Null, json!("invalid"), json!("2.0.0")] {
+    for floor in [Value::Null, json!("invalid"), json!("8.2.0")] {
         let mut contract = original.clone();
         contract["compatibility_baseline"] = floor;
         fs::write(&path, serde_json::to_vec(&contract).unwrap()).unwrap();
@@ -519,7 +540,7 @@ fn write_role_input(project: &Path, target: &str, bytes: &[u8]) {
 
 #[test]
 fn retired_role_scan_streams_text_and_ignores_binary_assets() {
-    let (root, project, factory) = upgrade_fixture("1.14.10", "1.14.11");
+    let (root, project, factory) = upgrade_fixture("8.0.1", "8.1.0");
     let mut text = vec![b'x'; 2 * 1024 * 1024];
     // Place the role name across a 64 KiB read boundary.
     text.splice(65530..65530, RETIRED_SYNC_ROLE.bytes());
@@ -549,7 +570,7 @@ fn retired_role_scan_streams_text_and_ignores_binary_assets() {
 
 #[test]
 fn retired_role_is_absent_on_init_and_removed_on_adopt() {
-    let (root, project, factory) = upgrade_fixture("1.14.10", "1.14.11");
+    let (root, project, factory) = upgrade_fixture("8.0.1", "8.1.0");
     let fresh = root.join("fresh");
     fs::create_dir_all(&fresh).unwrap();
     let init = build_plan(&fresh, &factory, SyncMode::Init).unwrap();
@@ -570,42 +591,40 @@ fn retired_role_is_absent_on_init_and_removed_on_adopt() {
 
 #[test]
 fn retired_role_known_releases_are_transactional_and_idempotent() {
-    for previous in ["1.5.8", "1.14.10"] {
-        for (index, payload) in retired_role_payloads().iter().enumerate() {
-            assert_eq!(sha_git(payload.as_bytes()), RETIRED_SYNC_HASHES[index]);
-            for content in [payload.clone(), payload.replace('\n', "\r\n")] {
-                let (root, project, factory) = upgrade_fixture(previous, "1.14.11");
-                write_role_input(&project, RETIRED_SYNC_TARGET, content.as_bytes());
-                let before = tree_sha(&project).unwrap();
-                let plan = build_plan(&project, &factory, SyncMode::Update).unwrap();
-                assert_eq!(
-                    tree_sha(&project).unwrap(),
-                    before,
-                    "planning must be read-only"
-                );
-                assert!(plan.gaps.is_empty(), "{:?}", plan.gaps);
-                assert!(
-                    plan.safe
-                        .iter()
-                        .any(|a| a.target == RETIRED_SYNC_TARGET && a.operation == "delete")
-                );
-                let receipt = apply_plan(plan.clone(), &plan.aggregate_fingerprint, true).unwrap();
-                assert!(receipt.stamp_written_last);
-                assert!(!project.join(RETIRED_SYNC_TARGET).exists());
-                let next = build_plan(&project, &factory, SyncMode::Update).unwrap();
-                assert_eq!(next.status, "current");
-                assert!(next.gaps.is_empty());
-                fs::remove_dir_all(root).unwrap();
-            }
+    for (index, payload) in retired_role_payloads().iter().enumerate() {
+        assert_eq!(sha_git(payload.as_bytes()), RETIRED_SYNC_HASHES[index]);
+        for content in [payload.clone(), payload.replace('\n', "\r\n")] {
+            let (root, project, factory) = upgrade_fixture("8.0.1", "8.1.0");
+            write_role_input(&project, RETIRED_SYNC_TARGET, content.as_bytes());
+            let before = tree_sha(&project).unwrap();
+            let plan = build_plan(&project, &factory, SyncMode::Update).unwrap();
+            assert_eq!(
+                tree_sha(&project).unwrap(),
+                before,
+                "planning must be read-only"
+            );
+            assert!(plan.gaps.is_empty(), "{:?}", plan.gaps);
+            assert!(
+                plan.safe
+                    .iter()
+                    .any(|a| a.target == RETIRED_SYNC_TARGET && a.operation == "delete")
+            );
+            let receipt = apply_plan(plan.clone(), &plan.aggregate_fingerprint, true).unwrap();
+            assert!(receipt.stamp_written_last);
+            assert!(!project.join(RETIRED_SYNC_TARGET).exists());
+            let next = build_plan(&project, &factory, SyncMode::Update).unwrap();
+            assert_eq!(next.status, "current");
+            assert!(next.gaps.is_empty());
+            fs::remove_dir_all(root).unwrap();
         }
     }
 }
 
 #[test]
 fn retired_role_custom_or_unknown_content_is_preserved_without_any_apply() {
-    for previous in ["1.5.8", "1.14.10"] {
+    for previous in ["8.0.0", "8.0.1"] {
         for content in [b"custom role\n".as_slice(), b"", b"\xff\x00"] {
-            let (root, project, factory) = upgrade_fixture(previous, "1.14.11");
+            let (root, project, factory) = upgrade_fixture(previous, "8.1.0");
             write_role_input(&project, RETIRED_SYNC_TARGET, content);
             // Even an old manifest claiming ownership is not retirement evidence.
             fs::write(
@@ -637,7 +656,7 @@ fn retired_role_references_block_update_even_when_role_is_already_missing() {
         ".codex/agents/local.toml",
     ] {
         for role_exists in [false, true] {
-            let (root, project, factory) = upgrade_fixture("1.14.10", "1.14.11");
+            let (root, project, factory) = upgrade_fixture("8.0.1", "8.1.0");
             if role_exists {
                 write_role_input(
                     &project,
@@ -665,7 +684,7 @@ fn retired_role_and_reference_changes_invalidate_the_approved_plan() {
         ".codex/config.toml",
     ] {
         for role_exists in [false, true] {
-            let (root, project, factory) = upgrade_fixture("1.14.10", "1.14.11");
+            let (root, project, factory) = upgrade_fixture("8.0.1", "8.1.0");
             if role_exists {
                 write_role_input(
                     &project,
@@ -673,6 +692,8 @@ fn retired_role_and_reference_changes_invalidate_the_approved_plan() {
                     retired_role_payloads()[0].as_bytes(),
                 );
             }
+            let original_stamp =
+                fs::read_to_string(project.join(".codex/.bridgeforge_codex_version")).unwrap();
             let plan = build_plan(&project, &factory, SyncMode::Update).unwrap();
             write_role_input(
                 &project,
@@ -684,7 +705,7 @@ fn retired_role_and_reference_changes_invalidate_the_approved_plan() {
             assert!(!project.join("managed.txt").exists());
             assert_eq!(
                 fs::read_to_string(project.join(".codex/.bridgeforge_codex_version")).unwrap(),
-                "1.14.10\n"
+                original_stamp
             );
             let replanned = build_plan(&project, &factory, SyncMode::Update).unwrap();
             assert_ne!(plan.aggregate_fingerprint, replanned.aggregate_fingerprint);
@@ -697,9 +718,11 @@ fn retired_role_and_reference_changes_invalidate_the_approved_plan() {
 #[test]
 fn retired_role_is_restored_on_failure_and_late_references_are_preserved() {
     for late_reference in [false, true] {
-        let (root, project, factory) = upgrade_fixture("1.14.10", "1.14.11");
+        let (root, project, factory) = upgrade_fixture("8.0.1", "8.1.0");
         let payload = retired_role_payloads()[0].replace('\n', "\r\n");
         write_role_input(&project, RETIRED_SYNC_TARGET, payload.as_bytes());
+        let original_contract = fs::read(project.join(".codex/managed-skeleton.json")).unwrap();
+        let original_stamp = fs::read(project.join(".codex/.bridgeforge_codex_version")).unwrap();
         let plan = build_plan(&project, &factory, SyncMode::Update).unwrap();
         let observer = |root: &Path, _: &Path| {
             assert!(!root.join(RETIRED_SYNC_TARGET).exists());
@@ -728,11 +751,11 @@ fn retired_role_is_restored_on_failure_and_late_references_are_preserved() {
         );
         assert_eq!(
             fs::read(project.join(".codex/managed-skeleton.json")).unwrap(),
-            b"invalid legacy contract"
+            original_contract
         );
         assert_eq!(
             fs::read(project.join(".codex/.bridgeforge_codex_version")).unwrap(),
-            b"1.14.10\n"
+            original_stamp
         );
         assert!(!project.join("managed.txt").exists());
         if late_reference {
@@ -772,7 +795,7 @@ fn hook_removal_matches_path_boundaries_and_platform_commands() {
 
 #[test]
 fn project_prefixed_files_use_exact_file_decisions_not_hook_bundles() {
-    let (root, project, factory) = upgrade_fixture("1.5.8", "1.8.7");
+    let (root, project, factory) = upgrade_fixture("8.0.0", "8.1.0");
     let bundle = project.join(".codex/hooks/project_business");
     fs::create_dir_all(&bundle).unwrap();
     fs::write(bundle.join("entrypoint.py"), b"business hook\r\n").unwrap();
@@ -786,6 +809,7 @@ fn project_prefixed_files_use_exact_file_decisions_not_hook_bundles() {
     }
     let before = tree_sha(&project).unwrap();
     let plan = build_plan(&project, &factory, SyncMode::Update).unwrap();
+    assert_eq!(plan.preservation_manifest["destructive_rebuild"], true);
     assert!(plan.blockers.is_empty(), "{:?}", plan.blockers);
     for target in targets {
         let entry = plan.preservation_manifest["entries"]
@@ -826,7 +850,7 @@ fn project_prefixed_files_use_exact_file_decisions_not_hook_bundles() {
     // Re-enter the below-baseline fixture to exercise explicitly confirmed file retirement.
     fs::write(
         project.join(".codex/.bridgeforge_codex_version"),
-        b"1.5.8\n",
+        b"8.0.0\n",
     )
     .unwrap();
     let choices = json!({"preserve":[bundle_id],"delete":file_ids});
@@ -853,14 +877,14 @@ fn project_prefixed_files_use_exact_file_decisions_not_hook_bundles() {
     );
     assert_eq!(
         fs::read_to_string(project.join(".codex/.bridgeforge_codex_version")).unwrap(),
-        "1.8.7\n"
+        "8.1.0\n"
     );
     fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
 fn project_prefixed_file_retirement_removes_only_its_hook_registration_atomically() {
-    let (root, project, factory) = upgrade_fixture("1.5.8", "1.8.7");
+    let (root, project, factory) = upgrade_fixture("8.0.0", "8.1.0");
     let repository = factory_repository::from_manifest_dir(env!("CARGO_MANIFEST_DIR"));
     let current: Value = serde_json::from_slice(
         &fs::read(repository.join("templates/managed-skeleton.json")).unwrap(),
@@ -903,6 +927,7 @@ fn project_prefixed_file_retirement_removes_only_its_hook_registration_atomicall
         "delete":[format!("P:project-file:{deleted}")]});
     let plan =
         build_plan_with_inputs(&project, &factory, SyncMode::Update, Some(&choices)).unwrap();
+    assert_eq!(plan.preservation_manifest["destructive_rebuild"], true);
     assert!(plan.blockers.is_empty());
     assert!(plan.gaps.is_empty());
     let fail = |_: &Path, _: &Path| Err("injected registration failure".into());
@@ -946,7 +971,7 @@ fn project_prefixed_file_retirement_removes_only_its_hook_registration_atomicall
 #[test]
 #[cfg(windows)]
 fn project_prefixed_junction_still_blocks_rebuild() {
-    let (root, project, factory) = upgrade_fixture("1.5.8", "1.8.7");
+    let (root, project, factory) = upgrade_fixture("8.0.0", "8.1.0");
     let external = root.join("external");
     fs::create_dir_all(&external).unwrap();
     fs::write(external.join("keep.txt"), b"external content").unwrap();
@@ -971,6 +996,7 @@ fn project_prefixed_junction_still_blocks_rebuild() {
     );
     assert!(crate::persistence::is_link_or_reparse(&link).unwrap());
     let plan = build_plan(&project, &factory, SyncMode::Update).unwrap();
+    assert_eq!(plan.preservation_manifest["destructive_rebuild"], true);
     assert!(
         plan.blockers
             .iter()
@@ -988,11 +1014,12 @@ fn project_prefixed_junction_still_blocks_rebuild() {
 
 #[test]
 fn legacy_business_hook_bundle_is_language_neutral_and_fingerprinted() {
-    let (root, project, factory) = upgrade_fixture("1.5.8", "1.8.6");
+    let (root, project, factory) = upgrade_fixture("8.0.0", "8.0.1");
     let bundle = project.join(".codex/hooks/project_business");
     fs::create_dir_all(&bundle).unwrap();
     fs::write(bundle.join("entrypoint.py"), b"project owned Python\r\n").unwrap();
     let plan = build_plan(&project, &factory, SyncMode::Update).unwrap();
+    assert_eq!(plan.preservation_manifest["destructive_rebuild"], true);
     assert!(plan.blockers.is_empty(), "{:?}", plan.blockers);
     assert!(!plan.gaps.is_empty());
     let decisions = json!({"preserve":["P:project-hook-bundle:.codex/hooks/project_business"]});
@@ -1167,7 +1194,7 @@ fn apply_rollback_preserves_external_receipt_recreated_after_retirement() {
     assert_eq!(fs::read(root.join("managed.txt")).unwrap(), b"old\n");
     assert_eq!(
         fs::read(root.join(".codex/.bridgeforge_codex_version")).unwrap(),
-        b"1.0.0\n"
+        b"8.0.0\n"
     );
     assert!(
         root.join(".runtime/bridgeforge-codex/project-sync.lock")
@@ -1222,7 +1249,7 @@ fn failed_atomic_replace_preserves_old_file_and_allows_transaction_rollback() {
     );
     assert_eq!(
         fs::read(root.join(".codex/.bridgeforge_codex_version")).unwrap(),
-        b"1.0.0\n"
+        b"8.0.0\n"
     );
     drop(held);
     apply_plan(plan, &fingerprint, false).unwrap();
@@ -1387,7 +1414,7 @@ fn transaction_fixture(valid_asset_hash: bool) -> (PathBuf, SyncPlan) {
     let asset_path = root.join("managed.txt");
     fs::create_dir_all(root.join(".codex")).unwrap();
     fs::write(&contract_path, b"old-contract\n").unwrap();
-    fs::write(&stamp_path, b"1.0.0\n").unwrap();
+    fs::write(&stamp_path, b"8.0.0\n").unwrap();
     fs::write(&asset_path, b"old\n").unwrap();
     let current_sha = if valid_asset_hash {
         sha_git(b"new\n")
@@ -1396,7 +1423,7 @@ fn transaction_fixture(valid_asset_hash: bool) -> (PathBuf, SyncPlan) {
     };
     let contract = serde_json::to_vec_pretty(&json!({
         "schema_version": 4,
-        "release_version": "2.0.0",
+        "release_version": "8.1.0",
         "host": "codex",
         "stamp": ".codex/.bridgeforge_codex_version",
         "contract_target": ".codex/managed-skeleton.json",
@@ -1407,7 +1434,7 @@ fn transaction_fixture(valid_asset_hash: bool) -> (PathBuf, SyncPlan) {
             "strategy": "whole",
             "current_sha256": current_sha,
         }],
-        "baseline_model": "current-only", "compatibility_baseline": "1.0.0",
+        "baseline_model": "current-only", "compatibility_baseline": "8.0.0",
         "generated_assets": [],
     }))
     .unwrap();
@@ -1424,7 +1451,7 @@ fn transaction_fixture(valid_asset_hash: bool) -> (PathBuf, SyncPlan) {
     let generated_source_fingerprints = BTreeMap::new();
     let fingerprint = plan_fingerprint(
         &SyncMode::Update,
-        "2.0.0",
+        "8.1.0",
         &safe,
         &[],
         &preservation_manifest,
@@ -1438,8 +1465,8 @@ fn transaction_fixture(valid_asset_hash: bool) -> (PathBuf, SyncPlan) {
         readiness: "ready".into(),
         release_setup: json!({"status":"not-applicable"}),
         mode: SyncMode::Update,
-        previous_version: Some("1.0.0".into()),
-        current_version: "2.0.0".into(),
+        previous_version: Some("8.0.0".into()),
+        current_version: "8.1.0".into(),
         safe,
         risk: Vec::new(),
         gaps: Vec::new(),
@@ -1453,7 +1480,7 @@ fn transaction_fixture(valid_asset_hash: bool) -> (PathBuf, SyncPlan) {
         writes: BTreeMap::from([
             (asset_path, b"new\n".to_vec()),
             (contract_path, contract),
-            (stamp_path, b"2.0.0\n".to_vec()),
+            (stamp_path, b"8.1.0\n".to_vec()),
         ]),
         deletes: Vec::new(),
         generated_source_fingerprints,
@@ -1534,7 +1561,7 @@ fn failed_prospective_check_restores_project_hook_payloads_and_retired_source() 
     }
     assert_eq!(
         fs::read(root.join(".codex/.bridgeforge_codex_version")).unwrap(),
-        b"1.0.0\n"
+        b"8.0.0\n"
     );
     fs::remove_dir_all(root).unwrap();
 }
@@ -1783,7 +1810,7 @@ fn stamp_is_last_and_finalize_failure_rolls_back_every_write() {
             fs::read(project_root.join("managed.txt")).unwrap(),
             b"new\n"
         );
-        assert_eq!(fs::read(stamp_path).unwrap(), b"1.0.0\n");
+        assert_eq!(fs::read(stamp_path).unwrap(), b"8.0.0\n");
         Err("injected failure before version stamp".into())
     };
     let error = apply_plan_internal(plan, &fingerprint, false, Some(&observer)).unwrap_err();
@@ -1795,7 +1822,7 @@ fn stamp_is_last_and_finalize_failure_rolls_back_every_write() {
     );
     assert_eq!(
         fs::read(root.join(".codex/.bridgeforge_codex_version")).unwrap(),
-        b"1.0.0\n"
+        b"8.0.0\n"
     );
     fs::remove_dir_all(root).unwrap();
 }
@@ -1813,7 +1840,7 @@ fn prospective_baseline_failure_rolls_back_before_stamp() {
     );
     assert_eq!(
         fs::read(root.join(".codex/.bridgeforge_codex_version")).unwrap(),
-        b"1.0.0\n"
+        b"8.0.0\n"
     );
     fs::remove_dir_all(root).unwrap();
 }
@@ -1877,7 +1904,7 @@ fn recorded_evidence_detects_post_validation_edits_and_preserves_external_bytes(
         assert_eq!(fs::read(root.join(target)).unwrap(), b"external edit");
         assert_eq!(
             fs::read(root.join(".codex/.bridgeforge_codex_version")).unwrap(),
-            b"1.0.0\n"
+            b"8.0.0\n"
         );
         assert_eq!(
             fs::read(root.join(".codex/managed-skeleton.json")).unwrap(),
@@ -1934,7 +1961,7 @@ fn recorded_transaction_rolls_back_public_payload_with_project_configuration() {
     assert_eq!(fs::read(root.join("managed.txt")).unwrap(), b"old\n");
     assert_eq!(
         fs::read(root.join(".codex/.bridgeforge_codex_version")).unwrap(),
-        b"1.0.0\n"
+        b"8.0.0\n"
     );
     fs::remove_dir_all(root).unwrap();
 }

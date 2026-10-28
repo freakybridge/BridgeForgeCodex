@@ -428,7 +428,7 @@
       "source": "Cargo.lock",
       "target": ".codex/hooks/Cargo.lock",
       "strategy": "whole",
-      "current_sha256": "sha256:1e18f9213922c6dd47a07c90df2d0cd6519fcb5306fe8cacfb04731bc454c476",
+      "current_sha256": "sha256:7ce0589e87ac47b15f199fc8f0e4321aca574b32abdde71928f2ac9007c79f99",
       "render": "public-runtime-lock"
     },
     {
@@ -535,7 +535,7 @@
       "source": "source/cli/src/lib.rs",
       "target": ".codex/hooks/source/cli/src/lib.rs",
       "strategy": "whole",
-      "current_sha256": "sha256:3f5e7aebcc84da5ad3d3e09cca0816af8ec06b6037c63769ca95305ae0d4382f"
+      "current_sha256": "sha256:346d40ebe4b1f48775aa8f24ef4823acbbe3c74abdf8acad015365e2c96721f9"
     },
     {
       "id": "codex.hooks.source-cli-src-main-rs",
@@ -801,7 +801,7 @@
       "source": "source/lifecycle/Cargo.toml",
       "target": ".codex/hooks/source/lifecycle/Cargo.toml",
       "strategy": "whole",
-      "current_sha256": "sha256:11aa72e7c6ce42ebc6ea28c6d17e736a81cfe1ec30593f38ea68939dd50115a7"
+      "current_sha256": "sha256:9b5b4b63a8421aa04b36c9ae55572ef6dbc621f8f2e26885215994f3a369c50d"
     },
     {
       "id": "codex.hooks.source-lifecycle-src-lib-rs",
@@ -815,7 +815,7 @@
       "source": "source/lifecycle/src/release.rs",
       "target": ".codex/hooks/source/lifecycle/src/release.rs",
       "strategy": "whole",
-      "current_sha256": "sha256:c837054e276e294113705c03cee8a011fe0cbddce5d412b4cc032514955a96ae"
+      "current_sha256": "sha256:28f16d83e43d39e65a81d6a7fcebbd0ecb1f04299f2e48e70305f7c9d06730f4"
     },
     {
       "id": "codex.hooks.crates-bridgeforge-core-src-release-config-rs",
@@ -941,7 +941,7 @@
       "source": "source/lifecycle/src/release/schema4/development.rs",
       "target": ".codex/hooks/source/lifecycle/src/release/schema4/development.rs",
       "strategy": "whole",
-      "current_sha256": "sha256:d11c740322a92825a3b0e386f3c44fc69a891f15f2ce8cf6816cc576f96335b9"
+      "current_sha256": "sha256:e1cb70e6791ce40abbcb87e1e087a24ac64a9bdf5fccd10416aa9e8225382d07"
     },
     {
       "id": "codex.hooks.source-lifecycle-src-release-schema4-development-inputs-rs",
@@ -962,7 +962,7 @@
       "source": "source/lifecycle/src/release/schema4/inputs.rs",
       "target": ".codex/hooks/source/lifecycle/src/release/schema4/inputs.rs",
       "strategy": "whole",
-      "current_sha256": "sha256:12aef821922f2eb235275db8861eac76614eb5791bf978546d207a56595986b1"
+      "current_sha256": "sha256:e51c3f964ace7beea3f35fbe8a794a6b35578e5b0a86f169b782d0f527627f43"
     },
     {
       "id": "codex.hooks.crates-bridgeforge-core-src-release-schema4-lineage-rs",
@@ -976,14 +976,14 @@
       "source": "source/lifecycle/src/release/schema4/migration.rs",
       "target": ".codex/hooks/source/lifecycle/src/release/schema4/migration.rs",
       "strategy": "whole",
-      "current_sha256": "sha256:5f986999703f1ef4a62aa3eee10b31355f98209748692e7e5bb896d948e6c3dd"
+      "current_sha256": "sha256:c936a372e625022a3d6b8b94f5d7ef0f4de6a60e4124b96f1d22b14ed521c588"
     },
     {
       "id": "codex.hooks.crates-bridgeforge-core-src-release-schema4-plan-rs",
       "source": "source/lifecycle/src/release/schema4/plan.rs",
       "target": ".codex/hooks/source/lifecycle/src/release/schema4/plan.rs",
       "strategy": "whole",
-      "current_sha256": "sha256:868ac44f85af476de8adcbb70e683ea3dd28ec065807b5efc9d637068a464cdc"
+      "current_sha256": "sha256:b1de070f3b370d046aec68e892180076180070cdc441dd16f3e6d89b156c590a"
     },
     {
       "id": "codex.hooks.source-lifecycle-src-release-schema4-portable-environment-rs",
@@ -997,21 +997,21 @@
       "source": "source/lifecycle/src/release/setup.rs",
       "target": ".codex/hooks/source/lifecycle/src/release/setup.rs",
       "strategy": "whole",
-      "current_sha256": "sha256:38ba3437b00aa2a34dfaac64bf01906b1f1a812631361558e672f40b715bfa62"
+      "current_sha256": "sha256:5ffcbf9cb91f11ed58ad8aaf4e69d4c55dbd6a4e0e5c2e824fc56e6a0ad94b76"
     },
     {
       "id": "codex.hooks.crates-bridgeforge-core-src-release-history-rs",
       "source": "source/lifecycle/src/release_history.rs",
       "target": ".codex/hooks/source/lifecycle/src/release_history.rs",
       "strategy": "whole",
-      "current_sha256": "sha256:23c676b4f29f83ec5a951135b46bf0ec1bf6aebdc932e8b0a5d2a08bd1355703"
+      "current_sha256": "sha256:b5bf2366e22975f84fbef0ddb6fc786e0f629633badf6a979ec99d52d57e6b88"
     },
     {
       "id": "codex.hooks.crates-bridgeforge-core-src-release-history-cache-rs",
       "source": "source/lifecycle/src/release_history_cache.rs",
       "target": ".codex/hooks/source/lifecycle/src/release_history_cache.rs",
       "strategy": "whole",
-      "current_sha256": "sha256:503d699c89a6da747477113961d10af5e4d71f2032bebf0ebf3338cebfb1d26b"
+      "current_sha256": "sha256:49a39cc1bb4761443cf67992c540e9a56977041489a6b21dae9671102f1601c1"
     },
     {
       "id": "codex.hooks.source-memory-cargo-toml",
@@ -1074,14 +1074,14 @@
       "source": "source/skeleton/Cargo.toml",
       "target": ".codex/hooks/source/skeleton/Cargo.toml",
       "strategy": "whole",
-      "current_sha256": "sha256:aa3773195486a75fed6c62d06dc74724289880288ae0984cc517c07d57dcd2bf"
+      "current_sha256": "sha256:3f91ff6001f1be3725b242a97f9e5b059d95c1eb4b834c38558f877a830c9332"
     },
     {
       "id": "codex.hooks.crates-bridgeforge-core-src-baseline-rs",
       "source": "source/skeleton/src/baseline.rs",
       "target": ".codex/hooks/source/skeleton/src/baseline.rs",
       "strategy": "whole",
-      "current_sha256": "sha256:58df75cbf1581347809f4887055c651ae7bae41f06d1844a67fbbc1456f0bcaa"
+      "current_sha256": "sha256:dc79ffb8ac7fb235f9b62dce40b34ff9bfc77d86d2ce6ff98f411d4a403df4b0"
     },
     {
       "id": "codex.hooks.crates-bridgeforge-core-src-project-sync-content-rs",
@@ -1116,21 +1116,21 @@
       "source": "source/workflow/Cargo.toml",
       "target": ".codex/hooks/source/workflow/Cargo.toml",
       "strategy": "whole",
-      "current_sha256": "sha256:b348f3cc3c65a3d5181e98bb15f274a01d375d03faeff9c5b21d2fde00fc3ab2"
+      "current_sha256": "sha256:d0a3dc9b5e67deb2c0a779c930099695f83ee01b42ab41627267a06527701a55"
     },
     {
       "id": "codex.hooks.source-workflow-src-git-command-rs",
       "source": "source/workflow/src/git_command.rs",
       "target": ".codex/hooks/source/workflow/src/git_command.rs",
       "strategy": "whole",
-      "current_sha256": "sha256:8a0d764e7644ce0d3b33f81ef5b3da18982ca90f650fbc3d5499af9714150e12"
+      "current_sha256": "sha256:844864d2ee2b1025f1aa55bd7d947b358e8d2d6d05d5524c26977f382dd35e92"
     },
     {
       "id": "codex.hooks.crates-bridgeforge-core-src-git-sync-rs",
       "source": "source/workflow/src/git_sync.rs",
       "target": ".codex/hooks/source/workflow/src/git_sync.rs",
       "strategy": "whole",
-      "current_sha256": "sha256:9d34b71f4e0f274a13630219f6a7ad930f3dc730b36e407f3de2f5e036b1ebdf"
+      "current_sha256": "sha256:ebfcdeee97a398a3aeb764c8ea48ee93c61cfe83a1f5e8da2e01791edb9f6887"
     },
     {
       "id": "codex.hooks.source-workflow-src-git-sync-plan-rs",
@@ -1172,7 +1172,7 @@
       "source": "source/workflow/src/project_sync.rs",
       "target": ".codex/hooks/source/workflow/src/project_sync.rs",
       "strategy": "whole",
-      "current_sha256": "sha256:4c192490a13acf1991c7787dd6e05355028688ca87eabbd28d36c4a3f6c5d5b3"
+      "current_sha256": "sha256:a901932160426aa129097d2a8ef4b6c2e364b41701b1ad960401e980aa94b39d"
     },
     {
       "id": "codex.hooks.crates-bridgeforge-core-src-public-artifacts-rs",
@@ -1180,20 +1180,6 @@
       "target": ".codex/hooks/source/workflow/src/public_artifacts.rs",
       "strategy": "whole",
       "current_sha256": "sha256:5e6ac5e11233bedefd78613d6f0e627e98a70ccc80329c100344cf7ce0a5cf93"
-    },
-    {
-      "id": "codex.hooks.crates-bridgeforge-core-src-release-check-cache-rs",
-      "source": "source/workflow/src/release_check_cache.rs",
-      "target": ".codex/hooks/source/workflow/src/release_check_cache.rs",
-      "strategy": "whole",
-      "current_sha256": "sha256:7cf687291cc98e21e84acefc9ab74b59d023065c9fa524c069a7ddeab7760745"
-    },
-    {
-      "id": "codex.hooks.crates-bridgeforge-core-src-release-preparation-rs",
-      "source": "source/workflow/src/release_preparation.rs",
-      "target": ".codex/hooks/source/workflow/src/release_preparation.rs",
-      "strategy": "whole",
-      "current_sha256": "sha256:ae9caffda31b258e354dcb8167ca509e360307d77f39be3261b09f9199efd389"
     },
     {
       "id": "codex.hooks.source-workflow-src-source-retirement-rs",
@@ -1246,8 +1232,8 @@
           "status": "ok"
         }
       },
-      "source_tree_sha256": "sha256:afe55f29a893be3657ced76adff01766f456e887cd62b1fbc08aa547af886530",
-      "lockfile_sha256": "sha256:1e18f9213922c6dd47a07c90df2d0cd6519fcb5306fe8cacfb04731bc454c476",
+      "source_tree_sha256": "sha256:7e90de4c0c173ba970466e3d0e35f864ac50653bad02aa7af9368f2e49ca312e",
+      "lockfile_sha256": "sha256:7ce0589e87ac47b15f199fc8f0e4321aca574b32abdde71928f2ac9007c79f99",
       "build_recipe_sha256": "sha256:d26d34aa838a1a1f5556ef92f492d2abc7b415c2163e2a4c9ea7e07121dad78a",
       "self_test_sha256": "sha256:74a8b4a4c20ff1f5cc6660697138c151d9ed2172e6d57e75cce671d773e98f5a",
       "source_projection": "public-runtime-v1"
@@ -1292,8 +1278,8 @@
           "status": "ok"
         }
       },
-      "source_tree_sha256": "sha256:afe55f29a893be3657ced76adff01766f456e887cd62b1fbc08aa547af886530",
-      "lockfile_sha256": "sha256:1e18f9213922c6dd47a07c90df2d0cd6519fcb5306fe8cacfb04731bc454c476",
+      "source_tree_sha256": "sha256:7e90de4c0c173ba970466e3d0e35f864ac50653bad02aa7af9368f2e49ca312e",
+      "lockfile_sha256": "sha256:7ce0589e87ac47b15f199fc8f0e4321aca574b32abdde71928f2ac9007c79f99",
       "build_recipe_sha256": "sha256:079aefde96a8925913b7b6cd3ee9d8c7086014ad5e4b6e3f74a911b2ce49e537",
       "self_test_sha256": "sha256:6b0426352bb099a61fae52600d4f684c0e11bca644fa767a9b79d224e939b0e0",
       "source_projection": "public-runtime-v1"
@@ -1779,13 +1765,6 @@
       ]
     },
     {
-      "id": "codex.hooks.crates-bridgeforge-core-src-release-check-cache-rs",
-      "target": ".codex/hooks/crates/bridgeforge-core/src/release_check_cache.rs",
-      "known_hashes": [
-        "sha256:abb6c83caea2c0f47c29e66010a9d33624687b8ee7087be4c3b72154ca50bdb1"
-      ]
-    },
-    {
       "id": "codex.hooks.crates-bridgeforge-core-src-release-history-cache-rs",
       "target": ".codex/hooks/crates/bridgeforge-core/src/release_history_cache.rs",
       "known_hashes": [
@@ -1813,20 +1792,6 @@
       "target": ".codex/hooks/crates/bridgeforge-core/src/release_metrics.rs",
       "known_hashes": [
         "sha256:05e4eac4ea16d79d30d64de2811ff542163e154dd058afb0f743bcd18faff5d4"
-      ]
-    },
-    {
-      "id": "codex.hooks.crates-bridgeforge-core-src-release-preparation-rs",
-      "target": ".codex/hooks/crates/bridgeforge-core/src/release_preparation.rs",
-      "known_hashes": [
-        "sha256:3574b3453fb823d9e195469c3a7426c4a8389691613e09784fa7487ac3b7e370",
-        "sha256:d38d95105d9e07486e099335a4d9cf6bfa6869e72c6ec1d47a6df4bea1e8aae2",
-        "sha256:ff69e024e8d2b925080b3da653dbedcf8e4b1b3570323606e6617cda2aacb383",
-        "sha256:7b84a1b503fc0fc85354f49076c9dcc7d2fc144c385817dd4b426f1bb4b822f4",
-        "sha256:2fa08071b10c2049c8f65822f5695d78e2664d18fb47c105cac94d4bf93a8299",
-        "sha256:9b9e2ab50ebd06dd1e2bd6d156cda55f0dd84ed15022b3f572128662a0e7a8a8",
-        "sha256:6dbf43045508e7b707b8ef20d1935024595a511d1331a0aeb4e5dab4a1fdd2bb",
-        "sha256:8df5147b27a3dc5f0b2b884ffc70ad50e7d4c7642ba9c42eb576394bf08a27c9"
       ]
     },
     {
@@ -2170,6 +2135,41 @@
         "sha256:757e69ce92ae01a51273c158817591e4c572f1ba9ae4e0f7f26a21864989f868",
         "sha256:27fcd3f6a76f293ce25d1e67d03c1bdd00ab73fbefcab7da7d7807c105ac90c7",
         "sha256:c767895ac34b202cc9f8633ad633db797848d6bd2587a644a331c7bd2106e430"
+      ]
+    },
+    {
+      "id": "codex.hooks.crates-bridgeforge-core-src-release-check-cache-rs",
+      "target": ".codex/hooks/crates/bridgeforge-core/src/release_check_cache.rs",
+      "known_hashes": [
+        "sha256:abb6c83caea2c0f47c29e66010a9d33624687b8ee7087be4c3b72154ca50bdb1"
+      ]
+    },
+    {
+      "id": "codex.hooks.crates-bridgeforge-core-src-release-preparation-rs",
+      "target": ".codex/hooks/crates/bridgeforge-core/src/release_preparation.rs",
+      "known_hashes": [
+        "sha256:3574b3453fb823d9e195469c3a7426c4a8389691613e09784fa7487ac3b7e370",
+        "sha256:d38d95105d9e07486e099335a4d9cf6bfa6869e72c6ec1d47a6df4bea1e8aae2",
+        "sha256:ff69e024e8d2b925080b3da653dbedcf8e4b1b3570323606e6617cda2aacb383",
+        "sha256:7b84a1b503fc0fc85354f49076c9dcc7d2fc144c385817dd4b426f1bb4b822f4",
+        "sha256:2fa08071b10c2049c8f65822f5695d78e2664d18fb47c105cac94d4bf93a8299",
+        "sha256:9b9e2ab50ebd06dd1e2bd6d156cda55f0dd84ed15022b3f572128662a0e7a8a8",
+        "sha256:6dbf43045508e7b707b8ef20d1935024595a511d1331a0aeb4e5dab4a1fdd2bb",
+        "sha256:8df5147b27a3dc5f0b2b884ffc70ad50e7d4c7642ba9c42eb576394bf08a27c9"
+      ]
+    },
+    {
+      "id": "codex.hooks.crates-bridgeforge-core-src-release-preparation-rs",
+      "target": ".codex/hooks/source/workflow/src/release_preparation.rs",
+      "known_hashes": [
+        "sha256:ae9caffda31b258e354dcb8167ca509e360307d77f39be3261b09f9199efd389"
+      ]
+    },
+    {
+      "id": "codex.hooks.crates-bridgeforge-core-src-release-check-cache-rs",
+      "target": ".codex/hooks/source/workflow/src/release_check_cache.rs",
+      "known_hashes": [
+        "sha256:7cf687291cc98e21e84acefc9ab74b59d023065c9fa524c069a7ddeab7760745"
       ]
     }
   ]

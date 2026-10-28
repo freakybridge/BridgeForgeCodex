@@ -4,6 +4,78 @@ mod factory_repository;
 use super::*;
 
 #[test]
+fn minimum_supported_skeleton_version_rejects_old_projects_without_writes() {
+    let token = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let root = std::env::temp_dir().join(format!("bf-support-floor-{token}"));
+    fs::create_dir_all(root.join(".codex")).unwrap();
+    for version in ["0.1.0", "7.0.5", "8.0.0", "8.0.1", "9.0.0"] {
+        let stamp = root.join(".codex/.bridgeforge_codex_version");
+        fs::write(&stamp, version).unwrap();
+        let result = require_supported_project(&root);
+        assert_eq!(
+            result.is_ok(),
+            version.parse::<bridgeforge_core::SemVer>().unwrap()
+                >= MIN_SUPPORTED_VERSION.parse().unwrap(),
+            "{version}: {result:?}"
+        );
+        assert_eq!(fs::read_to_string(stamp).unwrap(), version);
+        assert!(!root.join(".runtime").exists());
+    }
+    fs::remove_file(root.join(".codex/.bridgeforge_codex_version")).unwrap();
+    for unknown in [
+        b"{}".as_slice(),
+        br#"{"release_version":null}"#,
+        br#"{"release_version":7}"#,
+        b"not-json",
+    ] {
+        let path = root.join(".codex/managed-skeleton.json");
+        fs::write(&path, unknown).unwrap();
+        assert!(require_supported_project(&root).is_err());
+        assert_eq!(fs::read(path).unwrap(), unknown);
+        assert!(!root.join(".runtime").exists());
+    }
+    fs::write(
+        root.join(".codex/managed-skeleton.json"),
+        br#"{"release_version":"7.0.5"}"#,
+    )
+    .unwrap();
+    assert!(
+        require_supported_project(&root)
+            .unwrap_err()
+            .contains("minimum supported")
+    );
+    assert!(!root.join(".runtime").exists());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn minimum_supported_version_does_not_use_business_or_package_versions() {
+    let token = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let root = std::env::temp_dir().join(format!("bf-support-business-{token}"));
+    fs::create_dir_all(root.join(".codex")).unwrap();
+    fs::write(root.join("VERSION"), b"0.1.0\n").unwrap();
+    fs::write(
+        root.join("Cargo.toml"),
+        b"[package]\nname='business'\nversion='0.1.0'\n",
+    )
+    .unwrap();
+    assert!(
+        require_supported_project(&root).is_ok(),
+        "new projects remain supported"
+    );
+    fs::write(root.join(".codex/.bridgeforge_codex_version"), b"8.0.0\n").unwrap();
+    assert!(require_supported_project(&root).is_ok());
+    assert_eq!(fs::read(root.join("VERSION")).unwrap(), b"0.1.0\n");
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn strict_attribute_inspection_accepts_proven_defaults_and_never_falls_back() {
     for payload in [
         b"# defaults\n* text=auto eol=lf\n".as_slice(),

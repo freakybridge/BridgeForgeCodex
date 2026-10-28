@@ -1,5 +1,7 @@
-use bridgeforge_workflow::project_sync::{SyncMode, apply_plan, build_plan, build_plan_with_inputs};
 use bridgeforge_core::{ProcessOutput, ProcessRequest, ProcessRunner};
+use bridgeforge_workflow::project_sync::{
+    SyncMode, apply_plan, build_plan, build_plan_with_inputs,
+};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::fs;
@@ -367,7 +369,7 @@ fn hash(data: impl AsRef<[u8]>) -> String {
 }
 fn contract() -> Value {
     json!({
-        "schema_version":4,"baseline_model": "current-only", "compatibility_baseline": "1.8.2","host":"codex","release_version":"1.8.2",
+        "schema_version":4,"baseline_model": "current-only", "compatibility_baseline": "8.0.2","host":"codex","release_version":"8.0.2",
         "stamp":".codex/.bridgeforge_codex_version","contract_target":".codex/managed-skeleton.json",
         "assets":[{"id":"example","source":"templates/example.txt","target":".codex/example.txt","strategy":"whole","current_sha256":hash(b"managed\n")}],"generated_assets":[]
     })
@@ -559,8 +561,8 @@ fn knowledge_seed_initializes_and_upgrades_without_owning_topic_bytes() {
         let f = Fixture::new();
         let (factory, project) = minimal(&f);
         let mut current = contract();
-        current["release_version"] = json!("1.8.10");
-        current["compatibility_baseline"] = json!("1.8.6");
+        current["release_version"] = json!("8.0.10");
+        current["compatibility_baseline"] = json!("8.0.6");
         write(
             &factory.join("templates/managed-skeleton.json"),
             serde_json::to_vec(&current).unwrap(),
@@ -586,7 +588,7 @@ fn knowledge_seed_initializes_and_upgrades_without_owning_topic_bytes() {
             .clone();
         assert_eq!(seed["strategy"], "seed");
         current["assets"].as_array_mut().unwrap().push(seed.clone());
-        current["release_version"] = json!("1.9.0");
+        current["release_version"] = json!("8.1.0");
         write(&factory.join(seed["source"].as_str().unwrap()), b"");
         write(
             &factory.join("templates/managed-skeleton.json"),
@@ -600,7 +602,7 @@ fn knowledge_seed_initializes_and_upgrades_without_owning_topic_bytes() {
         let topic = project.join("doc/5_project_knowledgebase/topic/note.md");
         write(&topic, b"project knowledge\r\n");
         write(&target, b"project-owned seed\r\n");
-        current["release_version"] = json!("1.9.1");
+        current["release_version"] = json!("8.1.1");
         write(
             &factory.join("templates/managed-skeleton.json"),
             serde_json::to_vec(&current).unwrap(),
@@ -619,44 +621,12 @@ fn knowledge_seed_initializes_and_upgrades_without_owning_topic_bytes() {
 }
 
 #[test]
-fn legacy_identity_is_validated_and_retired_atomically() {
-    let f = Fixture::new();
-    let (factory, project) = minimal(&f);
-    let old = project.join(".codex/.bridgeforge_version");
-    write(&old, b"1.7.0\n");
-    let plan = build_plan(&project, &factory, SyncMode::Auto).unwrap();
-    assert_eq!(plan.previous_version.as_deref(), Some("1.7.0"));
-    assert!(
-        plan.preservation_manifest["destructive_rebuild"]
-            .as_bool()
-            .unwrap()
-    );
-    apply_plan(plan.clone(), &plan.aggregate_fingerprint, false).unwrap();
-    assert!(!old.exists());
-    write(&old, b"1.7.0\n");
-    assert!(
-        build_plan(&project, &factory, SyncMode::Update)
-            .unwrap_err()
-            .contains("multiple")
-    );
-    fs::remove_file(project.join(".codex/.bridgeforge_codex_version")).unwrap();
-    write(&old, b"9.0.0\n");
-    assert!(
-        build_plan(&project, &factory, SyncMode::Update)
-            .unwrap_err()
-            .contains("newer")
-    );
-    write(&old, b"not-a-version\n");
-    assert!(build_plan(&project, &factory, SyncMode::Adopt).is_err());
-}
-
-#[test]
 fn old_manifest_never_proves_deletion_ownership() {
     let f = Fixture::new();
     let (factory, project) = minimal(&f);
     write(
         &project.join(".codex/.bridgeforge_codex_version"),
-        b"1.7.0\n",
+        b"8.0.0\n",
     );
     write(
         &project.join(".codex/managed-skeleton.json"),

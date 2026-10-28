@@ -10,14 +10,12 @@ pub use bridgeforge_core::{
 pub use bridgeforge_lifecycle::release;
 pub use bridgeforge_skeleton::{baseline, project_hooks};
 pub use bridgeforge_workflow::{git_sync, project_sync};
-pub mod batch;
 pub mod commands;
 mod dogfood;
 pub mod factory_runtime;
 pub mod factory_version;
 pub mod git_sync_plan;
 pub mod manifest;
-pub mod proposal_contract;
 pub mod runner;
 
 #[cfg(all(test, bridgeforge_factory_tests))]

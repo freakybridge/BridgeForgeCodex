@@ -180,7 +180,7 @@ fn self_test() -> CommandOutcome {
         "name": "bridgeforge",
         "status": "ok",
         "version": env!("CARGO_PKG_VERSION"),
-        "capabilities": ["git-sync-explicit-release-v1", "git-sync-prepared-release-v1", "git-sync-release-only-v1", "git-sync-release-readiness-v1", "git-sync-direct-release-v1", "git-sync-timing-v1", "git-sync-setup-v1", "git-sync-analysis-reuse-v1", "git-sync-package-lifecycle-v1", "user-cli-reuse-v1", "project-sync-build-reuse-v1", "git-sync-preflight-v1", "git-sync-phase-timing-v1", "public-artifacts-v1"]
+        "capabilities": ["git-sync-explicit-release-v1", "git-sync-release-only-v1", "git-sync-release-readiness-v1", "git-sync-direct-release-v1", "git-sync-timing-v1", "git-sync-setup-v1", "git-sync-package-lifecycle-v1", "user-cli-reuse-v1", "project-sync-build-reuse-v1", "git-sync-remote-context-v1", "git-sync-preflight-v1", "git-sync-phase-timing-v1", "public-artifacts-v1"]
     }));
     if let Some(capabilities) = outcome
         .receipt
@@ -209,6 +209,8 @@ fn self_test() -> CommandOutcome {
                 "task-scoped-development-v1",
                 "resumable-development-checks-v1",
                 "task-selected-development-checks-v1",
+                "staged-development-validation-v1",
+                "direct-development-apply-v1",
                 "version-coverage-v1",
                 "release-external-analysis-preview-v1",
                 "public-source-projection-v1",
@@ -325,7 +327,7 @@ fn check(command: &str, args: &[String]) -> CommandOutcome {
             }
         }
         "instruction-source" => instruction_source(context.root()),
-        "factory-version" | "proposal" => factory_command(args),
+        "factory-version" => factory_command(args),
         _ => blocked("check", format!("unknown check: {command}")),
     }
 }
@@ -558,12 +560,6 @@ pub fn git_sync_with_runner(
     bridgeforge_workflow::git_command::run_with_identity(args, runner, self_test().receipt)
 }
 
-fn batch(args: &[String]) -> CommandOutcome {
-    let mut full = vec!["batch".to_owned()];
-    full.extend_from_slice(args);
-    factory_command(&full)
-}
-
 pub fn run(args: &[String]) -> CommandOutcome {
     if args.first().is_some_and(|c| c == "develop") {
         if let Err(error) =
@@ -573,17 +569,17 @@ pub fn run(args: &[String]) -> CommandOutcome {
         }
     }
     if args.first().is_some_and(|c| c == "develop")
-        && (["--preview", "--apply", "--recover"]
+        && (["--preview", "--apply", "--recover", "--validate"]
             .iter()
             .filter(|f| has(args, f))
             .count()
             != 1
-            || ((has(args, "--apply") || has(args, "--recover"))
+            || ((has(args, "--apply") || has(args, "--recover") || has(args, "--validate"))
                 && (has(args, "--check") || has(args, "--dry-run"))))
     {
         return blocked(
             "develop",
-            "choose exactly one of --preview, --apply, --recover; preview flags cannot authorize writes",
+            "choose exactly one of --preview, --validate, --apply, --recover; preview flags cannot authorize writes",
         );
     }
     let root = value(args, "--root")
@@ -689,15 +685,19 @@ pub fn run(args: &[String]) -> CommandOutcome {
         "develop" => {
             let root=value(args,"--root").map(PathBuf::from);
             let context=match ProjectContext::discover(root.as_deref()) { Ok(c)=>c,Err(e)=>return blocked("develop",e) };
-            if ["--preview","--apply","--recover"].iter().filter(|f|has(args,f)).count()!=1
-                || ((has(args,"--apply") || has(args,"--recover")) && (has(args,"--check") || has(args,"--dry-run"))) {
-                return blocked("develop","choose exactly one of --preview, --apply, --recover; preview flags cannot authorize writes");
+            if ["--preview","--apply","--recover","--validate"].iter().filter(|f|has(args,f)).count()!=1
+                || ((has(args,"--apply") || has(args,"--recover") || has(args,"--validate")) && (has(args,"--check") || has(args,"--dry-run"))) {
+                return blocked("develop","choose exactly one of --preview, --validate, --apply, --recover; preview flags cannot authorize writes");
             }
             let request=bridgeforge_lifecycle::release::schema4::Request{analysis_file:value(args,"--analysis-file").map(PathBuf::from)};
             let task_packages = match bridgeforge_lifecycle::release::schema4::development::task_packages_argument(args) {
                 Ok(packages) => packages,
                 Err(error) => return blocked("develop", error),
             };
+            if has(args, "--validate") {
+                return bridgeforge_lifecycle::release::schema4::development::validate_for_packages(
+                    context.root(), &request, task_packages.as_deref(), &SystemProcessRunner, None);
+            }
             if let Some(packages) = task_packages {
                 return if has(args, "--apply") {
                     bridgeforge_lifecycle::release::schema4::development::apply_for_packages(context.root(), &request,
@@ -741,10 +741,9 @@ pub fn run(args: &[String]) -> CommandOutcome {
                 Err(error) => blocked("build-assets", error),
             }
         }
-        "batch" => batch(&args[1..]),
         _ => CommandOutcome {
             code: EXIT_BLOCKED,
-            stderr: "usage: bridgeforge <self-test|doctor|check|archive-scan|audit-user-allow|project-sync|public-artifacts|project-hook-migration|develop|git-sync|memory-sync|manifest|build-assets|batch>\n".into(),
+            stderr: "usage: bridgeforge <self-test|doctor|check|archive-scan|audit-user-allow|project-sync|public-artifacts|project-hook-migration|develop|git-sync|memory-sync|manifest|build-assets>\n".into(),
             ..CommandOutcome::default()
         },
     }

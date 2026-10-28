@@ -78,7 +78,7 @@ pub(crate) fn real_repository(name: &str) -> RealRepository {
 pub(crate) fn managed_contract(asset: &[u8]) -> Vec<u8> {
     serde_json::to_vec_pretty(&json!({
         "schema_version": 4,
-        "release_version": "1.0.0",
+        "release_version": "8.0.0",
         "host": "codex",
         "stamp": ".codex/.bridgeforge_codex_version",
         "contract_target": ".codex/managed-skeleton.json",
@@ -109,7 +109,7 @@ pub(crate) fn managed_repository(name: &str) -> (RealRepository, PathBuf) {
         managed_contract(b"old\n"),
     )
     .unwrap();
-    fs::write(repo.0.join(".codex/.bridgeforge_codex_version"), b"1.0.0\n").unwrap();
+    fs::write(repo.0.join(".codex/.bridgeforge_codex_version"), b"8.0.0\n").unwrap();
     git_ok(&repo.0, &["add", "."]);
     git_ok(&repo.0, &["commit", "-m", "baseline"]);
     git_ok(
@@ -131,28 +131,4 @@ pub(crate) fn out(code: i32, stdout: &str) -> ProcessOutput {
         stderr: Vec::new(),
         timed_out: false,
     }
-}
-
-pub(crate) fn install_development_check(root: &Path) {
-    fs::write(root.join(".codex/development-checks.json"), br#"{"schema":1,"checks":[{"id":"diff","program":"git","args":["diff","--check"],"timeout_seconds":30}]}"#).unwrap();
-}
-
-pub(crate) fn install_record_documents(root: &Path) {
-    install_development_check(root);
-    let file = root.join(".codex/development-checks.json");
-    let mut cfg: serde_json::Value = serde_json::from_slice(&fs::read(&file).unwrap()).unwrap();
-    cfg["record_documents"] = json!([
-        "doc/README.md",
-        "doc/0_architecture/TODO-INDEX.md",
-        "doc/1_delivery/",
-        "doc/3_reference/"
-    ]);
-    fs::write(file, serde_json::to_vec(&cfg).unwrap()).unwrap();
-    fs::create_dir_all(root.join("doc/3_reference")).unwrap();
-    fs::create_dir_all(root.join("doc/0_architecture")).unwrap();
-    fs::write(
-        root.join("doc/README.md"),
-        b"---\ndelivery_layout: flat\n---\n# Docs\n",
-    )
-    .unwrap();
 }

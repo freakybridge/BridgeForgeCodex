@@ -1,6 +1,82 @@
 use super::*;
 
 #[test]
+fn manifest_projection_rejects_out_of_scope_retirement_before_io() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap();
+    let writes = render_targets(root).unwrap();
+    let contract_path = root.join("templates/managed-skeleton.json");
+    let bytes = &writes.iter().find(|(p, _)| p == &contract_path).unwrap().1;
+    let original = fs::read(root.join("source/memory/src/lib.rs")).unwrap();
+    for target in [
+        "source/memory/src/lib.rs",
+        ".codex/hooks/project_custom/lib.rs",
+    ] {
+        let mut contract: Value = serde_json::from_slice(bytes).unwrap();
+        contract["retired_assets"] =
+            json!([{"id":"retired.invalid","target":target,"known_hashes":[sha_git(&original)]}]);
+        let invalid = vec![(
+            contract_path.clone(),
+            serde_json::to_vec(&contract).unwrap(),
+        )];
+        let error = projection_targets_from_writes(root, invalid).unwrap_err();
+        assert!(error.contains("invalid retired source asset"), "{error}");
+        assert_eq!(
+            fs::read(root.join("source/memory/src/lib.rs")).unwrap(),
+            original
+        );
+    }
+}
+
+#[test]
+fn manifest_retirement_rolls_back_and_preserves_external_recreation() {
+    let token = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let root = std::env::temp_dir().join(format!("bf-manifest-retirement-{token}"));
+    fs::create_dir_all(&root).unwrap();
+    let retired = root.join("retired.rs");
+    for external in [false, true] {
+        fs::write(&retired, b"verified-old").unwrap();
+        let targets = vec![(retired.clone(), None)];
+        let before = BTreeMap::from([(retired.clone(), Some(b"verified-old".to_vec()))]);
+        let error = install_targets(&targets, &before, &|index| {
+            if index == 1 {
+                assert!(!retired.exists());
+                if external {
+                    fs::write(&retired, b"external").unwrap();
+                }
+                return Err("injected retirement failure".into());
+            }
+            Ok(())
+        })
+        .unwrap_err();
+        assert!(error.contains("injected retirement failure"));
+        assert_eq!(
+            fs::read(&retired).unwrap(),
+            if external {
+                b"external".as_slice()
+            } else {
+                b"verified-old".as_slice()
+            }
+        );
+    }
+    fs::write(&retired, b"verified-old").unwrap();
+    install_targets(
+        &[(retired.clone(), None)],
+        &BTreeMap::from([(retired.clone(), Some(b"verified-old".to_vec()))]),
+        &|_| Ok(()),
+    )
+    .unwrap();
+    assert!(!retired.exists());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn hook_asset_ids_are_stable() {
     assert_eq!(
         hook_asset_id("crates/core/src/lib.rs"),
@@ -163,9 +239,9 @@ fn manifest_install_failure_rolls_back_own_writes_and_preserves_external_edits()
     fs::create_dir_all(&root).unwrap();
     let (a, b, c) = (root.join("a"), root.join("b"), root.join("c"));
     let targets = vec![
-        (a.clone(), b"new-a".to_vec()),
-        (b.clone(), b"new-b".to_vec()),
-        (c.clone(), b"new-c".to_vec()),
+        (a.clone(), Some(b"new-a".to_vec())),
+        (b.clone(), Some(b"new-b".to_vec())),
+        (c.clone(), Some(b"new-c".to_vec())),
     ];
     for change_installed in [false, true] {
         fs::write(&a, b"old-a").unwrap();

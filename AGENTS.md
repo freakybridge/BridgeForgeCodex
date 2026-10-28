@@ -129,11 +129,11 @@
 
 本工厂的 develop 本地 dogfood 优先读取 `templates/skills/develop/SKILL.md` 及其按需引用的 reference；用户级安装副本不同时，以仓库候选作为本工厂的执行依据，不把旧版全仓清零规则重新带入。本入口不分发到公共 Template 或其他项目。
 
-实际命令使用下述受管准备后的 `.codex/bin/bridgeforge-factory.exe`，按本次包选择核验 `task-scoped-development-v1`；启用检查复用还需 `resumable-development-checks-v1` 及实际环境合同。能力缺失须报告，不能静默退回旧全仓入口。本地 dogfood 不等于正式版本收口或发布，也不更新用户级共享安装。
+实际命令使用受管准备后的 `.codex/bin/bridgeforge-factory.exe`，从本次包预览收据核验任务范围与直接 apply 能力；阶段间复用还需 `staged-development-validation-v1` 及完整实际环境合同，可选失败重试缓存仍按 `resumable-development-checks-v1`。能力缺失须报告，不能静默退回旧全仓入口。本地 dogfood 不等于正式版本收口或发布，也不更新用户级共享安装。
 
-本工厂的 Git 同步与开发收口入口为 `.codex/bin/bridgeforge-factory.exe git-sync` 和 `develop`；先执行下述当前源码准备。公共 CLI 保留兼容转发，但工厂直接入口避免额外转发进程，并在发布时直接处理自身映像刷新。
+本工厂的 Git 同步与开发收口入口为 `.codex/bin/bridgeforge-factory.exe git-sync` 和 `develop`。Git 同步使用已安装工具和一次聚合预检，不前置准备或独立 self-test；工具缺失、不匹配时报告维护缺口，不自动安装升级。develop 使用当前已准备工具，仅工具缺失、不匹配或本次确需新构建时执行受管准备，不为每个阶段重复构建或 self-test。公共 CLI 保留兼容转发，但工厂直接入口避免额外转发进程；发布结果确需刷新产物时仍由受管事务处理。
 
-工厂声明的运行时准备入口为下列第一条命令：普通 `$git-sync`、`$git-sync release` 和显式工具刷新在能力检查之前执行。它通过锁定 Cargo 启动当前源码工厂工具，按需准备 CLI、Hook 和工厂工具；成功后才使用 `.codex/bin`。准备失败停止，不对工厂执行下游 adopt/apply。只读检查直接使用已具备 `factory-runtime-prepare-v1` 的工厂工具的 `build-assets --factory --project-root . --check`；没有该能力时报告工具不可用，不用 Cargo 引导冒充零写入检查。完整说明见 INSTALL.md。
+工厂显式工具刷新及开发必要构建的受管准备入口为下列第一条命令，不再作为日常 Git 同步前置。它通过锁定 Cargo 启动当前源码工厂工具，按需准备 CLI、Hook 和工厂工具；准备失败停止，不对工厂执行下游 adopt/apply。只读检查直接使用已具备 `factory-runtime-prepare-v1` 的工厂工具的 `build-assets --factory --project-root . --check`；没有该能力时报告工具不可用，不用 Cargo 引导冒充零写入检查。完整说明见 INSTALL.md。
 
 ```powershell
 cargo run --locked --release --manifest-path Cargo.toml --bin bridgeforge-factory -- build-assets --factory --project-root .

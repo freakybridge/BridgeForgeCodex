@@ -49,7 +49,7 @@ $BRIDGEFORGE_CODEX_HOME = Join-Path $env:USERPROFILE ".bridgeforge-codex"
 3. 没有合法戳但已有 `.codex/`、`AGENTS.md` 或其他骨架资产：`adopt`。
 4. 没有骨架身份的空白项目：`init`。
 
-每轮以刷新后的产品 home 为安装目标，固定升级分界线不得随发布上移。低于分界线时禁止读取旧 manifest、旧 schema、旧 hash lineage 或逐版本迁移链来选择实现；等于或高于分界线时兼容更新并保留项目定制。只允许使用 updater 事务安装并验证的受管 Rust CLI：
+每轮以刷新后的产品 home 为安装目标。仅支持骨架 8.0.0 及以后；已识别为更早版本的项目须在项目写入前拒绝，不再执行旧项目迁移或重建。无戳新项目继续走当前初始化/合法首次接入，身份不明时只读报告。8.x 项目更新保留定制和必要历史证明。只允许使用 updater 事务安装并验证的受管 Rust CLI：
 
 ```powershell
 $BRIDGEFORGE = Join-Path $env:USERPROFILE ".codex\bin\bridgeforge.exe"

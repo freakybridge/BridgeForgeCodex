@@ -1,3 +1,4 @@
+use bridgeforge_core::{ProcessOutput, ProcessRequest, ProcessRunner, SystemProcessRunner};
 use bridgeforge_memory::remote::{
     apply_conflict_choices, reconcile, resolve_conflict_with_choices,
 };
@@ -5,7 +6,6 @@ use bridgeforge_memory::worker::mark_pending;
 use bridgeforge_workflow::project_sync::{
     SyncMode, apply_plan, attach_generated_assets, build_plan, build_plan_with_inputs,
 };
-use bridgeforge_core::{ProcessOutput, ProcessRequest, ProcessRunner, SystemProcessRunner};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use std::fs;
@@ -117,56 +117,6 @@ fn git_at(root: &Path, args: &[&str]) {
     );
 }
 
-fn synced_repo(parent: &Path, name: &str) -> PathBuf {
-    let remote = parent.join(format!("{name}.git"));
-    let repo = parent.join(name);
-    git_at(
-        parent,
-        &["init", "--bare", remote.to_string_lossy().as_ref()],
-    );
-    git_at(
-        parent,
-        &[
-            "clone",
-            remote.to_string_lossy().as_ref(),
-            repo.to_string_lossy().as_ref(),
-        ],
-    );
-    git_at(&repo, &["config", "user.email", "batch@example.invalid"]);
-    git_at(&repo, &["config", "user.name", "Batch Test"]);
-    git_at(&repo, &["checkout", "-b", "main"]);
-    repo
-}
-
-fn mark_official_factory(root: &Path) {
-    let output = Command::new("git")
-        .current_dir(root)
-        .args(["remote", "get-url", "origin"])
-        .output()
-        .unwrap();
-    assert!(output.status.success());
-    let local_push = String::from_utf8(output.stdout).unwrap().trim().to_string();
-    git_at(
-        root,
-        &["remote", "set-url", "--push", "origin", &local_push],
-    );
-    git_at(
-        root,
-        &[
-            "remote",
-            "set-url",
-            "origin",
-            "https://github.com/freakybridge/BridgeForgeCodex.git",
-        ],
-    );
-}
-
-fn commit_and_push(root: &Path, message: &str) {
-    git_at(root, &["add", "."]);
-    git_at(root, &["commit", "-m", message]);
-    git_at(root, &["push", "-u", "origin", "HEAD"]);
-}
-
 #[test]
 fn project_sync_plan_apply_and_fingerprint_gate_are_transactional() {
     let temp = TestDirectory::new("project-sync");
@@ -174,15 +124,15 @@ fn project_sync_plan_apply_and_fingerprint_gate_are_transactional() {
     let project = temp.0.join("project");
     fs::create_dir_all(factory.join("templates")).unwrap();
     fs::create_dir_all(&project).unwrap();
-    write(&factory.join("VERSION"), b"1.2.3\n");
+    write(&factory.join("VERSION"), b"8.0.1\n");
     write(&factory.join("templates/example.txt"), b"managed\n");
     let contract = json!({
         "schema_version": 4,
-        "release_version": "1.2.3",
+        "release_version": "8.0.1",
         "host": "codex",
         "stamp": ".codex/.bridgeforge_codex_version",
         "contract_target": ".codex/managed-skeleton.json",
-        "baseline_model": "current-only", "compatibility_baseline": "1.2.3",
+        "baseline_model": "current-only", "compatibility_baseline": "8.0.1",
         "assets": [{
             "id": "example",
             "source": "templates/example.txt",
@@ -228,7 +178,7 @@ fn project_sync_plan_apply_and_fingerprint_gate_are_transactional() {
         fs::read_to_string(project.join(".codex/.bridgeforge_codex_version"))
             .unwrap()
             .trim(),
-        "1.2.3"
+        "8.0.1"
     );
 }
 
@@ -845,15 +795,15 @@ fn project_sync_retired_assets_require_exact_preservation_decisions() {
     let temp = TestDirectory::new("project-sync-preservation");
     let factory = temp.0.join("factory");
     fs::create_dir_all(factory.join("templates")).unwrap();
-    write(&factory.join("VERSION"), b"1.2.3\n");
+    write(&factory.join("VERSION"), b"8.0.1\n");
     write(&factory.join("templates/example.txt"), b"managed\n");
     let current_contract = json!({
         "schema_version": 4,
-        "release_version": "1.2.3",
+        "release_version": "8.0.1",
         "host": "codex",
         "stamp": ".codex/.bridgeforge_codex_version",
         "contract_target": ".codex/managed-skeleton.json",
-        "baseline_model": "current-only", "compatibility_baseline": "1.2.3",
+        "baseline_model": "current-only", "compatibility_baseline": "8.0.1",
         "assets": [{
             "id": "example",
             "source": "templates/example.txt",
@@ -875,11 +825,11 @@ fn project_sync_retired_assets_require_exact_preservation_decisions() {
     let original_sha = format!("sha256:{:x}", Sha256::digest(original));
     let old_contract = json!({
         "schema_version": 4,
-        "release_version": "1.2.2",
+        "release_version": "8.0.0",
         "host": "codex",
         "stamp": ".codex/.bridgeforge_codex_version",
         "contract_target": ".codex/managed-skeleton.json",
-        "baseline_model": "current-only", "compatibility_baseline": "1.2.3",
+        "baseline_model": "current-only", "compatibility_baseline": "8.0.1",
         "assets": [{
             "id": "old-python-hook",
             "source": "templates/old.py",
@@ -894,7 +844,7 @@ fn project_sync_retired_assets_require_exact_preservation_decisions() {
         write(&project.join(".codex/old.py"), content);
         write(
             &project.join(".codex/.bridgeforge_codex_version"),
-            b"1.2.2\n",
+            b"8.0.0\n",
         );
         write(
             &project.join(".codex/managed-skeleton.json"),
@@ -942,13 +892,9 @@ fn project_sync_retired_assets_require_exact_preservation_decisions() {
     let delete = temp.0.join("delete");
     prepare(&delete, b"project custom\n");
     let delete_decision = json!({"preserve": [], "delete": ["P:project-file:.codex/old.py"]});
-    let delete_plan = build_plan_with_inputs(
-        &delete,
-        &factory,
-        SyncMode::Update,
-        Some(&delete_decision),
-    )
-    .unwrap();
+    let delete_plan =
+        build_plan_with_inputs(&delete, &factory, SyncMode::Update, Some(&delete_decision))
+            .unwrap();
     assert!(delete_plan.confirmation_required);
     assert!(
         delete_plan
@@ -968,15 +914,15 @@ fn destructive_rebuild_requires_unknown_file_decisions_and_retires_old_project_m
     let project = temp.0.join("project");
     fs::create_dir_all(factory.join("templates")).unwrap();
     fs::create_dir_all(&project).unwrap();
-    write(&factory.join("VERSION"), b"1.2.3\n");
+    write(&factory.join("VERSION"), b"8.0.1\n");
     write(&factory.join("templates/example.txt"), b"managed\n");
     let contract = json!({
         "schema_version": 4,
-        "release_version": "1.2.3",
+        "release_version": "8.0.1",
         "host": "codex",
         "stamp": ".codex/.bridgeforge_codex_version",
         "contract_target": ".codex/managed-skeleton.json",
-        "baseline_model": "current-only", "compatibility_baseline": "1.2.3",
+        "baseline_model": "current-only", "compatibility_baseline": "8.0.1",
         "assets": [{
             "id": "example",
             "source": "templates/example.txt",
@@ -1032,8 +978,8 @@ fn destructive_rebuild_requires_unknown_file_decisions_and_retires_old_project_m
         "preserve": ["P:rule:.codex/rules/custom.rules"],
         "delete": []
     });
-    let plan = build_plan_with_inputs(&project, &factory, SyncMode::Adopt, Some(&decisions))
-        .unwrap();
+    let plan =
+        build_plan_with_inputs(&project, &factory, SyncMode::Adopt, Some(&decisions)).unwrap();
     assert!(plan.gaps.is_empty(), "{:?}", plan.gaps);
     let combined =
         bridgeforge_workflow::project_sync::outcome_plan_with_format(Ok(plan.clone()), "combined");
@@ -1048,161 +994,6 @@ fn destructive_rebuild_requires_unknown_file_decisions_and_retires_old_project_m
     assert!(!project.join(".codex/sync-docs.map.md").exists());
     assert!(project.join(".codex/skills/custom/SKILL.md").is_file());
     assert!(project.join(".codex/rules/custom.rules").is_file());
-}
-
-#[test]
-fn batch_confirmation_detects_target_identity_drift_before_write() {
-    let temp = TestDirectory::new("batch-identity");
-    let factory = synced_repo(&temp.0, "factory");
-    // Match the official factory: operational state is not source content.
-    write(&factory.join(".gitignore"), b".runtime/\n");
-    let target = synced_repo(&temp.0, "target");
-    let payload = b"managed\n";
-    let payload_sha = format!("sha256:{:x}", Sha256::digest(payload));
-    let contract = json!({
-        "schema_version": 4,
-        "release_version": "1.2.3",
-        "host": "codex",
-        "stamp": ".codex/.bridgeforge_codex_version",
-        "contract_target": ".codex/managed-skeleton.json",
-        "baseline_model": "current-only", "compatibility_baseline": "1.2.3",
-        "assets": [{
-            "id": "example",
-            "source": "templates/example.txt",
-            "target": ".codex/example.txt",
-            "strategy": "whole",
-            "current_sha256": payload_sha
-        }],
-        "generated_assets": []
-    });
-    write(&factory.join("VERSION"), b"1.2.3\n");
-    write(&factory.join("templates/example.txt"), payload);
-    write(&factory.join(".codex/example.txt"), payload);
-    for path in [
-        factory.join("templates/managed-skeleton.json"),
-        factory.join(".codex/managed-skeleton.json"),
-    ] {
-        write(
-            &path,
-            format!("{}\n", serde_json::to_string_pretty(&contract).unwrap()).as_bytes(),
-        );
-    }
-    write(
-        &factory.join("templates/hooks/crates/bridgeforge-core/src/batch.rs"),
-        b"batch controller witness\n",
-    );
-    commit_and_push(&factory, "factory");
-    mark_official_factory(&factory);
-    write(&target.join("README.md"), b"target\n");
-    commit_and_push(&target, "target");
-
-    let roots = vec![target.clone()];
-    let plan = bridgeforge_factory::batch::plan(&factory, &roots).unwrap();
-    assert_eq!(plan.status, "planned");
-    assert!(!plan.projects[0].git.as_ref().unwrap().dirty);
-    let state_path = temp.0.join("batch/state.json");
-    bridgeforge_factory::batch::start(&state_path, &factory, &roots, &plan.aggregate_fingerprint)
-        .unwrap();
-    let other_state = temp.0.join("other-state/state.json");
-    assert!(
-        bridgeforge_factory::batch::start(&other_state, &factory, &roots, &plan.aggregate_fingerprint)
-            .unwrap_err()
-            .contains("another batch is already active")
-    );
-    assert!(!other_state.exists());
-    write(&target.join("after-confirmation.txt"), b"drift\n");
-    let state = bridgeforge_factory::batch::begin(&state_path).unwrap();
-    assert_eq!(state.current_order, None);
-    assert_eq!(state.projects[0].status, "deferred");
-    assert!(
-        state.projects[0]
-            .result
-            .as_deref()
-            .unwrap()
-            .contains("drifted")
-    );
-}
-
-#[test]
-fn batch_restart_requires_committed_bug_and_changed_controller_witness() {
-    let temp = TestDirectory::new("batch-restart");
-    let factory = synced_repo(&temp.0, "factory");
-    // Match the official factory: operational state is not source content.
-    write(&factory.join(".gitignore"), b".runtime/\n");
-    let first = synced_repo(&temp.0, "first");
-    let second = synced_repo(&temp.0, "second");
-    let payload = b"managed\n";
-    let payload_sha = format!("sha256:{:x}", Sha256::digest(payload));
-    let contract = json!({
-        "schema_version": 4,
-        "release_version": "1.2.3",
-        "host": "codex",
-        "stamp": ".codex/.bridgeforge_codex_version",
-        "contract_target": ".codex/managed-skeleton.json",
-        "baseline_model": "current-only", "compatibility_baseline": "1.2.3",
-        "assets": [{
-            "id": "example",
-            "source": "templates/example.txt",
-            "target": ".codex/example.txt",
-            "strategy": "whole",
-            "current_sha256": payload_sha
-        }],
-        "generated_assets": []
-    });
-    write(&factory.join("VERSION"), b"1.2.3\n");
-    write(&factory.join("templates/example.txt"), payload);
-    write(&factory.join(".codex/example.txt"), payload);
-    for path in [
-        factory.join("templates/managed-skeleton.json"),
-        factory.join(".codex/managed-skeleton.json"),
-    ] {
-        write(
-            &path,
-            format!("{}\n", serde_json::to_string_pretty(&contract).unwrap()).as_bytes(),
-        );
-    }
-    let controller = factory.join("templates/hooks/crates/bridgeforge-core/src/batch.rs");
-    write(&controller, b"batch controller witness v1\n");
-    commit_and_push(&factory, "factory v1");
-    mark_official_factory(&factory);
-    for target in [&first, &second] {
-        write(&target.join("README.md"), b"target\n");
-        commit_and_push(target, "target");
-    }
-
-    let roots = vec![first, second];
-    let plan = bridgeforge_factory::batch::plan(&factory, &roots).unwrap();
-    let state_path = temp.0.join("batch/state.json");
-    bridgeforge_factory::batch::start(&state_path, &factory, &roots, &plan.aggregate_fingerprint)
-        .unwrap();
-    for _ in 0..2 {
-        bridgeforge_factory::batch::begin(&state_path).unwrap();
-        bridgeforge_factory::batch::finish(
-            &state_path,
-            false,
-            "shared controller failure".into(),
-            Some("bridgeforge:batch-controller".into()),
-        )
-        .unwrap();
-    }
-    assert!(bridgeforge_factory::batch::restart(&state_path, "doc/2_bugs/BUG-batch.md").is_err());
-
-    write(&controller, b"batch controller witness v2\n");
-    write(
-        &factory.join("doc/2_bugs/BUG-batch.md"),
-        b"# Batch controller regression\n",
-    );
-    commit_and_push(&factory, "fix batch controller");
-    let restarted =
-        bridgeforge_factory::batch::restart(&state_path, "doc/2_bugs/BUG-batch.md").unwrap();
-    assert_eq!(restarted.generation, 2);
-    assert!(
-        restarted
-            .projects
-            .iter()
-            .all(|project| project.status == "planned")
-    );
-    assert!(restarted.common_issue_signature.is_none());
 }
 
 #[test]
@@ -1303,7 +1094,7 @@ fn project_sync_combined_upgrade_preserves_project_assets_and_is_idempotent() {
 
     write(
         &project.join(".codex/.bridgeforge_codex_version"),
-        b"1.14.8\n",
+        b"8.0.0\n",
     );
     let protected = [
         "AGENTS.md",

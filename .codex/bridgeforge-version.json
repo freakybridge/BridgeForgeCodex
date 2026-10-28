@@ -189,8 +189,6 @@
             "source/workflow/src/project_hook_migration.rs",
             "source/workflow/src/project_sync.rs",
             "source/workflow/src/public_artifacts.rs",
-            "source/workflow/src/release_check_cache.rs",
-            "source/workflow/src/release_preparation.rs",
             "source/workflow/src/source_retirement.rs",
             "templates/hooks/.gitignore",
             "source/lifecycle/src/release/schema4/portable_environment.rs"
@@ -245,7 +243,6 @@
             "scripts/tests/support/factory_root.rs",
             "scripts/tests/support/git_repository.rs",
             "scripts/tests/support/schema4_agent.rs",
-            "scripts/tests/unit/core_batch.rs",
             "scripts/tests/unit/core_factory_runtime.rs",
             "scripts/tests/unit/core_manifest.rs",
             "scripts/tests/unit/factory/git_sync.rs",
@@ -336,7 +333,9 @@
             "templates/source-layout.json",
             "templates/user/AGENTS.md",
             "user-agents-manifest.json",
-            "VERSION"
+            "VERSION",
+            "scripts/tests/support/current_fixture.rs",
+            "scripts/tests/support/release_plan.rs"
           ],
           "program": "cargo",
           "timeout_seconds": 3600
@@ -384,7 +383,9 @@
             "scripts/tests/unit/core_release_schema4.rs",
             "scripts/tests/unit/core_release_setup.rs",
             "scripts/tests/unit/core_release.rs",
-            "scripts/tests/unit/core_task_check_selection.rs"
+            "scripts/tests/unit/core_task_check_selection.rs",
+            "scripts/tests/support/current_fixture.rs",
+            "scripts/tests/support/release_plan.rs"
           ],
           "program": "cargo",
           "timeout_seconds": 7200
@@ -499,7 +500,9 @@
             "scripts/tests/unit/core_project_sync.rs",
             "scripts/tests/unit/source_retirement.rs",
             "templates/hooks.json",
-            "templates/managed-skeleton.json"
+            "templates/managed-skeleton.json",
+            "scripts/tests/support/current_fixture.rs",
+            "scripts/tests/support/release_plan.rs"
           ],
           "program": "cargo",
           "timeout_seconds": 3600

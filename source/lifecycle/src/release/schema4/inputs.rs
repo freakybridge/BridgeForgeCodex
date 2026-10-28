@@ -285,7 +285,7 @@ pub(super) fn environment(
     guard: Option<&EnvironmentGuard>,
     runner: &dyn ProcessRunner,
 ) -> Result<String, String> {
-    Ok(environment_snapshot(root, cfg, guard, runner)?.planning)
+    Ok(environment_snapshot(root, cfg, guard, runner, false)?.planning)
 }
 
 pub(super) struct EnvironmentSnapshot {
@@ -313,6 +313,7 @@ fn environment_snapshot(
     cfg: &Config,
     guard: Option<&EnvironmentGuard>,
     runner: &dyn ProcessRunner,
+    release: bool,
 ) -> Result<EnvironmentSnapshot, String> {
     let mut values = std::env::vars_os()
         .filter(|(key, _)| key != "CODEX_TOOL_CALL_ID")
@@ -343,7 +344,25 @@ fn environment_snapshot(
             );
         }
     }
-    environment_fingerprints(&values)
+    if release {
+        release_environment_fingerprints(&values)
+    } else {
+        environment_fingerprints(&values)
+    }
+}
+
+/// Terminal/session bookkeeping does not select a release toolchain or input.
+/// Keep all other variables conservatively. Explicitly declared project
+/// variables (including one of these names) are separately bound by release_gate.
+pub(super) fn release_environment_fingerprints(
+    values: &BTreeMap<String, String>,
+) -> Result<EnvironmentSnapshot, String> {
+    let mut effective = values.clone();
+    for name in ["CODEX_TOOL_CALL_ID", "WT_SESSION", "WT_PROFILE_ID", "TERM_SESSION_ID",
+        "SHLVL", "_", "PSModuleAnalysisCachePath"] {
+        effective.remove(name);
+    }
+    environment_fingerprints(&effective)
 }
 
 fn lock(cfg: &Config, path: &str) -> bool {
@@ -367,9 +386,15 @@ pub(super) fn capture(
 pub(super) fn capture_release(
     root: &Path,
     cfg: &Config,
-    runner: &dyn ProcessRunner,
+    reader: &history_cache::Reader<'_>,
 ) -> Result<Capture, String> {
-    capture_mode(root, cfg, runner, true)
+    crate::baseline::require_supported_project(root)?;
+    if !cfg.current_model {
+        return Err("release requires the current product-packages configuration".into());
+    }
+    let _profile = crate::release_metrics::span("inputs.capture");
+    crate::git_sync::verify_readonly_git(root, reader)?;
+    capture_with_reader(root, cfg, reader, true)
 }
 
 fn capture_mode(
@@ -378,6 +403,7 @@ fn capture_mode(
     runner: &dyn ProcessRunner,
     release: bool,
 ) -> Result<Capture, String> {
+    crate::baseline::require_supported_project(root)?;
     if !cfg.current_model {
         return Err("release requires the one-time product-packages cutover; update the skeleton or run --migration-plan".into());
     }
@@ -396,7 +422,7 @@ fn capture_with_reader(
     runner: &history_cache::Reader<'_>,
     release: bool,
 ) -> Result<Capture, String> {
-    let (head, boundary) = history::validate_baseline(root, runner, None, false)?;
+    let (head, boundary) = history::validate_baseline(root, runner, None, false, None)?;
     super::prefetch_history(cfg, &head, runner)?;
     let inventory = independent::inventory(root, runner)?;
     let status = independent::status(root, runner)?;
@@ -644,7 +670,7 @@ fn capture_with_reader(
         None => (None, None),
     };
     let environment_snapshot = if needs_evidence {
-        environment_snapshot(root, cfg, environment_guard.as_ref(), runner)?
+        environment_snapshot(root, cfg, environment_guard.as_ref(), runner, release)?
     } else {
         EnvironmentSnapshot {
             planning: String::new(),

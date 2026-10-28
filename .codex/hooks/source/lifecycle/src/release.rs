@@ -33,10 +33,7 @@ mod python_native_tests;
 mod rust;
 pub mod schema4;
 pub mod setup;
-pub use history::{
-    build_explicit_release_plan, build_explicit_release_plan_with_request, explicit_release_policy,
-    preview, validate_release_baseline,
-};
+pub use history::{explicit_release_policy, validate_release_baseline};
 pub use model::{PackageChange, PackageEvent};
 
 pub fn version_strategy(root: &Path) -> Result<&'static str, String> {
@@ -73,14 +70,6 @@ pub enum ReleaseKind {
     SkeletonOnly,
     Business,
     Factory,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct ReleasePlan {
-    pub schema: u32,
-    pub kind: ReleaseKind,
-    pub changed_paths: Vec<String>,
-    pub requires_business_version: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -125,49 +114,6 @@ pub fn parse_commit_message(message: &str) -> Result<CommitInfo, String> {
         section: section.into(),
         breaking,
     })
-}
-
-pub fn build_release_plan(paths: impl IntoIterator<Item = String>) -> ReleasePlan {
-    let mut paths = paths
-        .into_iter()
-        .map(|path| path.replace('\\', "/"))
-        .filter(|path| !path.trim().is_empty())
-        .collect::<Vec<_>>();
-    paths.sort();
-    paths.dedup();
-    if paths.is_empty() {
-        return ReleasePlan {
-            schema: 1,
-            kind: ReleaseKind::None,
-            changed_paths: paths,
-            requires_business_version: false,
-        };
-    }
-    let skeleton_only = paths.iter().all(|path| {
-        path == "AGENTS.md"
-            || path == "INSTALL.md"
-            || path == "README.md"
-            || path == "CHANGELOG.md"
-            || path == "bridgeforge-codex-manifest.json"
-            || path == crate::user_agents::MANIFEST
-            || path.starts_with(".codex/")
-            || path.starts_with(".githooks/")
-            || path.starts_with("doc/")
-            || path.starts_with("scripts/")
-            || path.starts_with("skills/")
-            || path.starts_with("templates/")
-            || path.starts_with("source/")
-    });
-    ReleasePlan {
-        schema: 1,
-        kind: if skeleton_only {
-            ReleaseKind::SkeletonOnly
-        } else {
-            ReleaseKind::Business
-        },
-        changed_paths: paths,
-        requires_business_version: !skeleton_only,
-    }
 }
 
 fn safe_relative(root: &Path, raw: &str) -> Result<PathBuf, String> {
@@ -1116,51 +1062,6 @@ fn render_changelog(
     Ok(text.into_bytes())
 }
 
-pub fn build_file_release_plan(
-    root: &Path,
-    message: &str,
-    changed_paths: Vec<String>,
-    runner: &dyn ProcessRunner,
-) -> Result<Option<FileReleasePlan>, String> {
-    build_explicit_release_plan(root, message, changed_paths, runner)
-}
-
-pub fn apply_file_release_plan(plan: &FileReleasePlan) -> Result<(), String> {
-    let root = plan
-        .writes
-        .keys()
-        .find(|p| p.file_name().is_some_and(|n| n == "VERSION"))
-        .and_then(|p| p.parent())
-        .ok_or("release root missing")?;
-    plan.build_directories.verify(root)?;
-    if let Some(environment) = &plan.environment {
-        let root = plan
-            .writes
-            .keys()
-            .find(|p| p.file_name().is_some_and(|n| n == "VERSION"))
-            .and_then(|p| p.parent())
-            .ok_or("release root missing")?;
-        environment.verify(root)?;
-    }
-    verify_release_inputs(&plan.inputs)?;
-    if let Some(inventory) = &plan.release_inventory {
-        let root = plan
-            .writes
-            .keys()
-            .find(|p| p.file_name().is_some_and(|n| n == "VERSION"))
-            .and_then(|p| p.parent())
-            .ok_or("release root missing")?;
-        verify_release_inventory(root, &crate::SystemProcessRunner, inventory)?;
-        if let Some(status) = &plan.release_status {
-            verify_release_status(root, &crate::SystemProcessRunner, status)?;
-        }
-    }
-    for (path, payload) in &plan.writes {
-        crate::persistence::atomic_write(path, payload).map_err(|error| error.to_string())?;
-    }
-    Ok(())
-}
-
 pub fn verify_release_inventory(
     root: &Path,
     runner: &dyn ProcessRunner,
@@ -1209,3 +1110,9 @@ pub fn verify_release_inputs(inputs: &BTreeMap<PathBuf, Option<Vec<u8>>>) -> Res
 #[cfg(all(test, bridgeforge_factory_tests))]
 #[path = "../../../scripts/tests/unit/core_release.rs"]
 mod tests;
+
+#[cfg(all(test, bridgeforge_factory_tests))]
+#[path = "../../../scripts/tests/support/release_plan.rs"]
+mod test_plan;
+#[cfg(all(test, bridgeforge_factory_tests))]
+pub(crate) use test_plan::apply_file_release_plan;

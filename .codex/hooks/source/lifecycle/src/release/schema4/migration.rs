@@ -1,4 +1,4 @@
-//! Legacy configuration is read here to create one immutable, language-neutral starting point.
+//! Current configuration initialization, reconfiguration and immutable baseline repair.
 use super::*;
 use crate::CommandOutcome;
 
@@ -38,6 +38,7 @@ impl Prepared {
 
 /// The project updater owns the write and rollback; this function is read-only.
 pub fn prepare_project_upgrade(root: &Path) -> Result<Option<Prepared>, String> {
+    crate::baseline::require_supported_project(root)?;
     if !root.join("VERSION").is_file() {
         return Ok(None);
     }
@@ -308,6 +309,7 @@ fn prepare(
     strategy: Option<&str>,
     repair: bool,
 ) -> Result<Prepared, String> {
+    crate::baseline::require_supported_project(root)?;
     let _profile = crate::release_metrics::span("migration.prepare");
     let inspection = InspectionRunner(runner);
     crate::git_sync::verify_readonly_git(root, &inspection)?;
@@ -316,19 +318,29 @@ fn prepare(
     let inventory = independent::inventory(root, &reader)?;
     let status = independent::status(root, &reader)?;
     let old = config::read_current(root, CONFIG)?;
-    let old_value=old.as_deref().map(|b|crate::json::parse_unique_json(b,"migration source config")).transpose()?.unwrap_or_else(||json!({"schema_version":1,"manifest_policy":"auto","release_policy":"explicit_release"}));
+    let old_value = old
+        .as_deref()
+        .map(|b| crate::json::parse_unique_json(b, "current source config"))
+        .transpose()?
+        .unwrap_or_else(|| {
+            json!({
+                "schema_version":4,"release_policy":"explicit_release","strategy":"independent",
+                "adapters":{},"packages":[],"product_manifests":inventory.iter()
+                    .filter(|p| p.as_str() == "Cargo.toml").cloned().collect::<Vec<_>>()
+            })
+        });
     let source_schema = old_value["schema_version"]
         .as_u64()
         .ok_or("migration source schema is missing")? as u32;
+    if source_schema != 4 {
+        return Err("legacy configuration migration is retired; skeleton 8.0.0 or newer with current configuration is required".into());
+    }
     let already_current = old_value["release_model"] == "product-packages";
     if repair && !already_current {
         return Err("legacy baseline requires the one-time product-packages migration".into());
     }
     if already_current && proposal.is_none() && strategy.is_none() && !repair {
         return Err("project already uses product-packages; use an explicit configuration proposal for reconfiguration".into());
-    }
-    if !(1..=4).contains(&source_schema) {
-        return Err("unsupported migration source schema".into());
     }
     if old_value["target_versions"]
         .as_object()
@@ -339,75 +351,8 @@ fn prepare(
     {
         return Err("migration cannot discard pending legacy targets; review them and supply per-release targets explicitly".into());
     }
-    let (head, boundary) = history::validate_baseline(root, &reader, None, false)?;
-    let corrected = if repair {
-        let cfg = parse(old.as_deref().ok_or("baseline repair requires schema 4")?)?
-            .ok_or("baseline repair requires schema 4")?;
-        if boundary != cfg.baseline.revision {
-            return Err("published migration baseline cannot be repaired".into());
-        }
-        super::prefetch_history(&cfg, &head, &reader)?;
-        let corrected = reconstruct_baseline(root, &cfg, &reader)?;
-        ownership_enrichment(&cfg.baseline, &corrected)?;
-        Some(serde_json::to_value(corrected).map_err(|e| e.to_string())?)
-    } else {
-        None
-    };
-    let mut value = if source_schema >= 3 {
-        old_value.clone()
-    } else {
-        json!({"schema_version":3,"release_policy":"explicit_release","strategy":"independent","adapters":{},"packages":[]})
-    };
+    let mut value = old_value.clone();
     let mut inputs = BTreeMap::from([(root.join(CONFIG), old.clone())]);
-    if source_schema == 2 {
-        let rust_cfg = config::parse(old.as_deref().ok_or("schema 2 source is missing")?)?
-            .ok_or("schema 2 Rust adapter missing")?;
-        let native = rust::snapshot(&rust_cfg, &inventory, &mut |p| {
-            config::read_current(root, p)
-        })?;
-        let mut identities = Vec::new();
-        let mut manifest_ids = BTreeMap::new();
-        let mut ids = BTreeSet::new();
-        for (manifest, p) in &native.packages {
-            if !ids.insert(p.name.clone()) {
-                return Err("schema 2 has duplicate native names; provide a schema 4 proposal with explicit stable ids".into());
-            }
-            manifest_ids.insert(manifest.clone(), p.name.clone());
-            identities
-                .push(json!({"id":p.name,"name":p.name,"manifest":manifest,"language":"rust"}));
-        }
-        value["packages"] = json!(identities);
-        value["adapters"]["rust"] = old_value["rust"].clone();
-        value["product_inputs"] = json!(rust_cfg.product_inputs);
-        value["shared_inputs"]=json!(rust_cfg.shared_inputs.iter().map(|s|Ok(json!({"path":s.path,"packages":s.packages.iter().map(|m|manifest_ids.get(m).cloned().ok_or_else(||format!("legacy shared input references unknown package: {m}"))).collect::<Result<Vec<_>,_>>()?}))).collect::<Result<Vec<Value>,String>>()?);
-    }
-    if source_schema == 1 {
-        let manifests = if config::auto_manifests(&old_value)? {
-            ["Cargo.toml", "package.json"]
-                .into_iter()
-                .filter(|p| inventory.iter().any(|x| x == p))
-                .map(str::to_string)
-                .collect::<Vec<_>>()
-        } else {
-            old_value["manifests"]
-                .as_array()
-                .ok_or("schema 1 manifests missing")?
-                .iter()
-                .map(|p| {
-                    p.as_str()
-                        .map(str::to_string)
-                        .ok_or("invalid legacy manifest".into())
-                })
-                .collect::<Result<Vec<_>, String>>()?
-        };
-        if manifests.iter().any(|p| !p.ends_with("Cargo.toml")) {
-            return Err(
-                "non-Rust/Python native mappings require an explicit supported migration proposal"
-                    .into(),
-            );
-        }
-        value["synchronized_manifests"] = json!(manifests);
-    }
     if let Some(path) = proposal {
         let path = if Path::new(path).is_absolute() {
             PathBuf::from(path)
@@ -455,6 +400,34 @@ fn prepare(
         value["product_manifests"] = mappings;
     }
     value["git_sync_setup"] = json!({"schema":1,"confirmed":true,"selection":value["strategy"].as_str().ok_or("migration proposal strategy missing")?});
+    let initial_product_manifests: Option<Vec<String>> = if old.is_none() {
+        Some(
+            serde_json::from_value(value.get("product_manifests").cloned().unwrap_or(json!([])))
+                .map_err(|e| format!("invalid initial product manifests: {e}"))?,
+        )
+    } else {
+        None
+    };
+    let (head, boundary) = history::validate_baseline(
+        root,
+        &reader,
+        None,
+        false,
+        initial_product_manifests.as_deref(),
+    )?;
+    let corrected = if repair {
+        let cfg = parse(old.as_deref().ok_or("baseline repair requires schema 4")?)?
+            .ok_or("baseline repair requires schema 4")?;
+        if boundary != cfg.baseline.revision {
+            return Err("published migration baseline cannot be repaired".into());
+        }
+        super::prefetch_history(&cfg, &head, &reader)?;
+        let corrected = reconstruct_baseline(root, &cfg, &reader)?;
+        ownership_enrichment(&cfg.baseline, &corrected)?;
+        Some(serde_json::to_value(corrected).map_err(|e| e.to_string())?)
+    } else {
+        None
+    };
     // Adapter DTOs are reused; no legacy bump algorithm is invoked during migration.
     let mut adapter_value = value.clone();
     let obj = adapter_value
@@ -744,6 +717,7 @@ fn apply_mode(
         if !confirmed {
             return Err("migration requires a confirmed strategy choice".into());
         }
+        crate::baseline::require_supported_project(root)?;
         let _lock = crate::project_sync::ProjectLock::acquire(root)?;
         let p = prepare(root, runner, proposal, strategy, repair)?;
         if p.fingerprint != expected {

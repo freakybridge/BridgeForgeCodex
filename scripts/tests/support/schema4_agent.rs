@@ -8,8 +8,13 @@ use std::{
 };
 const CONFIG: &str = ".codex/bridgeforge-version.json";
 
+#[path = "current_fixture.rs"]
+pub(crate) mod current_fixture;
+
 pub(crate) fn migrate(root: &Path, runner: &dyn ProcessRunner) -> Result<(), String> {
-    let p = migration_plan(root, runner, None);
+    let proposal = current_fixture::proposal(root)?;
+    let proposal = proposal.as_ref().map(|p| p.to_str().unwrap());
+    let p = migration_plan(root, runner, proposal);
     if p.code != 0 {
         return Err(p.stderr);
     }
@@ -18,7 +23,7 @@ pub(crate) fn migrate(root: &Path, runner: &dyn ProcessRunner) -> Result<(), Str
         .as_ref()
         .and_then(|r| r["fingerprint"].as_str())
         .ok_or("migration fingerprint missing")?;
-    let result = migration_apply(root, runner, None, fp, true);
+    let result = migration_apply(root, runner, proposal, fp, true);
     if result.code != 0 {
         return Err(result.stderr);
     }

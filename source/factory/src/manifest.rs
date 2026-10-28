@@ -231,6 +231,11 @@ fn render_managed_contract_with_overlay(
                 .map(|r| json!({"id":r["id"],"target":r["previous_target"],
                 "known_hashes":r["known_hashes"].as_array().into_iter().flatten()
                     .map(|h| h["sha256"].clone()).collect::<Vec<_>>() }))
+                .chain(layout["retirements"].as_array().into_iter().flatten().map(
+                    |r| json!({"id":r["id"],"target":r["target"],
+                        "known_hashes":r["known_hashes"].as_array().into_iter().flatten()
+                            .map(|h|h["sha256"].clone()).collect::<Vec<_>>() })
+                ))
                 .collect::<Vec<_>>()
         );
     }
@@ -453,8 +458,52 @@ fn render_targets(root: &Path) -> Result<Vec<(PathBuf, Vec<u8>)>, String> {
     Ok(targets)
 }
 
+fn projection_targets(root: &Path) -> Result<Vec<(PathBuf, Option<Vec<u8>>)>, String> {
+    projection_targets_from_writes(root, render_targets(root)?)
+}
+
+fn projection_targets_from_writes(
+    root: &Path,
+    writes: Vec<(PathBuf, Vec<u8>)>,
+) -> Result<Vec<(PathBuf, Option<Vec<u8>>)>, String> {
+    let contract = writes
+        .iter()
+        .find(|(path, _)| path == &root.join("templates/managed-skeleton.json"))
+        .ok_or("managed contract output missing")?;
+    let contract: Value = serde_json::from_slice(&contract.1).map_err(|e| e.to_string())?;
+    crate::baseline::validate_contract(&contract)?;
+    let mut targets = writes
+        .into_iter()
+        .map(|(p, b)| (p, Some(b)))
+        .collect::<Vec<_>>();
+    for asset in contract["retired_assets"].as_array().into_iter().flatten() {
+        let relative = asset["target"]
+            .as_str()
+            .ok_or("retired projection target missing")?;
+        let path = crate::managed_paths::safe_join(root, relative, "retired factory projection")?;
+        if targets.iter().any(|(p, _)| p == &path) {
+            return Err("retired projection is still an active output".into());
+        }
+        if let Some(bytes) = crate::managed_paths::read_metadata(&path, 32 * 1024 * 1024)? {
+            let hash = sha_git(&bytes);
+            if !asset["known_hashes"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .any(|h| h.as_str() == Some(hash.as_str()))
+            {
+                return Err(format!(
+                    "retired factory projection has external changes; preserved: {relative}"
+                ));
+            }
+        }
+        targets.push((path, None));
+    }
+    Ok(targets)
+}
+
 pub fn rebuild(root: &Path, check: bool) -> Result<bool, String> {
-    let targets = render_targets(root)?;
+    let targets = projection_targets(root)?;
     let mut before = BTreeMap::new();
     for (path, _) in &targets {
         for ancestor in path.ancestors().filter(|p| p.exists()) {
@@ -472,10 +521,10 @@ pub fn rebuild(root: &Path, check: bool) -> Result<bool, String> {
     }
     let changed = targets
         .iter()
-        .any(|(path, payload)| before[path].as_deref() != Some(payload));
+        .any(|(path, payload)| before[path].as_deref() != payload.as_deref());
     if changed && !check {
         install_targets(&targets, &before, &|index| {
-            if (index == 0 || index == targets.len()) && render_targets(root)? != targets {
+            if (index == 0 || index == targets.len()) && projection_targets(root)? != targets {
                 return Err("manifest inputs changed during generation".into());
             }
             Ok(())
@@ -485,7 +534,7 @@ pub fn rebuild(root: &Path, check: bool) -> Result<bool, String> {
 }
 
 fn install_targets(
-    targets: &[(PathBuf, Vec<u8>)],
+    targets: &[(PathBuf, Option<Vec<u8>>)],
     before: &BTreeMap<PathBuf, Option<Vec<u8>>>,
     observer: &dyn Fn(usize) -> Result<(), String>,
 ) -> Result<(), String> {
@@ -493,7 +542,7 @@ fn install_targets(
     let result = (|| -> Result<(), String> {
         for (index, (path, payload)) in targets.iter().enumerate() {
             observer(index)?;
-            if before[path].as_deref() == Some(payload) {
+            if before[path].as_deref() == payload.as_deref() {
                 continue;
             }
             if crate::managed_paths::read_metadata(path, 32 * 1024 * 1024)? != before[path] {
@@ -502,7 +551,12 @@ fn install_targets(
                     path.display()
                 ));
             }
-            crate::persistence::atomic_write(path, payload).map_err(|e| e.to_string())?;
+            match payload {
+                Some(bytes) => {
+                    crate::persistence::atomic_write(path, bytes).map_err(|e| e.to_string())?
+                }
+                None => fs::remove_file(path).map_err(|e| e.to_string())?,
+            }
             installed.push((path, payload));
         }
         observer(targets.len())?;
@@ -521,7 +575,7 @@ fn install_targets(
                     continue;
                 }
             };
-            if current.as_deref() != Some(payload) {
+            if current.as_deref() != payload.as_deref() {
                 failures.push(format!("external change preserved: {}", path.display()));
                 continue;
             }

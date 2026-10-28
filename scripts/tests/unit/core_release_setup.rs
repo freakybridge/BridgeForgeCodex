@@ -2,6 +2,31 @@ use super::*;
 use crate::{ProcessRequest, ProcessRunner, SystemProcessRunner};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+#[test]
+fn old_skeleton_configuration_apply_is_rejected_before_lock_or_process() {
+    struct NeverRun;
+    impl ProcessRunner for NeverRun {
+        fn run(&self, _: &ProcessRequest) -> std::io::Result<crate::ProcessOutput> {
+            panic!("old skeleton support check must precede process execution");
+        }
+    }
+    let root = repo(&[(".codex/.bridgeforge_codex_version", "7.0.5\n")]);
+    for repair in [false, true] {
+        let result = if repair {
+            schema4::repair_baseline_apply(&root.0, &NeverRun, "unused", true)
+        } else {
+            schema4::configuration_apply(&root.0, &NeverRun, None, None, "unused", true)
+        };
+        assert_ne!(result.code, 0);
+        assert!(
+            result.stderr.contains("minimum supported"),
+            "{}",
+            result.stderr
+        );
+        assert!(!root.0.join(".runtime").exists());
+    }
+}
+
 struct Repo(PathBuf);
 impl Drop for Repo {
     fn drop(&mut self) {
@@ -39,7 +64,7 @@ fn repo(files: &[(&str, &str)]) -> Repo {
     fs::write(root.0.join("CHANGELOG.md"), "# Changelog\n").unwrap();
     fs::write(
         root.0.join(".codex/managed-skeleton.json"),
-        r#"{"contract_target":".codex/managed-skeleton.json","assets":[]}"#,
+        r#"{"release_version":"8.0.0","contract_target":".codex/managed-skeleton.json","assets":[]}"#,
     )
     .unwrap();
     git(&root.0, &["init"]);
@@ -102,21 +127,19 @@ fn setup_single_model_ignores_managed_rust_and_generates_schema4() {
 }
 
 #[test]
-fn setup_legacy_rust_manifest_mapping_is_preserved_without_version_writes() {
-    let root = repo(&[
-        (
-            CONFIG,
-            r#"{"schema_version":1,"release_policy":"explicit_release","manifests":["Cargo.toml"]}"#,
-        ),
-        ("Cargo.toml", "[package]\nname='app'\nversion='1.0.0'\n"),
-    ]);
-    let native = fs::read(root.0.join("Cargo.toml")).unwrap();
-    apply_current(&root.0);
-    let value: Value = serde_json::from_slice(&fs::read(root.0.join(CONFIG)).unwrap()).unwrap();
-    assert_eq!(value["product_manifests"], json!(["Cargo.toml"]));
-    assert_eq!(value["baseline"]["source_schema"], 1);
-    assert_eq!(fs::read(root.0.join("Cargo.toml")).unwrap(), native);
-    assert_eq!(fs::read(root.0.join("VERSION")).unwrap(), b"1.0.0\n");
+fn setup_legacy_configuration_is_rejected_without_writes() {
+    for schema in [1, 2, 3] {
+        let payload =
+            format!("{{\"schema_version\":{schema},\"release_policy\":\"explicit_release\"}}");
+        let root = repo(&[(CONFIG, &payload)]);
+        let index = fs::read(root.0.join(".git/index")).unwrap();
+        let result = plan(&root.0, &SystemProcessRunner, "current");
+        assert_ne!(result.code, 0);
+        assert!(result.stderr.contains("retired"), "{}", result.stderr);
+        assert_eq!(fs::read_to_string(root.0.join(CONFIG)).unwrap(), payload);
+        assert_eq!(fs::read(root.0.join(".git/index")).unwrap(), index);
+        assert!(!root.0.join(".runtime").exists());
+    }
 }
 
 #[test]
@@ -206,7 +229,11 @@ fn setup_plan_binds_ignored_native_lock_and_choice() {
     git(&root.0, &["rm", "--cached", "Cargo.lock"]);
     git(&root.0, &["add", "."]);
     git(&root.0, &["commit", "-m", "chore: ignore lock"]);
-    let p = plan(&root.0, &SystemProcessRunner, "current");
+    fs::remove_file(root.0.join(CONFIG)).unwrap();
+    fs::create_dir_all(root.0.join(".runtime")).unwrap();
+    let proposal = ".runtime/current-configuration.json";
+    fs::write(root.0.join(proposal), br#"{"schema_version":4,"release_policy":"explicit_release","strategy":"independent","adapters":{"rust":{"workspaces":["Cargo.toml"]}},"packages":[{"id":"app","name":"app","language":"rust","manifest":"Cargo.toml"}]}"#).unwrap();
+    let p = plan_configuration(&root.0, &SystemProcessRunner, proposal);
     assert_eq!(p.code, 0, "{}", p.stderr);
     let fp = p.receipt.unwrap()["fingerprint"]
         .as_str()
@@ -222,8 +249,8 @@ fn setup_plan_binds_ignored_native_lock_and_choice() {
     )
     .unwrap();
     assert_ne!(
-        apply(&root.0, &SystemProcessRunner, "current", &fp, true).code,
+        apply_configuration(&root.0, &SystemProcessRunner, proposal, &fp, true).code,
         0
     );
-    assert_eq!(fs::read_to_string(root.0.join(CONFIG)).unwrap(), config);
+    assert!(!root.0.join(CONFIG).exists());
 }

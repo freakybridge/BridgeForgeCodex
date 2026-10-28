@@ -1,4 +1,36 @@
 use super::*;
+
+#[test]
+fn retired_operations_fail_before_repository_or_process_access() {
+    struct NeverRun;
+    impl bridgeforge_core::ProcessRunner for NeverRun {
+        fn run(
+            &self,
+            _: &bridgeforge_core::ProcessRequest,
+        ) -> std::io::Result<bridgeforge_core::ProcessOutput> {
+            panic!("retired operations must not execute processes");
+        }
+    }
+    for flag in [
+        "--prepare-release",
+        "--development-status",
+        "--prepare-release=true",
+        "--development-status=true",
+    ] {
+        let result = git_sync_with_runner(
+            &[
+                "git-sync".into(),
+                flag.into(),
+                "--root".into(),
+                "does-not-exist".into(),
+            ],
+            &NeverRun,
+        );
+        assert_eq!(result.code, EXIT_BLOCKED);
+        assert!(result.stderr.contains("retired"), "{}", result.stderr);
+    }
+    assert_eq!(run(&["batch".into()]).code, EXIT_BLOCKED);
+}
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[test]
@@ -33,6 +65,8 @@ fn development_capabilities_and_mutation_flags_are_explicit() {
         "package-stability-v1",
         "git-sync-development-closure-v1",
         "task-selected-development-checks-v1",
+        "staged-development-validation-v1",
+        "direct-development-apply-v1",
         "version-coverage-v1",
         "scoped-release-evidence-v1",
         "release-external-analysis-preview-v1",
@@ -60,6 +94,9 @@ fn development_capabilities_and_mutation_flags_are_explicit() {
     }
     for flags in [
         vec!["--apply", "--dry-run"],
+        vec!["--validate", "--dry-run"],
+        vec!["--validate", "--check"],
+        vec!["--validate", "--apply"],
         vec!["--recover", "--check"],
         vec!["--preview", "--apply"],
         vec![],
@@ -429,7 +466,7 @@ fn git_sync_preflight_is_capability_gated_and_mutually_exclusive() {
             .as_nanos()
     ));
     fs::create_dir_all(root.join(".codex")).unwrap();
-    for mode in ["--release", "--setup-apply", "--prepare-release"] {
+    for mode in ["--release", "--setup-apply"] {
         let result = run(&[
             "git-sync".into(),
             "--root".into(),
@@ -443,17 +480,6 @@ fn git_sync_preflight_is_capability_gated_and_mutually_exclusive() {
         assert!(!root.join(".runtime").exists());
     }
     fs::remove_dir_all(root).unwrap();
-}
-
-#[test]
-fn parser_collects_repeated_batch_roots_in_order() {
-    let args = vec![
-        "--project-root".into(),
-        "a".into(),
-        "--project-root".into(),
-        "b".into(),
-    ];
-    assert_eq!(values(&args, "--project-root"), vec!["a", "b"]);
 }
 
 #[test]

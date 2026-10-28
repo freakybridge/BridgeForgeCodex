@@ -33,34 +33,18 @@ pub(super) fn confirmation(value: &Value) -> Result<bool, String> {
 }
 
 fn read_config(root: &Path) -> Result<(Option<Vec<u8>>, Value), String> {
+    crate::baseline::require_supported_project(root)?;
     let bytes = config::read_current(root, CONFIG)?;
     let value = if let Some(bytes) = &bytes {
         let value = crate::json::parse_unique_json(bytes, "version sync config")?;
+        if value["schema_version"].as_u64() != Some(4) {
+            return Err("legacy configuration migration is retired; skeleton 8.0.0 or newer requires current configuration".into());
+        }
         config::parse(bytes)?;
         explicit_release_policy(root)?;
-        if value["schema_version"].as_u64() == Some(1) && !config::auto_manifests(&value)? {
-            let manifests = value["manifests"]
-                .as_array()
-                .filter(|a| !a.is_empty())
-                .ok_or("schema 1 manifests must be a nonempty array")?;
-            let mut seen = std::collections::BTreeSet::new();
-            for entry in manifests {
-                let path = entry
-                    .as_str()
-                    .ok_or("schema 1 manifest path must be a string")?;
-                safe_relative(root, path)?;
-                if !matches!(
-                    Path::new(path).file_name().and_then(|s| s.to_str()),
-                    Some("Cargo.toml" | "package.json")
-                ) || !seen.insert(path)
-                {
-                    return Err("schema 1 manifests contain unsupported or duplicate paths".into());
-                }
-            }
-        }
         value
     } else {
-        json!({"schema_version":1,"release_policy":"explicit_release","manifest_policy":"auto"})
+        json!({"schema_version":4,"release_policy":"explicit_release","strategy":"independent","adapters":{},"packages":[]})
     };
     Ok((bytes, value))
 }

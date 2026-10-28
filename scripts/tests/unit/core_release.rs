@@ -25,6 +25,12 @@ fn git_ok(root: &Path, args: &[&str]) {
 }
 
 fn release_repository(name: &str, contract: &Value, files: &[(&str, &[u8])]) -> ReleaseRepository {
+    let mut contract = contract.clone();
+    contract
+        .as_object_mut()
+        .unwrap()
+        .entry("release_version")
+        .or_insert(json!("8.0.0"));
     let token = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
@@ -40,7 +46,7 @@ fn release_repository(name: &str, contract: &Value, files: &[(&str, &[u8])]) -> 
     );
     fs::write(
         root.join(".codex/managed-skeleton.json"),
-        serde_json::to_vec_pretty(contract).unwrap(),
+        serde_json::to_vec_pretty(&contract).unwrap(),
     )
     .unwrap();
     for (relative, payload) in files {
@@ -123,6 +129,11 @@ fn immutable_history_reader_batches_payloads_and_never_caches_mutable_head() {
     assert_eq!(*runner.trees.borrow(), 1);
     assert_eq!(*runner.batches.borrow(), 1);
     assert_eq!(*runner.shows.borrow(), 0);
+    let inspection = schema4::InspectionRunner(&reader);
+    assert_eq!(revision_payload(&repo.0, oid.trim(), "second.txt", &inspection)
+        .unwrap().unwrap(), b"second\n");
+    assert_eq!(*runner.trees.borrow(), 1, "read-only decorators reuse the same immutable tree");
+    assert_eq!(*runner.shows.borrow(), 0, "read-only decorators must not bypass prefetched blobs");
     assert_eq!(
         head_payload(&repo.0, "second.txt", &reader)
             .unwrap()
@@ -588,10 +599,26 @@ fn conventional_commit_parses_description_and_breaking_annotation() {
 
 #[test]
 fn empty_and_skeleton_changes_do_not_require_business_release() {
-    assert_eq!(build_release_plan(Vec::new()).kind, ReleaseKind::None);
-    let plan = build_release_plan(vec!["templates/AGENTS.md".into()]);
-    assert_eq!(plan.kind, ReleaseKind::SkeletonOnly);
-    assert!(!plan.requires_business_version);
+    let repo = independent_repository("empty-and-skeleton", false);
+    migrate_fixture(&repo).unwrap();
+    for payload in [None, Some(b"new public content\n".as_slice())] {
+        if let Some(payload) = payload {
+            fs::write(repo.0.join("managed.txt"), payload).unwrap();
+            let path = repo.0.join(".codex/managed-skeleton.json");
+            let mut contract: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+            contract["assets"][0]["current_sha256"] = json!(digest(payload));
+            fs::write(path, serde_json::to_vec(&contract).unwrap()).unwrap();
+        }
+        assert!(fixture_plan(&repo, "patch", &[]).unwrap().is_none());
+        let result = schema4::preview(
+            &repo.0,
+            "fix: no business change",
+            &schema4::Request::default(),
+            &SystemProcessRunner,
+        );
+        assert_eq!(result.code, 0, "{}", result.stderr);
+        assert_eq!(result.receipt.unwrap()["status"], "nothing-to-release");
+    }
 }
 
 #[test]
@@ -1025,28 +1052,52 @@ fn independent_config() -> Value {
         "rust":{"workspaces":["Cargo.toml"],"dependency_bump":"patch","shared_inputs":[],"product_inputs":["README.md","doc/"]}})
 }
 
-fn migrate_fixture(repo: &ReleaseRepository) {
-    schema4::fixture::migrate(&repo.0, &SystemProcessRunner).unwrap();
+fn migrate_fixture(repo: &ReleaseRepository) -> Result<(), String> {
+    let bytes = fs::read(repo.0.join(".codex/bridgeforge-version.json"))
+        .unwrap_or_else(|_| b"{\"schema_version\":4}".to_vec());
+    let cfg: Value = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
+    if cfg["schema_version"] == 2 {
+        // Explicit modern package registration for historical-native fixtures.
+        let adapter = config::parse(&bytes)?.ok_or("historical Rust fixture missing")?;
+        let packages = rust::snapshot(
+            &adapter,
+            &independent::inventory(&repo.0, &SystemProcessRunner)?,
+            &mut |p| config::read_current(&repo.0, p),
+        )?;
+        let ids = packages
+            .packages
+            .iter()
+            .map(|(manifest, p)| (manifest.clone(), p.name.clone()))
+            .collect::<BTreeMap<_, _>>();
+        let shared = adapter.shared_inputs.iter().map(|entry|Ok(json!({"path":entry.path,"packages":entry.packages.iter().map(|p|ids.get(p).cloned().ok_or_else(||format!("unknown fixture package {p}"))).collect::<Result<Vec<_>,String>>()?}))).collect::<Result<Vec<Value>,String>>()?;
+        let path = repo.0.join(".runtime/current-configuration.json");
+        fs::create_dir_all(path.parent().unwrap()).map_err(|e| e.to_string())?;
+        fs::write(path,serde_json::to_vec(&json!({"schema_version":4,"strategy":"independent","release_policy":"explicit_release",
+            "adapters":{"rust":cfg["rust"]},"packages":packages.packages.iter().map(|(manifest,p)|json!({"id":p.name,"name":p.name,"manifest":manifest,"language":"rust"})).collect::<Vec<_>>(),
+            "product_inputs":adapter.product_inputs,"shared_inputs":shared
+        })).map_err(|e|e.to_string())?).map_err(|e|e.to_string())?;
+    }
+    schema4::fixture::migrate(&repo.0, &SystemProcessRunner)
 }
+
 fn fixture_plan(
     repo: &ReleaseRepository,
     product: &str,
     packages: &[(&str, &str)],
 ) -> Result<Option<FileReleasePlan>, String> {
     let request = schema4::fixture::analysis(&repo.0, &SystemProcessRunner, product, packages)?;
-    build_explicit_release_plan_with_request(
+    crate::release::schema4::build(
         &repo.0,
         "chore: fixture final release",
-        vec![],
-        &SystemProcessRunner,
         &request,
+        &SystemProcessRunner,
     )
 }
 
 #[test]
 fn independent_release_rates_each_final_package_and_is_idempotent() {
     let repo = independent_repository("schema4-impacts", false);
-    migrate_fixture(&repo);
+    migrate_fixture(&repo).unwrap();
     fs::write(
         repo.0.join("core/src/lib.rs"),
         b"pub fn value() -> u32 { 2 }\n",
@@ -1099,85 +1150,15 @@ fn independent_release_rates_each_final_package_and_is_idempotent() {
     git_ok(&repo.0, &["add", "."]);
     git_ok(&repo.0, &["commit", "-m", "chore: release"]);
     assert!(
-        build_explicit_release_plan(
+        schema4::build(
             &repo.0,
             "feat!: ignored title",
-            vec![],
+            &schema4::Request::default(),
             &SystemProcessRunner
         )
         .unwrap()
         .is_none()
     );
-}
-
-#[test]
-fn independent_migration_preserves_versions_unpublished_changes_and_initial_package() {
-    let repo = independent_repository("schema4-new", false);
-    fs::write(
-        repo.0.join("app/src/lib.rs"),
-        b"pub fn value() -> u32 { 9 }\n",
-    )
-    .unwrap();
-    fs::create_dir_all(repo.0.join("new/src")).unwrap();
-    fs::write(
-        repo.0.join("new/Cargo.toml"),
-        b"[package]\nname='new'\nversion='0.3.7'\nedition='2024'\n[workspace]\n",
-    )
-    .unwrap();
-    fs::write(
-        repo.0.join("new/Cargo.lock"),
-        b"version=4\n[[package]]\nname='new'\nversion='0.3.7'\n",
-    )
-    .unwrap();
-    fs::write(repo.0.join("new/src/lib.rs"), b"pub fn value() {}\n").unwrap();
-    let mut cfg = independent_config();
-    cfg["rust"]["workspaces"] = json!(["Cargo.toml", "new/Cargo.toml"]);
-    fs::write(
-        repo.0.join(".codex/bridgeforge-version.json"),
-        serde_json::to_vec(&cfg).unwrap(),
-    )
-    .unwrap();
-    git_ok(&repo.0, &["add", "."]);
-    git_ok(&repo.0, &["commit", "-m", "unclassified ordinary commit"]);
-    let version = fs::read(repo.0.join("VERSION")).unwrap();
-    migrate_fixture(&repo);
-    assert_eq!(fs::read(repo.0.join("VERSION")).unwrap(), version);
-    let p = fixture_plan(&repo, "patch", &[]).unwrap().unwrap();
-    assert_eq!(p.package_changes.len(), 2);
-    assert!(p.package_changes.iter().any(|p| p.name == "new"
-        && p.version_before == "unreleased"
-        && p.version_after == "0.3.7"));
-    assert!(
-        p.package_changes
-            .iter()
-            .any(|p| p.name == "app" && p.version_after == "1.0.1")
-    );
-}
-
-#[test]
-fn independent_migration_rejects_transient_identity_and_version_changes() {
-    for mode in ["delete", "rename", "version"] {
-        let repo = independent_repository(mode, false);
-        let original = fs::read(repo.0.join("core/Cargo.toml")).unwrap();
-        if mode == "delete" {
-            git_ok(&repo.0, &["rm", "-r", "core"]);
-        } else {
-            let old = String::from_utf8(original.clone()).unwrap();
-            let text = if mode == "rename" {
-                old.replace("name = \"core\"", "name = \"renamed\"")
-            } else {
-                old.replace("version.workspace = true", "version = \"0.9.0\"")
-            };
-            fs::write(repo.0.join("core/Cargo.toml"), text).unwrap();
-        }
-        git_ok(&repo.0, &["add", "."]);
-        git_ok(&repo.0, &["commit", "-m", "chore: unsafe transient"]);
-        fs::create_dir_all(repo.0.join("core")).unwrap();
-        fs::write(repo.0.join("core/Cargo.toml"), original).unwrap();
-        let p = schema4::migration_plan(&repo.0, &SystemProcessRunner, None);
-        assert_ne!(p.code, 0, "{mode}");
-        assert_eq!(fs::read(repo.0.join("VERSION")).unwrap(), b"1.0.0\n");
-    }
 }
 
 fn historical_lock_config(legacy: bool) -> Value {
@@ -1233,7 +1214,7 @@ fn independent_historical_lock_migration_accepts_legacy_boundary_and_intermediat
         git_ok(&repo.0, &["commit", "-m", "unclassified change"]);
         fs::write(repo.0.join("strategy/Cargo.lock"), strategy_lock(false)).unwrap();
         write_independent_lock_config(&repo);
-        migrate_fixture(&repo);
+        migrate_fixture(&repo).unwrap();
         let p = fixture_plan(&repo, "minor", &[("strategy", "minor")])
             .unwrap()
             .unwrap();
@@ -1259,7 +1240,7 @@ fn independent_historical_lock_migration_keeps_current_and_schema2_locks_strict(
             fs::write(repo.0.join("strategy/Cargo.lock"), strategy_lock(false)).unwrap();
         }
         write_independent_lock_config(&repo);
-        let error = schema4::fixture::migrate(&repo.0, &SystemProcessRunner).unwrap_err();
+        let error = migrate_fixture(&repo).unwrap_err();
         assert!(
             error.contains(
                 "strategy/Cargo.lock: local package native has missing, ambiguous, or stale version"
@@ -1286,7 +1267,7 @@ fn independent_historical_lock_migration_keeps_identity_and_effective_version_gu
         fs::write(repo.0.join("strategy/Cargo.toml"), original).unwrap();
         fs::write(repo.0.join("strategy/Cargo.lock"), strategy_lock(false)).unwrap();
         write_independent_lock_config(&repo);
-        let error = schema4::fixture::migrate(&repo.0, &SystemProcessRunner).unwrap_err();
+        let error = migrate_fixture(&repo).unwrap_err();
         assert!(
             (error.contains("identity") || error.contains("version")),
             "{error}"
@@ -1301,7 +1282,7 @@ fn independent_historical_lock_migration_does_not_exempt_legacy_managed_roots() 
     let repo = historical_lock_repository("legacy-managed-lock", legacy, true);
     fs::write(repo.0.join("strategy/Cargo.lock"), strategy_lock(false)).unwrap();
     write_independent_lock_config(&repo);
-    let error = schema4::fixture::migrate(&repo.0, &SystemProcessRunner).unwrap_err();
+    let error = migrate_fixture(&repo).unwrap_err();
     assert!(
         error.contains(
             "strategy/Cargo.lock: local package native has missing, ambiguous, or stale version"
@@ -1332,7 +1313,7 @@ fn independent_historical_lock_migration_requires_proven_legacy_contract() {
         );
         fs::write(repo.0.join("strategy/Cargo.lock"), strategy_lock(false)).unwrap();
         write_independent_lock_config(&repo);
-        let error = schema4::fixture::migrate(&repo.0, &SystemProcessRunner).unwrap_err();
+        let error = migrate_fixture(&repo).unwrap_err();
         if missing {
             assert!(error.contains("strategy/Cargo.lock: local package native has missing, ambiguous, or stale version"), "{error}");
         } else {
@@ -1354,7 +1335,7 @@ fn independent_historical_lock_migration_respects_auto_and_member_manifest_scope
     );
     fs::write(repo.0.join("strategy/Cargo.lock"), strategy_lock(false)).unwrap();
     write_independent_lock_config(&repo);
-    assert!(schema4::fixture::migrate(&repo.0, &SystemProcessRunner).is_ok());
+    assert!(migrate_fixture(&repo).is_ok());
 
     // Explicitly managing a member also keeps its containing root's lock
     // strict, even when the root manifest itself was not in the legacy list.
@@ -1405,7 +1386,7 @@ fn independent_historical_lock_migration_respects_auto_and_member_manifest_scope
 #[test]
 fn schema4_plan_collects_actual_changes_and_rejects_apply_drift() {
     let repo = independent_repository("schema4-drift", false);
-    migrate_fixture(&repo);
+    migrate_fixture(&repo).unwrap();
     fs::write(
         repo.0.join("app/src/lib.rs"),
         b"pub fn value() -> u32 { 8 }\n",
@@ -1440,19 +1421,37 @@ fn schema4_legacy_release_entrances_are_retired_without_writes() {
             independent_repository("retired", false)
         };
         let index = fs::read(repo.0.join(".git/index")).unwrap();
-        for error in [
-            build_explicit_release_plan(&repo.0, "fix: retired", vec![], &SystemProcessRunner)
-                .unwrap_err(),
-            build_file_release_plan(
+        for changed in [false, true] {
+            if changed {
+                fs::write(repo.0.join("business.txt"), b"current difference\n").unwrap();
+            }
+            let error = schema4::build(
                 &repo.0,
                 "fix: retired",
-                vec!["business.txt".into()],
+                &schema4::Request::default(),
                 &SystemProcessRunner,
             )
-            .unwrap_err(),
-        ] {
-            assert!(error.contains("schema 4 migration"), "{error}");
+            .unwrap_err();
+            assert!(error.contains("current schema 4"), "{error}");
         }
+        struct NoGit;
+        impl ProcessRunner for NoGit {
+            fn run(&self, _: &ProcessRequest) -> std::io::Result<ProcessOutput> {
+                panic!("retired release preview must not inspect Git");
+            }
+        }
+        let result = schema4::preview(
+            &repo.0,
+            "fix: retired",
+            &schema4::Request::default(),
+            &NoGit,
+        );
+        assert_eq!(result.code, crate::EXIT_BLOCKED);
+        assert!(
+            result.stderr.contains("current schema 4"),
+            "{}",
+            result.stderr
+        );
         assert_eq!(fs::read(repo.0.join(".git/index")).unwrap(), index);
     }
 }
@@ -1467,7 +1466,7 @@ fn schema4_final_analysis_controls_level_not_commit_titles() {
         let repo = explicit_repository(level);
         history_commit(&repo, b"one\n", "feat!: temporary feature");
         history_commit(&repo, b"two\n", "unclassified title");
-        migrate_fixture(&repo);
+        migrate_fixture(&repo).unwrap();
         let index = fs::read(repo.0.join(".git/index")).unwrap();
         let p = fixture_plan(&repo, level, &[]).unwrap().unwrap();
         assert_eq!(p.new_version.to_string(), expected);
@@ -1540,7 +1539,7 @@ fn schema4_merges_use_final_difference_and_keep_version_formatting_a_noop() {
         &repo.0,
         &["merge", "--no-ff", "feature", "-m", "merge business"],
     );
-    migrate_fixture(&repo);
+    migrate_fixture(&repo).unwrap();
     assert_eq!(
         fixture_plan(&repo, "patch", &[])
             .unwrap()
@@ -1553,6 +1552,6 @@ fn schema4_merges_use_final_difference_and_keep_version_formatting_a_noop() {
     fs::write(repo.0.join("VERSION"), b" 1.47.11\n\n").unwrap();
     git_ok(&repo.0, &["add", "."]);
     git_ok(&repo.0, &["commit", "-m", "docs: formatting"]);
-    migrate_fixture(&repo);
+    migrate_fixture(&repo).unwrap();
     assert!(fixture_plan(&repo, "patch", &[]).unwrap().is_none());
 }

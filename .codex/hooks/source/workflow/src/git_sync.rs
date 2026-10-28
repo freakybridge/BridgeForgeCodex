@@ -8,8 +8,6 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-#[path = "release_preparation.rs"]
-mod preparation;
 #[path = "git_sync_plan.rs"]
 mod write_plan;
 
@@ -58,20 +56,6 @@ pub fn release_status(root: &Path, runner: &dyn ProcessRunner) -> CommandOutcome
     }
 }
 
-pub fn development_status(root: &Path, runner: &dyn ProcessRunner) -> CommandOutcome {
-    match preparation::status(root, runner) {
-        Ok(value) if matches!(value["status"].as_str(), Some("setup-required" | "blocked")) => {
-            CommandOutcome {
-                code: crate::EXIT_BLOCKED,
-                receipt: Some(value),
-                ..CommandOutcome::default()
-            }
-        }
-        Ok(value) => CommandOutcome::with_receipt(value),
-        Err(error) => CommandOutcome::blocked(format!("[release-status] {error}\n")),
-    }
-}
-
 pub fn release_setup_status(root: &Path) -> serde_json::Value {
     let current = fs::read(root.join(".codex/bridgeforge-version.json"))
         .ok()
@@ -84,47 +68,9 @@ pub fn verify_readonly_git(root: &Path, runner: &dyn ProcessRunner) -> Result<()
     inspection::reject_external_filters(&Git { root, runner })
 }
 
-pub fn prepare_release(
-    root: &Path,
-    runner: &dyn ProcessRunner,
-    message: &str,
-    audit_file: Option<&Path>,
-) -> CommandOutcome {
-    prepare_release_with_request(
-        root,
-        runner,
-        message,
-        audit_file,
-        &crate::release::schema4::Request::default(),
-    )
-}
-
-pub fn prepare_release_with_request(
-    root: &Path,
-    runner: &dyn ProcessRunner,
-    message: &str,
-    audit_file: Option<&Path>,
-    request: &crate::release::schema4::Request,
-) -> CommandOutcome {
-    match preparation::prepare(root, runner, message, audit_file, request) {
-        Ok(value) => CommandOutcome::with_receipt(value),
-        Err(error) => CommandOutcome::blocked(format!("[prepare-release] {error}\n")),
-    }
-}
-
-fn requested_message(options: &GitSyncOptions) -> Result<String, String> {
-    let message = if let Some(path) = &options.message_file {
-        fs::read_to_string(path).map_err(|e| format!("cannot read commit message: {e}"))?
-    } else {
-        options.message.clone().unwrap_or_default()
-    };
-    if message.trim().is_empty() {
-        return Err("commit message is required for release".into());
-    }
-    Ok(message.trim().to_string())
-}
-
 fn release_guard_path(root: &Path) -> Result<PathBuf, String> {
+    // This is the active Git commit guard, not a prepared-release receipt.
+    // Keep the 8.x path so pending commit protection survives tool upgrades.
     write_plan::join(
         root,
         ".runtime/bridgeforge-codex/release-preparation/commit-guard.json",
@@ -250,25 +196,6 @@ impl<'a> Git<'a> {
         ))
     }
 
-    fn changed_paths(&self) -> Result<Vec<String>, String> {
-        let mut paths = Vec::new();
-        for args in [
-            &["diff", "--name-only"][..],
-            &["diff", "--cached", "--name-only"][..],
-            &["ls-files", "--others", "--exclude-standard"][..],
-        ] {
-            let output = self.required(args, Duration::from_secs(45))?;
-            paths.extend(
-                output
-                    .lines()
-                    .map(|line| line.trim().replace('\\', "/"))
-                    .filter(|line| !line.is_empty()),
-            );
-        }
-        paths.sort();
-        paths.dedup();
-        Ok(paths)
-    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -279,39 +206,6 @@ struct RepositoryIdentity {
     symbolic_head: String,
     head_oid: String,
     common_config_sha256: String,
-}
-
-// Ephemeral: preview remains read-only and no stale plan can cross processes.
-#[derive(PartialEq, Eq)]
-struct ReleasePlanningInputs {
-    identity: RepositoryIdentity,
-    index: String,
-    files: BTreeMap<String, Option<String>>,
-    git_config: String,
-    status: String,
-    history: String,
-}
-
-impl ReleasePlanningInputs {
-    fn capture(git: &Git<'_>) -> Result<Self, String> {
-        Ok(Self {
-            identity: RepositoryIdentity::capture(git)?,
-            index: git.required(
-                &["ls-files", "--stage", "-v", "-z"],
-                Duration::from_secs(30),
-            )?,
-            files: preparation::raw_inputs(git.root, git)?,
-            git_config: payload_sha(
-                git.required(
-                    &["config", "--null", "--list", "--show-origin"],
-                    Duration::from_secs(30),
-                )?
-                .as_bytes(),
-            ),
-            status: git.status()?,
-            history: crate::release::planning_history_state(git.root, git.runner)?,
-        })
-    }
 }
 
 fn payload_sha(payload: &[u8]) -> String {
@@ -403,15 +297,15 @@ impl RepositoryIdentity {
     }
 }
 
-pub struct SyncLock {
+pub struct RuntimeLock {
     _guard: crate::file_lock::FileLock,
 }
 
-pub fn lock_factory_runtime(root: &Path, runner: &dyn ProcessRunner) -> Result<SyncLock, String> {
-    SyncLock::acquire(&Git { root, runner })
+pub fn lock_factory_runtime(root: &Path, runner: &dyn ProcessRunner) -> Result<RuntimeLock, String> {
+    RuntimeLock::acquire(&Git { root, runner })
 }
 
-impl SyncLock {
+impl RuntimeLock {
     fn acquire(git: &Git<'_>) -> Result<Self, String> {
         let raw = git.required(
             &["rev-parse", "--path-format=absolute", "--git-common-dir"],
@@ -423,7 +317,7 @@ impl SyncLock {
         let path = PathBuf::from(raw).join("bridgeforge-git-sync.lock");
         let guard = crate::file_lock::FileLock::acquire(&path).map_err(|error| {
             format!(
-                "another bridgeforge git-sync is already running or lock is unavailable: {error}"
+                "runtime maintenance lock is unavailable: {error}"
             )
         })?;
         Ok(Self { _guard: guard })
@@ -528,13 +422,24 @@ fn receipt(
 }
 
 pub fn sync(root: &Path, runner: &dyn ProcessRunner, options: GitSyncOptions) -> CommandOutcome {
+    sync_mode(root, runner, options, false)
+}
+
+/// Mutating remote integration only: no version writes, commit, push or tool preparation.
+/// The agent obtains final release inputs after this step, then uses the ordinary
+/// read-only preview and explicit release with --skip-fetch.
+pub fn sync_remote(root: &Path, runner: &dyn ProcessRunner, options: GitSyncOptions) -> CommandOutcome {
+    sync_mode(root, runner, options, true)
+}
+
+fn sync_mode(root: &Path, runner: &dyn ProcessRunner, options: GitSyncOptions, remote_only: bool) -> CommandOutcome {
     let started = Instant::now();
     let timings = timing::Timings::new();
     let observed = timing::Observed {
         runner,
         timings: &timings,
     };
-    let mut outcome = sync_impl(root, &observed, options, &timings);
+    let mut outcome = sync_impl(root, &observed, options, &timings, remote_only);
     timings.attach(&mut outcome, started.elapsed().as_millis());
     outcome
 }
@@ -544,6 +449,7 @@ fn sync_impl(
     runner: &dyn ProcessRunner,
     mut options: GitSyncOptions,
     timings: &timing::Timings,
+    remote_only: bool,
 ) -> CommandOutcome {
     if options.remote.is_empty() {
         options.remote = "origin".into();
@@ -558,49 +464,11 @@ fn sync_impl(
     if git_dir.is_empty() {
         return blocked("not a Git repository".into());
     }
-    let sync_lock = match SyncLock::acquire(&git) {
-        Ok(value) => value,
-        Err(error) => return blocked(error),
-    };
     if let Err(error) = crate::release::schema4::development::require_completed_transaction(root) {
         return blocked(error);
     }
     if let Err(error) = check_release_commit_guard(&git) {
         return blocked(error);
-    }
-    // Check only version planning before network changes. Development checks
-    // and preparation receipts are independent of Git synchronization.
-    let mut preflight_plan = None;
-    if options.release {
-        let preflight = (|| {
-            let message = requested_message(&options)?;
-            // An optional optimization must not introduce preparation-only
-            // inventory restrictions into the release workflow.
-            let inputs = timings
-                .measure("input_validation", || ReleasePlanningInputs::capture(&git))
-                .ok();
-            let plan = timings.measure("release_analysis", || {
-                crate::release::build_explicit_release_plan_with_request(
-                    root,
-                    &message,
-                    git.changed_paths()?,
-                    runner,
-                    &options.release_request,
-                )
-            })?;
-            if let Some(inputs) = inputs {
-                if timings.measure("input_validation", || ReleasePlanningInputs::capture(&git))?
-                    != inputs
-                {
-                    return Err("repository changed during release preflight; no apply".into());
-                }
-                preflight_plan = Some((message, inputs, plan));
-            }
-            Ok::<(), String>(())
-        })();
-        if let Err(error) = preflight {
-            return blocked(error);
-        }
     }
     let push_target = match git.required(
         &[
@@ -744,6 +612,26 @@ fn sync_impl(
             Err(error) => return blocked(error),
         };
     }
+    if remote_only {
+        let (push_ahead, push_behind) = match git.ahead_behind_target(push_comparison) {
+            Ok(value) => value,
+            Err(error) => return blocked(error),
+        };
+        if push_behind > 0 {
+            return blocked("push target has changes not integrated by the configured upstream; review the targets before release".into());
+        }
+        let head = match git.required(&["rev-parse", "HEAD"], Duration::from_secs(30)) {
+            Ok(value) => value,
+            Err(error) => return blocked(error),
+        };
+        return CommandOutcome::with_receipt(json!({
+            "schema":1,"status":"remote-ready","remote_state":"fetched","head":head,
+            "upstream":upstream,"push_target":push_target,"ahead":push_ahead,"behind":push_behind,
+            "working_tree":if dirty {"dirty"} else {"clean"},
+            "commit_performed":false,"push_performed":false,"version_bumped":false,
+            "autostash_retained":autostashed
+        }));
+    }
     let factory = root.join("templates/managed-skeleton.json").is_file();
     let policy_path = root.join(".codex/bridgeforge-version.json");
     let policy_before = fs::read(&policy_path).ok();
@@ -764,22 +652,8 @@ fn sync_impl(
     };
     let mut generated_reused = 0;
     let mut generated_built = 0;
-    let mut release_plan_reused = false;
-    let factory_runtime_repair = if factory && !dirty {
-        if let Err(error) = timings.measure("baseline_checks", || {
-            crate::baseline::verify(root, None, false)
-        }) {
-            return blocked(format!("current baseline blocked git-sync: {error}"));
-        }
-        timings
-            .measure("baseline_checks", || {
-                crate::baseline::verify(root, None, true)
-            })
-            .is_err()
-    } else {
-        false
-    };
-    if dirty || factory_runtime_repair || options.release {
+    let release_plan_reused = false;
+    if dirty || options.release {
         let identity = match RepositoryIdentity::capture(&git) {
             Ok(value) => value,
             Err(error) => return blocked(error),
@@ -803,42 +677,13 @@ fn sync_impl(
                 (None, Some(value)) if !value.trim().is_empty() => value.trim().to_string(),
                 _ => return blocked("commit message is required when real changes exist".into()),
             };
-            let changed_paths = match git.changed_paths() {
-                Ok(value) => value,
-                Err(error) => return blocked(error),
-            };
             if let Err(error) = crate::release::parse_commit_message(&message) {
                 return blocked(error);
             }
             let planning = if options.release {
-                match preflight_plan.take() {
-                    Some((previous_message, previous_inputs, plan))
-                        if previous_message == message
-                            && timings
-                                .measure("input_validation", || {
-                                    ReleasePlanningInputs::capture(&git)
-                                })
-                                .ok()
-                                .as_ref()
-                                == Some(&previous_inputs)
-                            && plan.as_ref().is_none_or(|plan| {
-                                crate::release::verify_release_inputs(&plan.inputs).is_ok()
-                                    && plan.build_directories.verify(root).is_ok()
-                            }) =>
-                    {
-                        release_plan_reused = true;
-                        Ok(plan)
-                    }
-                    _ => timings.measure("release_analysis", || {
-                        crate::release::build_explicit_release_plan_with_request(
-                            root,
-                            &message,
-                            changed_paths,
-                            runner,
-                            &options.release_request,
-                        )
-                    }),
-                }
+                timings.measure("release_analysis", || {
+                    crate::release::schema4::build(root, &message, &options.release_request, runner)
+                })
             } else {
                 Ok(None)
             };
@@ -1203,7 +1048,6 @@ fn sync_impl(
     } else {
         "remaining-state"
     };
-    drop(sync_lock);
     let mut final_receipt = json!(receipt(
         status,
         commit,
@@ -1224,6 +1068,7 @@ fn sync_impl(
     final_receipt["package_events"] = json!(package_events);
     final_receipt["lifecycle_events"] = json!(lifecycle_events);
     final_receipt["release_plan_reused"] = json!(release_plan_reused);
+    final_receipt["release_planning"] = json!(if options.release { "once-after-remote" } else { "not-required" });
     if let Some(details) = release_details {
         final_receipt["release_details"] = details;
     }

@@ -8,7 +8,13 @@ delivery_layout: flat
 
 ## 从这里开始
 
-- 已验收：[Forge 骨架职责与版本工作流简化](1_delivery/forge-simplification/requirements_2026-10-27_workflow-and-versioning.md#用户验收2026-10-28)（TODO-044；P1–P3、112 项相关验证及七包必要检查收口完成，8.0.0 已以 c333caaf 推送；旧重型默认流程永久退役，临时方案 A 经单独授权删除，公共模板与 Hook 未改。真实下游、双机、用户级安装、自然 Hook 及端到端提速未验证；验收记录与发布后 AGENTS 清理尚未再次提交）。
+- 待用户验收：[develop 共用工作流实施计划](1_delivery/forge-simplification/plan_2026-10-28_develop-common-path.md)（TODO-046；D1–D5、S/M/L 差异及 F01–F12 已实施，23 项定向验证、独立审查、3 项最终候选检查及受管收口通过；factory 0.4.0、lifecycle 0.5.0，workflow 0.2.0 仅刷新覆盖，最终工具产物已核对。未提交推送发布、未用户级安装，真实下游及自然调用未验证。前期动机见[收口要求](1_delivery/forge-simplification/notes_2026-10-28_develop-closure.md)）。
+
+- 用户暂停：[summary 与 git-sync 共用流程精简](1_delivery/forge-simplification/plan_2026-10-28_command-paths.md)（2026-10-28 21:15 暂停，后台构建已停止；源码/Skill 与独立复核完成，资源故障影响的测试、最终运行时及版本收口未完成；进度、失败名单和接续顺序见第 14 节，未提交推送发布）。
+
+- 待用户验收：[核心能力保留与非核心、过期实现退役](1_delivery/core-only-cleanup/requirements_2026-10-28_core-only-cleanup.md)（TODO-045；C01–C03 已退役，保留 C04/C05，仅支持骨架 8.0.0 及以后；实质代码净减 2291 行，选定验证、受管子包收口及最终产物核验通过；含实际文件清单与未验证边界。未提交推送发布）。
+
+- 已验收：[Forge 骨架职责与版本工作流简化](1_delivery/forge-simplification/requirements_2026-10-27_workflow-and-versioning.md#用户验收2026-10-28)（TODO-044；P1–P3、112 项相关验证及七包必要检查收口完成，8.0.0 已以 c333caaf 推送；旧重型默认流程永久退役，临时方案 A 经单独授权删除，公共模板与 Hook 未改。验收记录与 AGENTS 清理已随 8.0.1 提交 64ee6ba 保存。真实下游、双机、用户级安装、自然 Hook 及端到端提速仍未验证）。
 
 - 历史阶段与独立待续：[develop 按本次任务收口与验证复用](1_delivery/develop-demand-discovery/requirements_2026-10-27_task-closure.md)（TODO-043；保留第 14 节四对话诊断、当时的方案 A 和 F1–F5 方案；该卡当时的未收口状态与临时规则不代表当前现状，最新简化、正式收口及方案 A 删除见 TODO-044 验收。TODO-043 的完整原需求未由本轮自动结算）。
 

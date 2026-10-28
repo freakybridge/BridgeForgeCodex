@@ -69,6 +69,9 @@ pub(super) struct CheckCommand {
     kind: String,
     #[serde(default, skip_serializing_if = "is_false")]
     reusable: bool,
+    /// Checks of live external state or mandatory side effects cannot be staged.
+    #[serde(default, skip_serializing_if = "is_false")]
+    always_run: bool,
 }
 fn is_false(value: &bool) -> bool {
     !*value
@@ -136,6 +139,7 @@ fn validate_task_selection(
             || check.inputs != registered.inputs
             || check.artifacts != registered.artifacts
             || check.kind != registered.kind
+            || check.always_run != registered.always_run
             || check.timeout_seconds > registered.timeout_seconds
             || (check.reusable && !registered.reusable)
         {
@@ -1075,6 +1079,28 @@ fn pending(
         .collect()
 }
 
+fn package_roles(
+    hashes: &BTreeMap<String, Fingerprints>,
+    affected: &BTreeSet<String>,
+    requested: Option<&BTreeSet<String>>,
+) -> Value {
+    json!(
+        hashes
+            .keys()
+            .map(|id| {
+                let role = if requested.is_some_and(|ids| ids.contains(id)) {
+                    "requested"
+                } else if affected.contains(id) {
+                    "affected-dependency-or-consumer"
+                } else {
+                    "context-only"
+                };
+                (id.clone(), role)
+            })
+            .collect::<BTreeMap<_, _>>()
+    )
+}
+
 fn release_scope(
     root: &Path,
     cfg: &Config,
@@ -1566,6 +1592,15 @@ fn prepare(
     }
     let mut receipt = json!({"schema":1,"status":"development-analysis-required","fingerprint":capture.fingerprint,
         "affected_packages":affected,"packages":capture.current.packages,"writes":[],"product_version":capture.product_version});
+    receipt["capabilities"] = json!([
+        "package-development-v1",
+        "package-stability-v1",
+        "task-selected-development-checks-v1",
+        "version-coverage-v1",
+        "task-scoped-development-v1",
+        "staged-development-validation-v1",
+        "direct-development-apply-v1"
+    ]);
     receipt["reused_published_packages"] = json!(published);
     receipt["readiness_scope"] = json!(if task_scope.is_some() {
         "task"
@@ -1584,6 +1619,7 @@ fn prepare(
         };
         (id.clone(), reason)
     }).collect::<BTreeMap<_, _>>());
+    receipt["package_roles"] = package_roles(&hashes, &affected, requested);
     if affected.is_empty() {
         receipt["status"] = json!(if task_scope.is_some() {
             "task-development-current"
@@ -1852,7 +1888,7 @@ fn prepare(
         })?;
         validate_task_selection(id, &cfg.development[id], selected)?;
     }
-    validate_cache_artifacts(root, &cfg, &affected, &analysis.validation, runner)?;
+    validate_cache_artifacts(root, &cfg, &affected, &analysis.validation, runner, false)?;
     materialize(root, &mut writes, renderer)?;
     for path in writes.keys() {
         capture
@@ -1872,6 +1908,7 @@ fn prepare(
     );
     development_inputs::verify(root, &capture, &capture.inputs)?;
     receipt["affected_packages"] = json!(affected);
+    receipt["package_roles"] = package_roles(&hashes, &affected, requested);
     receipt["versions"] = json!(versions);
     receipt["stability"] = json!(stability);
     receipt["writes"] = json!(
@@ -1923,6 +1960,7 @@ fn validate_cache_artifacts(
     affected: &BTreeSet<String>,
     validation: &BTreeMap<String, Vec<CheckCommand>>,
     runner: &dyn ProcessRunner,
+    staged: bool,
 ) -> Result<(), String> {
     let checks = affected
         .iter()
@@ -1935,7 +1973,7 @@ fn validate_cache_artifacts(
             )
         })
         .collect::<Vec<_>>();
-    if !checks.iter().any(|check| check.reusable) {
+    if !staged && !checks.iter().any(|check| check.reusable) {
         return Ok(());
     }
     let artifacts = checks
@@ -2200,12 +2238,41 @@ fn cache_input_snapshot(
     Ok(inputs)
 }
 
+/// Task proofs follow this package's declared inputs and dependency closure.
+/// Transaction guards still cover the complete worktree during execution.
+fn task_input_snapshot(
+    root: &Path,
+    p: &Prepared,
+    id: &str,
+    check: &CheckCommand,
+) -> Result<BTreeMap<String, Option<String>>, String> {
+    let scope = dependency_scope(&p.capture, id);
+    let policy = &p.cfg.development[id];
+    let mut inputs = cache_input_snapshot(root, p, check)?;
+    inputs.retain(|path, _| {
+        check.inputs.contains(path)
+            || policy
+                .stability
+                .as_ref()
+                .is_some_and(|s| s.contracts.contains(path))
+            || scope
+                .iter()
+                .any(|id| uses_build(&p.cfg, &p.capture, id, path))
+            || polyglot::owner(&p.capture.current, path, &p.cfg.native)
+                .unwrap_or_default()
+                .iter()
+                .any(|id| scope.contains(id))
+    });
+    Ok(inputs)
+}
+
 fn run_candidate_check(
     root: &Path,
     p: &Prepared,
     id: &str,
     check: &CheckCommand,
     runner: &dyn ProcessRunner,
+    validation_only: bool,
 ) -> Result<(Value, BTreeMap<String, String>), String> {
     let environment = p.cfg.development[id].environment.as_ref();
     let filtered = p.cfg.development[id]
@@ -2213,30 +2280,63 @@ fn run_candidate_check(
         .iter()
         .find(|registered| registered.id == check.id)
         .is_some_and(|registered| registered.args != check.args);
-    if !check.reusable {
+    if check.always_run || (!check.reusable && environment.is_none()) {
         return run_check(root, check, environment, filtered, runner, None);
     }
-    let environment = environment.ok_or("reusable check environment is missing")?;
+    // Task evidence is produced by --validate, not by accepting chat claims or
+    // importing arbitrary logs. Persistent retry caching remains opt-in.
+    let staged = !check.reusable;
+    let stage_path = format!(
+        ".runtime/bridgeforge-codex/develop-validation/{}.json",
+        hash(&json!({"package":id,"check":check.id}))?.trim_start_matches("sha256:")
+    );
+    if staged && !validation_only && config::read_current(root, &stage_path)?.is_none() {
+        return run_check(root, check, environment, filtered, runner, None);
+    }
+    if check.reusable && environment.is_none() {
+        return Err("reusable check environment is missing".into());
+    }
     let host = inputs::environment(root, &p.cfg, p.capture.environment_guard.as_ref(), runner)?;
     if host != p.capture.environment {
         return Err("validation environment changed before reusable check".into());
     }
-    let facts = environment.snapshot(root, &p.capture)?;
-    let inputs = cache_input_snapshot(root, p, check)?;
+    let facts = environment
+        .map(|e| e.snapshot(root, &p.capture))
+        .transpose()?;
+    let inputs = if staged {
+        task_input_snapshot(root, p, id, check)?
+    } else {
+        cache_input_snapshot(root, p, check)?
+    };
     let inventory = independent::inventory(root, &InspectionRunner(runner))?;
     let git = check_git_identity(root, runner)?;
+    let key_scope = if staged {
+        json!({"inputs":inputs,"modes":p.capture.modes.iter().filter(|(path,_)|inputs.contains_key(*path)).collect::<BTreeMap<_,_>>(),
+            "policy":p.cfg.development[id],"git":check_git_identity_without_status(root, runner)?})
+    } else {
+        json!({"candidate":p.writes.iter().map(|(path,bytes)|(path,digest(bytes))).collect::<BTreeMap<_,_>>(),
+            "inputs":inputs,"inventory":inventory,"git":git,"plan":p.capture.fingerprint})
+    };
     let key = hash(
         &json!({"schema":1,"root":root.canonicalize().map_err(|e|e.to_string())?.to_string_lossy(),
         "engine":env!("CARGO_PKG_VERSION"),"engine_binary":running_tool_identity()?,"package":id,"evidence":p.check_keys.get(id),"command":check,"filtered":filtered,
-        "candidate":p.writes.iter().map(|(path,bytes)|(path,digest(bytes))).collect::<BTreeMap<_,_>>(),
-        "inputs":inputs,"inventory":inventory,"environment":facts,"host_environment":host,
-        "git":git,"plan":p.capture.fingerprint}),
+        "scope":key_scope,"environment":facts,"host_environment":host,"staged":staged}),
     )?;
-    let path = format!(
-        ".runtime/bridgeforge-codex/develop-check-cache/{}.json",
-        key.trim_start_matches("sha256:")
-    );
-    if let Some(bytes) = config::read_current(root, &path)? {
+    let path = if staged {
+        stage_path
+    } else {
+        format!(
+            ".runtime/bridgeforge-codex/develop-check-cache/{}.json",
+            key.trim_start_matches("sha256:")
+        )
+    };
+    let saved = config::read_current(root, &path)?;
+    // Explicit validation refreshes staged evidence; failure must invalidate
+    // an older success for the same task/check.
+    if validation_only && staged && saved.is_some() {
+        fs::remove_file(safe_relative(root, &path)?).map_err(|e| e.to_string())?;
+    }
+    if let Some(bytes) = saved.filter(|_| !(validation_only && staged)) {
         if let Ok(value) = crate::json::parse_unique_json(&bytes, "development check cache") {
             if let Ok(cached) = serde_json::from_value::<CachedCheck>(value) {
                 let checksum = hash(&json!({"proof":cached.proof,"artifacts":cached.artifacts,
@@ -2266,25 +2366,31 @@ fn run_candidate_check(
                     let mut proof = cached.proof;
                     proof["cache_reused"] = json!(true);
                     proof["cache_key"] = json!(key);
+                    proof["evidence_source"] = json!(if staged {
+                        "development-validation"
+                    } else {
+                        "check-cache"
+                    });
                     return Ok((proof, cached.artifacts));
                 }
             }
         }
     }
     let mut logs = (Vec::new(), Vec::new());
-    let (mut proof, artifacts) = run_check(
-        root,
-        check,
-        Some(environment),
-        filtered,
-        runner,
-        Some(&mut logs),
-    )?;
-    if cache_input_snapshot(root, p, check)? != inputs
+    let (mut proof, artifacts) =
+        run_check(root, check, environment, filtered, runner, Some(&mut logs))?;
+    if (if staged {
+        task_input_snapshot(root, p, id, check)?
+    } else {
+        cache_input_snapshot(root, p, check)?
+    }) != inputs
         || independent::inventory(root, &InspectionRunner(runner))? != inventory
         || check_git_identity(root, runner)? != git
         || inputs::environment(root, &p.cfg, p.capture.environment_guard.as_ref(), runner)? != host
-        || environment.snapshot(root, &p.capture)? != facts
+        || environment
+            .map(|e| e.snapshot(root, &p.capture))
+            .transpose()?
+            != facts
     {
         return Err(format!(
             "{}: reusable check changed its validation inputs; no successful cache was saved",
@@ -2293,6 +2399,9 @@ fn run_candidate_check(
     }
     proof["cache_reused"] = json!(false);
     proof["cache_key"] = json!(key);
+    if staged && !validation_only {
+        return Ok((proof, artifacts));
+    }
     let checksum = hash(
         &json!({"proof":proof,"artifacts":artifacts,"stdout":digest(&logs.0),"stderr":digest(&logs.1)}),
     )?;
@@ -2338,6 +2447,19 @@ fn running_tool_identity() -> Result<String, String> {
 }
 
 fn check_git_identity(root: &Path, runner: &dyn ProcessRunner) -> Result<String, String> {
+    git_identity(root, runner, true)
+}
+fn check_git_identity_without_status(
+    root: &Path,
+    runner: &dyn ProcessRunner,
+) -> Result<String, String> {
+    git_identity(root, runner, false)
+}
+fn git_identity(
+    root: &Path,
+    runner: &dyn ProcessRunner,
+    include_status: bool,
+) -> Result<String, String> {
     let runner = InspectionRunner(runner);
     let mut state = BTreeMap::new();
     for (role, args) in [
@@ -2355,10 +2477,12 @@ fn check_git_identity(root: &Path, runner: &dyn ProcessRunner) -> Result<String,
     ] {
         state.insert(role, digest(history::git(root, &runner, &args)?.as_bytes()));
     }
-    state.insert(
-        "status",
-        digest(independent::status(root, &runner)?.as_bytes()),
-    );
+    if include_status {
+        state.insert(
+            "status",
+            digest(independent::status(root, &runner)?.as_bytes()),
+        );
+    }
     hash(&state)
 }
 
@@ -2367,6 +2491,7 @@ fn execute(
     mut p: Prepared,
     runner: &dyn ProcessRunner,
     renderer: Option<&Materializer>,
+    validation_only: bool,
 ) -> Result<Value, String> {
     let mut journal = Journal {
         root: root
@@ -2408,13 +2533,18 @@ fn execute(
             for (path, bytes) in &p.writes {
                 atomic(root, path, bytes)?;
             }
-            if p.affected.iter().any(|id| {
-                let policy = &p.cfg.development[id];
-                p.analysis.validation[id]
-                    .iter()
-                    .chain(policy.stability.iter().flat_map(|s| &s.checks))
-                    .any(|check| check.reusable)
-            }) {
+            if validation_only
+                || root
+                    .join(".runtime/bridgeforge-codex/develop-validation")
+                    .is_dir()
+                || p.affected.iter().any(|id| {
+                    let policy = &p.cfg.development[id];
+                    p.analysis.validation[id]
+                        .iter()
+                        .chain(policy.stability.iter().flat_map(|s| &s.checks))
+                        .any(|check| check.reusable)
+                })
+            {
                 cached_git_guard = Some(check_git_identity(root, runner)?);
             }
             proofs.clear();
@@ -2423,7 +2553,8 @@ fn execute(
             for id in &p.affected {
                 let policy = &p.cfg.development[id];
                 for check in &p.analysis.validation[id] {
-                    let (proof, files) = run_candidate_check(root, &p, id, check, runner)?;
+                    let (proof, files) =
+                        run_candidate_check(root, &p, id, check, runner, validation_only)?;
                     proofs.entry(id.clone()).or_default().push(proof);
                     artifacts.entry(id.clone()).or_default().extend(files);
                 }
@@ -2435,7 +2566,8 @@ fn execute(
                             .ok_or("stability policy missing")?
                             .checks
                         {
-                            match run_candidate_check(root, &p, id, check, runner) {
+                            match run_candidate_check(root, &p, id, check, runner, validation_only)
+                            {
                                 Ok((proof, files)) => {
                                     proofs.entry(id.clone()).or_default().push(proof);
                                     artifacts.entry(id.clone()).or_default().extend(files);
@@ -2611,6 +2743,23 @@ fn execute(
                 p.capture.inputs.insert(root.join(path), Some(bytes));
             }
         }
+        if validation_only {
+            if let Some(before) = &cached_git_guard {
+                if &check_git_identity(root, runner)? != before {
+                    return Err("Git identity changed during development validation".into());
+                }
+            }
+            // Validation is a write operation, but never closes a package or
+            // leaves candidate manifest/projection writes behind. Artifacts and
+            // ignored task evidence remain for the following closure.
+            rollback(root, &journal)?;
+            return Ok(json!({"schema":1,"status":"development-validated",
+                "validation_mode":"task-selected-final-candidate","version_written":false,
+                "ledger_written":false,"git_written":false,
+                "readiness_scope":p.receipt["readiness_scope"],"task_packages":p.receipt["task_packages"],
+                "effective_task_packages":p.task_scope,"versions":p.versions,
+                "checks":{"scope":"final-candidate","executed":final_checks-reused_checks,"reused":reused_checks}}));
+        }
         for id in &p.affected {
             let before = p
                 .ledger
@@ -2759,6 +2908,33 @@ fn apply_scoped(
     renderer: Option<&Materializer>,
     packages: Option<&BTreeSet<String>>,
 ) -> CommandOutcome {
+    mutate_scoped(root, request, expected, runner, renderer, packages, false)
+}
+
+/// Execute task validation on the final candidate, restoring native version
+/// writes afterwards. This is deliberately distinct from zero-write preview.
+pub fn validate_for_packages(
+    root: &Path,
+    request: &Request,
+    packages: Option<&str>,
+    runner: &dyn ProcessRunner,
+    renderer: Option<&Materializer>,
+) -> CommandOutcome {
+    match packages.map(parse_task_packages).transpose() {
+        Ok(packages) => mutate_scoped(root, request, "", runner, renderer, packages.as_ref(), true),
+        Err(error) => outcome(Err(error)),
+    }
+}
+
+fn mutate_scoped(
+    root: &Path,
+    request: &Request,
+    expected: &str,
+    runner: &dyn ProcessRunner,
+    renderer: Option<&Materializer>,
+    packages: Option<&BTreeSet<String>>,
+    validation_only: bool,
+) -> CommandOutcome {
     outcome((|| {
         require_ignored_runtime(root, runner)?;
         let _sync_lock = crate::git_sync::lock_factory_runtime(root, runner)?;
@@ -2772,10 +2948,20 @@ fn apply_scoped(
             }
             Err(_) => Err("development analysis is required".into()),
             Ok(p) => {
-                if expected.is_empty() || expected != p.capture.fingerprint {
+                if !expected.is_empty() && expected != p.capture.fingerprint {
                     return Err("development plan changed; preview again before applying".into());
                 }
-                execute(root, p, runner, renderer)
+                if validation_only {
+                    validate_cache_artifacts(
+                        root,
+                        &p.cfg,
+                        &p.affected,
+                        &p.analysis.validation,
+                        runner,
+                        true,
+                    )?;
+                }
+                execute(root, p, runner, renderer, validation_only)
             }
         }
     })())

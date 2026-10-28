@@ -1,8 +1,8 @@
 //! Factory-only command adaptation. Public CLI dispatch stays in its own package.
 use crate::runner::FactoryRunner;
 use crate::{
-    CommandOutcome, ProcessRunner, ProjectContext, SystemProcessRunner, batch, factory_runtime,
-    factory_version, manifest, proposal_contract,
+    CommandOutcome, ProcessRunner, ProjectContext, SystemProcessRunner, factory_runtime,
+    factory_version, manifest,
 };
 use serde_json::json;
 use std::path::{Path, PathBuf};
@@ -34,12 +34,6 @@ fn value(args: &[String], flag: &str) -> Option<String> {
     args.windows(2)
         .find(|pair| pair[0] == flag)
         .map(|pair| pair[1].clone())
-}
-fn values(args: &[String], flag: &str) -> Vec<String> {
-    args.windows(2)
-        .filter(|pair| pair[0] == flag)
-        .map(|pair| pair[1].clone())
-        .collect()
 }
 fn has(args: &[String], flag: &str) -> bool {
     args.iter().any(|arg| arg == flag)
@@ -84,7 +78,8 @@ pub fn self_test() -> CommandOutcome {
                 "release-external-analysis-preview-v1",
                 "scoped-release-evidence-v1","task-scoped-development-v1","resumable-development-checks-v1",
                 "task-selected-development-checks-v1","version-coverage-v1",
-                "git-sync-release-only-v1","git-sync-explicit-release-v1","git-sync-direct-release-v1","git-sync-preflight-v1"]
+                "staged-development-validation-v1","direct-development-apply-v1",
+                "git-sync-release-only-v1","git-sync-explicit-release-v1","git-sync-direct-release-v1","git-sync-remote-context-v1", "git-sync-preflight-v1"]
         })),
         Err(error) => blocked("factory-self-test", error),
     }
@@ -135,22 +130,7 @@ pub fn run_with_runner(args: &[String], inner: &dyn ProcessRunner) -> CommandOut
                         ..CommandOutcome::default()
                     }
                 }
-                Some("proposal") => {
-                    let path = value(args, "--proposal-root")
-                        .map(PathBuf::from)
-                        .unwrap_or_else(|| root.root().join("doc/2_bugs/BUG-agents-ia/proposal"));
-                    let report = proposal_contract::validate(&path);
-                    CommandOutcome {
-                        code: if report.healthy {
-                            0
-                        } else {
-                            crate::EXIT_BLOCKED
-                        },
-                        receipt: Some(serde_json::to_value(report).unwrap()),
-                        ..CommandOutcome::default()
-                    }
-                }
-                _ => blocked("factory-check", "expected factory-version or proposal"),
+                _ => blocked("factory-check", "expected factory-version"),
             }
         }
         "build-assets" => {
@@ -184,22 +164,31 @@ pub fn run_with_runner(args: &[String], inner: &dyn ProcessRunner) -> CommandOut
                 Ok(context) => context,
                 Err(error) => return blocked("develop", error),
             };
-            if ["--preview", "--apply", "--recover"]
+            if ["--preview", "--apply", "--recover", "--validate"]
                 .iter()
                 .filter(|flag| has(args, flag))
                 .count()
                 != 1
-                || ((has(args, "--apply") || has(args, "--recover"))
+                || ((has(args, "--apply") || has(args, "--recover") || has(args, "--validate"))
                     && (has(args, "--check") || has(args, "--dry-run")))
             {
                 return blocked(
                     "develop",
-                    "choose exactly one of --preview, --apply, --recover; preview flags cannot authorize writes",
+                    "choose exactly one of --preview, --validate, --apply, --recover; preview flags cannot authorize writes",
                 );
             }
             let request = crate::release::schema4::Request {
                 analysis_file: value(args, "--analysis-file").map(PathBuf::from),
             };
+            if has(args, "--validate") {
+                return crate::release::schema4::development::validate_for_packages(
+                    root.root(),
+                    &request,
+                    task_packages.as_deref(),
+                    &runner,
+                    Some(&manifest::development_projection),
+                );
+            }
             if let Some(packages) = task_packages {
                 return if has(args, "--apply") {
                     crate::release::schema4::development::apply_for_packages(
@@ -239,10 +228,9 @@ pub fn run_with_runner(args: &[String], inner: &dyn ProcessRunner) -> CommandOut
                 )
             }
         }
-        "batch" => batch_command(&args[1..]),
         _ => blocked(
             "factory",
-            "usage: bridgeforge-factory <self-test|manifest|check|build-assets|git-sync|develop|batch>",
+            "usage: bridgeforge-factory <self-test|manifest|check|build-assets|git-sync|develop>",
         ),
     }
 }
@@ -273,103 +261,5 @@ mod tests {
         assert_eq!(outcome.code, crate::EXIT_BLOCKED);
         assert!(outcome.stderr.contains("requires --factory"));
         assert_eq!(run(&["unknown".into()]).code, crate::EXIT_BLOCKED);
-    }
-}
-
-fn batch_command(args: &[String]) -> CommandOutcome {
-    let Some(command) = args.first().map(String::as_str) else {
-        return blocked("batch", "a subcommand is required");
-    };
-    let state = || path_value(args, "--state");
-    let outcome = match command {
-        "plan" => {
-            let template = match path_value(args, "--template-root") {
-                Ok(path) => path,
-                Err(error) => return blocked("batch", error),
-            };
-            let roots = values(args, "--project-root")
-                .into_iter()
-                .map(PathBuf::from)
-                .collect::<Vec<_>>();
-            return match batch::plan(&template, &roots) {
-                Ok(plan) => CommandOutcome {
-                    code: if plan.status == "planned" { 0 } else { 2 },
-                    receipt: Some(serde_json::to_value(plan).unwrap()),
-                    ..CommandOutcome::default()
-                },
-                Err(error) => blocked("batch", error),
-            };
-        }
-        "start" => {
-            let state = match state() {
-                Ok(path) => path,
-                Err(error) => return blocked("batch", error),
-            };
-            let template = match path_value(args, "--template-root") {
-                Ok(path) => path,
-                Err(error) => return blocked("batch", error),
-            };
-            let roots = values(args, "--project-root")
-                .into_iter()
-                .map(PathBuf::from)
-                .collect::<Vec<_>>();
-            let fingerprint = match value(args, "--plan-fingerprint") {
-                Some(value) => value,
-                None => return blocked("batch", "start requires --plan-fingerprint"),
-            };
-            batch::start(&state, &template, &roots, &fingerprint)
-        }
-        "begin" => state().and_then(|path| batch::begin(&path)),
-        "finish" => {
-            let state = match state() {
-                Ok(path) => path,
-                Err(error) => return blocked("batch", error),
-            };
-            let succeeded = match value(args, "--status").as_deref() {
-                Some("succeeded") => true,
-                Some("deferred") => false,
-                _ => return blocked("batch", "finish requires --status succeeded|deferred"),
-            };
-            batch::finish(
-                &state,
-                succeeded,
-                value(args, "--result")
-                    .unwrap_or_else(|| if succeeded { "completed" } else { "deferred" }.into()),
-                value(args, "--issue-signature"),
-            )
-        }
-        "retry" => {
-            let state = match state() {
-                Ok(path) => path,
-                Err(error) => return blocked("batch", error),
-            };
-            let order = match value(args, "--order").and_then(|value| value.parse::<usize>().ok()) {
-                Some(order) => order,
-                None => return blocked("batch", "retry requires numeric --order"),
-            };
-            let fingerprint = match value(args, "--plan-fingerprint") {
-                Some(value) => value,
-                None => return blocked("batch", "retry requires --plan-fingerprint"),
-            };
-            batch::retry(&state, order, &fingerprint)
-        }
-        "restart" => {
-            let state = match state() {
-                Ok(path) => path,
-                Err(error) => return blocked("batch", error),
-            };
-            let document = match value(args, "--bug-doc") {
-                Some(value) => value,
-                None => return blocked("batch", "restart requires --bug-doc"),
-            };
-            batch::restart(&state, &document)
-        }
-        "summary" => state().and_then(|path| batch::load(&path)),
-        "close" => state().and_then(|path| batch::close(&path)),
-        _ => return blocked("batch", format!("unknown subcommand: {command}")),
-    };
-    match outcome {
-        Ok(state) => CommandOutcome::with_receipt(serde_json::to_value(state).unwrap()),
-        Err(error) => blocked("batch", error),
     }
 }

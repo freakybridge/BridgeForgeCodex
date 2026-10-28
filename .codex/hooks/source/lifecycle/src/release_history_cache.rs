@@ -259,7 +259,7 @@ impl ProcessRunner for Reader<'_> {
         if !self.enabled
             || request.program != "git"
             || request.cwd != self.root
-            || !request.env.is_empty()
+            || request.env.iter().any(|(key, value)| key != "GIT_OPTIONAL_LOCKS" || value != "0")
             || !request.env_remove.is_empty()
             || !request.stdin.is_empty()
         {
@@ -273,10 +273,12 @@ impl ProcessRunner for Reader<'_> {
         let Some(mut args) = args.as_deref() else {
             return self.runner.run(request);
         };
-        // revision_payload supplies only this explicit repository safety setting.
-        if args.len() >= 2
+        // Read-only inspection decorations do not change immutable object bytes.
+        // Unknown options/environment still bypass the cache and reach Git.
+        while args.len() >= 2
             && args[0] == "-c"
-            && args[1] == format!("safe.directory={}", self.root.display())
+            && (args[1] == format!("safe.directory={}", self.root.display())
+                || matches!(args[1], "core.fsmonitor=false" | "diff.autoRefreshIndex=false"))
         {
             args = &args[2..];
         }

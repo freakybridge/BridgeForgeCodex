@@ -1,6 +1,12 @@
-use bridgeforge_lifecycle::release::{apply_file_release_plan, schema4};
+use bridgeforge_lifecycle::release::{
+    FileReleasePlan, schema4, verify_release_inputs, verify_release_inventory,
+    verify_release_status,
+};
+#[path = "../support/release_plan.rs"]
+mod release_plan;
 use bridgeforge_core::{ProcessOutput, ProcessRequest, ProcessRunner, SystemProcessRunner};
-use serde_json::{json, Value};
+use release_plan::apply_file_release_plan;
+use serde_json::{Value, json};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -56,7 +62,11 @@ fn legacy_factory_release_updates_all_three_cargo_manifests_and_locks() {
     let source = factory();
     // Frozen pre-refactor schema-1 mapping remains a supported migration input.
     let native = source.join("scripts/tests/fixtures/legacy-product-workspace");
-    let paths = vec![Value::from("templates/hooks/Cargo.toml"),Value::from(".codex/hooks/Cargo.toml"),Value::from("scripts/tests/Cargo.toml")];
+    let paths = vec![
+        Value::from("templates/hooks/Cargo.toml"),
+        Value::from(".codex/hooks/Cargo.toml"),
+        Value::from("scripts/tests/Cargo.toml"),
+    ];
     let root = std::env::temp_dir().join(format!(
         "bf-factory-version-{}-{}",
         std::process::id(),
@@ -84,7 +94,11 @@ fn legacy_factory_release_updates_all_three_cargo_manifests_and_locks() {
         fs::create_dir_all(temp.0.join(relative).parent().unwrap()).unwrap();
         for name in ["Cargo.toml", "Cargo.lock"] {
             fs::copy(
-                native.join(if relative.starts_with("scripts") { format!("consumer-{name}") } else {name.to_string()}),
+                native.join(if relative.starts_with("scripts") {
+                    format!("consumer-{name}")
+                } else {
+                    name.to_string()
+                }),
                 temp.0.join(relative).with_file_name(name),
             )
             .unwrap();

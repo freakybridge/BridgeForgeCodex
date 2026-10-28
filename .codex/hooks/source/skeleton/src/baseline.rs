@@ -12,6 +12,87 @@ use std::fs;
 use std::path::{Component, Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+/// Skeleton identity only: business and independently versioned packages may be 0.x.
+pub const MIN_SUPPORTED_VERSION: &str = "8.0.0";
+
+pub fn project_version(root: &Path) -> Result<Option<String>, String> {
+    let mut version = None;
+    for name in [".bridgeforge_codex_version", ".bridgeforge_version"] {
+        let path = bridgeforge_core::managed_paths::safe_join(
+            root,
+            &format!(".codex/{name}"),
+            "skeleton identity",
+        )?;
+        let metadata = match fs::symlink_metadata(&path) {
+            Ok(value) => value,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(error.to_string()),
+        };
+        if !metadata.is_file()
+            || crate::persistence::is_link_or_reparse(&path).map_err(|e| e.to_string())?
+        {
+            return Err("version stamp must be a plain file".into());
+        }
+        if version.is_some() {
+            return Err("multiple version stamps are not allowed".into());
+        }
+        let value = fs::read_to_string(&path)
+            .map_err(|e| e.to_string())?
+            .trim()
+            .to_owned();
+        require_supported_version(&value)?;
+        if name == ".bridgeforge_version" {
+            return Err(
+                "legacy version stamp is unsupported; skeleton 8.0.0 or newer is required".into(),
+            );
+        }
+        version = Some(value);
+    }
+    Ok(version)
+}
+
+fn require_supported_version(value: &str) -> Result<(), String> {
+    if value.parse::<bridgeforge_core::SemVer>()? < MIN_SUPPORTED_VERSION.parse()? {
+        return Err(format!(
+            "skeleton {value} is unsupported; minimum supported version is {MIN_SUPPORTED_VERSION}"
+        ));
+    }
+    Ok(())
+}
+
+/// Refuse known old identities before planning, locking or writing anything.
+/// Unstamped new projects remain eligible for first-use initialization.
+pub fn require_supported_project(root: &Path) -> Result<(), String> {
+    let stamped = project_version(root)?;
+    let path = bridgeforge_core::managed_paths::safe_join(
+        root,
+        ".codex/managed-skeleton.json",
+        "installed skeleton identity",
+    )?;
+    let bytes = match fs::read(&path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error.to_string()),
+    };
+    if crate::persistence::is_link_or_reparse(&path).map_err(|e| e.to_string())? {
+        return Err("managed skeleton identity must be a plain file".into());
+    }
+    // Supported projects can need repair of their installed contract. The
+    // transaction still validates every replacement; this check only owns the
+    // support floor, not the repair eligibility or deletion authorization.
+    let contract = match parse_unique_json(&bytes, "installed skeleton identity") {
+        Ok(value) => value,
+        Err(_) if stamped.is_some() => return Ok(()),
+        Err(error) => return Err(error),
+    };
+    if let Some(value) = contract["release_version"].as_str() {
+        require_supported_version(value)?;
+    } else if stamped.is_none() {
+        return Err("installed skeleton identity is unknown; refusing unstamped configuration without a valid release_version".into());
+    }
+    Ok(())
+}
+
 pub fn compatibility_baseline(contract: &Value) -> Result<bridgeforge_core::SemVer, String> {
     let floor = contract["compatibility_baseline"]
         .as_str()

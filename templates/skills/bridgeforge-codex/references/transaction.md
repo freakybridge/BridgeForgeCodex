@@ -10,7 +10,7 @@ Apply 必须传 `--apply --plan-fingerprint <fingerprint> --public-artifacts <up
 
 - 只以刷新后产品 home 的 latest current-only 合同生成目标；禁止解释旧 schema 或逐版本执行历史迁移。
 - 按当前合同固定 `compatibility_baseline` 分流：基线及以上常规兼容更新保留 project-owned、未知文件和人工定制；低基线 latest rebuild 将未被当前合同覆盖的普通文件列为精确路径的保留/删除决定；链接、危险 Hook 结构和未确认项阻断，并严格执行 `PreservationManifest`。
-- 两条升级路径都在事务内精确退役旧 `.codex/find-doc.map.md` 与 `.codex/sync-docs.map.md`；新 Hook 在 `.runtime/bridgeforge-codex/` 按当前项目事实重建运行时索引，禁止把这些骨架内生文件加入 Git 或作为 project-owned 数据保留。
+- 仅对受支持的 8.x 及以后项目执行当前基线更新或合法首次接入；<8.0.0 在项目写入前拒绝。事务精确退役已有旧 `.codex/find-doc.map.md` 与 `.codex/sync-docs.map.md`，保留 C04 在 `.runtime/bridgeforge-codex/` 重建索引的能力，禁止把运行时索引加入 Git。
 - Apply、`$git-sync` 与 pre-commit 复用同一 baseline 规则；项目规划只计算必要差异，不另做全量健康巡检。独立项目 Hook 的源码、依赖和开发构建不属于 baseline 常规检查。
 - legacy Rule／项目 Memory 作为普通项目自有资产保留或显式决定删除，不再解析正文、转换或固定退役派生文件。
 - Skill 只允许确定性修复 frontmatter；缺少 description 或 routing 语义时必须阻断。

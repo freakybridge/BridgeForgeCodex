@@ -30,7 +30,7 @@ pub(super) fn identity(id: &str, path: &str) -> Value {
 pub(super) fn config() -> Value {
     json!({"schema_version":3,"release_policy":"explicit_release","strategy":"independent","adapters":{"python":{"projects":["a/pyproject.toml","b/pyproject.toml"],"local_sources":{"b/pyproject.toml":{"a":"a/pyproject.toml"}}}},"packages":[identity("a","a/pyproject.toml"),identity("b","b/pyproject.toml")],"product_inputs":["README.md",".gitignore"]})
 }
-pub(super) fn repo() -> Repo {
+pub(super) fn repo_uninitialized() -> Repo {
     static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let dir = std::env::temp_dir().join(format!(
         "bf-polyglot-{}-{}-{}",
@@ -65,12 +65,18 @@ pub(super) fn repo() -> Repo {
     write(
         &dir,
         ".codex/managed-skeleton.json",
-        br#"{"schema_version":1,"assets":[]}"#,
+        br#"{"schema_version":1,"release_version":"8.0.0","assets":[]}"#,
     );
     git(&dir, &["add", "."]);
     git(&dir, &["commit", "-m", "chore: initial"]);
     Repo(dir)
 }
+pub(super) fn repo() -> Repo {
+    let r = repo_uninitialized();
+    super::super::schema4::fixture::migrate(&r.0, &SystemProcessRunner).unwrap();
+    r
+}
+
 pub(super) fn plan(root: &Path) -> Result<Option<FileReleasePlan>, String> {
     struct ReadOnlyPreview;
     impl ProcessRunner for ReadOnlyPreview {
@@ -86,16 +92,12 @@ pub(super) fn plan(root: &Path) -> Result<Option<FileReleasePlan>, String> {
             Ok(output)
         }
     }
-    if super::super::schema4::load(root)?.is_none() {
-        super::super::schema4::fixture::migrate(root, &SystemProcessRunner)?;
-    }
     let request = super::super::schema4::fixture::analysis(root, &ReadOnlyPreview, "patch", &[])?;
-    super::super::build_explicit_release_plan_with_request(
+    crate::release::schema4::build(
         root,
         "fix: explicit fixture repair",
-        vec![],
-        &ReadOnlyPreview,
         &request,
+        &ReadOnlyPreview,
     )
 }
 
@@ -198,7 +200,7 @@ fn polyglot_version_sources_cannot_alias_other_packages_or_product() {
         ("b/pyproject.toml", "toml", Some("project.version")),
     ] {
         let r = repo();
-        let mut c = config();
+        let mut c: Value = serde_json::from_slice(&fs::read(r.0.join(CONFIG)).unwrap()).unwrap();
         c["adapters"]["python"]["version_sources"] =
             json!({"a/pyproject.toml":{"path":path,"kind":kind,"key":key}});
         write(
@@ -214,7 +216,7 @@ fn polyglot_version_sources_cannot_alias_other_packages_or_product() {
 fn polyglot_retired_id_stays_retired_across_release_boundaries() {
     let r = repo();
     let base = git(&r.0, &["rev-parse", "HEAD"]);
-    let mut c = config();
+    let mut c: Value = serde_json::from_slice(&fs::read(r.0.join(CONFIG)).unwrap()).unwrap();
     c["adapters"]["python"]["projects"] = json!(["b/pyproject.toml"]);
     c["adapters"]["python"]["local_sources"] = json!({});
     c["packages"] = json!([identity("b", "b/pyproject.toml")]);
@@ -247,7 +249,7 @@ fn polyglot_retired_id_stays_retired_across_release_boundaries() {
 fn polyglot_mechanical_move_cannot_hide_source_changes() {
     let r = repo();
     let base = git(&r.0, &["rev-parse", "HEAD"]);
-    let mut c = config();
+    let mut c: Value = serde_json::from_slice(&fs::read(r.0.join(CONFIG)).unwrap()).unwrap();
     let old = identity("a", "a/pyproject.toml");
     let new = identity("a", "moved/pyproject.toml");
     c["packages"][0] = new.clone();
@@ -266,10 +268,11 @@ fn polyglot_mechanical_move_cannot_hide_source_changes() {
     );
 }
 #[test]
-fn polyglot_schema3_setup_is_fingerprinted_and_never_writes_on_preview() {
-    let r = repo();
-    let original = fs::read(r.0.join(CONFIG)).unwrap();
+fn polyglot_current_setup_is_fingerprinted_and_never_writes_on_preview() {
+    let r = repo_uninitialized();
+    let original = None;
     let mut c = config();
+    fs::remove_file(r.0.join(CONFIG)).unwrap();
     c["schema_version"] = json!(4);
     write(
         &r.0,
@@ -279,7 +282,7 @@ fn polyglot_schema3_setup_is_fingerprinted_and_never_writes_on_preview() {
     let result =
         setup::plan_configuration(&r.0, &SystemProcessRunner, ".runtime/release-proposal.json");
     assert_eq!(result.code, 0, "{}", result.stderr);
-    assert_eq!(fs::read(r.0.join(CONFIG)).unwrap(), original);
+    assert_eq!(fs::read(r.0.join(CONFIG)).ok(), original);
     let receipt = result.receipt.unwrap();
     let key = receipt["fingerprint"].as_str().unwrap();
     write(&r.0, "a/a.py", b"VALUE=7\n");
@@ -291,7 +294,7 @@ fn polyglot_schema3_setup_is_fingerprinted_and_never_writes_on_preview() {
         true,
     );
     assert_ne!(drift.code, 0);
-    assert_eq!(fs::read(r.0.join(CONFIG)).unwrap(), original);
+    assert_eq!(fs::read(r.0.join(CONFIG)).ok(), original);
 }
 #[test]
 fn polyglot_mechanical_metadata_proof_keeps_business_entrypoint_paths() {

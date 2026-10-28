@@ -1,6 +1,6 @@
 # 子包开发收口与主程序发布合同
 
-> 核验 self-test --json：开发需要 package-development-v1、package-stability-v1、task-selected-development-checks-v1 和 version-coverage-v1；发布需要 git-sync-development-closure-v1 和 version-coverage-v1。旧工具缺能力时停止相关版本写入，不手工改号或伪造记录。
+> 开发能力从实际入口收据读取并复用：需要 package-development-v1、package-stability-v1、task-selected-development-checks-v1 和 version-coverage-v1，阶段间复用还需 staged-development-validation-v1，直接 apply 需 direct-development-apply-v1。发布从 git-sync --preflight 的 tool 字段核对 git-sync-remote-context-v1、git-sync-development-closure-v1 和 version-coverage-v1，不独立 self-test。旧工具缺能力时报告维护缺口，不手工改号或伪造记录；开发既有诊断边界不变。
 
 本文是 develop / git-sync 共用的版本判级、稳定条件和机器入口事实源。轻量便捷是总目标：开发完成本次必要验证和版本事务即可结束；发布核验累计变化和版本后完成 Git 同步，不补跑 develop。普通同步不主动升版。
 
@@ -36,7 +36,7 @@
 
 每个实际待处理包在分析的 `validation` 中选择非空的已登记普通检查，依据本次风险选择并保留项目明确必需的检查。配置清单不自动删减；自动 1.0.0 的稳定清单独立完整执行，不能以普通子集替代。
 
-所选检查保留原 id、program、inputs、artifacts、kind 和参数。唯一参数扩展是给 Cargo test 在原参数末尾、原 -- 之前追加一个非选项测试名过滤条件，不替换 flags、manifest、package、runner 或原有后缀。超时可缩短不可放宽，不能自行开启 reusable。过滤命令须有可解析且执行数大于零的 Rust 测试摘要；仅列出、仅编译、零测试或无法证明执行均不通过。既有未过滤自定义 harness 保留原退出码/产物合同，不声称自动识别其数量。
+所选检查保留原 id、program、inputs、artifacts、kind、always_run 和参数。唯一参数扩展是给 Cargo test 在原参数末尾、原 -- 之前追加一个非选项测试名过滤条件，不替换 flags、manifest、package、runner 或原有后缀。超时可缩短不可放宽，不能自行开启 reusable 或关闭 always_run。过滤命令须有可解析且执行数大于零的 Rust 测试摘要；仅列出、仅编译、零测试或无法证明执行均不通过。既有未过滤自定义 harness 保留原退出码/产物合同，不声称自动识别其数量。
 
 命令从项目根执行，真实退出码 0 且未超时才通过，缺失输入或产物不通过。release 的 analysis.checks 声明不能代替 develop 执行。检查输入、稳定合同、必要环境、原始字节和目录成员仍绑定当前严格计划，漂移时停止或回滚。
 
@@ -74,12 +74,13 @@ development 按包 id 登记非空 checks，每项有 id、program、args，可�
 
 1. develop --preview --packages <id1,id2> 读取 affected、effective scope 和 fingerprint；无待处理项不写记录。
 2. 在忽略的 .runtime/develop-analysis.json 写 `{schema:1,fingerprint,packages:{id:{level,reason,compatibility,acceptance?}},validation:{id:[完整检查对象]},targets?,interface_impacts?}`。不含 product 或 release checks，必要关联包不得删除。
-3. 相同包选择运行带分析预览，核对候选及稳定缺口，再用计划指纹 apply。实际终态须为 development-closed；预览成功不是执行完成。
-4. 中断用 develop --recover，绑定 checkout 和 HEAD，外部冲突保留。预览/执行的选择、宿主和输入须一致，变化则重新分析，不重绑旧 JSON。
+3. 默认使用相同包选择和分析文件直接 `develop --apply`，内部重建计划并校验分析绑定；`--fingerprint` 可省略，提供时仍严格核对。带分析预览仅在需要审阅时执行。D3/D4 紧邻时由此一次完成必要检查与记账，不先在外部重复同一组检查。
+4. 需要把验证和记账分开时，先 `develop --validate --packages <ids> --analysis-file <path>`：在最终候选运行所选检查（及适用稳定检查），恢复原版本和投影，返回 development-validated，不写账本。随后同分析 apply 引用仍有效的任务证据，缺口或新增影响才执行相关检查；完成收口终态仍须 development-closed。validate 会写忽略的证据及检查产物，不接受 --check/--dry-run，不等于只读预览或用户验收。
+5. 中断用 develop --recover，绑定 checkout 和 HEAD，外部冲突保留。预览/执行的选择、宿主和输入须一致，变化则重新分析，不重绑旧 JSON。成功收据已核对最终输入，无后续变化或矛盾时不强制重复预览。
 
-task-scoped-development-v1 的 --packages 接收唯一非空 id，不与 recover 合用。工具展开依赖、调用方和生命周期端点，当前保守纳入依赖，不保证都无需检查。task-development-current 与 outside_task_evidence_checked=false 只说明本次范围；无关历史不自动纳入，不据此宣称 release 就绪。
+task-scoped-development-v1 的 --packages 接收唯一非空 id，不与 recover 合用。工具展开依赖、调用方和生命周期端点；package_roles 区分 requested、affected-dependency-or-consumer、context-only，只有实际 affected 包进入分析与检查，不能从 effective scope 数量推断升版或检查数量。task-development-current 与 outside_task_evidence_checked=false 只说明本次范围；无关历史不自动纳入，不据此宣称 release 就绪。
 
-release 用无分析预览生成上下文，分析只含 product、可选 targets.product 和显式必要 checks。实际 --release 内部重建并验证带分析计划再写入，通常不另跑一次外部带分析预览；需要只读审阅时仍可选用。release-external-analysis-preview-v1 只允许预览读取外部普通无 link/reparse 文件，实际 release/develop 仍须项目 .runtime 路径；预览不证明提交、Hook、推送或网络成功。
+release 先用 --sync-remote 接入远端变化，再用零写入 --release-preview 生成最终上下文；分析只含 product、可选 targets.product 和显式必要 checks。预览的 product_constraints 给出已记录包/生命周期影响的最低级别和版本、breaking 来源及 product 接受依据绑定要求；它是下限，不代替主程序真实影响分析。实际 --release --skip-fetch 内部只构建并校验一次计划再写入，不默认另跑外部带分析预览；需要独立只读审阅时仍可选用。相同输入和必要环境的分析可跨宿主进程使用，真实变化仍拒绝，不只替换 fingerprint。release-external-analysis-preview-v1 仅允许预览读取外部普通无 link/reparse 文件，实际 release/develop 仍须项目 .runtime 路径；预览不证明提交、Hook、推送或网络成功。--sync-remote 会 fetch、必要快进和恢复本地改动，不是零写入入口，不提交、推送或升版。
 
 ## 7. 必要环境与可选复用
 
@@ -87,6 +88,8 @@ release 用无分析预览生成上下文，分析只含 product、可选 target
 
 保留现有受限 Cargo 配置建模：build/target/term 和远程 source/registries/registry/net；本地 directory/local-registry、path patch、env 注入、credential-provider/alias、未建模 include/alias、linker/sysroot flags 继续拒绝，inline 表不例外。远程索引不得嵌凭证、查询或片段；Git 拉取绑定 Git 身份，相对工具按配置文件基准解析。不为轻量化删除项目配置，不能完整声明时保留原宿主模式。不运行 setup.py、安装脚本、SCM 后端或动态宏猜元数据。
 
-resumable-development-checks-v1 仅为可选同机完整候选缓存：完整显式 environment、项目明确 reusable:true 的确定性检查才可用；在线、未登记状态或必需副作用检查不开启。输入输出不重叠，产物须忽略。核验命令、工具、候选、原字节/目录、严格宿主、Git 身份、日志及产物；失败、超时、漂移不存成功。不重绑、不默认跨机复用、不扩建缓存框架。收据 checks.scope=final-candidate 的 executed/reused 仅统计最终轮，不含失败或稳定回退成本。
+staged-development-validation-v1 在现有检查记录结构上保存本任务候选证据，位于忽略的 `.runtime/bridgeforge-codex/develop-validation/`。复用须有完整显式 environment，绑定包/依赖及声明输入、最终候选字节、命令、工具/环境、Git 身份、日志及产物；独立包修正不机械废弃未受影响包证据，事务仍核对完整当前计划。没有 environment 时实际执行、不保存可复用任务证据，最短路径应把 D3/D4 合并在一次 apply，不先单跑相同检查。验证脚本/数据须登记 inputs，未声明的外部状态不能推断等价。在线状态或必需副作用检查登记 `always_run:true`，每次实际执行；普通稳定检查满足同一最终候选时可引用完整结果，不省略稳定清单。任务证据不接受任意外部 passed 声明，不默认跨机复用，不是长期认证。
 
-旧 development-checks.json / prepared 仅为项目明确要求的可选发布准备，不成为普通开发或 release 前置。本合同不授权安装、下游写入或正式发布。
+resumable-development-checks-v1 保留可选同机失败重试缓存：完整显式 environment、项目明确 reusable:true 的确定性检查才可用；always_run 优先于 reusable。输入输出不重叠，复用产物须忽略。两种复用共用检查记录、日志和产物核验；失败、超时、漂移不存成功，显式 validate 失败不继续使用该检查的旧任务成功记录。不重绑旧证据。收据 checks.scope=final-candidate 的 executed/reused 仅统计最终轮，不含失败或稳定回退成本。
+
+独立发布候选演练及其准备状态命令已退役。正常 develop 负责本次必要验证，release 负责版本覆盖与发布；C05 的确定性检查复用和受管构建缓存继续按各自合同执行。

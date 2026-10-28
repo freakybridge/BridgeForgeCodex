@@ -9,7 +9,7 @@ mod eol_tests;
 mod lightweight_tests;
 
 fn task_development_fixture(dependency: bool) -> Repo {
-    let r = fixture("legacy", true);
+    let r = fixture("unconfigured", true);
     write(
         &r.0,
         "second/Cargo.toml",
@@ -1193,7 +1193,7 @@ fn package_published_closure_checks_declared_files_and_unproven_ignored_inputs()
 /// The native crate predates registration and inherits version 6 from its
 /// workspace. The immutable schema-4 baseline deliberately has no packages.
 fn adoption_fixture(broken_source_lock: bool) -> Repo {
-    let r = fixture("legacy", true);
+    let r = fixture("unconfigured", true);
     write(&r.0, "pkg/Cargo.toml", b"[package]\nname='a'\nversion.workspace=true\nedition='2021'\n[workspace]\n[workspace.package]\nversion='6.0.0'\n");
     write(
         &r.0,
@@ -1838,7 +1838,7 @@ fn package_development_projection_recovers_after_process_interruption() {
 
 #[test]
 fn package_development_release_reports_more_than_three_changed_packages() {
-    let r = fixture("legacy", true);
+    let r = fixture("unconfigured", true);
     let mut cfg: Value = serde_json::from_slice(&fs::read(r.0.join(CONFIG)).unwrap()).unwrap();
     for id in ["b", "c", "d"] {
         let manifest = format!("{id}/Cargo.toml");
@@ -1972,7 +1972,7 @@ fn package_development_validation_only_change_cannot_fake_interface_impact() {
 
 #[test]
 fn package_development_deleted_source_remains_closed_after_commit() {
-    let r = fixture("legacy", true);
+    let r = fixture("unconfigured", true);
     write(&r.0, "pkg/src/obsolete.rs", b"// obsolete\n");
     git(&r.0, &["add", "."]);
     git(&r.0, &["commit", "--amend", "--no-edit"]);
@@ -1992,7 +1992,7 @@ fn package_development_deleted_source_remains_closed_after_commit() {
 
 #[test]
 fn package_development_stable_child_breaking_maps_to_unstable_product_minor() {
-    let r = fixture("legacy", true);
+    let r = fixture("unconfigured", true);
     write(&r.0, "VERSION", b"0.5.0\n");
     git(&r.0, &["add", "."]);
     git(&r.0, &["commit", "--amend", "--no-edit"]);
@@ -2003,6 +2003,12 @@ fn package_development_stable_child_breaking_maps_to_unstable_product_minor() {
     let q = request(&r.0, "major", true, &runner);
     let result = close(&r.0, &q, &runner);
     assert_eq!(result.code, 0, "{}", result.stderr);
+    let preview = super::preview(&r.0, "feat: release", &Request::default(), &runner);
+    assert_eq!(preview.code, 0, "{}", preview.stderr);
+    let constraints = preview.receipt.unwrap()["product_constraints"].clone();
+    assert_eq!(constraints["minimum_level"], "minor");
+    assert_eq!(constraints["minimum_version"], "0.6.0");
+    assert_eq!(constraints["acceptance_required"], true);
     let q = release_request(&r.0, "minor");
     let mut a: Value =
         serde_json::from_slice(&fs::read(r.0.join(".runtime/release.json")).unwrap()).unwrap();
@@ -2035,7 +2041,11 @@ impl Checks {
 }
 impl ProcessRunner for Checks {
     fn run(&self, request: &ProcessRequest) -> std::io::Result<crate::ProcessOutput> {
-        if request.program == "fixture-check" {
+        if request.program == "fixture-check"
+            || Path::new(&request.program)
+                .file_name()
+                .is_some_and(|n| n == "check-tool.exe")
+        {
             let id = request.args.first().unwrap().to_string_lossy().into_owned();
             self.calls.lock().unwrap().push(id.clone());
             if self.action.as_deref() == Some("crash") {
@@ -2088,7 +2098,7 @@ pub(super) fn configure(root: &Path, stable: bool) {
     write(root, CONFIG, &serde_json::to_vec(&v).unwrap());
 }
 fn zero_fixture() -> Repo {
-    let r = fixture("legacy", true);
+    let r = fixture("unconfigured", true);
     write(
         &r.0,
         "pkg/Cargo.toml",
@@ -2264,6 +2274,13 @@ fn package_development_zero_breaking_is_minor_and_acceptance_persists() {
     );
     fs::remove_file(r.0.join(".runtime/develop.json")).unwrap();
     let ledger = development::Ledger::load(&r.0).unwrap();
+    let preview = super::preview(&r.0, "feat: release", &Request::default(), &runner);
+    assert_eq!(preview.code, 0, "{}", preview.stderr);
+    let constraints = preview.receipt.unwrap()["product_constraints"].clone();
+    assert_eq!(constraints["minimum_level"], "major");
+    assert_eq!(constraints["minimum_version"], "2.0.0");
+    assert_eq!(constraints["breaking_packages"][0]["id"], "a");
+    assert_eq!(constraints["acceptance_scope"], json!(["product"]));
     assert_eq!(
         ledger.entries[0].acceptance.as_ref().unwrap()["source"],
         "isolated test authorization"
@@ -2408,7 +2425,7 @@ fn package_development_real_cargo_verifies_final_manifest_and_lock() {
 }
 
 pub(super) fn python_pair(pinned: bool) -> Repo {
-    let r = fixture("legacy", false);
+    let r = fixture("unconfigured", false);
     let mut cfg: Value = serde_json::from_slice(&fs::read(r.0.join(CONFIG)).unwrap()).unwrap();
     cfg["adapters"]["python"]["projects"] =
         json!(["pkg/pyproject.toml", "consumer/pyproject.toml"]);
@@ -2553,7 +2570,7 @@ fn package_development_stale_analysis_and_empty_checks_fail_closed() {
 }
 #[test]
 fn package_development_graduates_each_package_independently() {
-    let r = fixture("legacy", true);
+    let r = fixture("unconfigured", true);
     write(
         &r.0,
         "pkg/Cargo.toml",

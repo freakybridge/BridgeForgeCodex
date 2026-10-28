@@ -1,5 +1,7 @@
 # bridgeforge-codex 安装与迁移
 
+当前候选工具仅支持骨架 8.0.0 及以后。更早项目的升级/格式迁移已退役，须在项目写入前拒绝；新项目初始化、8.x 当前配置与恢复保持。业务 VERSION 和独立子包版本不受该数字下限限制。
+
 bridgeforge-codex 只支持 Windows、Rust/Cargo 1.88+ 和 Codex。Cargo 在安装、升级及工厂运行时准备时按需构建
 受管 Rust 工具；日常 Hook 不调用 Cargo 或脚本解释器。请按自己的情况直接进入对应章节：
 
@@ -10,8 +12,7 @@ bridgeforge-codex 只支持 Windows、Rust/Cargo 1.88+ 和 Codex。Cargo 在安�
 
 ## 工厂本地运行时准备
 
-工厂源码可由 Git 更新，但 `.codex/bin` 是被忽略的本地产物。维护本工厂时，在普通
-`$git-sync`、`$git-sync release` 的能力检查之前，或需要显式刷新工具时执行：
+工厂源码可由 Git 更新，但 `.codex/bin` 是被忽略的本地产物。需要显式刷新工具或完成开发必要构建时执行下列入口；普通 `$git-sync` 和 `$git-sync release` 使用已安装工具，不将准备或独立 self-test 作为日常前置：
 
 ```powershell
 cargo run --locked --release --manifest-path Cargo.toml --bin bridgeforge-factory -- build-assets --factory --project-root .
@@ -20,7 +21,7 @@ cargo run --locked --release --manifest-path Cargo.toml --bin bridgeforge-factor
 该入口不依赖旧 `.codex/bin/bridgeforge.exe`，不提交或发布，不安装下游骨架。
 它先校验产品源、dogfood 和派生 manifest，再核对 CLI、Hook、工厂工具的源码、锁文件、配方、产物
 哈希、自检与收据；健康产物不改写，失效产物复用经验证的缓存或执行锁定构建。
-三种产物及收据共用安装回滚事务，并与 git-sync 共用仓库锁。输入漂移、构建失败、
+三种产物及收据共用安装回滚事务，维护锁仍协调构建与 develop；git-sync 不再持有该锁或支持同仓库并行同步。输入漂移、构建失败、
 文件占用或安装校验失败均停止；并发外部修改保留并报告，不覆盖其他进程的文件。
 
 Cargo 引导可能产生增量构建及缓存写入，只用于已授权维护。引导产物未建立完整输入
@@ -101,7 +102,7 @@ Skills 由产品管理，避免覆盖来源不明或被人工修改的 Skill 文
 
 可选项目资产通过一次性 `PreservationManifest` 明确保留或删除；确认前项目零写入，不长期保存该 manifest。资产处理、最新基线及验证属于同一项目事务；可捕获失败恢复本事务能够证明归属的改动，外部编辑保留并报告未恢复项。同步器最后才写当前版本戳，`.codex/managed-skeleton.json` 只保存当次最新 schema 4 的资产归属和内容哈希。
 
-[子包开发收口与主程序发布](doc/0_architecture/design/package-version-lifecycle.md)要求 `package-development-v1`、`package-stability-v1`、`git-sync-development-closure-v1`；当前任务检查选择和版本覆盖还须核验 `task-selected-development-checks-v1`、`version-coverage-v1`。安装或骨架升级成功不等于项目已配置业务检查或完成版本收口。配置及实际入口只维护在[版本生命周期合同](templates/skills/git-sync/references/schema4.md)，保留原发布基线和下游 Python 环境支持，不借安装说明自动收口或写入真实下游。
+[子包开发收口与主程序发布](doc/0_architecture/design/package-version-lifecycle.md)要求 `package-development-v1`、`package-stability-v1`、`git-sync-development-closure-v1`；任务检查选择和版本覆盖还须核验 `task-selected-development-checks-v1`、`version-coverage-v1`。直接 apply 和阶段间复用分别核验 `direct-development-apply-v1`、`staged-development-validation-v1`，优先消费实际入口收据，不默认另跑 self-test。安装或骨架升级成功不等于项目已配置业务检查或完成版本收口。配置及实际入口只维护在[版本生命周期合同](templates/skills/git-sync/references/schema4.md)，保留原发布基线和下游 Python 环境支持，不借安装说明自动收口或写入真实下游。
 
 ## 维护者协议
 

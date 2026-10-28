@@ -58,16 +58,14 @@ fn real_cli_python_lock_preview_release_rollback_and_repeat() {
     } else {
         ".codex/bin/bridgeforge"
     });
-    let fixture = Fixture(
-        std::env::temp_dir().join(format!(
+    let fixture = Fixture(std::env::temp_dir().join(format!(
             "bf-polyglot-cli-{}-{}",
             std::process::id(),
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap()
                 .as_nanos()
-        )),
-    );
+        )));
     let root = fixture.0.join("project");
     fs::create_dir_all(&root).unwrap();
     write(&root, "VERSION", b"1.0.0\n");
@@ -75,7 +73,7 @@ fn real_cli_python_lock_preview_release_rollback_and_repeat() {
     write(&root, "app.py", b"VALUE=1\n");
     write(&root, ".gitignore", b".runtime/\n");
     write(&root, "managed.txt", b"managed\n");
-    write(&root, ".codex/.bridgeforge_codex_version", b"1.0.0\n");
+    write(&root, ".codex/.bridgeforge_codex_version", b"8.0.0\n");
     write(
         &root,
         "pyproject.toml",
@@ -89,7 +87,7 @@ fn real_cli_python_lock_preview_release_rollback_and_repeat() {
         &serde_json::to_vec(&cfg).unwrap(),
     );
     use sha2::{Digest, Sha256};
-    let contract = json!({"schema_version":4,"release_version":"1.0.0","host":"codex","stamp":".codex/.bridgeforge_codex_version","contract_target":".codex/managed-skeleton.json","assets":[{"id":"managed.asset","source":"templates/managed.txt","target":"managed.txt","strategy":"whole","current_sha256":format!("sha256:{:x}",Sha256::digest(b"managed\n"))}],"generated_assets":[],"baseline_model":"current-only","compatibility_baseline":"1.0.0"});
+    let contract = json!({"schema_version":4,"release_version":"8.0.0","host":"codex","stamp":".codex/.bridgeforge_codex_version","contract_target":".codex/managed-skeleton.json","assets":[{"id":"managed.asset","source":"templates/managed.txt","target":"managed.txt","strategy":"whole","current_sha256":format!("sha256:{:x}",Sha256::digest(b"managed\n"))}],"generated_assets":[],"baseline_model":"current-only","compatibility_baseline":"8.0.0"});
     write(
         &root,
         ".codex/managed-skeleton.json",
@@ -108,30 +106,56 @@ fn real_cli_python_lock_preview_release_rollback_and_repeat() {
         &["remote", "add", "origin", remote.to_str().unwrap()],
     );
     git(&root, &["push", "-u", "origin", "HEAD"]);
-    let legacy_config=fs::read(root.join(".codex/bridgeforge-version.json")).unwrap();
-    let legacy_index=fs::read(root.join(".git/index")).unwrap();
-    let denied=call(&cli,&root,&["git-sync","--release-preview","--message","fix: legacy release"],false);
-    assert!(denied["stderr"].as_str().unwrap().contains("schema 4 migration"));
-    assert_eq!(fs::read(root.join(".git/index")).unwrap(),legacy_index);
-    assert_eq!(fs::read(root.join(".codex/bridgeforge-version.json")).unwrap(),legacy_config);
-    super::schema4_fixture::migrate(&cli,&root);
+    let legacy_config = fs::read(root.join(".codex/bridgeforge-version.json")).unwrap();
+    let legacy_index = fs::read(root.join(".git/index")).unwrap();
+    let denied = call(
+        &cli,
+        &root,
+        &[
+            "git-sync",
+            "--release-preview",
+            "--message",
+            "fix: legacy release",
+        ],
+        false,
+    );
+    assert!(denied["stderr"].as_str().unwrap().contains("retired"));
+    assert_eq!(fs::read(root.join(".git/index")).unwrap(), legacy_index);
+    assert_eq!(
+        fs::read(root.join(".codex/bridgeforge-version.json")).unwrap(),
+        legacy_config
+    );
+    super::schema4_fixture::migrate(&cli, &root);
     // A skeleton update can already be committed while still being part of
     // the cumulative diff since the last formal business release.
     let mut updated_contract = contract.clone();
     updated_contract["assets"][0]["current_sha256"] =
         json!(format!("sha256:{:x}", Sha256::digest(b"managed update\n")));
     write(&root, "managed.txt", b"managed update\n");
-    write(&root, ".codex/managed-skeleton.json", &serde_json::to_vec(&updated_contract).unwrap());
+    write(
+        &root,
+        ".codex/managed-skeleton.json",
+        &serde_json::to_vec(&updated_contract).unwrap(),
+    );
     git(&root, &["add", "."]);
     git(&root, &["commit", "-m", "chore: committed skeleton update"]);
     let skeleton_index = fs::read(root.join(".git/index")).unwrap();
-    let skeleton_preview = call(&cli, &root,
-        &["git-sync", "--release-preview", "--message", "chore: skeleton only"], true);
+    let skeleton_preview = call(
+        &cli,
+        &root,
+        &[
+            "git-sync",
+            "--release-preview",
+            "--message",
+            "chore: skeleton only",
+        ],
+        true,
+    );
     assert_eq!(skeleton_preview["status"], "nothing-to-release");
     assert_eq!(fs::read(root.join(".git/index")).unwrap(), skeleton_index);
     assert_eq!(fs::read(root.join("VERSION")).unwrap(), b"1.0.0\n");
     write(&root, "app.py", b"VALUE=2\n");
-    super::schema4_fixture::analyze(&cli,&root,"fix: adjust app","patch",&[],&[]);
+    super::schema4_fixture::analyze(&cli, &root, "fix: adjust app", "patch", &[], &[]);
     let status = git(&root, &["status", "--porcelain=v1"]);
     let head = git(&root, &["rev-parse", "HEAD"]);
     let index = fs::read(root.join(".git/index")).unwrap();
@@ -145,7 +169,8 @@ fn real_cli_python_lock_preview_release_rollback_and_repeat() {
         &[
             "git-sync",
             "--release-preview",
-            "--release-analysis-file", ".runtime/schema4-analysis.json",
+            "--release-analysis-file",
+            ".runtime/schema4-analysis.json",
             "--message",
             "fix: adjust app",
         ],
@@ -158,7 +183,14 @@ fn real_cli_python_lock_preview_release_rollback_and_repeat() {
     call(
         &cli,
         &root,
-        &["git-sync", "--release", "--message", "fix: adjust app", "--release-analysis-file", ".runtime/schema4-analysis.json"],
+        &[
+            "git-sync",
+            "--release",
+            "--message",
+            "fix: adjust app",
+            "--release-analysis-file",
+            ".runtime/schema4-analysis.json",
+        ],
         false,
     );
     for (p, b) in &before {
@@ -170,7 +202,14 @@ fn real_cli_python_lock_preview_release_rollback_and_repeat() {
     let result = call(
         &cli,
         &root,
-        &["git-sync", "--release", "--message", "fix: adjust app", "--release-analysis-file", ".runtime/schema4-analysis.json"],
+        &[
+            "git-sync",
+            "--release",
+            "--message",
+            "fix: adjust app",
+            "--release-analysis-file",
+            ".runtime/schema4-analysis.json",
+        ],
         true,
     );
     assert_eq!(result["package_changes"], preview["package_changes"]);
@@ -199,33 +238,66 @@ fn real_cli_release_preview_after_project_sync_source_relocation() {
     use sha2::{Digest, Sha256};
     const OLD: &str = ".codex/hooks/crates/bridgeforge-core/src/memory/ownership.rs";
     const NEW: &str = ".codex/hooks/source/memory/src/ownership.rs";
-    let source = Path::new(env!("CARGO_MANIFEST_DIR")).ancestors().nth(2).unwrap();
-    let cli = source.join(if cfg!(windows) { ".codex/bin/bridgeforge.exe" } else { ".codex/bin/bridgeforge" });
-    let fixture = Fixture(std::env::temp_dir().join(format!("bf-polyglot-cli-relocation-{}-{}",
-        std::process::id(), SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos())));
+    let source = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .ancestors()
+        .nth(2)
+        .unwrap();
+    let cli = source.join(if cfg!(windows) {
+        ".codex/bin/bridgeforge.exe"
+    } else {
+        ".codex/bin/bridgeforge"
+    });
+    let fixture = Fixture(std::env::temp_dir().join(format!(
+            "bf-polyglot-cli-relocation-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        )));
     let root = fixture.0.join("project");
     let factory = fixture.0.join("factory");
     let payload = b"pub fn managed() {}\n";
     let hash = format!("sha256:{:x}", Sha256::digest(payload));
-    let contract = json!({"schema_version":4,"release_version":"6.0.0","host":"codex",
+    let contract = json!({"schema_version":4,"release_version":"8.0.0","host":"codex",
         "stamp":".codex/.bridgeforge_codex_version","contract_target":".codex/managed-skeleton.json",
-        "baseline_model":"current-only","compatibility_baseline":"1.0.0","generated_assets":[],
+        "baseline_model":"current-only","compatibility_baseline":"8.0.0","generated_assets":[],
         "assets":[{"id":"managed.memory","source":"source/memory/src/ownership.rs","target":OLD,
             "strategy":"whole","current_sha256":hash}]});
     write(&root, "VERSION", b"1.0.0\n");
     write(&root, "CHANGELOG.md", b"# Changelog\n");
     write(&root, ".gitignore", b".runtime/\n");
-    write(&root, "pkg/Cargo.toml", b"[package]\nname='app'\nversion='1.0.0'\nedition='2021'\n[workspace]\n");
-    write(&root, "pkg/Cargo.lock", b"version=4\n[[package]]\nname='app'\nversion='1.0.0'\n");
-    write(&root, "pkg/src/lib.rs", b"pub fn value()->u8{1}\n");
+    write(
+        &root,
+        "pkg/Cargo.toml",
+        b"[package]\nname='app'\nversion='1.0.0'\nedition='2021'\n[workspace]\n",
+    );
+    write(
+        &root,
+        "pkg/Cargo.lock",
+        b"version=4\n[[package]]\nname='app'\nversion='1.0.0'\n",
+    );
+    write(
+        &root,
+        "pkg/src/lib.rs",
+        b"pub fn value()->u8{1}\n#[test] fn value_contract(){assert_eq!(value(),1);}\n",
+    );
     write(&root, OLD, payload);
-    write(&root, ".codex/.bridgeforge_codex_version", b"6.0.0\n");
-    write(&root, ".codex/managed-skeleton.json", &serde_json::to_vec(&contract).unwrap());
+    write(&root, ".codex/.bridgeforge_codex_version", b"8.0.0\n");
+    write(
+        &root,
+        ".codex/managed-skeleton.json",
+        &serde_json::to_vec(&contract).unwrap(),
+    );
     let cfg = json!({"schema_version":3,"release_policy":"explicit_release","strategy":"independent",
         "adapters":{"rust":{"workspaces":["pkg/Cargo.toml"]}},
         "packages":[{"id":"app","language":"rust","manifest":"pkg/Cargo.toml","name":"app"}],
         "product_inputs":[".gitignore","pkg/Cargo.lock"]});
-    write(&root, ".codex/bridgeforge-version.json", &serde_json::to_vec(&cfg).unwrap());
+    write(
+        &root,
+        ".codex/bridgeforge-version.json",
+        &serde_json::to_vec(&cfg).unwrap(),
+    );
     git(&root, &["init"]);
     git(&root, &["config", "user.name", "BridgeForge Test"]);
     git(&root, &["config", "user.email", "test@example.invalid"]);
@@ -234,16 +306,24 @@ fn real_cli_release_preview_after_project_sync_source_relocation() {
     git(&root, &["commit", "-m", "chore: published baseline"]);
     super::schema4_fixture::migrate(&cli, &root);
     let mut updated = contract.clone();
-    updated["release_version"] = json!("7.0.0");
+    updated["release_version"] = json!("8.0.1");
     updated["assets"][0]["target"] = json!(NEW);
     updated["retired_assets"] = json!([{"id":"managed.memory","target":OLD,"known_hashes":[hash]}]);
-    write(&factory, "VERSION", b"7.0.0\n");
+    write(&factory, "VERSION", b"8.0.1\n");
     write(&factory, "source/memory/src/ownership.rs", payload);
-    write(&factory, "templates/managed-skeleton.json", &serde_json::to_vec(&updated).unwrap());
+    write(
+        &factory,
+        "templates/managed-skeleton.json",
+        &serde_json::to_vec(&updated).unwrap(),
+    );
     let plan = build_plan(&root, &factory, SyncMode::Update).unwrap();
     assert!(plan.gaps.is_empty(), "{:?}", plan.gaps);
     assert!(plan.blockers.is_empty(), "{:?}", plan.blockers);
-    assert!(plan.safe.iter().any(|a| a.target == OLD && a.operation == "delete"));
+    assert!(
+        plan.safe
+            .iter()
+            .any(|a| a.target == OLD && a.operation == "delete")
+    );
     let fingerprint = plan.aggregate_fingerprint.clone();
     apply_plan(plan, &fingerprint, true).unwrap();
     assert!(!root.join(OLD).exists());
@@ -261,13 +341,29 @@ fn real_cli_release_preview_after_project_sync_source_relocation() {
         assert_eq!(preview["status"], "nothing-to-release");
         assert_eq!(git(&root, &["status", "--porcelain=v1"]), status);
         assert_eq!(fs::read(root.join(".git/index")).unwrap(), index);
-        assert_eq!(fs::read(root.join(".codex/bridgeforge-version.json")).unwrap(), config);
+        assert_eq!(
+            fs::read(root.join(".codex/bridgeforge-version.json")).unwrap(),
+            config
+        );
         assert_eq!(fs::read(root.join("VERSION")).unwrap(), b"1.0.0\n");
     }
-    write(&root, "pkg/src/lib.rs", b"pub fn value()->u8{2}\n");
+    write(
+        &root,
+        "pkg/src/lib.rs",
+        b"pub fn value()->u8{2}\n#[test] fn value_contract(){assert_eq!(value(),2);}\n",
+    );
     super::schema4_fixture::analyze(&cli, &root, "fix: app", "patch", &[], &[]);
-    let preview = call(&cli, &root, &["git-sync", "--release-preview", "--release-analysis-file",
-        ".runtime/schema4-analysis.json"], true);
+    let preview = call(
+        &cli,
+        &root,
+        &[
+            "git-sync",
+            "--release-preview",
+            "--release-analysis-file",
+            ".runtime/schema4-analysis.json",
+        ],
+        true,
+    );
     assert_eq!(preview["status"], "release-planned");
     assert_eq!(preview["version_after"], "1.0.1");
     assert_eq!(preview["package_changes"].as_array().unwrap().len(), 1);
