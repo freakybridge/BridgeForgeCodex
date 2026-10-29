@@ -29,102 +29,6 @@ fn unsupported_skeleton_plan_and_apply_do_not_write() {
 use crate::ProcessRequest;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-fn legacy_upgrade_fixture() -> (PathBuf, PathBuf, PathBuf) {
-    let (root, project, factory) = upgrade_fixture("7.0.5", "9.0.0");
-    let contract_path = factory.join("templates/managed-skeleton.json");
-    let mut contract: Value = serde_json::from_slice(&fs::read(&contract_path).unwrap()).unwrap();
-    contract["compatibility_baseline"] = json!("1.8.6");
-    contract["release_model"] = json!("product-packages");
-    fs::write(&contract_path, serde_json::to_vec(&contract).unwrap()).unwrap();
-    contract["release_version"] = json!("7.0.5");
-    fs::write(
-        project.join(".codex/managed-skeleton.json"),
-        serde_json::to_vec(&contract).unwrap(),
-    )
-    .unwrap();
-    fs::write(
-        project.join(".codex/bridgeforge-version.json"),
-        br#"{"schema_version":4,"release_model":"product-packages"}"#,
-    )
-    .unwrap();
-    (root, project, factory)
-}
-
-#[test]
-fn legacy_upgrade_current_release_model_and_idempotence() {
-    let (root, project, factory) = legacy_upgrade_fixture();
-    assert!(build_plan(&project, &factory, SyncMode::Update).is_err());
-    let release_before = fs::read(project.join(".codex/bridgeforge-version.json")).unwrap();
-    let plan = build_legacy_upgrade_plan(&project, &factory).unwrap();
-    assert!(!project.join(".runtime").exists());
-    assert_eq!(plan.previous_version.as_deref(), Some("7.0.5"));
-    let fp = plan.aggregate_fingerprint.clone();
-    let receipt = apply_plan(plan, &fp, true).unwrap();
-    assert!(receipt.stamp_written_last);
-    assert_eq!(
-        fs::read(project.join(".codex/bridgeforge-version.json")).unwrap(),
-        release_before
-    );
-    // No VERSION: the existing updater has no business release setup to migrate.
-    let again = build_plan(&project, &factory, SyncMode::Update).unwrap();
-    assert!(again.safe.is_empty() && again.risk.is_empty());
-    fs::remove_dir_all(root).unwrap();
-}
-
-#[test]
-fn legacy_upgrade_identity_and_confirmation_drift_are_zero_write() {
-    for field in [
-        ".codex/.bridgeforge_codex_version",
-        ".codex/managed-skeleton.json",
-        "repo-identity",
-    ] {
-        let (root, project, factory) = legacy_upgrade_fixture();
-        fs::write(project.join("repo-identity"), b"original").unwrap();
-        let mut plan = build_legacy_upgrade_plan(&project, &factory).unwrap();
-        bind_identity_reads(&mut plan, &[project.join("repo-identity")]).unwrap();
-        let fp = plan.aggregate_fingerprint.clone();
-        fs::write(project.join(field), b"drift").unwrap();
-        assert!(
-            apply_plan(plan, &fp, true)
-                .unwrap_err()
-                .contains("identity drifted")
-        );
-        assert!(!project.join(".runtime").exists());
-        assert!(!project.join("managed.txt").exists());
-        fs::remove_dir_all(root).unwrap();
-    }
-}
-
-#[test]
-fn legacy_upgrade_rolls_back_before_stamp_and_rejects_bad_sources() {
-    let (root, project, factory) = legacy_upgrade_fixture();
-    let before = fs::read(project.join(".codex/managed-skeleton.json")).unwrap();
-    let plan = build_legacy_upgrade_plan(&project, &factory).unwrap();
-    let fp = plan.aggregate_fingerprint.clone();
-    let error = apply_plan_internal(
-        plan,
-        &fp,
-        true,
-        Some(&|_, _| Err("injected failure".into())),
-    )
-    .unwrap_err();
-    assert!(error.contains("transaction rolled back"));
-    assert_eq!(
-        fs::read(project.join(".codex/managed-skeleton.json")).unwrap(),
-        before
-    );
-    assert_eq!(
-        fs::read(project.join(".codex/.bridgeforge_codex_version")).unwrap(),
-        b"7.0.5\n"
-    );
-    assert!(!project.join("managed.txt").exists());
-    for version in ["7.0.3", "8.0.0", "10.0.0"] {
-        fs::write(project.join(".codex/.bridgeforge_codex_version"), version).unwrap();
-        assert!(build_legacy_upgrade_plan(&project, &factory).is_err());
-    }
-    fs::remove_dir_all(root).unwrap();
-}
-
 #[test]
 fn r05_render_asset_preserves_strategy_bytes_and_disk_snapshot() {
     let (root, _) = transaction_fixture(true);
@@ -1584,8 +1488,6 @@ fn transaction_fixture(valid_asset_hash: bool) -> (PathBuf, SyncPlan) {
         project_hook_reads: BTreeMap::new(),
         public_actions: Vec::new(),
         release_upgrade: None,
-        legacy_source: false,
-        identity_reads: BTreeMap::new(),
     };
     (root, plan)
 }

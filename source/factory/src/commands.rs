@@ -95,7 +95,6 @@ pub fn run_with_runner(args: &[String], inner: &dyn ProcessRunner) -> CommandOut
         return blocked("factory", "a command is required");
     };
     match command {
-        "upgrade-legacy-seven" => crate::legacy_upgrade::run(args, &runner),
         "self-test" if has(args, "--json") => self_test(),
         "manifest" => match context(args) {
             Ok(context) => match manifest::rebuild(
@@ -231,7 +230,7 @@ pub fn run_with_runner(args: &[String], inner: &dyn ProcessRunner) -> CommandOut
         }
         _ => blocked(
             "factory",
-            "usage: bridgeforge-factory <self-test|manifest|check|build-assets|git-sync|develop|upgrade-legacy-seven>",
+            "usage: bridgeforge-factory <self-test|manifest|check|build-assets|git-sync|develop>",
         ),
     }
 }

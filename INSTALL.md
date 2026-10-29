@@ -91,37 +91,6 @@ Skills 由产品管理，避免覆盖来源不明或被人工修改的 Skill 文
 
 ## 项目升级与异常诊断
 
-### 四项目 7.0.x 临时升级命令
-
-工厂专属 `upgrade-legacy-seven` 仅用于 StratusAgent、BridgePersonalAssist、CausisRiskSuite、HoldemTrainer
-从 7.0.4/7.0.5 过渡至当前 9.x。项目须匹配登记的 origin 与已核实的历史提交；支持同仓库 worktree，
-不凭目录名放行。普通 project-sync 仍拒绝 8.0.0 以下骨架。此入口不更新用户级安装，也不修改业务版本。
-
-在本工厂目录先按上文受管准备入口刷新工具，然后准备一次公共产物（四项目共用）：
-
-```powershell
-$prepared = .codex\bin\bridgeforge.exe public-artifacts prepare --product-root D:\Quant\BridgeForge --codex-home D:\Quant\BridgeForge\.runtime\legacy-seven-upgrade\codex-home | ConvertFrom-Json
-```
-
-逐项目指定 `--project` 和绝对 `--project-root`，预览不会写入目标项目。下面使用隔离测试 worktree：
-
-```powershell
-$target = 'D:\Quant\BridgeForge\.runtime\legacy-seven-upgrade\StratusAgent'
-$plan = .codex\bin\bridgeforge-factory.exe upgrade-legacy-seven --root D:\Quant\BridgeForge --project StratusAgent --project-root $target --preview | ConvertFrom-Json
-$plan | ConvertTo-Json -Depth 20
-```
-
-核对 `safe`、`risk`、`gaps`、`blockers` 后，使用该次指纹执行；有风险项时才明确加上 `--confirmed-risk`：
-
-```powershell
-.codex\bin\bridgeforge-factory.exe upgrade-legacy-seven --root D:\Quant\BridgeForge --project StratusAgent --project-root $target --apply --plan-fingerprint $plan.aggregate_fingerprint --public-artifacts $prepared.receipt --confirmed-risk
-```
-
-必须先确认每一步退出码为 0。身份、来源、资产、产物或计划漂移时重新预览；未知归属与冲突不得强制绕过。
-重复执行仍核验当前状态，完整匹配时不产生资产变动。四项目全部完成后可另行退役本命令；升级失败保留真实错误与回滚结果。
-本轮正式工作目录升级尚未授权，不能将示例路径替换为正式目录直接执行。需求与验证见
-[四项目临时升级记录](doc/1_delivery/legacy-seven-upgrade/requirements_2026-10-29_four-projects.md)。
-
 项目骨架版本记录在 `.codex/.bridgeforge_codex_version`。咨询、诊断或只读预览不更新安装；明确维护（含无附加限制的 `$bridgeforge-codex`）才刷新官方产品 home，随后分流：
 
 - 没有骨架身份和骨架资产的空白项目：直接初始化，不要求预先存在版本戳。

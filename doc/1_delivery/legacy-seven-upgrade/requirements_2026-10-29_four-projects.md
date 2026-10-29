@@ -91,3 +91,39 @@ M 级，沿用 confirm 默认预算与最多两轮验证；主对话实施，迁
 发布预检已执行：main，HEAD `31d1451ca5f32a6c4ed129e439e9fb5f9f210070`，push target 为 origin/main，主程序 9.0.0，工厂工具 0.6.0。首次沙箱预检输出缺少 `version-coverage-v1`；只读源码核对发现已有声明，随后在实际执行宿主重跑同一预检，完整返回 `git-sync-remote-context-v1`、`git-sync-development-closure-v1` 和 `version-coverage-v1`，所需能力核验通过。两次宿主输出差异的根因未核实，未因此改代码、补造能力或重建工具。
 
 发布从通过核验的实际宿主继续 S2–S5。此验收记录保存的是用户决定与发布授权，不预先声称提交、推送或目标版本已发布；实际结果以受管发布收据为准。发布不会升级四个正式下游目录。
+
+## 9.1.0 撤回与 9.0.0 恢复（2026-10-29）
+
+用户明确选择撤回 9.1.0：四个下游最终使用 9.0.0，工厂恢复原始 9.0.0 产品内容，并授权按已确认计划执行。CausisRiskSuite 由用户自行操作，用户已报告完成；本轮不操作或核验该项目。授权包含本仓库撤回提交、受管推送及用户级安装恢复；另外三个下游不提交、不推送。历史验收记录保留，不改写为从未发布。
+
+恢复依据为 `31d1451ca5f32a6c4ed129e439e9fb5f9f210070`，被撤回的 9.1.0 提交为 `35b5ad7ad1829ceae8805d78abdb759065c6b645`。采用现有临时工具将三个 7.x 项目直接迁入原始 9.0.0，不先安装 9.1.0，不手改下游版本戳。先隔离验证，再逐个正式应用，然后恢复工厂源码、合同、子包与收口记录、dogfood 及最终产物；新增撤回提交，保留 Git 历史。
+
+本次沿用 M 级预算：45 分钟、估算 20k 新增 token、主对话执行、最多两轮验证；token 未实测。保护项目业务代码、版本、配置、Hook 及未提交文件；BridgePersonalAssist 的三个未跟踪日记文件只核验哈希，不修改或发布正文。检查仅覆盖骨架迁移、内容保护、重复执行、原始产品一致性、受管构建和同步，不启动业务应用或连接业务账户。
+
+执行收据保存于 `.runtime/restore-nine-zero/`。9.0.0 公共产物准备返回 `status=prepared`，执行两次锁定 Cargo 构建；缺少隔离缓存根目录的首次准备在写入项目之前失败，创建目录后原命令成功。应用内 worktree 工具不支持当前聊天之外的仓库，三个下游使用已授权的 Git detached worktree，正式工作文件未因此改变。
+
+三个隔离项目全部完成升级、保护文件 SHA-256 核验、安装 CLI baseline 和重复 apply 零改动。随后逐个正式应用的结果如下：
+
+| 正式项目 | 来源 | 目标 | 实际受管动作数 | 保护文件数 | 基线 | 重复动作数 |
+|---|---|---|---:|---:|---|---:|
+| HoldemTrainer | 7.0.5 | 9.0.0 | 35 | 802 | clean | 0 |
+| StratusAgent | 7.0.5 | 9.0.0 | 35 | 2895 | clean | 0 |
+| BridgePersonalAssist | 7.0.4 | 9.0.0 | 35 | 666 | clean | 0 |
+
+正式升级均返回 `status=applied`、`project_readiness=ready`、`stamp_written_last=true`；保护集合覆盖所有非计划变更的 Git 文件、未跟踪文件及已有项目 Hook 可执行文件，哈希全部一致。三个下游不提交、不推送。CausisRiskSuite 仅采用用户完成反馈，不作为本轮 Agent 实测结果。
+
+工厂恢复原始提交中的 19 个产品文件（含删除临时命令）；`git diff --exit-code 31d1451 -- source templates .codex Cargo.toml Cargo.lock scripts INSTALL.md VERSION` 通过，证明产品、配置、测试及安装说明与原始 9.0.0 一致。保留历史任务文档，并在 CHANGELOG 标明 9.1.0 已撤回。
+
+工厂受管准备已返回 `status=prepared`、`prepared=3`、`written_files=6`、`self_test_executed=true`。最终 `manifest --check` 返回 `changed=false`，`check factory-version` 返回 9.0.0 / `healthy=true`，`build-assets --check` 返回 `current`、`reused=3`、`built=0`，`git diff --check` 通过。本次为恢复既有产品，不新增子包版本或新 release；factory / workflow 恢复为原始 0.5.0 / 0.3.0。
+
+上述为撤回提交前的工程事实。后续由普通受管 git-sync 保存并推送撤回提交，再由官方 updater 从远端恢复用户级安装；不预先将待执行步骤记为成功。实际提交、远端一致性与用户级安装以本轮交付及 `.runtime/restore-nine-zero/` 的同步、更新收据为准。三个下游隔离 worktree 已清理，收据保留；原始 9.0.0 来源 worktree 因应用将其作为本聊天主工作目录而无法归档，保持原样。工厂正式恢复、验证和 Git 同步均在 `D:\Quant\BridgeForgeCodex` 执行。
+
+### 首次同步：网络阻断
+
+受管 `git-sync --preflight` 已返回 `ready`，main、目标 `origin/main`、工厂工具 0.5.0 / 产品 9.0.0。随后 `git-sync --message-file .runtime/restore-nine-zero/message.txt` 在首次 `git fetch origin` 阶段返回 `status=blocked`：`OpenSSL SSL_connect: SSL_ERROR_SYSCALL in connection to github.com:443`。收据为 `.runtime/restore-nine-zero/git-sync.json`，错误日志为 `git-sync.stderr.log`。
+
+失败发生在暂存、提交、推送之前；已核对 HEAD 仍为 `35b5ad7`、原有 stash 未变化、23 个本轮文件改动保留，产品内容仍与原始 9.0.0 一致。用户级产品只读核验仍为 9.1.0，尚未调用 updater，避免再次安装尚未撤回的远端版本。不得将本地恢复称为远端撤回完成。
+
+网络恢复且用户明确重试后，从 `D:\Quant\BridgeForgeCodex` 继续同一受管 git-sync；复用本轮已验证内容和提交消息，真实输入发生变化才补核。成功后独立核验实际 push 目标、工作区、HEAD 与远端一致性，再执行官方用户级 updater 并核验 9.0.0。不要重复升级三个已完成的下游，也不操作用户自行负责的 CausisRiskSuite。
+
+用户随后明确授权重试同步、完成上游撤回及用户级 9.0.0 恢复，并再次要求三个已完成下游保持不动。重试沿用原仓库、已验证产物和提交消息；重试及用户级安装收据分别保存为 `git-sync-retry.json`、`user-update.log`，以实际终态为准。
