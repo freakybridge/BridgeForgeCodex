@@ -733,7 +733,7 @@ fn rust_cross_workspace_locks_are_accepted_by_offline_locked_cargo() {
         fn drop(&mut self) {
             // The only recursively removed path is this generated, absolute,
             // test-owned child of the operating system's temporary directory.
-            let temp = std::env::temp_dir();
+            let temp = test_artifacts::root(env!("CARGO_MANIFEST_DIR"), "release-rust");
             if self.0.is_absolute()
                 && self.0.starts_with(&temp)
                 && self
@@ -757,10 +757,12 @@ fn rust_cross_workspace_locks_are_accepted_by_offline_locked_cargo() {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let root = FixtureDirectory(std::env::temp_dir().join(format!(
-            "bridgeforge-rust-lock-{unique}-{}",
-            COUNTER.fetch_add(1, Ordering::Relaxed)
-        )));
+        let root = FixtureDirectory(
+            test_artifacts::root(env!("CARGO_MANIFEST_DIR"), "release-rust").join(format!(
+                "bridgeforge-rust-lock-{unique}-{}",
+                COUNTER.fetch_add(1, Ordering::Relaxed)
+            )),
+        );
         for (relative, contents) in &files {
             let path = root.0.join(relative);
             fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -1045,7 +1047,7 @@ fn rust_implicit_discovery_respects_excludes_and_independent_roots() {
 #[test]
 fn rust_implicit_members_match_offline_cargo_metadata() {
     use std::fs;
-    let root = std::env::temp_dir().join(format!(
+    let root = test_artifacts::root(env!("CARGO_MANIFEST_DIR"), "release-rust").join(format!(
         "bf-implicit-cargo-{}-{}",
         std::process::id(),
         std::time::SystemTime::now()
@@ -1401,7 +1403,7 @@ fn rust_common_renderer_preserves_registry_identity_and_unaffected_packages() {
 #[test]
 fn rust_common_final_versions_match_locked_offline_cargo_metadata() {
     use std::fs;
-    let path = std::env::temp_dir().join(format!(
+    let path = test_artifacts::root(env!("CARGO_MANIFEST_DIR"), "release-rust").join(format!(
         "bf-release-cargo-{}-{}",
         std::process::id(),
         std::time::SystemTime::now()
@@ -1494,3 +1496,7 @@ fn rust_common_final_versions_match_locked_offline_cargo_metadata() {
         writes["Cargo.lock"]
     );
 }
+
+#[allow(dead_code)]
+#[path = "../support/artifact_paths.rs"]
+mod test_artifacts;

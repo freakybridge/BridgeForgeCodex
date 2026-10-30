@@ -6,7 +6,7 @@ static NEXT: AtomicUsize = AtomicUsize::new(0);
 struct Fixture(PathBuf);
 impl Fixture {
     fn new() -> Self {
-        let root = std::env::temp_dir().join(format!(
+        let root = test_artifacts::root(env!("CARGO_MANIFEST_DIR"), "user-agents").join(format!(
             "bfc-user-agents-{}-{}",
             std::process::id(),
             NEXT.fetch_add(1, Ordering::Relaxed)
@@ -141,3 +141,7 @@ fn junction_to_another_profile_is_rejected() {
     assert_eq!(fs::read_dir(outside).unwrap().count(), 0);
     fs::remove_dir(f.profile().join(".codex")).unwrap();
 }
+
+#[allow(dead_code)]
+#[path = "../support/artifact_paths.rs"]
+mod test_artifacts;

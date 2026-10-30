@@ -20,14 +20,15 @@ fn high_cost_live_logs_read_only() {
 
 #[test]
 fn high_cost_windows_reads_only_matching_session_without_database_changes() {
-    let directory = std::env::temp_dir().join(format!(
-        "bf-high-cost-sql-{}-{}",
-        std::process::id(),
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
+    let directory =
+        test_artifacts::root(env!("CARGO_MANIFEST_DIR"), "high-cost-windows").join(format!(
+            "bf-high-cost-sql-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
     fs::create_dir_all(&directory).unwrap();
     let path = directory.join("logs.sqlite");
     let api = Api::load().unwrap();
@@ -79,3 +80,7 @@ fn high_cost_windows_reads_only_matching_session_without_database_changes() {
     drop(api);
     fs::remove_dir_all(directory).unwrap();
 }
+
+#[allow(dead_code)]
+#[path = "../support/artifact_paths.rs"]
+mod test_artifacts;

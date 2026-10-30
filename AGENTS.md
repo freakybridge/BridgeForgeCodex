@@ -68,7 +68,7 @@
 - **安装与恢复统一从 INSTALL.md 进入。** 每个项目必须在根目录维护 `INSTALL.md`，作为安装、换机恢复、重装和环境迁移的唯一说明入口。`README.md`、`AGENTS.md` 中的安装与恢复相关内容只做导航或保留必要的快速命令，不重复维护完整安装流程。
 - **保护项目资料，不自动归档。** 项目知识资料归项目所有，骨架升级不得覆盖或删除正文。不因日期或完成状态自动归档；需要归档已完成事项时，使用 archive-scan。
 - **测试和工具放在规定位置。** 独立测试、基准及其专用辅助文件放在 `scripts/tests/**`；语言原生的内联单元测试可以留在被测模块中。独立工具放在 `scripts/`，生产运行不得依赖测试集。
-- **产物按项目配置存放。** 测试运行产物写入项目指定目录。Forge 默认做通用布局检查，必要差异只在 `.codex/artifact-layout.json` 中声明；项目特有约束和执行入口留在项目 AGENTS。迁移测试时同步更新引用和执行入口，保留原有测试覆盖。
+- **产物严格按三目录存放。** 项目本机运行产物进入 `.runtime/`，依赖环境和安装工具进入 `.deps/`，编译、打包的中间及最终产物和编译缓存进入 `.build/`；根目录及源码目录不得散落这些产物，`target/`、`dist/`、`.venv/`、`node_modules/` 不保留原位例外，也不以链接绕过。工具链不兼容时报告阻断。本机配置固定在 `.runtime/config/`，下载文件固定在 `.runtime/download/`，测试报告、测试日志、覆盖率结果和运行临时数据固定在 `.runtime/tests/<测试任务>/`；测试源码及固定样本仍在 `scripts/tests/`。受版本管理的配置、依赖清单、锁文件、源码和用户资料保留原职责。项目根 `.gitignore` 必须完整忽略 `.runtime/`、`.deps/`、`.build/` 及全部内容；忽略不等于删除授权，已跟踪文件须单独处理并保留本机内容。`.codex/artifact-layout.json` 仅可细化三根内的识别与路径，不得开放根外或固定子目录之外的豁免。迁移须同步读写、构建、安装和调用入口，保护配置原始内容及权限，归属不明或目标冲突时停止。
 
 ### 7. 版本与发布
 
@@ -129,9 +129,11 @@
 
 本工厂的 develop 本地 dogfood 优先读取 `templates/skills/develop/SKILL.md` 及其按需引用的 reference；用户级安装副本不同时，以仓库候选作为本工厂的执行依据，不把旧版全仓清零规则重新带入。本入口不分发到公共 Template 或其他项目。
 
-实际命令使用受管准备后的 `.codex/bin/bridgeforge-factory.exe`，从本次包预览收据核验任务范围与直接 apply 能力；阶段间复用还需 `staged-development-validation-v1` 及完整实际环境合同，可选失败重试缓存仍按 `resumable-development-checks-v1`。能力缺失须报告，不能静默退回旧全仓入口。本地 dogfood 不等于正式版本收口或发布，也不更新用户级共享安装。
+实际命令使用受管准备后的 `.build/bridgeforge/bin/bridgeforge-factory.exe`，从本次包预览收据核验任务范围与直接 apply 能力；阶段间复用还需 `staged-development-validation-v1` 及完整实际环境合同，可选失败重试缓存仍按 `resumable-development-checks-v1`。能力缺失须报告，不能静默退回旧全仓入口。本地 dogfood 不等于正式版本收口或发布，也不更新用户级共享安装。
 
-本工厂的 Git 同步与开发收口入口为 `.codex/bin/bridgeforge-factory.exe git-sync` 和 `develop`。Git 同步使用已安装工具和一次聚合预检，不前置准备或独立 self-test；工具缺失、不匹配时报告维护缺口，不自动安装升级。develop 使用当前已准备工具，仅工具缺失、不匹配或本次确需新构建时执行受管准备，不为每个阶段重复构建或 self-test。公共 CLI 保留兼容转发，但工厂直接入口避免额外转发进程；发布结果确需刷新产物时仍由受管事务处理。
+本工厂的 Git 同步与开发收口入口为 `.build/bridgeforge/bin/bridgeforge-factory.exe git-sync` 和 `develop`。Git 同步使用已安装工具和一次聚合预检，不前置准备或独立 self-test；工具缺失、不匹配时报告维护缺口，不自动安装升级。develop 使用当前已准备工具，仅工具缺失、不匹配或本次确需新构建时执行受管准备，不为每个阶段重复构建或 self-test。公共 CLI 保留兼容转发，但工厂直接入口避免额外转发进程；发布结果确需刷新产物时仍由受管事务处理。
+
+本工厂的显式产物清理入口为 `.build/bridgeforge/bin/bridgeforge-factory.exe cleanup --root .`，只读预览追加 `--dry-run`。build 范围仅限历史编译产物，当前工具及其收据保留；直接使用本项目入口，不采用外部清理执行器。
 
 工厂显式工具刷新及开发必要构建的受管准备入口为下列第一条命令，不再作为日常 Git 同步前置。它通过锁定 Cargo 启动当前源码工厂工具，按需准备 CLI、Hook 和工厂工具；准备失败停止，不对工厂执行下游 adopt/apply。只读检查直接使用已具备 `factory-runtime-prepare-v1` 的工厂工具的 `build-assets --factory --project-root . --check`；没有该能力时报告工具不可用，不用 Cargo 引导冒充零写入检查。完整说明见 INSTALL.md。
 
@@ -140,8 +142,8 @@ cargo run --locked --release --manifest-path Cargo.toml --bin bridgeforge-factor
 cargo build --locked --release --manifest-path Cargo.toml
 cargo test --locked --config scripts/tests/factory-cargo.toml --manifest-path Cargo.toml --workspace
 cargo test --locked --manifest-path scripts/tests/Cargo.toml
-.codex\bin\bridgeforge-factory.exe manifest --root . --check
-.codex\bin\bridgeforge-factory.exe check factory-version --root .
+.build\bridgeforge\bin\bridgeforge-factory.exe manifest --root . --check
+.build\bridgeforge\bin\bridgeforge-factory.exe check factory-version --root .
 ```
 
 ### 目录级 AGENTS 索引

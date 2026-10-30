@@ -70,6 +70,12 @@ schema 4 保留 release_model=product-packages、原生适配和正式发布 bas
 
 首次纳管旧包用 package_adoptions 声明当前新 id、不可变来源 revision、原生版本和 source 身份；程序从紧邻首次登记的 Git revision 重建真实 workspace/锁核验。不能替代 split/move、冒领退役身份、挑方便历史或改写 baseline。
 
+经用户明确批准的正式版本撤回通过 `release_withdrawals` 精确登记：`rollback`、`restored_release`、`withdrawn_release` 为完整不可变提交 ID，`reason` 说明批准依据；`retained_documentation` 只列实际保留差异的 Markdown 文档路径。工具逐次核验第一父链、正式发布、完整恢复树及原收口账本；文档若在任一历史配置中承担产品、包或构建输入，不能豁免。包身份或生命周期跨撤回变化暂不支持，Git replacement/graft 也不能作为撤回证明。已提交的撤回登记不得删除或改写。
+
+撤回只改变内容比较基线，不释放已经发布的版本号。后续主程序版本和新内容子包版本必须高于对应历史已发布上限；保持原内容的重验证不重复升版。release 不补做 develop，撤回登记也不伪造收口记录。无需先安装已撤回版本，可在另行获准发布后直接升级到更高版本。
+
+普通 `checks.inputs` 只绑定检查执行，单独承担该角色的保留文档可以不同；同时承担产品、构建、稳定性或交付物角色时仍拒绝豁免。允许撤回不等于这些检查已经通过，本次验证仍按实际开发范围安排。
+
 development 按包 id 登记非空 checks，每项有 id、program、args，可选 timeout_seconds（默认 300，1–14400）、inputs、artifacts。验证脚本/数据须为包输入或 checks.inputs，跟踪产物须为 build_inputs。可选 stability 含非空 contracts 和至少 core/integration 各一项检查。下游 Python 项目保留 python_environment 的解释器、运行时及依赖目录要求，Forge 自身工具仍用受管 Rust。
 
 1. develop --preview --packages <id1,id2> 读取 affected、effective scope 和 fingerprint；无待处理项不写记录。

@@ -84,7 +84,7 @@ fn close_packages(
         let id = p["id"].as_str().unwrap();
         let manifest = p["manifest"].as_str().unwrap();
         let check = if p["language"] == "rust" {
-            json!({"id":"native-test","program":"cargo","args":["test","--locked","--manifest-path",manifest,"--target-dir",".runtime/native-target"],"timeout_seconds":120})
+            json!({"id":"native-test","program":"cargo","args":["test","--locked","--manifest-path",manifest,"--target-dir",".build/native-target"],"timeout_seconds":120})
         } else {
             // Real Python executes the changed module; no package installation.
             json!({"id":"native-test","program":"python","args":["-B","-S","-c","exec(compile(open('app.py',encoding='utf-8').read(),'app.py','exec')); assert VALUE == 2"],"timeout_seconds":30})

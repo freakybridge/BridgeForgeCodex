@@ -1,0 +1,23 @@
+{
+  "schema": 1,
+  "outputs": [
+    {
+      "path": ".build/bridgeforge/legacy/build-artifact-cache",
+      "kind": "build",
+      "directory": true,
+      "cleanup": "history"
+    },
+    {
+      "path": ".build/bridgeforge/legacy/git-sync-images",
+      "kind": "build",
+      "directory": true,
+      "cleanup": "history"
+    },
+    {
+      "path": ".build/bridgeforge/transient",
+      "kind": "build",
+      "directory": true,
+      "cleanup": "cache"
+    }
+  ]
+}

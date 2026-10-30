@@ -59,4 +59,13 @@ impl ProcessRunner for Observed<'_> {
             .or_default() += 1;
         self.runner.cache_miss(reason);
     }
+    fn build_group_finished(&self, group: &'static str, elapsed_ms: u128) {
+        *self
+            .metrics
+            .borrow_mut()
+            .timings_ms
+            .entry(format!("build_group_{group}"))
+            .or_default() += elapsed_ms;
+        self.runner.build_group_finished(group, elapsed_ms);
+    }
 }

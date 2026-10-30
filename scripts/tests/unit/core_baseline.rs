@@ -9,7 +9,8 @@ fn minimum_supported_skeleton_version_rejects_old_projects_without_writes() {
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    let root = std::env::temp_dir().join(format!("bf-support-floor-{token}"));
+    let root = test_artifacts::root(env!("CARGO_MANIFEST_DIR"), "baseline")
+        .join(format!("bf-support-floor-{token}"));
     fs::create_dir_all(root.join(".codex")).unwrap();
     for version in ["0.1.0", "7.0.5", "8.0.0", "8.0.1", "9.0.0"] {
         let stamp = root.join(".codex/.bridgeforge_codex_version");
@@ -57,7 +58,8 @@ fn minimum_supported_version_does_not_use_business_or_package_versions() {
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    let root = std::env::temp_dir().join(format!("bf-support-business-{token}"));
+    let root = test_artifacts::root(env!("CARGO_MANIFEST_DIR"), "baseline")
+        .join(format!("bf-support-business-{token}"));
     fs::create_dir_all(root.join(".codex")).unwrap();
     fs::write(root.join("VERSION"), b"0.1.0\n").unwrap();
     fs::write(
@@ -325,8 +327,11 @@ fn agents_contract_and_payload_require_both_unique_zones() {
 
 #[test]
 fn gitattributes_uses_effective_git_semantics() {
-    verify_gitattributes(b"* text=auto eol=lf\n").unwrap();
-    let error = verify_gitattributes(b"* text=auto eol=lf\n* eol=crlf\n").unwrap_err();
+    let root = factory_repository::from_manifest_dir(env!("CARGO_MANIFEST_DIR"))
+        .join(".runtime/tests/attributes");
+    fs::create_dir_all(&root).unwrap();
+    verify_gitattributes(b"* text=auto eol=lf\n", Some(&root)).unwrap();
+    let error = verify_gitattributes(b"* text=auto eol=lf\n* eol=crlf\n", Some(&root)).unwrap_err();
     assert!(error.contains("overridden"), "{error}");
 }
 
@@ -378,3 +383,7 @@ fn generic_merge_requires_the_full_declared_json_subset() {
         .remove("defaultMode");
     assert!(verify_asset_payload(&asset, &serde_json::to_vec(&document).unwrap()).is_err());
 }
+
+#[allow(dead_code)]
+#[path = "../support/artifact_paths.rs"]
+mod test_artifacts;

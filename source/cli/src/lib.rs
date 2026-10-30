@@ -91,11 +91,10 @@ fn factory_command_with_runner(
         if !is_factory_repository(&root) {
             return Err("this command requires the factory repository".into());
         }
-        let binary = root.join(format!(
-            ".codex/bin/bridgeforge-factory{}",
-            std::env::consts::EXE_SUFFIX
-        ));
-        let receipt = root.join(".codex/bin/build-receipt-factory.json");
+        let binary = bridgeforge_core::artifact_paths::binary(&root, true, "bridgeforge-factory");
+        let receipt = root
+            .join(bridgeforge_core::artifact_paths::FACTORY_BIN)
+            .join("build-receipt-factory.json");
         let before = verified_factory_image(&root, &binary, &receipt)?;
         let mut request = bridgeforge_core::ProcessRequest::new(binary.as_os_str(), &root);
         request.args = args.iter().map(OsString::from).collect();
@@ -197,6 +196,8 @@ fn self_test() -> CommandOutcome {
         .and_then(|r| r["capabilities"].as_array_mut())
     {
         capabilities.push(json!("factory-runtime-prepare-v1"));
+        capabilities.push(json!("artifact-cleanup-v1"));
+        capabilities.push(json!("three-directory-layout-v1"));
         capabilities.push(json!("package-development-v1"));
         capabilities.push(json!("package-stability-v1"));
         capabilities.push(json!("git-sync-development-closure-v1"));
@@ -254,11 +255,9 @@ fn check(command: &str, args: &[String]) -> CommandOutcome {
                     Err(error) => blocked("current-baseline", error),
                 };
             }
-            let factory_contract = context.root().join("templates/managed-skeleton.json");
-            let contract = factory_contract.is_file().then_some(factory_contract);
             match bridgeforge_skeleton::baseline::verify(
                 context.root(),
-                contract.as_deref(),
+                None,
                 !has(args, "--skip-generated-runtime"),
             ) {
                 Ok(report) => CommandOutcome::with_receipt(serde_json::to_value(report).unwrap()),
@@ -681,6 +680,7 @@ pub fn run(args: &[String]) -> CommandOutcome {
                 Err(error) => blocked("user-agents-stage", error),
             }
         }
+        "cleanup" => bridgeforge_workflow::artifact_cleanup::command(args, &SystemProcessRunner),
         "git-sync" => git_sync(args),
         "develop" => {
             let root=value(args,"--root").map(PathBuf::from);
@@ -743,7 +743,7 @@ pub fn run(args: &[String]) -> CommandOutcome {
         }
         _ => CommandOutcome {
             code: EXIT_BLOCKED,
-            stderr: "usage: bridgeforge <self-test|doctor|check|archive-scan|audit-user-allow|project-sync|public-artifacts|project-hook-migration|develop|git-sync|memory-sync|manifest|build-assets>\n".into(),
+            stderr: "usage: bridgeforge <self-test|doctor|check|archive-scan|audit-user-allow|project-sync|public-artifacts|project-hook-migration|develop|git-sync|memory-sync|manifest|build-assets|cleanup>\n".into(),
             ..CommandOutcome::default()
         },
     }

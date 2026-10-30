@@ -1,5 +1,5 @@
-use bridgeforge_workflow::project_sync::build_generated_assets;
 use bridgeforge_core::{ProcessOutput, ProcessRequest, ProcessRunner};
+use bridgeforge_workflow::project_sync::build_generated_assets;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::cell::Cell;
@@ -181,15 +181,16 @@ fn legacy_receipt_delete_failure_rolls_back_installed_assets() {
 }
 impl Fixture {
     fn new() -> Self {
-        let root = std::env::temp_dir().join(format!(
-            "bf-provenance-{}-{}-{}",
-            std::process::id(),
-            FIXTURE_ID.fetch_add(1, Ordering::Relaxed),
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let root =
+            test_artifacts::root(env!("CARGO_MANIFEST_DIR"), "build-provenance").join(format!(
+                "bf-provenance-{}-{}-{}",
+                std::process::id(),
+                FIXTURE_ID.fetch_add(1, Ordering::Relaxed),
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
         for base in ["templates/hooks", ".codex/hooks"] {
             fs::create_dir_all(root.join(base).join("src")).unwrap();
             fs::write(root.join(base).join("Cargo.toml"), "[workspace]\n").unwrap();
@@ -208,6 +209,9 @@ impl Fixture {
             &bridgeforge_factory::manifest::render_managed_contract(&root).unwrap(),
         )
         .unwrap();
+        // Legacy-receipt scenarios retain their old parent independently of
+        // the new generated tool destinations under .deps/.
+        fs::create_dir_all(root.join(".codex/bin")).unwrap();
         let fixture = Self { root, contract };
         for target in fixture.targets() {
             fs::create_dir_all(target.parent().unwrap()).unwrap();
@@ -257,8 +261,12 @@ impl ProcessRunner for Runner<'_> {
     fn run(&self, request: &ProcessRequest) -> std::io::Result<ProcessOutput> {
         self.calls.set(self.calls.get() + 1);
         assert!(
-            !request.cwd.starts_with(self.root),
-            "must compile the isolated snapshot"
+            request
+                .cwd
+                .starts_with(self.root.join(".build/bridgeforge/transient"))
+                && request.cwd != self.root.join(".codex/hooks"),
+            "must compile the isolated project-local snapshot: {}",
+            request.cwd.display()
         );
         let mut stdout = Vec::new();
         let mut code = 0;
@@ -509,5 +517,9 @@ fn both_binaries_share_one_isolated_dependency_target() {
     let targets = runner.targets.borrow();
     assert_eq!(targets.len(), 2);
     assert_eq!(targets[0], targets[1]);
-    assert!(!targets[0].starts_with(&fixture.root));
+    assert!(targets[0].starts_with(fixture.root.join(".build/bridgeforge/transient")));
 }
+
+#[allow(dead_code)]
+#[path = "../support/artifact_paths.rs"]
+mod test_artifacts;

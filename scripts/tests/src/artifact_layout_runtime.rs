@@ -46,7 +46,10 @@ fn setup(cli: &Path, label: &str, configured: bool, modern: bool) -> Fixture {
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    let fixture = Fixture(std::env::temp_dir().join(format!("bf-layout-{label}-{token}")));
+    let fixture = Fixture(
+        test_artifacts::root(env!("CARGO_MANIFEST_DIR"), "artifact-layout-runtime")
+            .join(format!("bf-layout-{label}-{token}")),
+    );
     let root = fixture.0.join("project");
     fs::create_dir_all(&root).unwrap();
     write(&root, "VERSION", b"1.0.0\n");
@@ -62,7 +65,7 @@ fn setup(cli: &Path, label: &str, configured: bool, modern: bool) -> Fixture {
         b"version = 4\n[[package]]\nname = 'layout-fixture'\nversion = '1.0.0'\n",
     );
     write(&root, "src/lib.rs", b"pub fn sample() {}\n");
-    write(&root, ".gitignore", b".runtime/\n");
+    write(&root, ".gitignore", b"/.runtime/\n/.deps/\n/.build/\n");
     use sha2::{Digest, Sha256};
     write(&root, "templates/seed.txt", b"seed\n");
     write(&root, "seed.txt", b"seed\n");
@@ -147,9 +150,9 @@ fn artifact_layout_real_git_sync_blocks_only_new_violations_and_keeps_remote() {
         .nth(2)
         .unwrap();
     let cli = source.join(if cfg!(windows) {
-        ".codex/bin/bridgeforge.exe"
+        ".build/bridgeforge/bin/bridgeforge.exe"
     } else {
-        ".codex/bin/bridgeforge"
+        ".build/bridgeforge/bin/bridgeforge"
     });
     let fixture = setup(&cli, "workflow", true, true);
     let root = fixture.0.join("project");
@@ -192,7 +195,11 @@ fn artifact_layout_real_git_sync_blocks_only_new_violations_and_keeps_remote() {
         "0\t0"
     );
     // An ignored historical cache is visible to audit, but cannot block A mode.
-    write(&root, ".gitignore", b".runtime/\nlegacy-cache/\n");
+    write(
+        &root,
+        ".gitignore",
+        b"/.runtime/\n/.deps/\n/.build/\nlegacy-cache/\n",
+    );
     git(&root, &["add", ".gitignore"]);
     git(&root, &["commit", "-m", "chore: ignore legacy cache"]);
     write(&root, "legacy-cache/__pycache__/old.pyc", b"old\n");
@@ -221,9 +228,9 @@ fn artifact_layout_defaults_block_nested_tests_without_project_configuration() {
         .nth(2)
         .unwrap();
     let cli = source.join(if cfg!(windows) {
-        ".codex/bin/bridgeforge.exe"
+        ".build/bridgeforge/bin/bridgeforge.exe"
     } else {
-        ".codex/bin/bridgeforge"
+        ".build/bridgeforge/bin/bridgeforge"
     });
     let fixture = setup(&cli, "defaults", false, true);
     let root = fixture.0.join("project");
@@ -263,11 +270,11 @@ fn artifact_layout_performance() {
     let defaults_comparison =
         std::env::var("BRIDGEFORGE_LAYOUT_PERF_DEFAULTS").as_deref() == Ok("1");
     let baseline = source.join(if defaults_comparison {
-        ".runtime/artifact-layout-defaults/baseline/bridgeforge.exe"
+        ".build/bridgeforge/layout-defaults-baseline/bridgeforge.exe"
     } else {
-        ".runtime/artifact-layout/baseline/bridgeforge.exe"
+        ".build/bridgeforge/layout-baseline/bridgeforge.exe"
     });
-    let current = source.join(".codex/bin/bridgeforge.exe");
+    let current = source.join(".build/bridgeforge/bin/bridgeforge.exe");
     let baseline_only = std::env::var("BRIDGEFORGE_LAYOUT_PERF_PHASE").as_deref() == Ok("baseline");
     let focused = std::env::var("BRIDGEFORGE_LAYOUT_PERF_SCENARIOS").ok();
     let mut measurements = Vec::new();
@@ -368,15 +375,15 @@ fn artifact_layout_performance() {
     }
     let result = json!({"scope":"offline_cli_local_bare_remote_not_chat_end_to_end","samples_per_variant":5,"baseline_sha256":format!("{:x}",Sha256::digest(fs::read(&baseline).unwrap())),"current_sha256":format!("{:x}",Sha256::digest(fs::read(&current).unwrap())),"measurements":measurements});
     let file = source.join(if defaults_comparison && focused.is_some() {
-        ".runtime/artifact-layout-defaults/performance-focused.json"
+        ".runtime/tests/artifact-layout-defaults/performance-focused.json"
     } else if defaults_comparison {
-        ".runtime/artifact-layout-defaults/performance-comparison.json"
+        ".runtime/tests/artifact-layout-defaults/performance-comparison.json"
     } else if focused.is_some() {
-        ".runtime/artifact-layout/performance-focused.json"
+        ".runtime/tests/artifact-layout/performance-focused.json"
     } else if baseline_only {
-        ".runtime/artifact-layout/performance-baseline.json"
+        ".runtime/tests/artifact-layout/performance-baseline.json"
     } else {
-        ".runtime/artifact-layout/performance-comparison.json"
+        ".runtime/tests/artifact-layout/performance-comparison.json"
     });
     fs::write(file, serde_json::to_vec_pretty(&result).unwrap()).unwrap();
     println!(
@@ -384,3 +391,7 @@ fn artifact_layout_performance() {
         result["measurements"].as_array().unwrap().len()
     );
 }
+
+#[allow(dead_code)]
+#[path = "../support/artifact_paths.rs"]
+mod test_artifacts;

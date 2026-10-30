@@ -83,7 +83,7 @@ impl TestDirectory {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let path = std::env::temp_dir().join(format!(
+        let path = test_artifacts::root(env!("CARGO_MANIFEST_DIR"), "runtime-flows").join(format!(
             "bridgeforge-rust-{label}-{}-{token}",
             std::process::id()
         ));
@@ -242,7 +242,7 @@ fn project_sync_real_init_builds_and_applies_generated_assets() {
     hooks_config["bridgeforgeProjectHooks"] = json!({"schema_version":1,"hooks":[{"id":"demo","events":[{"event":"SessionStart","args":["check"]}]}]});
     write(&hooks_path, &serde_json::to_vec(&hooks_config).unwrap());
     let project_binary = project.join(format!(
-        ".codex/bin/project_demo{}",
+        ".build/bridgeforge/bin/project_demo{}",
         std::env::consts::EXE_SUFFIX
     ));
     write(&project_binary, b"existing project program");
@@ -382,7 +382,7 @@ fn project_sync_real_init_builds_and_applies_generated_assets() {
     let mut project_hook = ProcessRequest::new(
         project
             .join(format!(
-                ".codex/bin/project_demo{}",
+                ".build/bridgeforge/bin/project_demo{}",
                 std::env::consts::EXE_SUFFIX
             ))
             .into_os_string(),
@@ -540,14 +540,14 @@ fn prepared_public_artifacts_are_shared_and_update_preserves_project_hooks() {
         let native = project.join(".codex/hooks.json");
         let mut hooks: serde_json::Value =
             serde_json::from_slice(&fs::read(&native).unwrap()).unwrap();
-        hooks["hooks"]["Stop"].as_array_mut().unwrap().push(json!({"hooks":[{"type":"command","bridgeforgeProjectHookId":"demo:0","command":".codex/bin/project_demo"}]}));
+        hooks["hooks"]["Stop"].as_array_mut().unwrap().push(json!({"hooks":[{"type":"command","bridgeforgeProjectHookId":"demo:0","command":".build/bridgeforge/bin/project_demo"}]}));
         write(&native, &serde_json::to_vec_pretty(&hooks).unwrap());
         write(
             &project.join(".codex/hooks/project_demo/entrypoint.rs"),
             b"not Rust; private project data",
         );
         let private_binary = project.join(format!(
-            ".codex/bin/project_demo{}",
+            ".build/bridgeforge/bin/project_demo{}",
             std::env::consts::EXE_SUFFIX
         ));
         write(&private_binary, b"project-owned executable");
@@ -578,7 +578,7 @@ fn prepared_public_artifacts_are_shared_and_update_preserves_project_hooks() {
         let mut cli = ProcessRequest::new(
             project
                 .join(format!(
-                    ".codex/bin/bridgeforge{}",
+                    ".deps/bridgeforge/bin/bridgeforge{}",
                     std::env::consts::EXE_SUFFIX
                 ))
                 .into_os_string(),
@@ -629,7 +629,7 @@ fn independent_project_hook_completion_requires_own_build_and_rejects_external_i
         &project.join(".codex/project-hook-policy.json"),
         include_bytes!("../../../templates/project-hook-policy.json"),
     );
-    write(&project.join(".codex/hooks.json"), br#"{"hooks":{"Stop":[{"hooks":[{"type":"command","bridgeforgeProjectHookId":"demo:0","command":".codex/bin/project_demo"}]}]}}"#);
+    write(&project.join(".codex/hooks.json"), br#"{"hooks":{"Stop":[{"hooks":[{"type":"command","bridgeforgeProjectHookId":"demo:0","command":".build/bridgeforge/bin/project_demo"}]}]}}"#);
     write(
         &package.join("Cargo.toml"),
         b"[package]\nname=\"project_demo\"\nversion=\"0.1.0\"\nedition=\"2024\"\n[workspace]\n",
@@ -644,6 +644,10 @@ fn independent_project_hook_completion_requires_own_build_and_rejects_external_i
     );
     let mut command = ProcessRequest::new("cargo", &package);
     command.args = ["build", "--locked", "--release"].map(Into::into).to_vec();
+    let target = project.join(".build/bridgeforge/project-hooks/demo/target");
+    command
+        .args
+        .extend(["--target-dir".into(), target.clone().into_os_string()]);
     let result = SystemProcessRunner.run(&command).unwrap();
     assert_eq!(
         result.code,
@@ -653,8 +657,8 @@ fn independent_project_hook_completion_requires_own_build_and_rejects_external_i
     );
     let binary = format!("project_demo{}", std::env::consts::EXE_SUFFIX);
     write(
-        &project.join(".codex/bin").join(&binary),
-        &fs::read(package.join("target/release").join(&binary)).unwrap(),
+        &project.join(".build/bridgeforge/bin").join(&binary),
+        &fs::read(target.join("release").join(&binary)).unwrap(),
     );
     let result = bridgeforge_workflow::project_hook_migration::verify_completed(
         project,
@@ -1078,7 +1082,7 @@ fn project_sync_combined_upgrade_preserves_project_assets_and_is_idempotent() {
         &project.join(".codex/hooks.json"),
         format!("{}\n", serde_json::to_string_pretty(&hooks).unwrap()).as_bytes(),
     );
-    fs::create_dir_all(project.join(".codex/bin")).unwrap();
+    fs::create_dir_all(project.join(".deps/bridgeforge/bin")).unwrap();
     for name in [
         "bridgeforge.exe",
         "bridgeforge-hook.exe",
@@ -1086,8 +1090,8 @@ fn project_sync_combined_upgrade_preserves_project_assets_and_is_idempotent() {
         "build-receipt-cli.json",
     ] {
         fs::copy(
-            factory.join(".codex/bin").join(name),
-            project.join(".codex/bin").join(name),
+            factory.join(".build/bridgeforge/bin").join(name),
+            project.join(".deps/bridgeforge/bin").join(name),
         )
         .unwrap();
     }
@@ -1294,3 +1298,7 @@ fn memory_same_path_conflict_requires_explicit_resolution() {
         .is_err()
     );
 }
+
+#[allow(dead_code)]
+#[path = "../support/artifact_paths.rs"]
+mod test_artifacts;

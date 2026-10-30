@@ -35,7 +35,8 @@ fn release_repository(name: &str, contract: &Value, files: &[(&str, &[u8])]) -> 
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    let root = std::env::temp_dir().join(format!("bridgeforge-release-{name}-{token}"));
+    let root = test_artifacts::root(env!("CARGO_MANIFEST_DIR"), "release")
+        .join(format!("bridgeforge-release-{name}-{token}"));
     fs::create_dir_all(root.join(".codex")).unwrap();
     fs::write(root.join(".gitignore"), b".runtime/\n").unwrap();
     git_ok(&root, &["init"]);
@@ -130,10 +131,22 @@ fn immutable_history_reader_batches_payloads_and_never_caches_mutable_head() {
     assert_eq!(*runner.batches.borrow(), 1);
     assert_eq!(*runner.shows.borrow(), 0);
     let inspection = schema4::InspectionRunner(&reader);
-    assert_eq!(revision_payload(&repo.0, oid.trim(), "second.txt", &inspection)
-        .unwrap().unwrap(), b"second\n");
-    assert_eq!(*runner.trees.borrow(), 1, "read-only decorators reuse the same immutable tree");
-    assert_eq!(*runner.shows.borrow(), 0, "read-only decorators must not bypass prefetched blobs");
+    assert_eq!(
+        revision_payload(&repo.0, oid.trim(), "second.txt", &inspection)
+            .unwrap()
+            .unwrap(),
+        b"second\n"
+    );
+    assert_eq!(
+        *runner.trees.borrow(),
+        1,
+        "read-only decorators reuse the same immutable tree"
+    );
+    assert_eq!(
+        *runner.shows.borrow(),
+        0,
+        "read-only decorators must not bypass prefetched blobs"
+    );
     assert_eq!(
         head_payload(&repo.0, "second.txt", &reader)
             .unwrap()
@@ -1555,3 +1568,7 @@ fn schema4_merges_use_final_difference_and_keep_version_formatting_a_noop() {
     migrate_fixture(&repo).unwrap();
     assert!(fixture_plan(&repo, "patch", &[]).unwrap().is_none());
 }
+
+#[allow(dead_code)]
+#[path = "../support/artifact_paths.rs"]
+mod test_artifacts;

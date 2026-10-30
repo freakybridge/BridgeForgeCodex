@@ -17,15 +17,18 @@ fn git_sync_preflight_pipeline_performance() {
         std::env::var_os("BRIDGEFORGE_SYNC_BASELINE_CLI").expect("explicit baseline CLI required"),
     );
     let current = source.join(if cfg!(windows) {
-        ".codex/bin/bridgeforge.exe"
+        ".build/bridgeforge/bin/bridgeforge.exe"
     } else {
-        ".codex/bin/bridgeforge"
+        ".build/bridgeforge/bin/bridgeforge"
     });
     let token = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    let fixture = Fixture(std::env::temp_dir().join(format!("bf-sync-pipeline-{token}")));
+    let fixture = Fixture(
+        test_artifacts::root(env!("CARGO_MANIFEST_DIR"), "git-sync-runtime")
+            .join(format!("bf-sync-pipeline-{token}")),
+    );
     let root = fixture.0.join("project");
     let remote = fixture.0.join("remote.git");
     fs::create_dir_all(root.join(".codex")).unwrap();
@@ -151,7 +154,7 @@ fn git_sync_preflight_pipeline_performance() {
         }
     }
     let result = serde_json::json!({"scope":"isolated_cli_pipeline_not_chat_end_to_end","samples_per_variant":5,"generated_assets":0,"remote":"local_bare_only","baseline_sha256":format!("{:x}",sha2::Sha256::digest(fs::read(&baseline).unwrap())),"new_sha256":format!("{:x}",sha2::Sha256::digest(fs::read(&current).unwrap())),"measurements":measurements});
-    let output = source.join(".runtime/git-sync-performance/cli-comparison.json");
+    let output = source.join(".runtime/tests/git-sync-performance/cli-comparison.json");
     fs::create_dir_all(output.parent().unwrap()).unwrap();
     fs::write(output, serde_json::to_vec_pretty(&result).unwrap()).unwrap();
     println!("{result}");
@@ -180,15 +183,18 @@ fn new_project_setup(kind: &str) {
         .nth(2)
         .unwrap();
     let cli = source.join(if cfg!(windows) {
-        ".codex/bin/bridgeforge.exe"
+        ".build/bridgeforge/bin/bridgeforge.exe"
     } else {
-        ".codex/bin/bridgeforge"
+        ".build/bridgeforge/bin/bridgeforge"
     });
     let token = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    let fixture = Fixture(std::env::temp_dir().join(format!("bf-new-setup-{kind}-{token}")));
+    let fixture = Fixture(
+        test_artifacts::root(env!("CARGO_MANIFEST_DIR"), "git-sync-runtime")
+            .join(format!("bf-new-setup-{kind}-{token}")),
+    );
     let root = &fixture.0;
     fs::create_dir_all(root.join(".codex")).unwrap();
     fs::create_dir_all(root.join(".runtime")).unwrap();
@@ -327,7 +333,10 @@ fn git(root: &Path, args: &[&str]) -> String {
 
 fn fixture_configuration(root: &Path) {
     assert!(
-        root.starts_with(std::env::temp_dir()) && !root.join(".git").exists(),
+        root.starts_with(test_artifacts::root(
+            env!("CARGO_MANIFEST_DIR"),
+            "git-sync-runtime"
+        )) && !root.join(".git").exists(),
         "fixture setup requires a fresh temporary repository"
     );
     // Factory build/rollback fixtures start from an already confirmed policy;
@@ -388,16 +397,18 @@ fn real_cli_release_flow(policy: &str) {
         .nth(2)
         .unwrap();
     let cli = source.join(if cfg!(windows) {
-        ".codex/bin/bridgeforge.exe"
+        ".build/bridgeforge/bin/bridgeforge.exe"
     } else {
-        ".codex/bin/bridgeforge"
+        ".build/bridgeforge/bin/bridgeforge"
     });
     let nonce = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_nanos();
     let fixture_name = format!("bf-explicit-cli-{}-{nonce}", std::process::id());
-    let fixture = Fixture(std::env::temp_dir().join(fixture_name));
+    let fixture = Fixture(
+        test_artifacts::root(env!("CARGO_MANIFEST_DIR"), "git-sync-runtime").join(fixture_name),
+    );
     let root = fixture.0.join("project");
     fs::create_dir_all(root.join(".codex")).unwrap();
     let call = |args: &[&str]| {
@@ -696,13 +707,26 @@ fn real_cli_release_flow(policy: &str) {
     fs::write(root.join("CHANGELOG.md"), &changed_changelog).unwrap();
     let mut stale = ProcessRequest::new(cli.as_os_str(), &root);
     stale.args = [
-        "git-sync", "--release", "--skip-fetch", "--message", "fix: release",
-        "--release-analysis-file", ".runtime/schema4-analysis.json",
-    ].iter().map(Into::into).collect();
+        "git-sync",
+        "--release",
+        "--skip-fetch",
+        "--message",
+        "fix: release",
+        "--release-analysis-file",
+        ".runtime/schema4-analysis.json",
+    ]
+    .iter()
+    .map(Into::into)
+    .collect();
     stale.timeout = Duration::from_secs(120);
     let rejected = SystemProcessRunner.run(&stale).unwrap();
     assert!(!rejected.timed_out);
-    assert_eq!(rejected.code, 2, "{}", String::from_utf8_lossy(&rejected.stderr));
+    assert_eq!(
+        rejected.code,
+        2,
+        "{}",
+        String::from_utf8_lossy(&rejected.stderr)
+    );
     assert!(
         String::from_utf8_lossy(&rejected.stderr).contains("stale"),
         "policy={policy}: {}",
@@ -716,7 +740,10 @@ fn real_cli_release_flow(policy: &str) {
             assert_eq!(&fs::read(root.join(name)).unwrap(), bytes);
         }
     }
-    assert_eq!(fs::read(root.join("CHANGELOG.md")).unwrap(), changed_changelog);
+    assert_eq!(
+        fs::read(root.join("CHANGELOG.md")).unwrap(),
+        changed_changelog
+    );
     fs::write(root.join("CHANGELOG.md"), changelog).unwrap();
     let released = call(&[
         "git-sync",
@@ -751,7 +778,13 @@ fn real_cli_release_flow(policy: &str) {
             );
         }
     }
-    let repeated = call(&["git-sync", "--release", "--skip-fetch", "--message", "feat!: ignored"]);
+    let repeated = call(&[
+        "git-sync",
+        "--release",
+        "--skip-fetch",
+        "--message",
+        "feat!: ignored",
+    ]);
     assert_eq!(repeated["version_bumped"], false);
     assert_eq!(repeated["version_strategy"], "independent");
     assert_eq!(repeated["commit"], released["commit"]);
@@ -801,14 +834,16 @@ fn real_factory_cli_sync_builds_new_runtime_and_commits_through_precommit() {
         .ancestors()
         .nth(2)
         .unwrap();
-    let fixture = Fixture(std::env::temp_dir().join(format!(
+    let fixture = Fixture(
+        test_artifacts::root(env!("CARGO_MANIFEST_DIR"), "git-sync-runtime").join(format!(
             "bf-real-factory-sync-{}-{}",
             std::process::id(),
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap()
                 .as_nanos()
-        )));
+        )),
+    );
     let root = fixture.0.join("factory");
     copy_tree(source, &root);
     fixture_configuration(&root);
@@ -833,9 +868,9 @@ fn real_factory_cli_sync_builds_new_runtime_and_commits_through_precommit() {
         .parse()
         .unwrap();
     let cli = root.join(if cfg!(windows) {
-        ".codex/bin/bridgeforge.exe"
+        ".build/bridgeforge/bin/bridgeforge.exe"
     } else {
-        ".codex/bin/bridgeforge"
+        ".build/bridgeforge/bin/bridgeforge"
     });
     super::schema4_fixture::migrate(&cli, &root);
     let original = fs::read(&cli).unwrap();
@@ -896,7 +931,7 @@ fn real_factory_cli_sync_builds_new_runtime_and_commits_through_precommit() {
     assert_eq!(receipt["version"], next.to_string());
 
     let released_head = git(&root, &["rev-parse", "HEAD"]);
-    let hook_receipt = root.join(".codex/bin/build-receipt-hook.json");
+    let hook_receipt = root.join(".build/bridgeforge/bin/build-receipt-hook.json");
     fs::write(&hook_receipt, b"{}\n").unwrap();
     request.args = ["git-sync"].iter().map(Into::into).collect();
     request.timeout = Duration::from_secs(2400);
@@ -964,8 +999,10 @@ fn factory_ordinary_sync_performance() {
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    let fixture =
-        Fixture(std::env::temp_dir().join(format!("bf-sync-perf-{}-{nonce}", std::process::id())));
+    let fixture = Fixture(
+        test_artifacts::root(env!("CARGO_MANIFEST_DIR"), "git-sync-runtime")
+            .join(format!("bf-sync-perf-{}-{nonce}", std::process::id())),
+    );
     let root = fixture.0.join("factory");
     copy_tree(source, &root);
     fixture_configuration(&root);
@@ -994,9 +1031,9 @@ fn factory_ordinary_sync_performance() {
     git(&root, &["push", "-u", "origin", "HEAD"]);
     let version = fs::read(root.join("VERSION")).unwrap();
     let cli = root.join(if cfg!(windows) {
-        ".codex/bin/bridgeforge.exe"
+        ".build/bridgeforge/bin/bridgeforge.exe"
     } else {
-        ".codex/bin/bridgeforge"
+        ".build/bridgeforge/bin/bridgeforge"
     });
     super::schema4_fixture::migrate(&cli, &root);
     let cli_before = fs::metadata(&cli).unwrap().modified().unwrap();
@@ -1074,3 +1111,7 @@ fn factory_ordinary_sync_performance() {
         );
     }
 }
+
+#[allow(dead_code)]
+#[path = "../support/artifact_paths.rs"]
+mod test_artifacts;

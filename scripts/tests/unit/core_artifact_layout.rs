@@ -25,18 +25,37 @@ fn config() -> Vec<u8> {
     serde_json::to_vec(&json!({"schema":1,"source_roots":["src/"],"python_artifacts":{"enabled":true,"allowed_roots":[".runtime/"]},"forbidden_source_components":["tests","examples","scripts",".runtime"],"cargo_registration":{"manifest_roots":["src/"],"forbidden_target_roots":["scripts/"]}})).unwrap()
 }
 fn repo() -> Repo {
+    static SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let token = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    let repo =
-        Repo(std::env::temp_dir().join(format!("bf-layout-unit-{}-{token}", std::process::id())));
+    let sequence = SEQUENCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let repo = Repo(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join(".runtime")
+            .join("tests")
+            .join("artifact-layout")
+            .join(format!(
+                "bf-layout-unit-{}-{token}-{sequence}",
+                std::process::id()
+            )),
+    );
     fs::create_dir_all(&repo.0).unwrap();
     command(&repo.0, &["init"]);
     command(&repo.0, &["config", "user.name", "Layout Test"]);
     command(&repo.0, &["config", "user.email", "layout@example.invalid"]);
     command(&repo.0, &["config", "core.hooksPath", ".git/hooks"]);
     put(&repo.0, "seed.txt", b"seed\n");
+    put(
+        &repo.0,
+        ".gitignore",
+        artifact_paths::IGNORE_RULES.as_bytes(),
+    );
     put(&repo.0, CONFIG, &config());
     commit(&repo.0);
     repo
@@ -63,6 +82,163 @@ fn layout_config_is_strict_and_project_owned() {
     ] {
         assert!(parse(bytes).is_err(), "{bytes:?}");
     }
+}
+
+#[test]
+fn three_directory_default_policy_and_fixed_test_paths() {
+    let cfg = Config::default();
+    let managed = BTreeSet::new();
+    for (path, dir) in [
+        ("target", true),
+        ("src/node_modules", true),
+        (".runtime/target", true),
+        (".build/node_modules", true),
+        (".runtime/coverage.xml", false),
+        (".runtime/tests/report.xml", false),
+        (".codex/bin/bridgeforge.exe", false),
+    ] {
+        assert!(
+            !path_findings(path, dir, Some(&cfg), &managed).is_empty(),
+            "{path}"
+        );
+    }
+    for (path, dir) in [
+        (".build/target", true),
+        (".deps/node_modules", true),
+        (".runtime/tests/unit/coverage.xml", false),
+        (".runtime/tests/unit", true),
+        (".runtime/__pycache__/x.pyc", false),
+        ("src/cache.rs", false),
+        ("config/settings.json", false),
+        ("scripts/tests/fixtures/input.json", false),
+    ] {
+        assert!(
+            path_findings(path, dir, Some(&cfg), &managed).is_empty(),
+            "{path}"
+        );
+    }
+    for json in [
+        br#"{"schema":1,"outputs":[{"kind":"config","path":".runtime/settings.json"}]}"#.as_slice(),
+        br#"{"schema":1,"outputs":[{"kind":"download","path":".runtime/config/file.zip"}]}"#,
+        br#"{"schema":1,"outputs":[{"kind":"test","path":".runtime/tests/result.xml"}]}"#,
+        br#"{"schema":1,"python_artifacts":{"allowed_roots":["cache/"]}}"#,
+    ] {
+        assert!(parse(json).is_err());
+    }
+    assert!(parse(br#"{"schema":1,"outputs":[{"kind":"config","path":".runtime/config/settings.json"},{"kind":"download","path":".runtime/download/archive.zip"},{"kind":"test","path":".runtime/tests/unit/report.xml"}]}"#).is_ok());
+}
+
+#[test]
+fn three_directory_ignore_uses_staged_rules_and_detects_tracked_artifacts() {
+    let r = repo();
+    put(
+        &r.0,
+        ".gitignore",
+        b"/.runtime/\n/.deps/\n/.build/\n!/.build/\n",
+    );
+    command(&r.0, &["add", ".gitignore"]);
+    put(&r.0, ".gitignore", artifact_paths::IGNORE_RULES.as_bytes());
+    assert!(
+        report(&r.0)
+            .errors
+            .iter()
+            .any(|f| f.code == "artifact-ignore-required")
+    );
+    command(&r.0, &["add", ".gitignore"]);
+    assert!(report(&r.0).errors.is_empty());
+    put(&r.0, ".runtime/config/settings.json", b"{}\n");
+    command(&r.0, &["add", "-f", ".runtime/config/settings.json"]);
+    assert!(
+        report(&r.0)
+            .errors
+            .iter()
+            .any(|f| f.code == "tracked-local-artifact")
+    );
+    assert!(
+        worktree(&r.0)
+            .errors
+            .iter()
+            .any(|f| f.code == "tracked-local-artifact")
+    );
+    command(&r.0, &["rm", "--cached", ".runtime/config/settings.json"]);
+    assert!(report(&r.0).errors.is_empty());
+    assert!(r.0.join(".runtime/config/settings.json").is_file());
+    assert!(
+        ignore_findings(Some(b"/.runtime/\n/.deps/\n/.build/\n!/.build/keep.txt\n"))
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(ignore_findings(None).unwrap().len(), 3);
+}
+
+#[test]
+fn three_directory_ignore_patterns_match_git_root_semantics() {
+    let r = repo();
+    fs::create_dir_all(r.0.join(".runtime")).unwrap();
+    for suffix in [
+        "",
+        "!**/.runtime/\n",
+        "!\\.runtime/\n",
+        "!/.runtime/\n",
+        "!/.runtime/keep\n",
+        "!**/.runtime/\n/.runtime/\n",
+    ] {
+        let rules = format!("{}{suffix}", artifact_paths::IGNORE_RULES);
+        put(&r.0, ".gitignore", rules.as_bytes());
+        let mut request = ProcessRequest::new("git", &r.0);
+        request.args = [
+            "-c",
+            "core.excludesFile=",
+            "check-ignore",
+            "--no-index",
+            "--quiet",
+            ".runtime/",
+        ]
+        .into_iter()
+        .map(Into::into)
+        .collect();
+        let output = SystemProcessRunner.run(&request).unwrap();
+        assert!(!output.timed_out && [0, 1].contains(&output.code));
+        assert_eq!(
+            ignore_findings(Some(rules.as_bytes())).unwrap().is_empty(),
+            output.code == 0,
+            "{suffix}"
+        );
+    }
+}
+
+#[test]
+fn three_directory_worktree_defaults_and_legacy_cache_config_enforce_fixed_roots() {
+    let r = repo();
+    put(&r.0, ".runtime/tests/report.xml", b"bad");
+    put(&r.0, ".runtime/coverage.xml", b"bad");
+    for config in [config(), br#"{"schema":1}"#.to_vec()] {
+        put(&r.0, CONFIG, &config);
+        let report = worktree(&r.0);
+        for path in [".runtime/tests/report.xml", ".runtime/coverage.xml"] {
+            assert!(
+                report.errors.iter().any(|f| f.path == path),
+                "{path}: {:?}",
+                report.errors
+            );
+        }
+    }
+    for (path, directory) in [
+        ("src/bridgeforge", true),
+        (".runtime/download/bridgeforge.exe", false),
+    ] {
+        assert!(path_findings(path, directory, None, &BTreeSet::new()).is_empty());
+    }
+}
+
+#[test]
+fn three_directory_deleting_violation_does_not_require_historical_ignore_repair() {
+    let r = repo();
+    command(&r.0, &["rm", ".gitignore"]);
+    put(&r.0, ".runtime/old.log", b"historical");
+    commit(&r.0);
+    command(&r.0, &["rm", ".runtime/old.log"]);
+    assert!(report(&r.0).errors.is_empty(), "{:?}", report(&r.0).errors);
 }
 #[test]
 fn layout_effective_defaults_and_partial_configuration_are_equivalent() {
@@ -182,14 +358,25 @@ fn layout_default_audit_prunes_runtime_but_staged_paths_are_checked() {
         put(root, path, b"derived\n");
     }
     let audit = worktree(root);
-    assert!(audit.errors.is_empty(), "{:?}", audit.errors);
+    assert!(
+        audit
+            .errors
+            .iter()
+            .any(|f| f.path == "target" && f.code == "misplaced-artifact")
+    );
+    assert!(
+        audit
+            .errors
+            .iter()
+            .any(|f| f.path == ".venv" && f.code == "misplaced-artifact")
+    );
     assert!(
         audit
             .advisories
             .iter()
-            .any(|f| f.path == ".runtime" && f.code == "layout-excluded-tree")
+            .any(|f| f.path == ".runtime/fixture" && f.code == "layout-excluded-tree")
     );
-    command(root, &["add", ".runtime/fixture/tests/a.rs"]);
+    command(root, &["add", "-f", ".runtime/fixture/tests/a.rs"]);
     assert!(
         report(root)
             .errors
@@ -607,7 +794,7 @@ fn layout_unrelated_allowed_root_change_does_not_reclassify_history() {
     cfg["python_artifacts"]["allowed_roots"]
         .as_array_mut()
         .unwrap()
-        .push(json!("other-cache/"));
+        .push(json!(".runtime/other-cache/"));
     put(root, CONFIG, &serde_json::to_vec(&cfg).unwrap());
     command(root, &["add", CONFIG]);
     assert!(
@@ -770,7 +957,7 @@ fn layout_empty_junction_is_reported_as_excluded_not_an_empty_directory() {
     fs::remove_dir(&junction).unwrap();
     assert!(
         report
-            .advisories
+            .errors
             .iter()
             .any(|f| f.path == "src/tests" && f.code == "layout-excluded-link")
     );
@@ -827,7 +1014,7 @@ fn layout_combined_config_and_cargo_changes_preserve_reference_scope() {
     cfg["python_artifacts"]["allowed_roots"]
         .as_array_mut()
         .unwrap()
-        .push(json!("other-cache/"));
+        .push(json!(".runtime/other-cache/"));
     put(root, CONFIG, &serde_json::to_vec(&cfg).unwrap());
     put(
         root,

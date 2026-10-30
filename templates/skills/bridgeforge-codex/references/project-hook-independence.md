@@ -12,7 +12,7 @@
 
 1. 每个项目 Hook 自己维护 Cargo.toml、Cargo.lock、main 入口和依赖；不引用 `bridgeforge_core` 或骨架 workspace。进程管理等原能力由项目维护，保留 stdin/stdout/stderr、退出码、超时与 Windows 隐藏启动语义。
 2. 使用项目自己的锁定 Cargo 构建入口，测试原业务行为，由项目安装可执行文件并维护自己的 native Hook 注册。骨架只保留注册，不为项目生成运行入口。
-3. 已使用 `.codex/hooks/project_<id>/` 和 `.codex/bin/project_<id>.exe` 的旧项目保持对应身份，便于一次性验证；如果项目主动改变布局，须明确其独立迁移验证方式，不猜测路径或自动重写。
+3. 项目 Hook 源码继续位于 `.codex/hooks/project_<id>/`，编译产物位于 `.build/bridgeforge/bin/`。旧 `.codex/bin/` 中具有登记、精确收据及匹配字节的受管 Hook 由布局迁移事务搬迁并更新对应注册，保持 Hook 身份。自定义或无法证明归属的旧入口保留并阻断相关迁移，不猜测路径或自动重写。
 4. 在行为已明确验证并获准记录完成后，运行 `bridgeforge project-hook-migration verify --root <项目> --confirmed-behavior`。它核对独立 workspace/依赖，执行锁定构建并比对项目已安装程序，记录完成证据；不是只读命令，也不替用户执行业务事件测试。缺自己的 manifest/lock/main 或安装产物不匹配时停止，不回退到骨架隐式构建。
 
 独立验证依赖项目已构建过所需依赖；离线 metadata 无法确认时先在项目自己的开发环境解决。构建脚本和项目代码属于受信任可执行输入，不将 Cargo 构建称为安全沙箱。迁移失败不能标成完成，也不能通过伪造新收据绕过旧构建绑定。

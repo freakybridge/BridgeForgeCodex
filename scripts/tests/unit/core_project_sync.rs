@@ -890,7 +890,7 @@ fn project_prefixed_file_retirement_removes_only_its_hook_registration_atomicall
         &fs::read(repository.join("templates/managed-skeleton.json")).unwrap(),
     )
     .unwrap();
-    let asset = current["assets"]
+    let mut asset = current["assets"]
         .as_array()
         .unwrap()
         .iter()
@@ -900,6 +900,17 @@ fn project_prefixed_file_retirement_removes_only_its_hook_registration_atomicall
     let source_path = asset["source"].as_str().unwrap();
     let source = fs::read(repository.join(source_path)).unwrap();
     fs::write(factory.join(source_path), &source).unwrap();
+    let document: Value = serde_json::from_slice(&source).unwrap();
+    let handlers = crate::baseline::hook_handlers(&document).unwrap();
+    for required in asset["merge_validation"]["required_handlers"]
+        .as_array_mut()
+        .unwrap()
+    {
+        required["sha256"] = json!(
+            crate::manifest::canonical_sha(&handlers[required["id"].as_str().unwrap()]["handler"])
+                .unwrap()
+        );
+    }
     let contract_path = factory.join("templates/managed-skeleton.json");
     let mut contract: Value = serde_json::from_slice(&fs::read(&contract_path).unwrap()).unwrap();
     contract["assets"].as_array_mut().unwrap().push(asset);
@@ -1405,7 +1416,7 @@ fn transaction_fixture(valid_asset_hash: bool) -> (PathBuf, SyncPlan) {
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    let root = std::env::temp_dir().join(format!(
+    let root = test_artifacts::root(env!("CARGO_MANIFEST_DIR"), "project-sync").join(format!(
         "bridgeforge-project-sync-{}-{token}",
         std::process::id()
     ));
@@ -1897,10 +1908,12 @@ fn recorded_evidence_detects_post_validation_edits_and_preserves_external_bytes(
             Ok(())
         };
         let error = apply_plan_internal(plan, &fingerprint, false, Some(&observer)).unwrap_err();
-        assert!(
-            error.contains("installed asset changed after verification"),
-            "{error}"
-        );
+        let expected = if target == "managed.txt" {
+            "installed payload changed during transaction"
+        } else {
+            "installed asset changed after verification"
+        };
+        assert!(error.contains(expected), "{error}");
         assert_eq!(fs::read(root.join(target)).unwrap(), b"external edit");
         assert_eq!(
             fs::read(root.join(".codex/.bridgeforge_codex_version")).unwrap(),
@@ -1965,3 +1978,7 @@ fn recorded_transaction_rolls_back_public_payload_with_project_configuration() {
     );
     fs::remove_dir_all(root).unwrap();
 }
+
+#[allow(dead_code)]
+#[path = "../support/artifact_paths.rs"]
+mod test_artifacts;

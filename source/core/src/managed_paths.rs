@@ -7,14 +7,7 @@ use std::path::{Component, Path, PathBuf};
 /// Bounded metadata reads must not follow a leaf reparse point or allocate from
 /// an untrusted file length. Missing is distinct from unreadable/invalid.
 pub fn read_metadata(path: &Path, limit: u64) -> Result<Option<Vec<u8>>, String> {
-    for ancestor in path.ancestors().filter(|p| p.exists()) {
-        if crate::persistence::is_link_or_reparse(ancestor).map_err(|e| e.to_string())? {
-            return Err(format!(
-                "metadata traverses a linked path: {}",
-                path.display()
-            ));
-        }
-    }
+    reject_links(path)?;
     let metadata = match fs::symlink_metadata(path) {
         Ok(m) => m,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -56,20 +49,23 @@ pub fn safe_join(root: &Path, raw: &str, label: &str) -> Result<PathBuf, String>
         return Err(format!("{label} is unsafe: {raw}"));
     }
     let target = root.join(relative);
-    let mut cursor = target.parent();
-    while let Some(path) = cursor {
-        if path == root {
-            break;
-        }
-        if path.exists()
-            && fs::symlink_metadata(path)
-                .map_err(|error| error.to_string())?
-                .file_type()
-                .is_symlink()
-        {
-            return Err(format!("{label} traverses a linked path: {raw}"));
-        }
-        cursor = path.parent();
-    }
+    reject_links(&target).map_err(|error| format!("{label}: {error}"))?;
     Ok(target)
+}
+
+fn reject_links(path: &Path) -> Result<(), String> {
+    for ancestor in path.ancestors() {
+        match fs::symlink_metadata(ancestor) {
+            Ok(_)
+                if crate::persistence::is_link_or_reparse(ancestor)
+                    .map_err(|e| e.to_string())? =>
+            {
+                return Err(format!("path traverses a linked path: {}", path.display()));
+            }
+            Ok(_) => (),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => (),
+            Err(e) => return Err(e.to_string()),
+        }
+    }
+    Ok(())
 }

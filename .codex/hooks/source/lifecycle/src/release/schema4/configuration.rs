@@ -40,6 +40,7 @@ pub(in crate::release) struct Config {
     pub python_environment: Option<PythonEnvironment>,
     pub development: BTreeMap<String, development::Policy>,
     pub package_adoptions: Vec<adoption::Adoption>,
+    pub release_withdrawals: Vec<withdrawal::Declaration>,
 }
 
 pub(super) fn configuration_hash(value: &Value) -> Result<String, String> {
@@ -118,6 +119,10 @@ pub(in crate::release) fn parse(payload: &[u8]) -> Result<Option<Config>, String
         }
     }
     let current_model = value["release_model"] == "product-packages";
+    let release_withdrawals = withdrawal::declarations(&value)?;
+    if !current_model && !release_withdrawals.is_empty() {
+        return Err("release_withdrawals requires the product-packages model".into());
+    }
     let package_adoptions = value
         .get("package_adoptions")
         .cloned()
@@ -238,6 +243,7 @@ pub(in crate::release) fn parse(payload: &[u8]) -> Result<Option<Config>, String
         "python_environment",
         "development",
         "package_adoptions",
+        "release_withdrawals",
     ] {
         object.remove(key);
     }
@@ -305,6 +311,7 @@ pub(in crate::release) fn parse(payload: &[u8]) -> Result<Option<Config>, String
         python_environment,
         development,
         package_adoptions,
+        release_withdrawals,
     }))
 }
 

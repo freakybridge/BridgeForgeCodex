@@ -27,6 +27,9 @@ impl ProcessRunner for FactoryRunner<'_> {
     fn cache_miss(&self, reason: &'static str) {
         self.inner.cache_miss(reason);
     }
+    fn build_group_finished(&self, group: &'static str, elapsed_ms: u128) {
+        self.inner.build_group_finished(group, elapsed_ms);
+    }
     fn factory_transaction(
         &self,
         root: &Path,

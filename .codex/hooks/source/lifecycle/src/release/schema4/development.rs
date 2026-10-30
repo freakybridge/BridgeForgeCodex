@@ -171,6 +171,28 @@ pub(in crate::release) struct Policy {
     release_artifacts: Vec<String>,
 }
 impl Policy {
+    pub(super) fn covers_durable_input(&self, path: &str) -> bool {
+        // checks.inputs binds execution, not durable product content. Explicit
+        // retained documentation does not certify or reuse a check result.
+        self.checks
+            .iter()
+            .flat_map(|c| &c.artifacts)
+            .chain(
+                self.stability
+                    .iter()
+                    .flat_map(|s| &s.checks)
+                    .flat_map(|c| c.inputs.iter().chain(&c.artifacts)),
+            )
+            .chain(self.stability.iter().flat_map(|s| &s.contracts))
+            .chain(&self.release_artifacts)
+            .any(|input| {
+                path.eq_ignore_ascii_case(input.trim_end_matches('/'))
+                    || path.to_ascii_lowercase().starts_with(&format!(
+                        "{}/",
+                        input.trim_end_matches('/').to_ascii_lowercase()
+                    ))
+            })
+    }
     pub(super) fn validate(&self, id: &str) -> Result<(), String> {
         if id.trim().is_empty() || self.checks.is_empty() {
             return Err(format!(
@@ -1260,6 +1282,30 @@ pub(super) fn release_gate(
     let published_ledger =
         Ledger::parse(revision_payload(root, &capture.boundary, RECORD, runner)?.as_deref())?;
     ledger.extends(&published_ledger)?;
+    if let Some(history) = &capture.release_history {
+        for entry in ledger.entries.iter().skip(published_ledger.entries.len()) {
+            if entry.before == entry.after {
+                continue;
+            }
+            if let (Some(floor), Some(version)) =
+                (history.package_high_water.get(&entry.id), &entry.after)
+            {
+                let package = capture
+                    .current
+                    .packages
+                    .get(&entry.id)
+                    .or_else(|| capture.baseline.packages.get(&entry.id))
+                    .unwrap_or(floor);
+                withdrawal::version_base(package, Some(floor))?;
+                if !withdrawal::greater(package, version, &floor.version)? {
+                    return Err(format!(
+                        "{}: new closure must exceed withdrawn published version {}",
+                        entry.id, floor.version
+                    ));
+                }
+            }
+        }
+    }
     if capture.changes.iter().all(|c| c.role == "record") {
         return Ok(ledger);
     }
@@ -1780,7 +1826,17 @@ fn prepare(
             let target = if revalidation {
                 package.version.clone()
             } else {
-                plan::choose(package, impact, analysis.targets.get(id), first)?
+                let published = capture
+                    .release_history
+                    .as_ref()
+                    .and_then(|h| h.package_high_water.get(id));
+                let base = withdrawal::version_base(package, published)?;
+                plan::choose(
+                    &base,
+                    impact,
+                    analysis.targets.get(id),
+                    first && published.is_none(),
+                )?
             };
             if revalidation && analysis.targets.contains_key(id) {
                 return Err(format!("{id}: unchanged content cannot be upgraded"));
@@ -1793,10 +1849,22 @@ fn prepare(
                     "{id}: entry to 1.0.0 is automatic and requires the stability contract"
                 ));
             }
-            versions.insert(
-                package.manifest.clone(),
-                if promote { "1.0.0".into() } else { target },
-            );
+            let final_target = if promote { "1.0.0".into() } else { target };
+            if !revalidation {
+                if let Some(published) = capture
+                    .release_history
+                    .as_ref()
+                    .and_then(|h| h.package_high_water.get(id))
+                {
+                    if !withdrawal::greater(package, &final_target, &published.version)? {
+                        return Err(format!(
+                            "{id}: development target {final_target} must exceed withdrawn published version {}",
+                            published.version
+                        ));
+                    }
+                }
+            }
+            versions.insert(package.manifest.clone(), final_target);
             stability.insert(
                 id.clone(),
                 if promote {

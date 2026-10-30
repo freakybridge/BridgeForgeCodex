@@ -3,6 +3,22 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
+#[cfg(all(test, bridgeforge_factory_tests))]
+thread_local! { static LEGACY_REFERENCE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) }; }
+
+#[cfg(all(test, bridgeforge_factory_tests))]
+pub(super) fn with_legacy_reference<T>(run: impl FnOnce() -> T) -> T {
+    struct Reset;
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            LEGACY_REFERENCE.set(false);
+        }
+    }
+    LEGACY_REFERENCE.set(true);
+    let _reset = Reset;
+    run()
+}
+
 pub(super) struct WritePlan {
     pub generated_reused: usize,
     pub generated_built: usize,
@@ -82,6 +98,19 @@ impl WritePlan {
         paths.insert(crate::user_agents::MANIFEST.into());
         let modern = crate::source_projection::available(root);
         if modern {
+            for relative in [
+                "AGENTS.md",
+                ".gitignore",
+                ".codex/hooks.json",
+                ".githooks/pre-commit",
+            ] {
+                let path = join(root, relative)?;
+                plan.before.insert(path.clone(), read_optional(&path)?);
+                if path.exists() {
+                    paths.insert(relative.into());
+                }
+            }
+            paths.insert("templates/artifact-roots.gitignore".into());
             paths.insert("templates/source-layout.json".into());
             paths.insert("templates/hooks/.gitignore".into());
             if root.join("scripts/tests/Cargo.toml").is_file() {
@@ -148,15 +177,10 @@ impl WritePlan {
             plan.inputs
                 .insert(path.clone(), fs::read(path).map_err(|e| e.to_string())?);
         }
-        let nonce = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_err(|e| e.to_string())?
-            .as_nanos();
-        let temporary = Temporary(std::env::temp_dir().join(format!(
-            "bridgeforge-sync-plan-{}-{nonce}",
-            std::process::id()
-        )));
-        fs::create_dir(&temporary.0).map_err(|e| e.to_string())?;
+        let temporary = Temporary(bridgeforge_core::artifact_paths::temporary_build(
+            root,
+            "sync-plan",
+        )?);
         for (path, payload) in plan.inputs.iter().chain(writes.iter()) {
             let relative = path.strip_prefix(root).map_err(|e| e.to_string())?;
             let target = join(&temporary.0, &relative.to_string_lossy().replace('\\', "/"))?;
@@ -169,7 +193,10 @@ impl WritePlan {
             serde_json::from_slice(&managed_after).map_err(|e| e.to_string())?;
         let contract_after = crate::manifest::runtime_contract(&temporary.0, &public_after)?;
         writes.insert(managed, managed_after.clone());
-        writes.insert(join(root, ".codex/managed-skeleton.json")?, managed_after);
+        writes.insert(
+            join(root, ".codex/managed-skeleton.json")?,
+            crate::manifest::render_factory_contract(&temporary.0, &BTreeMap::new())?,
+        );
         writes.insert(distribution, distribution_after);
         writes.insert(
             join(root, crate::user_agents::MANIFEST)?,
@@ -197,24 +224,12 @@ impl WritePlan {
         } else {
             "macos-x86_64"
         };
-        let mut pending_assets = Vec::new();
         let all_assets = contract_after["generated_assets"]
             .as_array()
             .ok_or("missing generated assets")?
             .clone();
-        let mut built_assets = BTreeSet::new();
-        let mut cache_contexts = BTreeMap::<
-            String,
-            (
-                crate::build_inputs::BuildInputs,
-                Temporary,
-                Option<crate::artifact_cache::Cache>,
-            ),
-        >::new();
-        for asset in contract_after["generated_assets"]
-            .as_array()
-            .ok_or("missing generated assets")?
-        {
+        let mut groups = BTreeMap::<bool, Vec<serde_json::Value>>::new();
+        for asset in &all_assets {
             let binary = join(
                 root,
                 asset["binary_targets"][platform]
@@ -233,39 +248,10 @@ impl WritePlan {
             if crate::generated_assets::installed_current(root, asset, &binary, runner) {
                 plan.generated_reused += 1;
             } else {
-                let cache_key = serde_json::to_string(&(
-                    asset["source_root"].clone(),
-                    asset["source_projection"].clone(),
-                ))
-                .map_err(|e| e.to_string())?;
-                if !cache_contexts.contains_key(&cache_key) {
-                    let context = Temporary(std::env::temp_dir().join(format!(
-                        "bridgeforge-cache-context-{}-{nonce}-{}",
-                        std::process::id(),
-                        cache_contexts.len()
-                    )));
-                    let source = source_root(&temporary.0, asset)?;
-                    let inputs = crate::build_inputs::BuildInputs::capture(
-                        &source,
-                        context.0.join("source-0"),
-                        asset,
-                    )?;
-                    let cache = crate::artifact_cache::Cache::open(root, &inputs.snapshot, runner);
-                    cache_contexts.insert(cache_key.clone(), (inputs, context, cache));
-                }
-                if let Some((payload, receipt_payload)) = cache_contexts
-                    .get_mut(&cache_key)
-                    .and_then(|(_, _, cache)| cache.as_mut())
-                    .and_then(|cache| cache.load(asset, runner))
-                {
-                    writes.insert(binary.clone(), payload);
-                    writes.insert(receipt, receipt_payload);
-                    plan.generated_reused += 1;
-                } else {
-                    pending_assets.push(asset.clone());
-                    built_assets
-                        .insert(asset["id"].as_str().ok_or("missing asset id")?.to_string());
-                }
+                groups
+                    .entry(asset["id"] == "codex.factory-cli")
+                    .or_default()
+                    .push(asset.clone());
                 plan.binaries.insert(binary);
             }
         }
@@ -274,80 +260,132 @@ impl WritePlan {
                 plan.before.insert(path.clone(), read_optional(path)?);
             }
         }
-        plan.generated_built = pending_assets.len();
-        if !pending_assets.is_empty() {
-            let mut captured = BTreeMap::new();
-            for asset in &pending_assets {
-                let cache_key = serde_json::to_string(&(
-                    asset["source_root"].clone(),
-                    asset["source_projection"].clone(),
-                ))
-                .map_err(|error| error.to_string())?;
-                if let Some((inputs, _, _)) = cache_contexts.get(&cache_key) {
-                    captured.insert(
-                        (
-                            source_root(&temporary.0, asset)?,
-                            asset["source_projection"].as_str().map(str::to_owned),
-                        ),
-                        inputs,
+        // Complete one group's cache lifecycle before acquiring the next group.
+        // A held lock protects both the final cache and its stable Cargo slot.
+        #[cfg(all(test, bridgeforge_factory_tests))]
+        let reference = LEGACY_REFERENCE.get();
+        #[cfg(not(all(test, bridgeforge_factory_tests)))]
+        let reference = false;
+        // Test-only reference reproduces the former two-lock lifetime and
+        // transient Cargo workspaces against exactly the same candidate bytes.
+        let mut reference_locks = Vec::new();
+        for (private, assets) in groups {
+            let started = std::time::Instant::now();
+            let source = source_root(&temporary.0, &assets[0])?;
+            let opened = crate::artifact_cache::Cache::open_project(root, &source, runner);
+            let mut cache = if reference {
+                opened.ok().flatten()
+            } else {
+                opened?
+            };
+            let mut pending = Vec::new();
+            for asset in &assets {
+                if let Some((payload, receipt)) = cache.as_mut().and_then(|c| c.load(asset, runner))
+                {
+                    writes.insert(
+                        join(
+                            root,
+                            asset["binary_targets"][platform]
+                                .as_str()
+                                .ok_or("binary target missing")?,
+                        )?,
+                        payload,
                     );
+                    writes.insert(
+                        join(
+                            root,
+                            asset["receipt_target"]
+                                .as_str()
+                                .ok_or("receipt target missing")?,
+                        )?,
+                        receipt,
+                    );
+                    plan.generated_reused += 1;
+                } else {
+                    pending.push(asset.clone());
                 }
             }
-            let mut pending_contract = contract_after;
-            pending_contract["generated_assets"] = serde_json::Value::Array(pending_assets);
-            let (generated, _) = crate::generated_assets::generated_writes_captured(
-                &temporary.0,
-                "source_root",
-                root,
-                &pending_contract,
-                runner,
-                &captured,
-            )?;
-            writes.extend(generated);
-        }
-        for (inputs, _, _) in cache_contexts.values() {
-            inputs.verify_unchanged()?;
-        }
-        plan.writes = writes;
-        plan.verify_unchanged(root)?;
-        for asset in &all_assets {
-            let cache_key = serde_json::to_string(&(
-                asset["source_root"].clone(),
-                asset["source_projection"].clone(),
-            ))
-            .map_err(|e| e.to_string())?;
-            if let Some(cache) = cache_contexts
-                .get_mut(&cache_key)
-                .and_then(|(_, _, cache)| cache.as_mut())
-            {
-                if !built_assets.contains(asset["id"].as_str().ok_or("missing asset id")?) {
-                    continue;
+            if !pending.is_empty() {
+                let fallback;
+                let inputs = if let Some(cache) = cache.as_ref().filter(|_| !reference) {
+                    crate::build_inputs::BuildInputs::capture_persistent(
+                        &source,
+                        &bridgeforge_core::artifact_paths::cargo_slot(root, private),
+                        &pending[0],
+                        cache.compiler_environment(),
+                    )?
+                } else {
+                    runner.cache_miss("environment_or_project_cache_unavailable");
+                    fallback = Temporary(bridgeforge_core::artifact_paths::temporary_build(
+                        root,
+                        "cache-context",
+                    )?);
+                    crate::build_inputs::BuildInputs::capture(
+                        &source,
+                        fallback.0.join("source-0"),
+                        &pending[0],
+                    )?
+                };
+                let projection = pending[0]["source_projection"].as_str().map(str::to_owned);
+                if pending.iter().any(|a| {
+                    a["source_projection"].as_str().map(str::to_owned) != projection
+                        || source_root(&temporary.0, a).ok().as_ref() != Some(&source)
+                }) {
+                    return Err("generated build group mixes sources or projections".into());
                 }
-                let binary = join(
+                let captured = BTreeMap::from([((source.clone(), projection), &inputs)]);
+                if let Some(cache) = &cache {
+                    cache.verify_compiler_environment(&inputs.snapshot, runner)?;
+                }
+                let mut selected = contract_after.clone();
+                selected["generated_assets"] = serde_json::Value::Array(pending.clone());
+                let (generated, _) = crate::generated_assets::generated_writes_captured(
+                    &temporary.0,
+                    "source_root",
                     root,
-                    asset["binary_targets"][platform]
-                        .as_str()
-                        .ok_or("missing binary target")?,
+                    &selected,
+                    runner,
+                    &captured,
                 )?;
-                let receipt = join(
-                    root,
-                    asset["receipt_target"]
-                        .as_str()
-                        .ok_or("missing receipt target")?,
-                )?;
-                if let (Some(payload), Some(receipt_payload)) =
-                    (plan.writes.get(&binary), plan.writes.get(&receipt))
-                {
-                    // Loaded cache entries already have a lease and fresh recency.
-                    if let Err(error) = cache.store(asset, payload, receipt_payload, runner) {
-                        eprintln!("[artifact-cache] optional cache publication skipped: {error}");
+                inputs.verify_unchanged()?;
+                plan.verify_unchanged(root)?;
+                if let Some(cache) = &mut cache {
+                    cache.verify_compiler_environment(&inputs.snapshot, runner)?;
+                    for asset in &pending {
+                        let binary = join(
+                            root,
+                            asset["binary_targets"][platform]
+                                .as_str()
+                                .ok_or("binary target missing")?,
+                        )?;
+                        let receipt = join(
+                            root,
+                            asset["receipt_target"]
+                                .as_str()
+                                .ok_or("receipt target missing")?,
+                        )?;
+                        if cache
+                            .store(asset, &generated[&binary], &generated[&receipt], runner)
+                            .is_err()
+                        {
+                            runner.cache_miss("optional_cache_publication_failed");
+                        }
+                        cache.verify_compiler_environment(&inputs.snapshot, runner)?;
                     }
                 }
+                inputs.verify_unchanged()?;
+                plan.generated_built += pending.len();
+                writes.extend(generated);
+            }
+            runner.build_group_finished(
+                if private { "factory" } else { "public" },
+                started.elapsed().as_millis(),
+            );
+            if reference {
+                reference_locks.push(cache);
             }
         }
-        for (inputs, _, _) in cache_contexts.values() {
-            inputs.verify_unchanged()?;
-        }
+        plan.writes = writes;
         plan.verify_unchanged(root)?;
         Ok(plan)
     }

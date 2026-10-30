@@ -41,13 +41,12 @@ fn background_does_not_inherit_extra_handles_and_preserves_native_contract() {
     // deliberately inheritable sentinel. Isolate the probe's handle table.
     const CHILD: &str = "BRIDGEFORGE_BACKGROUND_PROBE_CHILD";
     if std::env::var_os(CHILD).is_none() {
+        let test_name = format!(
+            "{}::background_does_not_inherit_extra_handles_and_preserves_native_contract",
+            module_path!().split_once("::").unwrap().1
+        );
         let result = Command::new(std::env::current_exe().unwrap())
-            .args([
-                "--exact",
-                "memory::background::tests::background_does_not_inherit_extra_handles_and_preserves_native_contract",
-                "--nocapture",
-                "--test-threads=1",
-            ])
+            .args(["--exact", &test_name, "--nocapture", "--test-threads=1"])
             .env(CHILD, "1")
             .creation_flags(0x08000000)
             .output()
@@ -58,19 +57,28 @@ fn background_does_not_inherit_extra_handles_and_preserves_native_contract() {
             String::from_utf8_lossy(&result.stdout),
             String::from_utf8_lossy(&result.stderr)
         );
+        let stdout = String::from_utf8_lossy(&result.stdout);
+        assert!(
+            stdout.contains("running 1 test") && stdout.contains("1 passed; 0 failed"),
+            "isolated background probe must execute exactly one test: {stdout}"
+        );
         return;
     }
     use std::os::windows::io::{FromRawHandle, OwnedHandle};
     use windows_sys::Win32::System::Threading::{OpenProcess, WaitForSingleObject};
-    let folder = std::env::temp_dir().join(format!(
-        "bf-background 空格 ' $ {}",
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
+    let folder =
+        test_artifacts::root(env!("CARGO_MANIFEST_DIR"), "memory-background").join(format!(
+            "bf-background 空格 ' $ {}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
     fs::create_dir_all(&folder).unwrap();
-    let binary = folder.join("worker probe.exe");
+    let build_folder = test_artifacts::build_root(env!("CARGO_MANIFEST_DIR"), "memory-background")
+        .join(folder.file_name().unwrap());
+    fs::create_dir_all(&build_folder).unwrap();
+    let binary = build_folder.join("worker probe.exe");
     let root = factory_repository::from_manifest_dir(env!("CARGO_MANIFEST_DIR"));
     let built = Command::new("rustc")
         .arg(root.join("scripts/tests/fixtures/native_memory_background_probe.rs"))
@@ -148,5 +156,10 @@ fn background_does_not_inherit_extra_handles_and_preserves_native_contract() {
     );
     drop(reopened);
     assert!(folder.join("done").exists(), "worker did not finish");
+    fs::remove_dir_all(build_folder).unwrap();
     fs::remove_dir_all(folder).unwrap();
 }
+
+#[allow(dead_code)]
+#[path = "../support/artifact_paths.rs"]
+mod test_artifacts;

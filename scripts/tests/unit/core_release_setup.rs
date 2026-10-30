@@ -45,14 +45,16 @@ fn git(root: &Path, args: &[&str]) {
     );
 }
 fn repo(files: &[(&str, &str)]) -> Repo {
-    let root = Repo(std::env::temp_dir().join(format!(
+    let root = Repo(
+        test_artifacts::root(env!("CARGO_MANIFEST_DIR"), "release-setup").join(format!(
             "bf-release-setup-{}-{}",
             std::process::id(),
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap()
                 .as_nanos()
-        )));
+        )),
+    );
     fs::create_dir_all(root.0.join(".codex")).unwrap();
     for (p, b) in files {
         let p = root.0.join(p);
@@ -254,3 +256,7 @@ fn setup_plan_binds_ignored_native_lock_and_choice() {
     );
     assert!(!root.0.join(CONFIG).exists());
 }
+
+#[allow(dead_code)]
+#[path = "../support/artifact_paths.rs"]
+mod test_artifacts;

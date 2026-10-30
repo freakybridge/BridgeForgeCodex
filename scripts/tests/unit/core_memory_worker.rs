@@ -4,7 +4,8 @@ use std::sync::{Arc, Barrier};
 struct Fixture(std::path::PathBuf);
 impl Fixture {
     fn new() -> Self {
-        let root = std::env::temp_dir().join(format!("bf-worker-{}", unique_token()));
+        let root = test_artifacts::root(env!("CARGO_MANIFEST_DIR"), "memory-worker")
+            .join(format!("bf-worker-{}", unique_token()));
         fs::create_dir_all(&root).unwrap();
         Self(root)
     }
@@ -122,3 +123,7 @@ fn worker_reuse_checks_process_birth_identity_and_legacy_launch_interval() {
     ));
     assert!(!release_worker(&temp.0, &lease.token).unwrap());
 }
+
+#[allow(dead_code)]
+#[path = "../support/artifact_paths.rs"]
+mod test_artifacts;

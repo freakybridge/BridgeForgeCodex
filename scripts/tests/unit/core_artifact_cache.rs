@@ -4,16 +4,19 @@ use crate::{ProcessOutput, SystemProcessRunner};
 struct Fixture(PathBuf);
 impl Fixture {
     fn new() -> Self {
-        let root = std::env::temp_dir().join(format!(
-            "bf-artifact-cache-{}-{}",
-            std::process::id(),
-            now()
-        ));
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let root =
+            test_artifacts::root(env!("CARGO_MANIFEST_DIR"), "artifact-cache").join(format!(
+                "bf-artifact-cache-{}-{}-{}",
+                std::process::id(),
+                now(),
+                NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            ));
         fs::create_dir_all(&root).unwrap();
         let mut git = ProcessRequest::new("git", &root);
         git.args = vec!["init".into()];
         assert_eq!(SystemProcessRunner.run(&git).unwrap().code, 0);
-        fs::write(root.join(".gitignore"), b".runtime/\n").unwrap();
+        fs::write(root.join(".gitignore"), crate::artifact_paths::IGNORE_RULES).unwrap();
         Self(root)
     }
 }
@@ -26,6 +29,83 @@ impl Drop for Fixture {
 struct Runner {
     fail: bool,
     mutate: bool,
+}
+
+#[test]
+fn explicit_cleanup_selects_verified_entries_and_can_retry_partial_deletion() {
+    let f = Fixture::new();
+    let (asset, payload, receipt) = artifact("cleanup");
+    let mut cache = Cache::open(&f.0, &f.0, &runner()).unwrap();
+    cache.store(&asset, &payload, &receipt, &runner()).unwrap();
+    let key = Cache::key(&cache.identity(&asset)).unwrap();
+    let entry = cache.directory.join(&key);
+    drop(cache);
+    fs::write(f.0.join(DIRECTORY).join("unknown.txt"), b"keep").unwrap();
+    assert_eq!(cleanup_candidates(&f.0).unwrap(), vec![entry.clone()]);
+    fs::remove_file(entry.join("bridgeforge.exe")).unwrap();
+    assert_eq!(cleanup_candidates(&f.0).unwrap(), vec![entry.clone()]);
+    fs::write(entry.join("foreign.bin"), b"keep").unwrap();
+    assert!(cleanup_candidates(&f.0).unwrap().is_empty());
+    fs::remove_file(entry.join("foreign.bin")).unwrap();
+    fs::remove_file(entry.join("receipt.json")).unwrap();
+    fs::remove_file(entry.join("entry.json")).unwrap();
+    assert_eq!(cleanup_candidates(&f.0).unwrap(), vec![entry.clone()]);
+    fs::remove_dir(entry).unwrap();
+    let mut cache = Cache::open(&f.0, &f.0, &runner()).unwrap();
+    cache.store(&asset, &payload, &receipt, &runner()).unwrap();
+    assert_eq!(cache.load(&asset, &runner()).unwrap(), (payload, receipt));
+    assert_eq!(
+        fs::read(f.0.join(DIRECTORY).join("unknown.txt")).unwrap(),
+        b"keep"
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn explicit_cleanup_binds_ownership_before_capture_and_holds_preserved_cache_lock() {
+    use crate::artifact_cleanup::{BuildPolicy, Plan};
+    let f = Fixture::new();
+    let root = f.0.canonicalize().unwrap();
+    let (asset, payload, receipt) = artifact("cleanup-drift");
+    let mut cache = Cache::open(&root, &root, &runner()).unwrap();
+    cache.store(&asset, &payload, &receipt, &runner()).unwrap();
+    let selections = cleanup_selections(&root).unwrap();
+    let entry = selections[0].path.clone();
+    let policy = BuildPolicy {
+        remove: selections
+            .iter()
+            .map(|s| {
+                s.path
+                    .strip_prefix(&root)
+                    .unwrap()
+                    .to_string_lossy()
+                    .replace('\\', "/")
+            })
+            .collect(),
+        selections,
+        ..BuildPolicy::default()
+    };
+    let blocked = Plan::capture_with_build(&root, policy.clone())
+        .unwrap()
+        .execute();
+    assert_eq!(blocked.status, "blocked");
+    assert_eq!(blocked.deleted_files, 0);
+    drop(cache);
+    fs::write(entry.join("foreign.bin"), b"keep").unwrap();
+    assert!(Plan::capture_with_build(&root, policy.clone()).is_err());
+    fs::remove_file(entry.join("foreign.bin")).unwrap();
+    let plan = Plan::capture_with_build(&root, policy.clone()).unwrap();
+    fs::write(entry.join("bridgeforge.exe"), b"changed").unwrap();
+    let blocked = plan.execute();
+    assert_eq!(blocked.status, "blocked");
+    assert_eq!(blocked.deleted_files, 0);
+    fs::write(entry.join("bridgeforge.exe"), &payload).unwrap();
+    let complete = Plan::capture_with_build(&root, policy).unwrap().execute();
+    assert_eq!(complete.status, "completed", "{:?}", complete.failures);
+    assert_eq!(complete.deleted_files, 3);
+    assert!(!entry.exists());
+    assert!(root.join(DIRECTORY).join("cache.lock").exists());
+    assert!(Cache::open(&root, &root, &runner()).is_some());
 }
 impl ProcessRunner for Runner {
     fn run(&self, request: &ProcessRequest) -> std::io::Result<ProcessOutput> {
@@ -79,6 +159,58 @@ fn runner() -> Runner {
 }
 
 #[test]
+fn actual_cargo_context_must_match_cache_environment() {
+    let f = Fixture::new();
+    let context = f.0.join("transient/source");
+    let actual = f.0.join("cargo/public/source");
+    fs::create_dir_all(&context).unwrap();
+    fs::create_dir_all(&actual).unwrap();
+    let cache = Cache::open_project(&f.0, &context, &runner())
+        .unwrap()
+        .unwrap();
+    cache
+        .verify_compiler_environment(&actual, &runner())
+        .unwrap();
+    fs::create_dir_all(f.0.join("cargo/.cargo")).unwrap();
+    fs::write(
+        f.0.join("cargo/.cargo/config.toml"),
+        b"[build]\nrustflags=['--cfg','custom_build']\n",
+    )
+    .unwrap();
+    assert!(
+        cache
+            .verify_compiler_environment(&actual, &runner())
+            .is_err()
+    );
+}
+
+#[test]
+fn legacy_cache_migration_requires_exact_owned_entries_and_retains_lock_inode() {
+    let f = Fixture::new();
+    let mut cache = Cache::open_project(&f.0, &f.0, &runner()).unwrap().unwrap();
+    let (asset, binary, receipt) = artifact("legacy");
+    cache.store(&asset, &binary, &receipt, &runner()).unwrap();
+    let current = cache.directory.clone();
+    drop(cache);
+    let old = f.0.join(LEGACY_DIRECTORY);
+    fs::create_dir_all(old.parent().unwrap()).unwrap();
+    fs::rename(current, &old).unwrap();
+    let owned = legacy_files(&f.0).unwrap();
+    assert_eq!(owned.len(), 4);
+    let held = lock_legacy(&f.0).unwrap().unwrap();
+    assert!(lock_legacy(&f.0).is_err());
+    fs::write(old.join("unowned.txt"), b"preserve").unwrap();
+    assert!(legacy_files(&f.0).is_err());
+    fs::remove_file(old.join("unowned.txt")).unwrap();
+    for path in owned.keys() {
+        fs::remove_file(path).unwrap();
+    }
+    assert!(old.join("cache.lock").is_file());
+    assert!(legacy_files(&f.0).unwrap().is_empty());
+    drop(held);
+}
+
+#[test]
 fn public_prepared_references_are_read_only_and_bound_to_user_and_bytes() {
     let fixture = Fixture::new();
     let user = fixture.0.join("codex");
@@ -119,7 +251,7 @@ fn public_prepared_references_are_read_only_and_bound_to_user_and_bytes() {
 fn probe_cleanup_preserves_replaced_bytes_and_directory() {
     for replace_directory in [false, true] {
         let f = Fixture::new();
-        let probe = Probe::create("bridgeforge.exe", b"owned probe").unwrap();
+        let probe = Probe::create(Some(&f.0), "bridgeforge.exe", b"owned probe").unwrap();
         let binary = probe.binary.clone();
         let directory = probe.directory.clone();
         if replace_directory {
@@ -170,7 +302,10 @@ fn long_cache_image_path_executes_only_verified_short_probe() {
     // native versions. Exercise real PE execution with an isolated fixture,
     // rather than requiring live binaries to match a candidate source contract.
     let source = f.0.join("cache_probe.rs");
-    let binary = f.0.join("cache_probe.exe");
+    let build_folder = test_artifacts::build_root(env!("CARGO_MANIFEST_DIR"), "artifact-cache")
+        .join(f.0.file_name().unwrap());
+    fs::create_dir_all(&build_folder).unwrap();
+    let binary = build_folder.join("cache_probe.exe");
     fs::write(
         &source,
         br##"fn main() { println!("{}", r#"{"schema":1,"name":"bridgeforge","status":"ok"}"#); }"##,
@@ -191,6 +326,7 @@ fn long_cache_image_path_executes_only_verified_short_probe() {
     );
     let (asset, _, receipt) = artifact("long-probe");
     let payload = fs::read(binary).unwrap();
+    fs::remove_dir_all(build_folder).unwrap();
     let mut receipt: Value = serde_json::from_slice(&receipt).unwrap();
     receipt["binary_sha256"] = json!(hash(&payload));
     let receipt = serde_json::to_vec(&receipt).unwrap();
@@ -531,3 +667,7 @@ fn cache_byte_capacity_evicts_an_owned_large_entry_without_touching_foreign_data
     cache.store(&asset, &payload, &receipt, &runner()).unwrap();
     assert!(footprint(&cache.directory).unwrap() <= MAX_BYTES);
 }
+
+#[allow(dead_code)]
+#[path = "../support/artifact_paths.rs"]
+mod test_artifacts;

@@ -344,6 +344,15 @@ pub fn verify_completed(
         }
         let manifest = directory.join("Cargo.toml");
         let mut metadata = crate::ProcessRequest::new("cargo", &directory);
+        let build_target = safe_join(
+            root,
+            &format!(".build/bridgeforge/project-hooks/{id}/target"),
+            "project Hook build target",
+        )?;
+        metadata.env.insert(
+            "CARGO_TARGET_DIR".into(),
+            build_target.clone().into_os_string(),
+        );
         metadata.args = vec![
             "metadata".into(),
             "--locked".into(),
@@ -422,7 +431,10 @@ pub fn verify_completed(
         }
         let installed = safe_join(
             root,
-            &format!(".codex/bin/{binary_name}{}", std::env::consts::EXE_SUFFIX),
+            &format!(
+                ".build/bridgeforge/bin/{binary_name}{}",
+                std::env::consts::EXE_SUFFIX
+            ),
             "project Hook executable",
         )?;
         if crate::persistence::is_link_or_reparse(&installed).map_err(|e| e.to_string())? {
@@ -432,6 +444,9 @@ pub fn verify_completed(
             format!("project Hook {id} must be installed by its project build workflow first")
         })?;
         let mut build = crate::ProcessRequest::new("cargo", &directory);
+        build
+            .env
+            .insert("CARGO_TARGET_DIR".into(), build_target.into_os_string());
         build.args = vec![
             "build".into(),
             "--locked".into(),

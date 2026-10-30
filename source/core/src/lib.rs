@@ -1,4 +1,7 @@
 pub mod artifact_cache;
+pub mod artifact_cleanup;
+pub mod artifact_migration;
+pub mod artifact_paths;
 pub mod build_inputs;
 pub mod build_manifest;
 pub mod build_metrics;
@@ -13,6 +16,7 @@ pub mod managed_paths;
 pub mod output;
 pub mod persistence;
 pub mod process;
+pub mod process_activity;
 pub mod project_lock;
 pub mod release_metrics;
 pub mod repository;

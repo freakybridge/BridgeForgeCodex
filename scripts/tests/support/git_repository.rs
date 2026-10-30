@@ -57,7 +57,7 @@ pub(crate) fn real_repository(name: &str) -> RealRepository {
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    let root = std::env::temp_dir().join(format!(
+    let root = test_artifacts::root(env!("CARGO_MANIFEST_DIR"), "git-repository").join(format!(
         "bridgeforge-git-sync-{name}-{}-{}-{token}",
         std::process::id(),
         NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
@@ -103,7 +103,11 @@ pub(crate) fn managed_repository(name: &str) -> (RealRepository, PathBuf) {
     ));
     fs::create_dir_all(repo.0.join(".codex")).unwrap();
     fs::write(repo.0.join("managed.txt"), b"old\n").unwrap();
-    fs::write(repo.0.join(".gitignore"), b".runtime/\n").unwrap();
+    fs::write(
+        repo.0.join(".gitignore"),
+        bridgeforge_core::artifact_paths::IGNORE_RULES,
+    )
+    .unwrap();
     fs::write(
         repo.0.join(".codex/managed-skeleton.json"),
         managed_contract(b"old\n"),
@@ -132,3 +136,7 @@ pub(crate) fn out(code: i32, stdout: &str) -> ProcessOutput {
         timed_out: false,
     }
 }
+
+#[allow(dead_code)]
+#[path = "artifact_paths.rs"]
+mod test_artifacts;

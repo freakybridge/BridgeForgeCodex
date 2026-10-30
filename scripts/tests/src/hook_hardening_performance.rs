@@ -47,14 +47,16 @@ fn paired_hook_release_benchmark() {
     let old = PathBuf::from(std::env::var_os("BFC_BENCH_OLD").expect("old release binary"));
     let new = PathBuf::from(std::env::var_os("BFC_BENCH_NEW").expect("new release binary"));
     let fixture = Fixture(
-        std::env::temp_dir().join(format!(
-            "bf-hook-benchmark-{}-{}",
-            std::process::id(),
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        )),
+        test_artifacts::root(env!("CARGO_MANIFEST_DIR"), "hook-hardening-performance").join(
+            format!(
+                "bf-hook-benchmark-{}-{}",
+                std::process::id(),
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ),
+        ),
     );
     let root = &fixture.0;
     let repository = repository();
@@ -150,3 +152,7 @@ fn paired_hook_release_benchmark() {
         fs::write(output, serde_json::to_vec_pretty(&report).unwrap()).unwrap();
     }
 }
+
+#[allow(dead_code)]
+#[path = "../support/artifact_paths.rs"]
+mod test_artifacts;

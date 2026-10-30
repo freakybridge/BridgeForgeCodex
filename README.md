@@ -79,7 +79,7 @@ $refactor-scan 扫描当前项目，允许现有定向测试和离线性能基�
 目标项目：
 
 - 根 `AGENTS.md`：公共区由产品更新；项目级专区逐字保留。
-- `.codex/hooks/`、`.codex/bin/bridgeforge-hook.exe` 与 `.codex/bin/bridgeforge.exe`：受管 Rust
+- `.codex/hooks/`、`.build/bridgeforge/bin/bridgeforge-hook.exe` 与 `.build/bridgeforge/bin/bridgeforge.exe`：受管 Rust
   源码与编译产物；`init`、`adopt`、`update` 按需构建，工厂先按 [运行时准备](INSTALL.md#工厂本地运行时准备)维护当前产物，再检查能力或执行获授权的 `$git-sync`。日常入口不启动脚本解释器。项目自有 Hook 继续使用
   `.codex/hooks/project_*/` 扩展目录，不与受管 Rust 源码混写。
 - `.githooks/pre-commit`：执行提交前机器检查。

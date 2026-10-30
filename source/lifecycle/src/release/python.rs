@@ -107,7 +107,7 @@ pub(super) fn normalize_path(base: &str, raw: &str) -> Result<String, String> {
             other => {
                 if matches!(
                     other.to_ascii_lowercase().as_str(),
-                    ".git" | ".runtime" | ".venv" | "target"
+                    ".git" | ".runtime" | ".deps" | ".build" | ".venv" | "target"
                 ) || other.ends_with(['.', ' '])
                 {
                     return Err(format!(

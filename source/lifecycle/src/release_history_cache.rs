@@ -67,6 +67,13 @@ fn immutable(revision: &str) -> bool {
 }
 
 impl<'a> Reader<'a> {
+    #[cfg(all(test, bridgeforge_factory_tests))]
+    pub(super) fn uncached(root: &'a Path, runner: &'a dyn ProcessRunner) -> Self {
+        let mut reader = Self::new(root, runner);
+        reader.enabled = false;
+        reader
+    }
+
     pub(super) fn new(root: &'a Path, runner: &'a dyn ProcessRunner) -> Self {
         let state = state(root, runner).ok();
         Self {
@@ -259,7 +266,10 @@ impl ProcessRunner for Reader<'_> {
         if !self.enabled
             || request.program != "git"
             || request.cwd != self.root
-            || request.env.iter().any(|(key, value)| key != "GIT_OPTIONAL_LOCKS" || value != "0")
+            || request
+                .env
+                .iter()
+                .any(|(key, value)| key != "GIT_OPTIONAL_LOCKS" || value != "0")
             || !request.env_remove.is_empty()
             || !request.stdin.is_empty()
         {
@@ -278,7 +288,10 @@ impl ProcessRunner for Reader<'_> {
         while args.len() >= 2
             && args[0] == "-c"
             && (args[1] == format!("safe.directory={}", self.root.display())
-                || matches!(args[1], "core.fsmonitor=false" | "diff.autoRefreshIndex=false"))
+                || matches!(
+                    args[1],
+                    "core.fsmonitor=false" | "diff.autoRefreshIndex=false"
+                ))
         {
             args = &args[2..];
         }

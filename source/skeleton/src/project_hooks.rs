@@ -7,7 +7,7 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 const REGISTRY: &str = "bridgeforgeProjectHooks";
 pub const REGISTRY_PATH: &str = ".codex/project-hooks.json";
@@ -162,13 +162,16 @@ impl Hook {
     }
     pub fn binary(&self) -> String {
         format!(
-            ".codex/bin/project_{}{}",
+            ".build/bridgeforge/bin/project_{}{}",
             self.id,
             std::env::consts::EXE_SUFFIX
         )
     }
     pub fn receipt(&self) -> String {
-        format!(".codex/bin/build-receipt-project-{}.json", self.id)
+        format!(
+            ".build/bridgeforge/bin/build-receipt-project-{}.json",
+            self.id
+        )
     }
 }
 
@@ -251,8 +254,8 @@ pub fn render(document: &Value) -> Result<Value, String> {
             };
             let group = json!({"matcher":event.matcher,"hooks":[{
                 "type":"command", HANDLER_ID:format!("{}:{index}",hook.id),
-                "command":format!(".codex/bin/project_{}{args}",hook.id),
-                "commandWindows":format!(".codex/bin/project_{}.exe{args}",hook.id),
+                "command":format!(".build/bridgeforge/bin/project_{}{args}",hook.id),
+                "commandWindows":format!(".build/bridgeforge/bin/project_{}.exe{args}",hook.id),
                 "timeout":event.timeout
             }]});
             groups
@@ -310,6 +313,98 @@ pub fn owned(root: &Path, hook: &Hook) -> Result<bool, String> {
         return Ok(false);
     }
     current(root, hook, input)
+}
+
+/// Exact legacy outputs from registered generated handlers. Independent,
+/// unregistered programs remain project-owned and are never guessed from names.
+pub fn legacy_artifacts(root: &Path) -> Result<BTreeMap<PathBuf, Vec<u8>>, String> {
+    let Some(config) = read(root, ".codex/hooks.json")? else {
+        return Ok(BTreeMap::new());
+    };
+    let document = crate::json::parse_unique_json(&config, "legacy project hooks")?;
+    let combined = with_registry(&document, read(root, REGISTRY_PATH)?.as_deref())?;
+    let mut owned = BTreeMap::new();
+    for hook in hooks(&combined)? {
+        let binary = format!(
+            ".codex/bin/project_{}{}",
+            hook.id,
+            std::env::consts::EXE_SUFFIX
+        );
+        let receipt = format!(".codex/bin/build-receipt-project-{}.json", hook.id);
+        let payload = read(root, &binary)?;
+        let record = read(root, &receipt)?;
+        if payload.is_none() && record.is_none() {
+            continue;
+        }
+        let (payload, record) = payload
+            .zip(record)
+            .ok_or("legacy project hook pair is incomplete; preserve it")?;
+        let value = crate::json::parse_unique_json(&record, "legacy project hook receipt")?;
+        let identity = value["input_sha256"]
+            .as_str()
+            .ok_or("legacy project hook identity missing")?;
+        if !identity
+            .strip_prefix("sha256:")
+            .is_some_and(|s| s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit()))
+            || value
+                != json!({"schema_version":1,"id":hook.id,"input_sha256":identity,"platform":std::env::consts::OS,"binary_sha256":sha(&payload)})
+        {
+            return Err(format!(
+                "legacy project hook ownership unknown: {}",
+                hook.id
+            ));
+        }
+        owned.insert(root.join(binary), payload);
+        owned.insert(root.join(receipt), record);
+    }
+    if !owned.is_empty() {
+        let migrated = render(&combined)?;
+        let mut expected = migrated.clone();
+        for groups in expected["hooks"]
+            .as_object_mut()
+            .ok_or("hook groups missing")?
+            .values_mut()
+        {
+            for group in groups.as_array_mut().ok_or("invalid hook group")? {
+                for handler in group["hooks"]
+                    .as_array_mut()
+                    .ok_or("invalid hook handlers")?
+                {
+                    if handler.get(HANDLER_ID).is_some() {
+                        for key in ["command", "commandWindows"] {
+                            if let Some(command) = handler[key].as_str() {
+                                handler[key] = json!(command.replacen(
+                                    ".build/bridgeforge/bin/",
+                                    ".codex/bin/",
+                                    1
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        let mut original = document.clone();
+        original
+            .as_object_mut()
+            .ok_or("invalid hook document")?
+            .remove(REGISTRY);
+        if expected != original && migrated != original {
+            return Err("legacy project hook handlers have external changes; preserve them".into());
+        }
+    }
+    Ok(owned)
+}
+
+pub fn migrate_legacy_registration(root: &Path, payload: &[u8]) -> Result<Vec<u8>, String> {
+    if legacy_artifacts(root)?.is_empty() {
+        return Ok(payload.to_vec());
+    }
+    let document = crate::json::parse_unique_json(payload, "prospective hooks")?;
+    let combined = with_registry(&document, read(root, REGISTRY_PATH)?.as_deref())?;
+    let mut bytes = serde_json::to_vec_pretty(&render(&combined)?).map_err(|e| e.to_string())?;
+    bytes.push(b'\n');
+    Ok(bytes)
 }
 
 pub fn verify(root: &Path, contract: &Value, runtime: bool) -> Result<Vec<String>, String> {
@@ -389,15 +484,10 @@ fn build_legacy(
     if inputs.is_empty() {
         return Ok(BTreeMap::new());
     }
-    let nonce = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_err(|e| e.to_string())?
-        .as_nanos();
-    let temporary = Temporary(std::env::temp_dir().join(format!(
-        "bridgeforge-project-hooks-{}-{nonce}",
-        std::process::id()
-    )));
-    fs::create_dir(&temporary.0).map_err(|e| e.to_string())?;
+    let temporary = Temporary(bridgeforge_core::artifact_paths::temporary_build(
+        root,
+        "project-hooks",
+    )?);
     let item = contract["generated_assets"]
         .as_array()
         .and_then(|items| items.first())

@@ -189,9 +189,12 @@ fn relative(path: &str) -> Result<(), String> {
         || Path::new(path)
             .components()
             .any(|c| !matches!(c, Component::Normal(_)))
-        || path
-            .split('/')
-            .any(|p| matches!(p, ".git" | ".runtime" | ".venv" | "target"))
+        || path.split('/').any(|p| {
+            matches!(
+                p,
+                ".git" | ".runtime" | ".deps" | ".build" | ".venv" | "target"
+            )
+        })
     {
         return Err(format!("unsafe release input path: {path}"));
     }

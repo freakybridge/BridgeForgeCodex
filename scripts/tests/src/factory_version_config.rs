@@ -67,14 +67,15 @@ fn legacy_factory_release_updates_all_three_cargo_manifests_and_locks() {
         Value::from(".codex/hooks/Cargo.toml"),
         Value::from("scripts/tests/Cargo.toml"),
     ];
-    let root = std::env::temp_dir().join(format!(
-        "bf-factory-version-{}-{}",
-        std::process::id(),
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
+    let root =
+        test_artifacts::root(env!("CARGO_MANIFEST_DIR"), "factory-version-config").join(format!(
+            "bf-factory-version-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
     let temp = Temp(root);
     fs::create_dir_all(temp.0.join(".codex")).unwrap();
     fs::create_dir_all(temp.0.join("templates")).unwrap();
@@ -257,3 +258,7 @@ fn obsolete_venv_contract_is_not_an_active_runtime_instruction() {
     assert!(old.contains("superseded_by: ../rust-only-bridgeforge/"));
     assert!(!old.contains("其他 Python 流程仍继续遵守本卡"));
 }
+
+#[allow(dead_code)]
+#[path = "../support/artifact_paths.rs"]
+mod test_artifacts;

@@ -185,10 +185,14 @@ fn generated_writes_internal(
         .duration_since(UNIX_EPOCH)
         .map_err(|error| error.to_string())?
         .as_nanos();
-    let target_dir = std::env::temp_dir().join(format!(
-        "bridgeforge-generated-{}-{token}",
-        std::process::id()
-    ));
+    let target_dir = if shared_root.is_some() {
+        std::env::temp_dir().join(format!(
+            "bridgeforge-generated-{}-{token}",
+            std::process::id()
+        ))
+    } else {
+        crate::artifact_paths::temporary_build(project_root, "g")?
+    };
     fs::create_dir_all(&target_dir).map_err(|error| error.to_string())?;
     let result = (|| {
         let mut writes = BTreeMap::new();
@@ -216,7 +220,7 @@ fn generated_writes_internal(
                     })
                     .transpose()?,
             );
-            let snapshot = target_dir.join(format!("source-{}", snapshots.len()));
+            let snapshot = target_dir.join(format!("s{}", snapshots.len()));
             // Reuse a verified snapshot for the Hook/CLI sharing one workspace.
             let provided = captured
                 .and_then(|inputs| inputs.get(&snapshot_key))
@@ -334,7 +338,8 @@ fn generated_writes_internal(
             } else {
                 bootstrap_target
                     .map(Path::to_path_buf)
-                    .unwrap_or_else(|| inputs.snapshot.with_extension("target"))
+                    .or_else(|| inputs.target.clone())
+                    .unwrap_or_else(|| inputs.snapshot.with_extension("t"))
             };
             let built = output_dir.join("release").join(if cfg!(windows) {
                 format!("{binary_name}.exe")

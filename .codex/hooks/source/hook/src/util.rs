@@ -30,14 +30,14 @@ pub fn repo_root() -> PathBuf {
     if let Some(value) = env::var_os("BRIDGEFORGE_HOOK_ROOT") {
         return PathBuf::from(value);
     }
-    let executable =
-        env::current_exe().unwrap_or_else(|_| PathBuf::from(".codex/bin/bridgeforge-hook"));
-    executable
-        .parent()
-        .and_then(Path::parent)
-        .and_then(Path::parent)
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
+    if let Ok(executable) = env::current_exe() {
+        for ancestor in executable.ancestors().skip(1) {
+            if ancestor.join(".codex/managed-skeleton.json").is_file() {
+                return ancestor.to_path_buf();
+            }
+        }
+    }
+    env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
 }
 
 pub fn codex_root() -> PathBuf {

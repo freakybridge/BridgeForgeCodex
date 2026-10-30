@@ -1,4 +1,5 @@
 use super::*;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 #[test]
 #[ignore = "child process helper for cache environment isolation"]
@@ -92,15 +93,62 @@ fn config() -> Value {
         "bridgeforgeProjectHooks":{"schema_version":1,"hooks":[{"id":"demo","events":[{"event":"SessionStart","args":["check"]},{"event":"Stop","args":["snapshot"]}]}]}})
 }
 
+#[test]
+fn legacy_project_outputs_require_registered_handlers_receipts_and_exact_bytes() {
+    let temp = temporary();
+    fs::create_dir_all(temp.0.join(".codex/bin")).unwrap();
+    let config = config();
+    let current = render(&config).unwrap();
+    let old = serde_json::to_string(&current)
+        .unwrap()
+        .replace(".build/bridgeforge/bin/", ".codex/bin/");
+    fs::write(temp.0.join(".codex/hooks.json"), old.as_bytes()).unwrap();
+    fs::write(
+        temp.0.join(REGISTRY_PATH),
+        serde_json::to_vec(&config[REGISTRY]).unwrap(),
+    )
+    .unwrap();
+    let image = temp.0.join(format!(
+        ".codex/bin/project_demo{}",
+        std::env::consts::EXE_SUFFIX
+    ));
+    fs::write(&image, b"old binary").unwrap();
+    let receipt = json!({"schema_version":1,"id":"demo","input_sha256":sha(b"old source"),"platform":std::env::consts::OS,"binary_sha256":sha(b"old binary")});
+    fs::write(
+        temp.0.join(".codex/bin/build-receipt-project-demo.json"),
+        serde_json::to_vec(&receipt).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(legacy_artifacts(&temp.0).unwrap().len(), 2);
+    let migrated = migrate_legacy_registration(&temp.0, old.as_bytes()).unwrap();
+    assert_eq!(serde_json::from_slice::<Value>(&migrated).unwrap(), current);
+    fs::write(
+        temp.0.join(".codex/hooks.json"),
+        old.replace("project_demo check", "project_demo changed"),
+    )
+    .unwrap();
+    assert!(
+        legacy_artifacts(&temp.0)
+            .unwrap_err()
+            .contains("external changes")
+    );
+    fs::write(temp.0.join(".codex/hooks.json"), old.as_bytes()).unwrap();
+    fs::write(&image, b"unowned change").unwrap();
+    assert!(
+        legacy_artifacts(&temp.0)
+            .unwrap_err()
+            .contains("ownership unknown")
+    );
+    assert_eq!(fs::read(image).unwrap(), b"unowned change");
+}
+
 fn temporary() -> Temporary {
     let nonce = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    let root = std::env::temp_dir().join(format!(
-        "bridgeforge-project-hook-test-{}-{nonce}",
-        std::process::id()
-    ));
+    let root = test_artifacts::root(env!("CARGO_MANIFEST_DIR"), "project-hooks")
+        .join(format!("{:x}-{nonce:x}", std::process::id()));
     fs::create_dir(&root).unwrap();
     Temporary(root)
 }
@@ -151,16 +199,7 @@ fn closed_package_hook_reuses_verified_bytes_and_rebuilds_corruption() {
     assert_eq!(first, second);
     assert_eq!(observed.metrics.borrow().cargo_build_invocations, 1);
     assert_eq!(observed.metrics.borrow().cache_hits, 1);
-    let project = temp
-        .0
-        .canonicalize()
-        .unwrap()
-        .to_string_lossy()
-        .into_owned();
-    let cache = std::env::temp_dir().join(format!(
-        "bridgeforge-artifacts-{}",
-        &sha(project.as_bytes())[7..]
-    ));
+    let cache = temp.0.join(bridgeforge_core::artifact_cache::DIRECTORY);
     let mut corrupted = false;
     for entry in fs::read_dir(cache).unwrap() {
         let path = entry
@@ -203,7 +242,7 @@ fn registry_is_strict_and_render_is_idempotent_and_preserves_custom_handlers() {
     );
     assert_eq!(
         rendered["hooks"]["Stop"][0]["hooks"][0]["commandWindows"],
-        ".codex/bin/project_demo.exe snapshot"
+        ".build/bridgeforge/bin/project_demo.exe snapshot"
     );
     for id in ["../escape", "Foo", "a-b", "a/b", "con.exe", "a & calc"] {
         let mut invalid = original.clone();
@@ -294,7 +333,7 @@ fn source_workspace_lock_registration_and_binary_are_bound_to_receipt() {
             identity(&hook, b"pub fn run(_:Vec<String>)->i32{0}", &changed).unwrap()
         );
     }
-    fs::create_dir_all(temp.0.join(".codex/bin")).unwrap();
+    fs::create_dir_all(temp.0.join(".build/bridgeforge/bin")).unwrap();
     fs::write(temp.0.join(hook.binary()), b"binary").unwrap();
     fs::write(temp.0.join(hook.receipt()),serde_json::to_vec(&json!({"schema_version":1,"id":hook.id,"input_sha256":input,"platform":std::env::consts::OS,"binary_sha256":sha(b"binary")})).unwrap()).unwrap();
     assert!(current(&temp.0, &hook, &input).unwrap());
@@ -461,7 +500,14 @@ fn build_is_isolated_and_failures_never_install_or_mutate_the_lock() {
         } else {
             assert_eq!(result.unwrap().len(), 2);
         }
-        assert!(fs::read_dir(&project).unwrap().next().is_none());
+        assert!(!project.join(hook.binary()).exists());
+        assert!(!project.join(hook.receipt()).exists());
+        assert_eq!(
+            fs::read_dir(project.join(".build/bridgeforge/transient"))
+                .unwrap()
+                .count(),
+            0
+        );
         assert_eq!(fs::read(workspace.join("Cargo.lock")).unwrap(), b"locked\n");
     }
 }
@@ -990,3 +1036,7 @@ fn project_package_generated_sources_reject_out_directory_junctions() {
         b"external source"
     );
 }
+
+#[allow(dead_code)]
+#[path = "../support/artifact_paths.rs"]
+mod test_artifacts;

@@ -2,14 +2,16 @@ use super::*;
 struct Fixture(PathBuf);
 impl Fixture {
     fn new() -> Self {
-        let root = std::env::temp_dir().join(format!(
-            "bf-hook-migration-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let root = test_artifacts::root(env!("CARGO_MANIFEST_DIR"), "project-hook-migration").join(
+            format!(
+                "bf-hook-migration-{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ),
+        );
         fs::create_dir_all(root.join(".codex/hooks/project_demo")).unwrap();
         fs::write(root.join(".codex/project-hooks.json"),br#"{"schema_version":1,"hooks":[{"id":"demo","events":[{"event":"Stop","args":[]}]}]}"#).unwrap();
         fs::write(root.join(".codex/hooks.json"),br#"{"hooks":{"Stop":[{"hooks":[{"type":"command","bridgeforgeProjectHookId":"demo:0","command":".codex/bin/project_demo"}]}]}}"#).unwrap();
@@ -105,3 +107,7 @@ fn unconfirmed_migration_does_not_create_a_lock_or_build() {
     assert!(verify_completed(&f.0, false, &Never).is_err());
     assert!(!f.0.join(".runtime").exists());
 }
+
+#[allow(dead_code)]
+#[path = "../support/artifact_paths.rs"]
+mod test_artifacts;

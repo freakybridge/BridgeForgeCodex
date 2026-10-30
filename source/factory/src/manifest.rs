@@ -1,3 +1,4 @@
+use bridgeforge_core::artifact_paths;
 pub use bridgeforge_core::build_manifest::{
     canonical_sha, generated_build_recipe, generated_source_sha, generated_sources,
 };
@@ -111,9 +112,9 @@ fn generated_asset(
         "manifest": "Cargo.toml",
         "lockfile": "Cargo.lock",
         "binary_targets": {
-            "windows-x86_64": format!(".codex/bin/{file}.exe"),
-            "linux-x86_64": format!(".codex/bin/{file}"),
-            "macos-x86_64": format!(".codex/bin/{file}"),
+            "windows-x86_64": format!("{}/{file}.exe", artifact_paths::PROJECT_BIN),
+            "linux-x86_64": format!("{}/{file}", artifact_paths::PROJECT_BIN),
+            "macos-x86_64": format!("{}/{file}", artifact_paths::PROJECT_BIN),
         },
         "receipt_target": receipt,
         "build": build,
@@ -132,6 +133,7 @@ pub fn runtime_contract(root: &Path, public: &Value) -> Result<Value, String> {
     if !crate::source_projection::available(root) {
         return Ok(contract);
     }
+    factory_binary_targets(&mut contract)?;
     let files = crate::source_projection::render(root, false)?;
     let package = std::str::from_utf8(
         files
@@ -156,10 +158,10 @@ pub fn runtime_contract(root: &Path, public: &Value) -> Result<Value, String> {
         "source_root":".","target_source_root":".","source_projection":crate::source_projection::FACTORY,
         "manifest":"Cargo.toml","lockfile":"Cargo.lock",
         "binary_targets":{
-            "windows-x86_64":".codex/bin/bridgeforge-factory.exe",
-            "linux-x86_64":".codex/bin/bridgeforge-factory",
-            "macos-x86_64":".codex/bin/bridgeforge-factory"},
-        "receipt_target":".codex/bin/build-receipt-factory.json",
+            "windows-x86_64":format!("{}/bridgeforge-factory.exe", artifact_paths::FACTORY_BIN),
+            "linux-x86_64":format!("{}/bridgeforge-factory", artifact_paths::FACTORY_BIN),
+            "macos-x86_64":format!("{}/bridgeforge-factory", artifact_paths::FACTORY_BIN)},
+        "receipt_target":format!("{}/build-receipt-factory.json", artifact_paths::FACTORY_BIN),
         "source_tree_sha256":crate::source_projection::tree_sha(&files)?,
         "lockfile_sha256":sha_git(files.get("Cargo.lock").ok_or("factory lockfile missing")?),
         "build_recipe_sha256":canonical_sha(&build)?,"build":build,
@@ -182,6 +184,65 @@ pub fn render_managed_contract(root: &Path) -> Result<Vec<u8>, String> {
 fn render_managed_contract_with_overlay(
     root: &Path,
     overlay: &BTreeMap<String, Vec<u8>>,
+) -> Result<Vec<u8>, String> {
+    render_contract(root, overlay, false)
+}
+
+pub fn render_factory_contract(
+    root: &Path,
+    overlay: &BTreeMap<String, Vec<u8>>,
+) -> Result<Vec<u8>, String> {
+    render_contract(root, overlay, crate::source_projection::available(root))
+}
+
+fn factory_binary_targets(contract: &mut Value) -> Result<(), String> {
+    for asset in contract["generated_assets"]
+        .as_array_mut()
+        .ok_or("generated assets missing")?
+    {
+        for value in asset["binary_targets"]
+            .as_object_mut()
+            .ok_or("binary targets missing")?
+            .values_mut()
+        {
+            let name = Path::new(value.as_str().ok_or("binary path missing")?)
+                .file_name()
+                .ok_or("binary name missing")?
+                .to_string_lossy();
+            *value = json!(format!("{}/{name}", artifact_paths::FACTORY_BIN));
+        }
+        let name = Path::new(
+            asset["receipt_target"]
+                .as_str()
+                .ok_or("receipt target missing")?,
+        )
+        .file_name()
+        .ok_or("receipt name missing")?
+        .to_string_lossy();
+        asset["receipt_target"] = json!(format!("{}/{name}", artifact_paths::FACTORY_BIN));
+    }
+    Ok(())
+}
+
+fn factory_payload(id: &str, payload: Vec<u8>) -> Result<Vec<u8>, String> {
+    if matches!(id, "codex.hooks-config" | "codex.precommit") {
+        let text = String::from_utf8(payload).map_err(|e| e.to_string())?;
+        Ok(text
+            .replace(artifact_paths::PROJECT_BIN, artifact_paths::FACTORY_BIN)
+            .replace(
+                ".deps\\\\bridgeforge\\\\bin",
+                ".build\\\\bridgeforge\\\\bin",
+            )
+            .into_bytes())
+    } else {
+        Ok(payload)
+    }
+}
+
+fn render_contract(
+    root: &Path,
+    overlay: &BTreeMap<String, Vec<u8>>,
+    factory: bool,
 ) -> Result<Vec<u8>, String> {
     let path = root.join("templates/managed-skeleton.json");
     let mut contract: Value = serde_json::from_slice(
@@ -256,9 +317,17 @@ fn render_managed_contract_with_overlay(
                 && !target.ends_with(".py")
                 && !source.starts_with("templates/hooks/")
                 && !target.starts_with(".codex/hooks/")
+                && asset["id"] != "codex.generated-bin.gitignore"
         })
         .cloned()
         .collect::<Vec<_>>();
+    if (projected.is_some() || root.join("templates/artifact-roots.gitignore").is_file())
+        && !assets.iter().any(|a| a["id"] == "root.artifact-ignore")
+    {
+        assets.push(json!({"id":"root.artifact-ignore","source":"templates/artifact-roots.gitignore",
+            "target":".gitignore","strategy":"merge","merge_policy":"artifact-roots","current_sha256":"",
+            "merge_validation":{"format":artifact_paths::CONTRACT}}));
+    }
     for relative in &sources {
         let source = if projected.is_some() && relative == ".gitignore" {
             "templates/hooks/.gitignore".into()
@@ -298,6 +367,11 @@ fn render_managed_contract_with_overlay(
             bytes.clone()
         } else {
             fs::read(safe_join(root, source)?).map_err(|error| format!("{source}: {error}"))?
+        };
+        let payload = if factory {
+            factory_payload(asset["id"].as_str().ok_or("asset id missing")?, payload)?
+        } else {
+            payload
         };
         asset["current_sha256"] = Value::String(sha_git(&payload));
         if let Some(blocks) = asset
@@ -370,13 +444,13 @@ fn render_managed_contract_with_overlay(
     contract["generated_assets"] = Value::Array(vec![
         generated_asset(
             "bridgeforge-hook",
-            ".codex/bin/build-receipt-hook.json",
+            &format!("{}/build-receipt-hook.json", artifact_paths::PROJECT_BIN),
             &tree_sha,
             &lock_sha,
         )?,
         generated_asset(
             "bridgeforge",
-            ".codex/bin/build-receipt-cli.json",
+            &format!("{}/build-receipt-cli.json", artifact_paths::PROJECT_BIN),
             &tree_sha,
             &lock_sha,
         )?,
@@ -386,6 +460,12 @@ fn render_managed_contract_with_overlay(
             item["source_root"] = json!(".");
             item["source_projection"] = json!(crate::source_projection::PUBLIC);
         }
+    }
+    if projected.is_some() {
+        contract["artifact_layout"] = json!(artifact_paths::CONTRACT);
+    }
+    if factory {
+        factory_binary_targets(&mut contract)?;
     }
     let mut encoded = serde_json::to_vec_pretty(&contract).map_err(|error| error.to_string())?;
     encoded.push(b'\n');
@@ -421,7 +501,49 @@ pub fn render_distribution_manifest(root: &Path) -> Result<Vec<u8>, String> {
     Ok(encoded)
 }
 
-fn render_targets(root: &Path) -> Result<Vec<(PathBuf, Vec<u8>)>, String> {
+/// Render only explicit factory mirrors; public/project extension regions keep
+/// the same ownership and preservation semantics as the installation renderer.
+fn factory_entrypoints(root: &Path) -> Result<BTreeMap<String, Vec<u8>>, String> {
+    let contract: Value = serde_json::from_slice(&render_factory_contract(root, &BTreeMap::new())?)
+        .map_err(|e| e.to_string())?;
+    let mut outputs = BTreeMap::new();
+    for asset in contract["assets"]
+        .as_array()
+        .ok_or("factory assets missing")?
+    {
+        let id = asset["id"].as_str().ok_or("factory asset id missing")?;
+        if !matches!(
+            id,
+            "root.agents" | "root.artifact-ignore" | "codex.hooks-config" | "codex.precommit"
+        ) {
+            continue;
+        }
+        let source = asset["source"].as_str().ok_or("factory source missing")?;
+        let target = asset["target"].as_str().ok_or("factory target missing")?;
+        let payload = factory_payload(id, fs::read(root.join(source)).map_err(|e| e.to_string())?)?;
+        let current =
+            crate::managed_paths::read_metadata(&safe_join(root, target)?, 16 * 1024 * 1024)?;
+        let rendered = bridgeforge_skeleton::content::render(
+            id,
+            &payload,
+            current.as_deref(),
+            asset,
+            root,
+            false,
+        )?;
+        outputs.insert(
+            target.into(),
+            if id == "codex.hooks-config" {
+                bridgeforge_skeleton::project_hooks::migrate_legacy_registration(root, &rendered)?
+            } else {
+                rendered
+            },
+        );
+    }
+    Ok(outputs)
+}
+
+pub(crate) fn render_targets(root: &Path) -> Result<Vec<(PathBuf, Vec<u8>)>, String> {
     let contract = render_managed_contract(root)?;
     let distribution = render_distribution_manifest(root)?;
     let mut targets = vec![
@@ -429,7 +551,10 @@ fn render_targets(root: &Path) -> Result<Vec<(PathBuf, Vec<u8>)>, String> {
             root.join("templates/managed-skeleton.json"),
             contract.clone(),
         ),
-        (root.join(".codex/managed-skeleton.json"), contract),
+        (
+            root.join(".codex/managed-skeleton.json"),
+            render_factory_contract(root, &BTreeMap::new())?,
+        ),
         (root.join("bridgeforge-codex-manifest.json"), distribution),
         (
             root.join(crate::user_agents::MANIFEST),
@@ -437,6 +562,11 @@ fn render_targets(root: &Path) -> Result<Vec<(PathBuf, Vec<u8>)>, String> {
         ),
     ];
     if crate::source_projection::available(root) {
+        targets.extend(
+            factory_entrypoints(root)?
+                .into_iter()
+                .map(|(p, b)| (root.join(p), b)),
+        );
         targets.extend(
             crate::dogfood::render(root)?
                 .into_iter()
@@ -523,6 +653,23 @@ pub fn rebuild(root: &Path, check: bool) -> Result<bool, String> {
         .iter()
         .any(|(path, payload)| before[path].as_deref() != payload.as_deref());
     if changed && !check {
+        let switches_runtime = targets.iter().any(|(path, payload)| {
+            [".codex/hooks.json", ".githooks/pre-commit"]
+                .iter()
+                .any(|p| path == &root.join(p))
+                && before[path].as_deref() != payload.as_deref()
+        });
+        if switches_runtime && crate::source_projection::available(root) {
+            let candidate: Value = serde_json::from_slice(&render_managed_contract(root)?)
+                .map_err(|e| e.to_string())?;
+            let runtime = runtime_contract(root, &candidate)?;
+            for asset in runtime["generated_assets"]
+                .as_array()
+                .ok_or("runtime assets missing")?
+            {
+                crate::build_receipt::verify_generated(root, asset).map_err(|_| "runtime entrypoint changes require transactional build-assets --factory preparation".to_string())?;
+            }
+        }
         install_targets(&targets, &before, &|index| {
             if (index == 0 || index == targets.len()) && projection_targets(root)? != targets {
                 return Err("manifest inputs changed during generation".into());
@@ -614,7 +761,11 @@ pub fn development_projection(
     outputs.extend(crate::dogfood::render(root)?);
     let contract = render_managed_contract_with_overlay(root, native)?;
     outputs.insert("templates/managed-skeleton.json".into(), contract.clone());
-    outputs.insert(".codex/managed-skeleton.json".into(), contract);
+    outputs.insert(
+        ".codex/managed-skeleton.json".into(),
+        render_factory_contract(root, native)?,
+    );
+    outputs.extend(factory_entrypoints(root)?);
     outputs.insert(
         "bridgeforge-codex-manifest.json".into(),
         render_distribution_manifest(root)?,

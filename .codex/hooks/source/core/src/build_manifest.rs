@@ -52,6 +52,9 @@ pub fn generated_sources(source_root: &Path) -> Result<Vec<String>, String> {
         .filter_entry(|entry| {
             entry.depth() != 1
                 || (entry.file_name() != "target"
+                    && ![".runtime", ".deps", ".build"]
+                        .iter()
+                        .any(|p| entry.file_name() == *p)
                     && !entry.file_name().to_string_lossy().starts_with("project_"))
         })
     {

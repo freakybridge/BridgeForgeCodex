@@ -106,7 +106,7 @@ struct Fixture {
 impl Fixture {
     fn new() -> Self {
         let guard = ENV_LOCK.lock().unwrap();
-        let root = std::env::temp_dir().join(format!(
+        let root = test_artifacts::root(env!("CARGO_MANIFEST_DIR"), "hook").join(format!(
             "bf-hook-lifecycle-{}-{}",
             std::process::id(),
             SystemTime::now()
@@ -650,8 +650,12 @@ fn asynchronous_test_receipt_never_infers_success() {
         let payload = json!({"tool_name":"shell_command","tool_input":{"command":"cargo test"},"tool_response":response});
         assert_eq!(post::test_receipt(&payload).code, 0);
     }
-    let text =
-        fs::read_to_string(fixture.root.join(".runtime/test_receipts/receipts.jsonl")).unwrap();
+    let text = fs::read_to_string(
+        fixture
+            .root
+            .join(".runtime/tests/test-receipts/receipts.jsonl"),
+    )
+    .unwrap();
     for line in text.lines() {
         let receipt: Value = serde_json::from_str(line).unwrap();
         assert!(receipt["exit_code"].is_null());
@@ -696,7 +700,7 @@ fn precommit_encoding_checks_index_not_worktree() {
 fn post_tool_receipt_preserves_exit_and_reports_directory_open_and_sample_failures() {
     for failure in ["none", "directory", "open", "sample"] {
         let fixture = Fixture::new();
-        let directory = fixture.root.join(".runtime/test_receipts");
+        let directory = fixture.root.join(".runtime/tests/test-receipts");
         if failure == "directory" {
             fs::write(fixture.root.join(".runtime"), b"blocked").unwrap();
         } else {
@@ -883,3 +887,7 @@ fn artifact_layout_edit_warnings_keep_completed_action_and_cover_patch_targets()
     assert_eq!(fs::read(&nested).unwrap(), b"fn probe() {}\n");
     assert!(!fixture.root.join(".codex/artifact-layout.json").exists());
 }
+
+#[allow(dead_code)]
+#[path = "../support/artifact_paths.rs"]
+mod test_artifacts;

@@ -19,7 +19,7 @@ argument: 主题关键词（中英混合，例 "auth oauth" / "数据库 schema"
 
 ### 0. 选择索引路径
 
-明确只读、审计或预览时，跳过刷新，禁止写入 Map 或清除脏标记。其他场景使用 `.codex/bin/bridgeforge-hook.exe project-map ensure-current`（非 Windows 去掉 `.exe`），成功无输出。
+明确只读、审计或预览时，跳过刷新，禁止写入 Map 或清除脏标记。其他场景使用 `.deps/bridgeforge/bin/bridgeforge-hook.exe project-map ensure-current`（非 Windows 去掉 `.exe`），成功无输出。
 
 入口缺失或失败时直接搜索文档，不要求用户维护 Map；只有搜索也受阻才报告卡点。
 

@@ -20,7 +20,7 @@ Rust 扫描器统一判定候选，结构检查、CLI 与启动提醒共用入�
 1. 主对话直接运行当前 agent 的确定性扫描脚本；此 fast path 禁止为执行脚本启动子 agent：
 
    ```bash
-   .codex/bin/bridgeforge archive-scan --json
+   .deps/bridgeforge/bin/bridgeforge archive-scan --json
    ```
 
 2. 解析 JSON 的 `schema / count / candidates`；候选字段为 `source / target / kind / topic / path / lifecycle / evidence / reasons`。不猜 score、时间或未返回字段；区分正式收口和 legacy evidence。

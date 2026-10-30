@@ -125,7 +125,10 @@ fn collect(
             .file_name()
             .into_string()
             .map_err(|_| "projection name is not UTF-8")?;
-        if matches!(name.as_str(), "target" | ".git" | ".runtime") {
+        if matches!(
+            name.as_str(),
+            "target" | ".git" | ".runtime" | ".deps" | ".build"
+        ) {
             continue;
         }
         let child = format!("{relative}/{name}");

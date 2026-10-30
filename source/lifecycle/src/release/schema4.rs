@@ -15,6 +15,7 @@ pub use development_inputs::BuildDirectoryGuard;
 mod lineage;
 mod migration;
 mod plan;
+pub(super) mod withdrawal;
 pub(super) use configuration::{Baseline, Config, load, parse};
 use inputs::{Capture, capture};
 pub use migration::{Prepared as ReleaseUpgrade, prepare_project_upgrade};

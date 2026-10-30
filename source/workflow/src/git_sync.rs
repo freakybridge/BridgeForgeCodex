@@ -77,6 +77,15 @@ fn release_guard_path(root: &Path) -> Result<PathBuf, String> {
     )
 }
 
+pub(crate) fn require_no_cleanup_commit_guard(root: &Path) -> Result<(), String> {
+    if crate::managed_paths::read_metadata(&release_guard_path(root)?, 1024 * 1024)?.is_some() {
+        return Err(
+            "unfinished release commit guard; resolve Git synchronization before cleanup".into(),
+        );
+    }
+    Ok(())
+}
+
 fn check_release_commit_guard(git: &Git<'_>) -> Result<(), String> {
     let file = release_guard_path(git.root)?;
     let bytes = match fs::read(&file) {
@@ -195,7 +204,6 @@ impl<'a> Git<'a> {
                 .map_err(|_| format!("invalid behind count: {}", parts[1]))?,
         ))
     }
-
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -301,7 +309,10 @@ pub struct RuntimeLock {
     _guard: crate::file_lock::FileLock,
 }
 
-pub fn lock_factory_runtime(root: &Path, runner: &dyn ProcessRunner) -> Result<RuntimeLock, String> {
+pub fn lock_factory_runtime(
+    root: &Path,
+    runner: &dyn ProcessRunner,
+) -> Result<RuntimeLock, String> {
     RuntimeLock::acquire(&Git { root, runner })
 }
 
@@ -315,11 +326,8 @@ impl RuntimeLock {
             return Err("Git common directory is not an absolute path".into());
         }
         let path = PathBuf::from(raw).join("bridgeforge-git-sync.lock");
-        let guard = crate::file_lock::FileLock::acquire(&path).map_err(|error| {
-            format!(
-                "runtime maintenance lock is unavailable: {error}"
-            )
-        })?;
+        let guard = crate::file_lock::FileLock::acquire(&path)
+            .map_err(|error| format!("runtime maintenance lock is unavailable: {error}"))?;
         Ok(Self { _guard: guard })
     }
 }
@@ -428,11 +436,20 @@ pub fn sync(root: &Path, runner: &dyn ProcessRunner, options: GitSyncOptions) ->
 /// Mutating remote integration only: no version writes, commit, push or tool preparation.
 /// The agent obtains final release inputs after this step, then uses the ordinary
 /// read-only preview and explicit release with --skip-fetch.
-pub fn sync_remote(root: &Path, runner: &dyn ProcessRunner, options: GitSyncOptions) -> CommandOutcome {
+pub fn sync_remote(
+    root: &Path,
+    runner: &dyn ProcessRunner,
+    options: GitSyncOptions,
+) -> CommandOutcome {
     sync_mode(root, runner, options, true)
 }
 
-fn sync_mode(root: &Path, runner: &dyn ProcessRunner, options: GitSyncOptions, remote_only: bool) -> CommandOutcome {
+fn sync_mode(
+    root: &Path,
+    runner: &dyn ProcessRunner,
+    options: GitSyncOptions,
+    remote_only: bool,
+) -> CommandOutcome {
     let started = Instant::now();
     let timings = timing::Timings::new();
     let observed = timing::Observed {
@@ -706,10 +723,7 @@ fn sync_impl(
         }
         if factory {
             if let Err(error) = git.required(
-                &[
-                    "check-ignore",
-                    ".runtime/bridgeforge-codex/git-sync-images/probe",
-                ],
+                &["check-ignore", ".build/bridgeforge/git-sync-images/probe"],
                 Duration::from_secs(30),
             ) {
                 return blocked(format!(
@@ -1060,7 +1074,11 @@ fn sync_impl(
     final_receipt["package_events"] = json!(package_events);
     final_receipt["lifecycle_events"] = json!(lifecycle_events);
     final_receipt["release_plan_reused"] = json!(release_plan_reused);
-    final_receipt["release_planning"] = json!(if options.release { "once-after-remote" } else { "not-required" });
+    final_receipt["release_planning"] = json!(if options.release {
+        "once-after-remote"
+    } else {
+        "not-required"
+    });
     if let Some(details) = release_details {
         final_receipt["release_details"] = details;
     }

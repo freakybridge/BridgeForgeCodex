@@ -9,7 +9,11 @@ use std::{
 struct Fixture(PathBuf);
 impl Drop for Fixture {
     fn drop(&mut self) {
-        if let (Ok(path), Ok(temp)) = (self.0.canonicalize(), std::env::temp_dir().canonicalize()) {
+        if let (Ok(path), Ok(temp)) = (
+            self.0.canonicalize(),
+            test_artifacts::root(env!("CARGO_MANIFEST_DIR"), "git-sync-polyglot-runtime")
+                .canonicalize(),
+        ) {
             if path.parent() == Some(temp.as_path())
                 && path
                     .file_name()
@@ -54,18 +58,22 @@ fn real_cli_python_lock_preview_release_rollback_and_repeat() {
         .nth(2)
         .unwrap();
     let cli = source.join(if cfg!(windows) {
-        ".codex/bin/bridgeforge.exe"
+        ".build/bridgeforge/bin/bridgeforge.exe"
     } else {
-        ".codex/bin/bridgeforge"
+        ".build/bridgeforge/bin/bridgeforge"
     });
-    let fixture = Fixture(std::env::temp_dir().join(format!(
-            "bf-polyglot-cli-{}-{}",
-            std::process::id(),
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        )));
+    let fixture = Fixture(
+        test_artifacts::root(env!("CARGO_MANIFEST_DIR"), "git-sync-polyglot-runtime").join(
+            format!(
+                "bf-polyglot-cli-{}-{}",
+                std::process::id(),
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ),
+        ),
+    );
     let root = fixture.0.join("project");
     fs::create_dir_all(&root).unwrap();
     write(&root, "VERSION", b"1.0.0\n");
@@ -243,18 +251,22 @@ fn real_cli_release_preview_after_project_sync_source_relocation() {
         .nth(2)
         .unwrap();
     let cli = source.join(if cfg!(windows) {
-        ".codex/bin/bridgeforge.exe"
+        ".build/bridgeforge/bin/bridgeforge.exe"
     } else {
-        ".codex/bin/bridgeforge"
+        ".build/bridgeforge/bin/bridgeforge"
     });
-    let fixture = Fixture(std::env::temp_dir().join(format!(
-            "bf-polyglot-cli-relocation-{}-{}",
-            std::process::id(),
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        )));
+    let fixture = Fixture(
+        test_artifacts::root(env!("CARGO_MANIFEST_DIR"), "git-sync-polyglot-runtime").join(
+            format!(
+                "bf-polyglot-cli-relocation-{}-{}",
+                std::process::id(),
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ),
+        ),
+    );
     let root = fixture.0.join("project");
     let factory = fixture.0.join("factory");
     let payload = b"pub fn managed() {}\n";
@@ -372,3 +384,7 @@ fn real_cli_release_preview_after_project_sync_source_relocation() {
     // No actual release, push, remote, or real downstream is needed here.
     assert_eq!(git(&root, &["remote"]), "");
 }
+
+#[allow(dead_code)]
+#[path = "../support/artifact_paths.rs"]
+mod test_artifacts;

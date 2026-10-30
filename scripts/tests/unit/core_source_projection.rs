@@ -10,7 +10,7 @@ impl Drop for Fixture {
 }
 
 fn fixture() -> Fixture {
-    let path = std::env::temp_dir().join(format!(
+    let path = test_artifacts::root(env!("CARGO_MANIFEST_DIR"), "source-projection").join(format!(
         "bf-projection-{}-{}",
         std::process::id(),
         SystemTime::now()
@@ -172,8 +172,7 @@ fn actual_public_projection_builds_locked_without_factory_or_factory_test_source
         "--offline".into(),
         "--workspace".into(),
         "--target-dir".into(),
-        root.join(".runtime/source-workspace-refactor/cargo")
-            .into_os_string(),
+        root.join(".build/bridgeforge/test-target").into_os_string(),
     ];
     request.timeout = std::time::Duration::from_secs(300);
     let result = crate::ProcessRunner::run(&crate::SystemProcessRunner, &request).unwrap();
@@ -192,3 +191,7 @@ fn actual_public_projection_builds_locked_without_factory_or_factory_test_source
         before["Cargo.lock"]
     );
 }
+
+#[allow(dead_code)]
+#[path = "../support/artifact_paths.rs"]
+mod test_artifacts;

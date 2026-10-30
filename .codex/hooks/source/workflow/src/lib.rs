@@ -11,6 +11,7 @@ pub use bridgeforge_core::{
 };
 pub use bridgeforge_lifecycle::release;
 pub use bridgeforge_skeleton::{baseline, project_hooks};
+pub mod artifact_cleanup;
 pub mod git_command;
 pub mod git_sync;
 pub mod project_hook_migration;

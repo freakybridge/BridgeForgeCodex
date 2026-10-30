@@ -430,6 +430,19 @@ pub fn render(
                 )?
             }
             ("region", None) => source_payload.to_vec(),
+            ("merge", Some(payload)) if asset["merge_policy"] == "artifact-roots" => {
+                if bridgeforge_core::artifact_paths::ignore_problems(Some(payload))?.is_empty() {
+                    payload.to_vec()
+                } else {
+                    let mut text = String::from_utf8(payload.to_vec())
+                        .map_err(|_| ".gitignore is not UTF-8")?;
+                    if !text.is_empty() && !text.ends_with('\n') {
+                        text.push('\n');
+                    }
+                    text.push_str(bridgeforge_core::artifact_paths::IGNORE_RULES);
+                    text.into_bytes()
+                }
+            }
             ("merge", Some(payload)) if asset["merge_policy"] == "git-attributes-default-lf" => {
                 let text = String::from_utf8(payload.to_vec())
                     .map_err(|_| ".gitattributes is not UTF-8")?;

@@ -27,9 +27,9 @@ fn high_cost_stop_emits_ui_warning_without_continuation() {
         .map(PathBuf::from)
         .unwrap_or_else(|| {
             repository().join(if cfg!(windows) {
-                ".codex/bin/bridgeforge-hook.exe"
+                ".build/bridgeforge/bin/bridgeforge-hook.exe"
             } else {
-                ".codex/bin/bridgeforge-hook"
+                ".build/bridgeforge/bin/bridgeforge-hook"
             })
         });
     for round in 1..=31 {
@@ -100,10 +100,9 @@ impl Fixture {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let directory = std::env::temp_dir().join(format!(
-            "bridgeforge-guard-matrix-{}-{token}",
-            std::process::id()
-        ));
+        let directory = test_artifacts::root(env!("CARGO_MANIFEST_DIR"), "hook-guards").join(
+            format!("bridgeforge-guard-matrix-{}-{token}", std::process::id()),
+        );
         let root = directory.join("project");
         let home = root.join("fake-home");
         fs::create_dir_all(home.join(".codex")).unwrap();
@@ -120,9 +119,9 @@ impl Fixture {
             .map(PathBuf::from)
             .unwrap_or_else(|| {
                 repository().join(if cfg!(windows) {
-                    ".codex/bin/bridgeforge-hook.exe"
+                    ".build/bridgeforge/bin/bridgeforge-hook.exe"
                 } else {
-                    ".codex/bin/bridgeforge-hook"
+                    ".build/bridgeforge/bin/bridgeforge-hook"
                 })
             });
         assert!(
@@ -133,6 +132,21 @@ impl Fixture {
         let mut request = ProcessRequest::new(binary, &self.root);
         request.args = vec![event.into()];
         request.timeout = Duration::from_secs(10);
+        // Fixtures now live inside the repository's ignored runtime tree.
+        // A non-repository fixture must not discover the real parent checkout.
+        request.env.insert(
+            "GIT_CEILING_DIRECTORIES".into(),
+            self.directory.clone().into_os_string(),
+        );
+        request.env_remove.extend(
+            [
+                "GIT_DIR",
+                "GIT_WORK_TREE",
+                "GIT_COMMON_DIR",
+                "GIT_INDEX_FILE",
+            ]
+            .map(Into::into),
+        );
         request.env.insert(
             "BRIDGEFORGE_HOOK_ROOT".into(),
             self.root.clone().into_os_string(),
@@ -477,3 +491,7 @@ fn hook_topic4_native_patch_reports_smell_once_and_map_failure_without_rollback(
         "except Exception:\n    pass\n"
     );
 }
+
+#[allow(dead_code)]
+#[path = "../support/artifact_paths.rs"]
+mod test_artifacts;

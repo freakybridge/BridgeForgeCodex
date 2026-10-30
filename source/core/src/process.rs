@@ -56,6 +56,7 @@ pub trait ProcessRunner {
     /// A verified cache load, after byte, receipt, self-test and environment checks.
     fn cache_hit(&self) {}
     fn cache_miss(&self, _reason: &'static str) {}
+    fn build_group_finished(&self, _group: &'static str, _elapsed_ms: u128) {}
     /// Runners must explicitly support compiler probes and executing cached bytes.
     fn artifact_cache_enabled(&self) -> bool {
         false

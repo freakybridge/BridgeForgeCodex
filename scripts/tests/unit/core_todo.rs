@@ -5,7 +5,7 @@ static ID: AtomicU64 = AtomicU64::new(0);
 struct Fixture(PathBuf);
 impl Fixture {
     fn new() -> Self {
-        let root = std::env::temp_dir().join(format!(
+        let root = test_artifacts::root(env!("CARGO_MANIFEST_DIR"), "todo").join(format!(
             "bf-todo-{}-{}",
             std::process::id(),
             ID.fetch_add(1, Ordering::SeqCst)
@@ -211,3 +211,7 @@ fn acceptance_and_cancellation_reject_other_id_prefixes() {
         );
     }
 }
+
+#[allow(dead_code)]
+#[path = "../support/artifact_paths.rs"]
+mod test_artifacts;

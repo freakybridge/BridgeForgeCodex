@@ -38,12 +38,9 @@ pub(crate) fn render(root: &Path) -> Result<BTreeMap<String, Vec<u8>>, String> {
                 .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b"._-".contains(&b))
             || !ids.insert(asset.id)
             || !targets.insert(asset.target.to_ascii_lowercase())
-            || asset
-                .source
-                .strip_prefix("templates/skills/git-sync/")
-                .is_none()
-            || asset.target.strip_prefix(".codex/skills/git-sync/")
-                != asset.source.strip_prefix("templates/skills/git-sync/")
+            || asset.source.strip_prefix("templates/skills/").is_none()
+            || asset.target.strip_prefix(".codex/skills/")
+                != asset.source.strip_prefix("templates/skills/")
         {
             return Err("unsafe or duplicated factory mirror asset".into());
         }

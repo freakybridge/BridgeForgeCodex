@@ -1,6 +1,7 @@
 //! Project-owned layout policy. Checks never move files or mutate the index.
 use crate::project_structure::{Finding, StructureReport};
 use crate::{ProcessRequest, ProcessRunner, SystemProcessRunner};
+use bridgeforge_core::artifact_paths::{self, Kind};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -29,6 +30,28 @@ pub struct Config {
     pub forbidden_source_components: Vec<String>,
     #[serde(default)]
     pub cargo_registration: CargoRegistration,
+    /// Exact output paths or directory roots, never ownership globs.
+    #[serde(default)]
+    pub outputs: Vec<OutputPath>,
+}
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct OutputPath {
+    pub path: String,
+    pub kind: Kind,
+    #[serde(default)]
+    pub directory: bool,
+    /// Cleanup consumes these explicit roles; an absent role grants no deletion.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cleanup: Option<CleanupRole>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CleanupRole {
+    Keep,
+    Cache,
+    History,
 }
 impl Default for Config {
     fn default() -> Self {
@@ -40,6 +63,7 @@ impl Default for Config {
             python_artifacts: PythonArtifacts::default(),
             forbidden_source_components: Vec::new(),
             cargo_registration: CargoRegistration::default(),
+            outputs: Vec::new(),
         }
     }
 }
@@ -133,6 +157,32 @@ pub fn parse(bytes: &[u8]) -> Result<Config, String> {
     for path in paths {
         safe_relative(path)?;
     }
+    for path in &cfg.python_artifacts.allowed_roots {
+        if !within(path, artifact_paths::RUNTIME) {
+            return Err("Python artifact roots must remain under .runtime/; legacy exemptions require migration".into());
+        }
+    }
+    let mut outputs = BTreeSet::new();
+    for output in &cfg.outputs {
+        safe_relative(&output.path)?;
+        if !output.kind.accepts(&output.path, output.directory) {
+            return Err(format!(
+                "declared {:?} output must respect {}: {}",
+                output.kind,
+                output.kind.root(),
+                output.path
+            ));
+        }
+        if output.cleanup.is_some()
+            && (output.kind != Kind::Build
+                || key(&output.path).trim_end_matches('/') == artifact_paths::BUILD)
+        {
+            return Err("cleanup output roles require exact paths below .build; the entire root cannot be selected".into());
+        }
+        if !outputs.insert(key(&output.path)) {
+            return Err(format!("duplicate output path: {}", output.path));
+        }
+    }
     if !within(&cfg.tests_root, "scripts/tests") || !within(&cfg.tools_root, "scripts") {
         return Err(
             "project test/tool roots must respect scripts/tests and scripts public boundaries"
@@ -191,6 +241,74 @@ fn process_artifact(path: &str) -> bool {
         || name.ends_with(".pyc")
         || name.ends_with(".pyo")
 }
+fn known_kind(path: &str, is_dir: bool) -> Option<Kind> {
+    let path = key(path);
+    let parts: Vec<_> = path.split('/').collect();
+    let name = parts.last().copied().unwrap_or("");
+    let dirs = if is_dir {
+        parts.as_slice()
+    } else {
+        &parts[..parts.len().saturating_sub(1)]
+    };
+    if dirs
+        .iter()
+        .any(|p| [".venv", "venv", "node_modules"].contains(p))
+    {
+        return Some(Kind::Dependency);
+    }
+    if dirs.iter().any(|p| ["target", "dist"].contains(p)) {
+        return Some(Kind::Build);
+    }
+    if parts.contains(&"htmlcov")
+        || name == "coverage.xml"
+        || name == ".coverage"
+        || name.starts_with(".coverage.")
+        || parts.contains(&".pytest_cache")
+    {
+        return Some(Kind::Test);
+    }
+    if process_artifact(&path) {
+        return Some(Kind::Runtime);
+    }
+    // Only named managed tools/receipts, not arbitrary business executables.
+    if !is_dir
+        && !within(&path, artifact_paths::DOWNLOAD)
+        && ([
+            "bridgeforge.exe",
+            "bridgeforge-hook.exe",
+            "bridgeforge-factory.exe",
+        ]
+        .contains(&name)
+            || (parts.iter().any(|p| *p == "bin")
+                && ["bridgeforge", "bridgeforge-hook", "bridgeforge-factory"].contains(&name))
+            || [
+                "build-receipt-cli.json",
+                "build-receipt-hook.json",
+                "build-receipt-factory.json",
+            ]
+            .contains(&name))
+    {
+        return Some(if within(&path, artifact_paths::DEPS) {
+            Kind::Dependency
+        } else {
+            Kind::Build
+        });
+    }
+    None
+}
+
+/// A root directory exclusion protects every descendant: Git cannot re-include
+/// children without first re-including the parent. Inspect root semantics only;
+/// ignored nested .gitignore files therefore cannot weaken these exclusions.
+fn ignore_findings(bytes: Option<&[u8]>) -> Result<Vec<Finding>, String> {
+    artifact_paths::ignore_problems(bytes).map(|items| {
+        items
+            .into_iter()
+            .map(|message| finding("artifact-ignore-required", ".gitignore", message))
+            .collect()
+    })
+}
+
 fn managed_paths(bytes: Option<&[u8]>) -> Result<BTreeSet<String>, String> {
     let Some(bytes) = bytes else {
         return Ok(BTreeSet::new());
@@ -231,21 +349,37 @@ pub fn path_findings(
         }
     };
     let mut errors = vec![];
-    if cfg.python_artifacts.enabled
-        && process_artifact(&path)
-        && !cfg
-            .python_artifacts
-            .allowed_roots
+    if let Some(kind) = known_kind(&path, is_dir) {
+        // Bytecode caches can also occur inside an installed dependency or a
+        // generated build workspace. Those trees are never source inputs.
+        let contained = kind == Kind::Runtime
+            && [
+                artifact_paths::DEPS,
+                artifact_paths::BUILD,
+                artifact_paths::TESTS,
+            ]
             .iter()
-            .any(|r| within(&path, r))
+            .any(|r| within(&path, r));
+        if !contained && !kind.accepts(&path, is_dir) {
+            errors.push(finding(
+                if process_artifact(&path) {
+                    "misplaced-python-artifact"
+                } else {
+                    "misplaced-artifact"
+                },
+                &path,
+                format!("{kind:?} artifacts must stay under {}", kind.root()),
+            ));
+        }
+    }
+    if within(&path, artifact_paths::TESTS)
+        && path != artifact_paths::TESTS
+        && !Kind::Test.accepts(&path, is_dir)
     {
         errors.push(finding(
-            "misplaced-python-artifact",
+            "test-artifact-task-required",
             &path,
-            format!(
-                "Python/pytest/coverage artifacts must stay under {:?}",
-                cfg.python_artifacts.allowed_roots
-            ),
+            "test output requires .runtime/tests/<task>/",
         ));
     }
     let directories = if is_dir {
@@ -259,6 +393,7 @@ pub fn path_findings(
         && !within(&path, &cfg.tests_root)
         && !(is_dir && within(&cfg.tests_root, &path))
         && !managed_location
+        && !artifact_paths::local(&path)
     {
         errors.push(finding(
             "misplaced-test-directory",
@@ -324,57 +459,7 @@ struct Registration {
     target: String,
 }
 
-fn glob_regex(pattern: &str) -> Result<regex::Regex, String> {
-    let chars: Vec<_> = key(pattern).chars().collect();
-    let mut expression = String::from("^");
-    let mut index = 0;
-    while index < chars.len() {
-        match chars[index] {
-            '*' if chars.get(index + 1) == Some(&'*') => {
-                index += 1;
-                if chars.get(index + 1) == Some(&'/') {
-                    expression.push_str("(?:[^/]+/)*");
-                    index += 1;
-                } else {
-                    expression.push_str(".*");
-                }
-            }
-            '*' => expression.push_str("[^/]*"),
-            '?' => expression.push_str("[^/]"),
-            '[' => {
-                expression.push('[');
-                index += 1;
-                if chars.get(index) == Some(&'!') {
-                    expression.push('^');
-                    index += 1;
-                }
-                let start = index;
-                if chars.get(index) == Some(&']') {
-                    expression.push_str("\\]");
-                    index += 1;
-                }
-                while index < chars.len() && chars[index] != ']' {
-                    if chars[index] == '/' {
-                        return Err("Cargo glob class must not contain a separator".into());
-                    }
-                    if matches!(chars[index], '[' | '\\' | '^') {
-                        expression.push('\\');
-                    }
-                    expression.push(chars[index]);
-                    index += 1;
-                }
-                if index == start || chars.get(index) != Some(&']') {
-                    return Err("invalid Cargo member glob class".into());
-                }
-                expression.push(']');
-            }
-            value => expression.push_str(&regex::escape(&value.to_string())),
-        }
-        index += 1;
-    }
-    expression.push('$');
-    regex::Regex::new(&expression).map_err(|e| format!("invalid Cargo member glob: {e}"))
-}
+use bridgeforge_core::artifact_paths::glob_regex;
 
 fn expanded_registrations(
     path: &str,
@@ -519,6 +604,53 @@ pub fn worktree(root: &Path) -> StructureReport {
     let result = (|| -> Result<StructureReport, String> {
         let cfg = effective_config(safe_file(root, CONFIG)?.as_deref())?;
         let mut report = StructureReport::default();
+        for path in bridgeforge_core::artifact_migration::legacy_test_outputs(root)?.keys() {
+            report.errors.push(finding(
+                "misplaced-test-artifact",
+                &path
+                    .strip_prefix(root)
+                    .map_err(|e| e.to_string())?
+                    .to_string_lossy()
+                    .replace('\\', "/"),
+                "managed test receipts require .runtime/tests/<task>/; complete managed migration",
+            ));
+        }
+        report
+            .errors
+            .extend(ignore_findings(safe_file(root, ".gitignore")?.as_deref())?);
+        let tracked = if root.join(".git").exists() {
+            git(root, &SystemProcessRunner, &["ls-files", "-z"], vec![])?
+        } else {
+            vec![]
+        };
+        for path in std::str::from_utf8(&tracked)
+            .map_err(|e| e.to_string())?
+            .split('\0')
+            .filter(|p| !p.is_empty())
+        {
+            if artifact_paths::local(path) {
+                report.errors.push(finding("tracked-local-artifact", path, "local artifact roots must not contain tracked files; preserve local data when removing tracking"));
+            }
+        }
+        for output in &cfg.outputs {
+            // Bounded metadata access verifies ancestors before the derived
+            // tree is pruned; declared directories need a separate link check.
+            let target = root.join(&output.path);
+            for ancestor in target.ancestors().take_while(|p| *p != root) {
+                if ancestor.exists()
+                    && crate::persistence::is_link_or_reparse(ancestor)
+                        .map_err(|e| e.to_string())?
+                {
+                    return Err(format!("declared output traverses link: {}", output.path));
+                }
+            }
+            report.errors.extend(path_findings(
+                &output.path,
+                output.directory,
+                Some(&cfg),
+                &BTreeSet::new(),
+            ));
+        }
         let managed = managed_paths(safe_file(root, MANAGED)?.as_deref())?;
         let skipped = [".git", ".venv", "node_modules", "target"];
         let cfg = &cfg;
@@ -578,7 +710,7 @@ pub fn worktree(root: &Path) -> StructureReport {
             // Check the directory itself before pruning its contents.
             report.errors.extend(findings);
             if linked {
-                report.advisories.push(finding(
+                report.errors.push(finding(
                     "layout-excluded-link",
                     &path,
                     "link contents not inspected",
@@ -590,12 +722,10 @@ pub fn worktree(root: &Path) -> StructureReport {
             }
             if directory
                 && (skipped.contains(&entry.file_name().to_string_lossy().as_ref())
-                    || key(&path) == ".runtime"
-                    || cfg
-                        .python_artifacts
-                        .allowed_roots
-                        .iter()
-                        .any(|r| within(&path, r)))
+                    || [".deps", ".build"].contains(&key(&path).as_str())
+                    || (within(&path, ".runtime")
+                        && entry.depth() >= 2
+                        && key(&path) != artifact_paths::TESTS))
             {
                 report.advisories.push(finding(
                     "layout-excluded-tree",
@@ -777,6 +907,19 @@ fn staged_inner(root: &Path, runner: &dyn ProcessRunner) -> Result<StructureRepo
         .find(|(path, _)| key(path) == key(CONFIG))
         .map(|(_, entry)| entry);
     let mut wanted = BTreeSet::new();
+    let ignore_affected = config_touched
+        || changed.iter().any(|p| key(p) == ".gitignore")
+        || current.keys().any(|p| artifact_paths::local(p));
+    let ignore_entry = index
+        .iter()
+        .find(|(p, _)| key(p) == ".gitignore")
+        .map(|(_, e)| e);
+    if ignore_affected && let Some(entry) = ignore_entry {
+        if !entry.mode.starts_with("100") {
+            return Err("project .gitignore must be a regular staged file".into());
+        }
+        wanted.insert(entry.oid.clone());
+    }
     if let Some(entry) = config_entry {
         if !entry.mode.starts_with("100") {
             return Err("layout config must be a regular staged file".into());
@@ -801,8 +944,13 @@ fn staged_inner(root: &Path, runner: &dyn ProcessRunner) -> Result<StructureRepo
     };
     let config_changed = previous_cfg.as_ref() != Some(&cfg);
     let mut report = StructureReport::default();
+    if ignore_affected {
+        report.errors.extend(ignore_findings(
+            ignore_entry.map(|e| initial[&e.oid].as_slice()),
+        )?);
+    }
     let mut selected = current.keys().cloned().collect::<BTreeSet<_>>();
-    if config_changed {
+    if config_changed || changed.iter().any(|p| key(p) == ".gitignore") {
         selected.extend(index.keys().cloned());
     }
     let managed_entry = index
@@ -885,6 +1033,13 @@ fn staged_inner(root: &Path, runner: &dyn ProcessRunner) -> Result<StructureRepo
             continue;
         }
         let mut findings = path_findings(path, false, Some(&cfg), &managed);
+        if artifact_paths::local(path) {
+            findings.push(finding(
+                "tracked-local-artifact",
+                path,
+                "local artifacts must not be tracked; preserve local files when removing tracking",
+            ));
+        }
         if !current.contains_key(path)
             && let Some(previous_cfg) = &previous_cfg
         {
@@ -937,6 +1092,11 @@ pub fn edited(root: &Path, path: &str) -> StructureReport {
         let cfg = effective_config(safe_file(root, CONFIG)?.as_deref())?;
         let managed = managed_paths(safe_file(root, MANAGED)?.as_deref())?;
         let mut report = StructureReport::default();
+        if key(&path) == ".gitignore" || key(&path) == key(CONFIG) || artifact_paths::local(&path) {
+            report
+                .advisories
+                .extend(ignore_findings(safe_file(root, ".gitignore")?.as_deref())?);
+        }
         report
             .advisories
             .extend(path_findings(&path, false, Some(&cfg), &managed));

@@ -1,8 +1,8 @@
+use bridgeforge_core::{ProcessOutput, ProcessRequest, ProcessRunner};
 use bridgeforge_memory::remote::{reconcile, resolve_conflict_with_choices};
 use bridgeforge_memory::{
     MemoryRemoteClient, authorization_payload, remote_targets_managed_repository,
 };
-use bridgeforge_core::{ProcessOutput, ProcessRequest, ProcessRunner};
 use serde_json::json;
 use std::cell::Cell;
 use std::fs;
@@ -34,10 +34,9 @@ impl Temp {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let path = std::env::temp_dir().join(format!(
-            "bridgeforge-security-{}-{token}",
-            std::process::id()
-        ));
+        let path = test_artifacts::root(env!("CARGO_MANIFEST_DIR"), "security-guards").join(
+            format!("bridgeforge-security-{}-{token}", std::process::id()),
+        );
         fs::create_dir_all(&path).unwrap();
         Self(path)
     }
@@ -368,3 +367,7 @@ fn native_memory_rejects_includeif_rewrite_in_the_actual_fetch_repository() {
     assert!(actual_checked.get());
     assert_eq!(fs::read(memories.join("note.md")).unwrap(), b"unchanged");
 }
+
+#[allow(dead_code)]
+#[path = "../support/artifact_paths.rs"]
+mod test_artifacts;

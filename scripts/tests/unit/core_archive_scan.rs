@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn active_lifecycle_wins() {
-    let mut root = std::env::temp_dir();
+    let mut root = test_artifacts::root(env!("CARGO_MANIFEST_DIR"), "archive-scan");
     root.push(format!("bridgeforge-archive-{}", std::process::id()));
     let topic = root.join("doc/1_delivery/demo");
     fs::create_dir_all(&topic).unwrap();
@@ -14,7 +14,8 @@ fn active_lifecycle_wins() {
 
 #[test]
 fn formal_cards_drive_archive_not_historical_reports_and_todo_ownership_matters() {
-    let root = std::env::temp_dir().join(format!("bf-archive-formal-{}", std::process::id()));
+    let root = test_artifacts::root(env!("CARGO_MANIFEST_DIR"), "archive-scan")
+        .join(format!("bf-archive-formal-{}", std::process::id()));
     let topic = root.join("doc/1_delivery/demo");
     fs::create_dir_all(&topic).unwrap();
     fs::create_dir_all(root.join("doc/0_architecture")).unwrap();
@@ -51,7 +52,8 @@ fn formal_cards_drive_archive_not_historical_reports_and_todo_ownership_matters(
 
 #[test]
 fn milestone_bug_forms_and_legacy_evidence_have_one_policy() {
-    let root = std::env::temp_dir().join(format!("bf-archive-layout-{}", std::process::id()));
+    let root = test_artifacts::root(env!("CARGO_MANIFEST_DIR"), "archive-scan")
+        .join(format!("bf-archive-layout-{}", std::process::id()));
     let topic = root.join("doc/1_delivery/M1/demo");
     fs::create_dir_all(&topic).unwrap();
     fs::create_dir_all(root.join("doc/2_bugs/BUG-directory")).unwrap();
@@ -97,3 +99,7 @@ fn milestone_bug_forms_and_legacy_evidence_have_one_policy() {
     );
     let _ = fs::remove_dir_all(root);
 }
+
+#[allow(dead_code)]
+#[path = "../support/artifact_paths.rs"]
+mod test_artifacts;

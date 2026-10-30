@@ -32,7 +32,7 @@ pub(super) fn config() -> Value {
 }
 pub(super) fn repo_uninitialized() -> Repo {
     static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-    let dir = std::env::temp_dir().join(format!(
+    let dir = test_artifacts::root(env!("CARGO_MANIFEST_DIR"), "release-polyglot").join(format!(
         "bf-polyglot-{}-{}-{}",
         std::process::id(),
         NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
@@ -127,7 +127,7 @@ fn polyglot_python_direct_change_propagates_and_preview_is_read_only() {
 fn polyglot_python_remove_updates_surviving_dependency_and_emits_tombstone() {
     let repo = repo();
     let base = git(&repo.0, &["rev-parse", "HEAD"]);
-    let mut cfg = config();
+    let mut cfg: Value = serde_json::from_slice(&fs::read(repo.0.join(CONFIG)).unwrap()).unwrap();
     cfg["adapters"]["python"]["projects"] = json!(["b/pyproject.toml"]);
     cfg["adapters"]["python"]["local_sources"] = json!({});
     cfg["packages"] = json!([identity("b", "b/pyproject.toml")]);
@@ -173,7 +173,6 @@ fn polyglot_config_rejects_duplicate_ids_and_unknown_fields() {
 #[test]
 fn polyglot_explicit_target_cannot_bypass_a_business_impact_floor() {
     let r = repo();
-    super::super::schema4::fixture::migrate(&r.0, &SystemProcessRunner).unwrap();
     write(&r.0, "a/a.py", b"VALUE=3\n");
     let request = super::super::schema4::fixture::analysis(
         &r.0,
@@ -323,7 +322,7 @@ fn polyglot_committed_rename_chain_uses_observed_order_in_status_and_preview() {
     write(&r.0, "a/a.py", b"VALUE=42\n");
     git(&r.0, &["add", "."]);
     git(&r.0, &["commit", "-m", "feat: extend original package"]);
-    let mut cfg = config();
+    let mut cfg: Value = serde_json::from_slice(&fs::read(r.0.join(CONFIG)).unwrap()).unwrap();
     let old = identity("a", "a/pyproject.toml");
     let mut mid = identity("a", "middle/pyproject.toml");
     mid["name"] = json!("alpha");
@@ -369,3 +368,7 @@ fn polyglot_committed_rename_chain_uses_observed_order_in_status_and_preview() {
     );
     assert_eq!(p.lifecycle_events.len(), 2);
 }
+
+#[allow(dead_code)]
+#[path = "../support/artifact_paths.rs"]
+mod test_artifacts;

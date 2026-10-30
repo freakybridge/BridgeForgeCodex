@@ -9,15 +9,17 @@ struct Fixture(PathBuf);
 impl Fixture {
     fn new() -> Self {
         static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-        let p = std::env::temp_dir().join(format!(
-            "bf-public-cache-{}-{}-{}",
-            std::process::id(),
-            NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let p = test_artifacts::root(env!("CARGO_MANIFEST_DIR"), "public-artifact-cache").join(
+            format!(
+                "bf-public-cache-{}-{}-{}",
+                std::process::id(),
+                NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ),
+        );
         fs::create_dir_all(&p).unwrap();
         Self(p)
     }
@@ -290,3 +292,7 @@ fn project_plan_builds_are_reused_without_writing_project_targets() {
     );
     assert_eq!(r.builds.get(), 2);
 }
+
+#[allow(dead_code)]
+#[path = "../../support/artifact_paths.rs"]
+mod test_artifacts;

@@ -24,7 +24,7 @@ fn loaded_image_child() {
 
 #[test]
 fn generated_binary_can_replace_its_loaded_image_and_restore() {
-    let root = std::env::temp_dir().join(format!(
+    let root = test_artifacts::root(env!("CARGO_MANIFEST_DIR"), "runtime").join(format!(
         "bfc-image-{}-{}",
         std::process::id(),
         SystemTime::now()
@@ -108,7 +108,7 @@ fn loaded_peer_parent() {
     let path = std::env::current_exe().unwrap();
     let before = fs::read(&path).unwrap();
     let mut request = crate::ProcessRequest::new(
-        root.join(".codex/bin/bridgeforge-factory.exe")
+        root.join(".build/bridgeforge/bin/bridgeforge-factory.exe")
             .into_os_string(),
         &root,
     );
@@ -186,11 +186,7 @@ fn loaded_peer_child() {
             "unmanaged loaded peer must retain its original failure semantics"
         );
         assert_eq!(fs::read(&target).unwrap(), before);
-        assert!(
-            !root
-                .join(".runtime/bridgeforge-codex/git-sync-images")
-                .exists()
-        );
+        assert!(!root.join(".build/bridgeforge/git-sync-images").exists());
     }
     fs::write(root.join("peer-ready"), b"ready").unwrap();
     let deadline = Instant::now() + Duration::from_secs(20);
@@ -212,11 +208,11 @@ fn loaded_peer_child() {
 fn managed_factory_child_replaces_loaded_parent_and_rejects_unmanaged_peers() {
     use std::os::windows::process::CommandExt;
     for (relative, allowed) in [
-        (".codex/bin/bridgeforge.exe", true),
-        (".codex/bin/project_demo.exe", false),
+        (".build/bridgeforge/bin/bridgeforge.exe", true),
+        (".build/bridgeforge/bin/project_demo.exe", false),
         ("outside/bridgeforge.exe", false),
     ] {
-        let root = std::env::temp_dir().join(format!(
+        let root = test_artifacts::root(env!("CARGO_MANIFEST_DIR"), "runtime").join(format!(
             "bfc-peer-image-{}-{}",
             std::process::id(),
             SystemTime::now()
@@ -224,14 +220,16 @@ fn managed_factory_child_replaces_loaded_parent_and_rejects_unmanaged_peers() {
                 .unwrap()
                 .as_nanos()
         ));
-        fs::create_dir_all(root.join(".codex/bin")).unwrap();
+        fs::create_dir_all(root.join(".build/bridgeforge/bin")).unwrap();
+        fs::create_dir_all(root.join("templates")).unwrap();
+        fs::write(root.join("templates/managed-skeleton.json"), b"{}").unwrap();
         let parent = root.join(relative);
         fs::create_dir_all(parent.parent().unwrap()).unwrap();
         let before = fs::read(std::env::current_exe().unwrap()).unwrap();
         write_binary(&root, &parent, &before).unwrap();
         write_binary(
             &root,
-            &root.join(".codex/bin/bridgeforge-factory.exe"),
+            &root.join(".build/bridgeforge/bin/bridgeforge-factory.exe"),
             &before,
         )
         .unwrap();
@@ -290,3 +288,7 @@ fn managed_factory_child_replaces_loaded_parent_and_rejects_unmanaged_peers() {
         fs::remove_dir_all(root).unwrap();
     }
 }
+
+#[allow(dead_code)]
+#[path = "../support/artifact_paths.rs"]
+mod test_artifacts;

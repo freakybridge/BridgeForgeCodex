@@ -31,7 +31,7 @@ fn unfinished_development_transaction_blocks_sync_before_network() {
             ))
         }
     }
-    let root = std::env::temp_dir().join(format!(
+    let root = test_artifacts::root(env!("CARGO_MANIFEST_DIR"), "git-sync").join(format!(
         "bf-sync-unfinished-{}-{}",
         std::process::id(),
         SystemTime::now()
@@ -53,7 +53,11 @@ fn unfinished_development_transaction_blocks_sync_before_network() {
         "{}",
         result.stderr
     );
-    assert_eq!(runner.0.get(), 1, "only repository discovery runs before the unfinished-transaction guard");
+    assert_eq!(
+        runner.0.get(),
+        1,
+        "only repository discovery runs before the unfinished-transaction guard"
+    );
     assert_eq!(
         fs::read(root.join(".runtime/bridgeforge-codex/develop-transaction.json")).unwrap(),
         b"{}"
@@ -170,9 +174,20 @@ fn remote_context_rejects_invalid_cli_combinations_before_git_mutation() {
     let (repo, remote) = managed_repository("remote-context-flags");
     let index = fs::read(repo.0.join(".git/index")).unwrap();
     let head = git_output(&repo.0, &["rev-parse", "HEAD"]);
-    for flags in [vec!["--dry-run"], vec!["--check"], vec!["--release"],
-        vec!["--preflight"], vec!["--skip-fetch"], vec!["--release-analysis-file", ".runtime/analysis.json"]] {
-        let mut args = vec!["git-sync".to_string(), "--sync-remote".into(), "--root".into(), repo.0.to_string_lossy().into_owned()];
+    for flags in [
+        vec!["--dry-run"],
+        vec!["--check"],
+        vec!["--release"],
+        vec!["--preflight"],
+        vec!["--skip-fetch"],
+        vec!["--release-analysis-file", ".runtime/analysis.json"],
+    ] {
+        let mut args = vec![
+            "git-sync".to_string(),
+            "--sync-remote".into(),
+            "--root".into(),
+            repo.0.to_string_lossy().into_owned(),
+        ];
         args.extend(flags.into_iter().map(str::to_string));
         let result = crate::git_command::run(&args, &SystemProcessRunner);
         assert_ne!(result.code, 0, "{args:?}");
@@ -190,7 +205,10 @@ fn remote_context_divergence_and_restore_conflict_preserve_work() {
         git_ok(&repo.0, &["config", "core.autocrlf", "false"]);
         let peer = repo.0.join(".runtime/peer");
         fs::create_dir_all(peer.parent().unwrap()).unwrap();
-        git_ok(&repo.0, &["clone", remote.to_str().unwrap(), peer.to_str().unwrap()]);
+        git_ok(
+            &repo.0,
+            &["clone", remote.to_str().unwrap(), peer.to_str().unwrap()],
+        );
         git_ok(&peer, &["config", "user.name", "Peer"]);
         git_ok(&peer, &["config", "user.email", "peer@example.invalid"]);
         git_ok(&peer, &["config", "core.autocrlf", "false"]);
@@ -198,7 +216,9 @@ fn remote_context_divergence_and_restore_conflict_preserve_work() {
         git_ok(&peer, &["commit", "-am", "fix: remote line"]);
         git_ok(&peer, &["push"]);
         fs::write(repo.0.join("tracked.txt"), b"local line\n").unwrap();
-        if committed { git_ok(&repo.0, &["commit", "-am", "fix: local line"]); }
+        if committed {
+            git_ok(&repo.0, &["commit", "-am", "fix: local line"]);
+        }
         let head = git_output(&repo.0, &["rev-parse", "HEAD"]);
         let result = super::sync_remote(&repo.0, &SystemProcessRunner, GitSyncOptions::default());
         assert_ne!(result.code, 0);
@@ -207,11 +227,17 @@ fn remote_context_divergence_and_restore_conflict_preserve_work() {
         if committed {
             assert_eq!(receipt["status"], "diverged");
             assert_eq!(git_output(&repo.0, &["rev-parse", "HEAD"]), head);
-            assert_eq!(fs::read(repo.0.join("tracked.txt")).unwrap(), b"local line\n");
+            assert_eq!(
+                fs::read(repo.0.join("tracked.txt")).unwrap(),
+                b"local line\n"
+            );
         } else {
             assert_eq!(receipt["status"], "autostash-retained");
             assert_eq!(receipt["autostash_retained"], true);
-            assert_eq!(git_output(&repo.0, &["show", "stash@{0}:tracked.txt"]), "local line");
+            assert_eq!(
+                git_output(&repo.0, &["show", "stash@{0}:tracked.txt"]),
+                "local line"
+            );
             assert!(!git_output(&repo.0, &["diff", "--name-only", "--diff-filter=U"]).is_empty());
         }
         fs::remove_dir_all(remote).unwrap();
@@ -232,7 +258,10 @@ fn remote_context_preserves_dirty_files_and_never_commits_or_pushes() {
     assert_eq!(receipt["push_performed"], false);
     assert_eq!(receipt["commit_performed"], false);
     assert_eq!(receipt["version_bumped"], false);
-    assert_eq!(fs::read(repo.0.join("tracked.txt")).unwrap(), b"local work\n");
+    assert_eq!(
+        fs::read(repo.0.join("tracked.txt")).unwrap(),
+        b"local work\n"
+    );
     assert_eq!(fs::read(repo.0.join("VERSION")).unwrap(), b"1.0.0\n");
     assert!(!repo.0.join(".git/bridgeforge-git-sync.lock").exists());
     fs::remove_dir_all(remote).unwrap();
@@ -244,7 +273,10 @@ fn remote_context_fast_forwards_before_analysis_and_restores_local_work() {
     git_ok(&repo.0, &["config", "core.autocrlf", "false"]);
     let peer = repo.0.join(".runtime/peer");
     fs::create_dir_all(peer.parent().unwrap()).unwrap();
-    git_ok(&repo.0, &["clone", remote.to_str().unwrap(), peer.to_str().unwrap()]);
+    git_ok(
+        &repo.0,
+        &["clone", remote.to_str().unwrap(), peer.to_str().unwrap()],
+    );
     git_ok(&peer, &["config", "user.name", "Peer"]);
     git_ok(&peer, &["config", "user.email", "peer@example.invalid"]);
     git_ok(&peer, &["config", "core.autocrlf", "false"]);
@@ -261,9 +293,18 @@ fn remote_context_fast_forwards_before_analysis_and_restores_local_work() {
     assert_eq!(receipt["head"], target);
     assert_eq!(receipt["behind"], 0);
     assert_eq!(receipt["autostash_retained"], false);
-    assert_eq!(fs::read(repo.0.join("tracked.txt")).unwrap(), b"local work\n");
-    assert_eq!(fs::read(repo.0.join("untracked.txt")).unwrap(), b"new local work\n");
-    assert_eq!(fs::read(repo.0.join("remote.txt")).unwrap(), b"remote work\n");
+    assert_eq!(
+        fs::read(repo.0.join("tracked.txt")).unwrap(),
+        b"local work\n"
+    );
+    assert_eq!(
+        fs::read(repo.0.join("untracked.txt")).unwrap(),
+        b"new local work\n"
+    );
+    assert_eq!(
+        fs::read(repo.0.join("remote.txt")).unwrap(),
+        b"remote work\n"
+    );
     assert!(git_output(&repo.0, &["stash", "list"]).is_empty());
     fs::remove_dir_all(remote).unwrap();
 }
@@ -663,7 +704,10 @@ fn release_reuses_plan_only_when_fetch_preserves_all_planning_inputs() {
         );
         let profile = crate::release_metrics::finish();
         assert_eq!(profile["counters"]["release.plan.build"]["calls"], 1);
-        eprintln!("release pipeline mutate={mutate} elapsed_ms={} profile={profile}", started.elapsed().as_millis());
+        eprintln!(
+            "release pipeline mutate={mutate} elapsed_ms={} profile={profile}",
+            started.elapsed().as_millis()
+        );
         if mutate {
             assert_eq!(result.code, 2, "{}", result.stderr);
             assert!(result.stderr.contains("stale"), "{}", result.stderr);
@@ -1162,7 +1206,7 @@ fn repository_identity_batches_facts_without_caching_later_guards() {
 
 #[test]
 fn repository_identity_rejects_malformed_batch_instead_of_using_partial_facts() {
-    let root = std::env::temp_dir();
+    let root = test_artifacts::root(env!("CARGO_MANIFEST_DIR"), "git-sync");
     let directory = root.to_string_lossy();
     for body in [
         "".to_owned(),
@@ -1830,3 +1874,7 @@ fn phase_timing_success_preserves_commit_hook_and_remote_receipt() {
     );
     fs::remove_dir_all(remote).unwrap();
 }
+
+#[allow(dead_code)]
+#[path = "../support/artifact_paths.rs"]
+mod test_artifacts;

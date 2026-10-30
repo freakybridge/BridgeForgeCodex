@@ -60,9 +60,12 @@
             "bridgeforge-checks",
             "--lib",
             "--target-dir",
-            ".runtime/source-workspace-refactor/cargo",
+            ".build/bridgeforge/test-target",
             "--",
-            "--test-threads=1"
+            "--test-threads=1",
+            "--nocapture",
+            "--logfile",
+            "../../.runtime/tests/development/checks-unit-tests.log"
           ],
           "id": "checks-unit",
           "inputs": [
@@ -70,7 +73,8 @@
             "scripts/tests/unit/core_archive_scan.rs",
             "scripts/tests/unit/core_artifact_layout.rs",
             "scripts/tests/unit/core_audit_user_allow.rs",
-            "scripts/tests/unit/core_todo.rs"
+            "scripts/tests/unit/core_todo.rs",
+            "scripts/tests/support/artifact_paths.rs"
           ],
           "program": "cargo",
           "timeout_seconds": 3600
@@ -93,9 +97,12 @@
             "bridgeforge-core",
             "--lib",
             "--target-dir",
-            ".runtime/source-workspace-refactor/cargo",
+            ".build/bridgeforge/test-target",
             "--",
-            "--test-threads=1"
+            "--test-threads=1",
+            "--nocapture",
+            "--logfile",
+            "../../.runtime/tests/development/core-unit-tests.log"
           ],
           "id": "core-unit",
           "inputs": [
@@ -191,7 +198,14 @@
             "source/workflow/src/public_artifacts.rs",
             "source/workflow/src/source_retirement.rs",
             "templates/hooks/.gitignore",
-            "source/lifecycle/src/release/schema4/portable_environment.rs"
+            "source/lifecycle/src/release/schema4/portable_environment.rs",
+            "scripts/tests/support/artifact_paths.rs",
+            "scripts/tests/unit/core_artifact_cleanup.rs",
+            "scripts/tests/unit/core_artifact_migration.rs",
+            "scripts/tests/unit/core_build_inputs.rs",
+            "scripts/tests/unit/core_process_activity.rs",
+            "scripts/tests/unit/core_process_context.rs",
+            "source/workflow/src/artifact_cleanup.rs"
           ],
           "program": "cargo",
           "timeout_seconds": 3600
@@ -214,11 +228,11 @@
             "bridgeforge-factory",
             "--lib",
             "--target-dir",
-            ".runtime/source-workspace-refactor/cargo",
+            ".build/bridgeforge/test-target",
             "--",
             "--test-threads=1",
             "--logfile",
-            "../../.runtime/bridgeforge-codex/factory-unit-tests.log"
+            "../../.runtime/tests/development/factory-unit-tests.log"
           ],
           "id": "factory-unit",
           "inputs": [
@@ -334,7 +348,8 @@
             "user-agents-manifest.json",
             "VERSION",
             "scripts/tests/support/current_fixture.rs",
-            "scripts/tests/support/release_plan.rs"
+            "scripts/tests/support/release_plan.rs",
+            "scripts/tests/support/artifact_paths.rs"
           ],
           "program": "cargo",
           "timeout_seconds": 3600
@@ -357,12 +372,12 @@
             "bridgeforge-lifecycle",
             "--lib",
             "--target-dir",
-            ".runtime/source-workspace-refactor/cargo",
+            ".build/bridgeforge/test-target",
             "--",
             "--test-threads=1",
             "--nocapture",
             "--logfile",
-            "../../.runtime/bridgeforge-codex/lifecycle-unit-tests.log"
+            "../../.runtime/tests/development/lifecycle-unit-tests.log"
           ],
           "id": "lifecycle-unit",
           "inputs": [
@@ -384,7 +399,9 @@
             "scripts/tests/unit/core_release.rs",
             "scripts/tests/unit/core_task_check_selection.rs",
             "scripts/tests/support/current_fixture.rs",
-            "scripts/tests/support/release_plan.rs"
+            "scripts/tests/support/release_plan.rs",
+            "scripts/tests/support/artifact_paths.rs",
+            "scripts/tests/unit/core_release_withdrawal.rs"
           ],
           "program": "cargo",
           "timeout_seconds": 7200
@@ -407,9 +424,12 @@
             "bridgeforge-memory",
             "--lib",
             "--target-dir",
-            ".runtime/source-workspace-refactor/cargo",
+            ".build/bridgeforge/test-target",
             "--",
-            "--test-threads=1"
+            "--test-threads=1",
+            "--nocapture",
+            "--logfile",
+            "../../.runtime/tests/development/memory-unit-tests.log"
           ],
           "id": "memory-unit",
           "inputs": [
@@ -423,7 +443,8 @@
             "scripts/tests/unit/core_memory_remote.rs",
             "scripts/tests/unit/core_memory_user_config.rs",
             "scripts/tests/unit/core_memory_worker.rs",
-            "scripts/tests/unit/memory/persistence_contract.rs"
+            "scripts/tests/unit/memory/persistence_contract.rs",
+            "scripts/tests/support/artifact_paths.rs"
           ],
           "program": "cargo",
           "timeout_seconds": 3600
@@ -446,9 +467,12 @@
             "bridgeforge-skeleton",
             "--lib",
             "--target-dir",
-            ".runtime/source-workspace-refactor/cargo",
+            ".build/bridgeforge/test-target",
             "--",
-            "--test-threads=1"
+            "--test-threads=1",
+            "--nocapture",
+            "--logfile",
+            "../../.runtime/tests/development/skeleton-unit-tests.log"
           ],
           "id": "skeleton-unit",
           "inputs": [
@@ -461,7 +485,8 @@
             "templates/doc/README.md",
             "templates/hooks.json",
             "templates/managed-skeleton.json",
-            "templates/settings.json"
+            "templates/settings.json",
+            "scripts/tests/support/artifact_paths.rs"
           ],
           "program": "cargo",
           "timeout_seconds": 3600
@@ -484,9 +509,12 @@
             "bridgeforge-workflow",
             "--lib",
             "--target-dir",
-            ".runtime/source-workspace-refactor/cargo",
+            ".build/bridgeforge/test-target",
             "--",
-            "--test-threads=1"
+            "--test-threads=1",
+            "--nocapture",
+            "--logfile",
+            "../../.runtime/tests/development/workflow-unit-tests.log"
           ],
           "id": "workflow-unit",
           "inputs": [
@@ -501,7 +529,9 @@
             "templates/hooks.json",
             "templates/managed-skeleton.json",
             "scripts/tests/support/current_fixture.rs",
-            "scripts/tests/support/release_plan.rs"
+            "scripts/tests/support/release_plan.rs",
+            "scripts/tests/support/artifact_paths.rs",
+            "scripts/tests/unit/workflow_artifact_cleanup.rs"
           ],
           "program": "cargo",
           "timeout_seconds": 3600
@@ -605,5 +635,19 @@
   "release_model": "product-packages",
   "release_policy": "explicit_release",
   "schema_version": 4,
-  "strategy": "independent"
+  "strategy": "independent",
+  "release_withdrawals": [
+    {
+      "retained_documentation": [
+        "CHANGELOG.md",
+        "doc/0_architecture/TODO-INDEX.md",
+        "doc/1_delivery/legacy-seven-upgrade/requirements_2026-10-29_four-projects.md",
+        "doc/README.md"
+      ],
+      "rollback": "47bc1903fd91e26d60011417863d59ef87027941",
+      "restored_release": "31d1451ca5f32a6c4ed129e439e9fb5f9f210070",
+      "reason": "User explicitly approved verified withdrawal recognition and managed package development closure on 2026-10-30; no commit, push or release.",
+      "withdrawn_release": "35b5ad7ad1829ceae8805d78abdb759065c6b645"
+    }
+  ]
 }

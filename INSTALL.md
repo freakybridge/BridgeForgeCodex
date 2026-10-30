@@ -12,26 +12,28 @@ bridgeforge-codex 只支持 Windows、Rust/Cargo 1.88+ 和 Codex。Cargo 在安�
 
 ## 工厂本地运行时准备
 
-工厂源码可由 Git 更新，但 `.codex/bin` 是被忽略的本地产物。需要显式刷新工具或完成开发必要构建时执行下列入口；普通 `$git-sync` 和 `$git-sync release` 使用已安装工具，不将准备或独立 self-test 作为日常前置：
+工厂源码可由 Git 更新，但 `.build/bridgeforge/bin` 是被忽略的本地产物。需要显式刷新工具或完成开发必要构建时执行下列入口；普通 `$git-sync` 和 `$git-sync release` 使用已安装工具，不将准备或独立 self-test 作为日常前置：
 
 ```powershell
 cargo run --locked --release --manifest-path Cargo.toml --bin bridgeforge-factory -- build-assets --factory --project-root .
 ```
 
-该入口不依赖旧 `.codex/bin/bridgeforge.exe`，不提交或发布，不安装下游骨架。
-它先校验产品源、dogfood 和派生 manifest，再核对 CLI、Hook、工厂工具的源码、锁文件、配方、产物
+该入口不依赖已安装的 CLI，不提交或发布，不安装下游骨架。
+它先核验已安装基线，再从当前产品源生成候选 dogfood、manifest 和入口，并核对 CLI、Hook、工厂工具的源码、锁文件、配方、产物
 哈希、自检与收据；健康产物不改写，失效产物复用经验证的缓存或执行锁定构建。
-三种产物及收据共用安装回滚事务，维护锁仍协调构建与 develop；git-sync 不再持有该锁或支持同仓库并行同步。输入漂移、构建失败、
+候选投影、入口、三种产物及收据共用安装回滚事务。旧 `.codex/bin/` 文件仅在历史收据及实际字节可证明归属时退役；未知文件保留并阻断。维护锁仍协调构建与 develop；git-sync 不再持有该锁或支持同仓库并行同步。输入漂移、构建失败、
 文件占用或安装校验失败均停止；并发外部修改保留并报告，不覆盖其他进程的文件。
 
 Cargo 引导可能产生增量构建及缓存写入，只用于已授权维护。引导产物未建立完整输入
 身份时不冒充正式产物复用；首次准备可能仍需隔离构建，实际耗时以执行结果为准。
-源码和镜像/manifest 漂移时先完成开发同步，准备入口不会自动修复源文件。
+当前产品源可以生成新的候选投影；已有镜像被外部改坏或旧文件归属不明时阻断，不自动改写产品源。单独 `manifest` 不得在新工具尚未就绪时切换运行入口。
+
+项目目录遵守三目录合同：工厂生成工具及编译缓存放在 `.build/bridgeforge/`，消费项目的已安装公共工具放在 `.deps/bridgeforge/bin/`；用户级 `$env:USERPROFILE/.codex/bin/` 属于独立安装作用域，保持不变。项目本机配置、下载和测试结果分别使用 `.runtime/config/`、`.runtime/download/`、`.runtime/tests/<任务>/`。三个根全部由项目 `.gitignore` 忽略，受版本管理的配置继续留在原所有权位置。
 
 只读诊断使用已支持 `factory-runtime-prepare-v1` 的工具：
 
 ```powershell
-.codex/bin/bridgeforge-factory.exe build-assets --factory --project-root . --check
+.build/bridgeforge/bin/bridgeforge-factory.exe build-assets --factory --project-root . --check
 ```
 
 `--check`（以及同义 `--dry-run`）不创建锁、缓存或收据，不启动 Cargo 或产物自检进程；

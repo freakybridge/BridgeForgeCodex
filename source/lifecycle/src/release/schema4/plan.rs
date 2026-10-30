@@ -299,9 +299,15 @@ fn finish(
     {
         return Err("product: breaking lifecycle transition requires breaking analysis and explicit user acceptance".into());
     }
-    let suggested: SemVer = polyglot::bump_native(&product(old_version), program_level)?.parse()?;
+    let version_base = capture
+        .release_history
+        .as_ref()
+        .map(|h| h.product_high_water.max(old_version))
+        .unwrap_or(old_version);
+    let suggested: SemVer =
+        polyglot::bump_native(&product(version_base), program_level)?.parse()?;
     let new_version: SemVer = choose(
-        &product(old_version),
+        &product(version_base),
         program_level,
         analysis.targets.get("product"),
         false,
@@ -519,27 +525,55 @@ fn finish(
 fn with_release_history<T>(
     root: &Path,
     runner: &dyn ProcessRunner,
-    operation: impl FnOnce(&history_cache::Reader<'_>) -> Result<T, String>,
+    operation: impl FnOnce(&Config, &history_cache::Reader<'_>) -> Result<T, String>,
 ) -> Result<T, String> {
+    let cfg = load(root)?.ok_or("release requires current schema 4 configuration; use --setup-plan for first-use setup; legacy migrations are retired")?;
+    if !cfg.current_model {
+        return Err("release requires the current product-packages configuration".into());
+    }
     let inspection = InspectionRunner(runner);
     let reader = history_cache::Reader::new(root, &inspection);
-    let result = operation(&reader)?;
+    let result = operation(&cfg, &reader)?;
     reader.verify_unchanged()?;
     Ok(result)
 }
 
-fn minimum_product_level(cfg: &Config, capture: &Capture, entries: &[development::Entry], unstable: bool) -> u8 {
+fn minimum_product_level(
+    cfg: &Config,
+    capture: &Capture,
+    entries: &[development::Entry],
+    unstable: bool,
+) -> u8 {
     let breaking_level = if unstable { 2 } else { 3 };
-    let packages = entries.iter().map(|entry| {
-        if entry.compatibility == "breaking" { breaking_level } else { entry.level }
-    }).max().unwrap_or(1).max(1);
-    if cfg.native.lifecycle.iter().any(|t| t.base == capture.boundary && t.compatibility == "breaking") {
+    let packages = entries
+        .iter()
+        .map(|entry| {
+            if entry.compatibility == "breaking" {
+                breaking_level
+            } else {
+                entry.level
+            }
+        })
+        .max()
+        .unwrap_or(1)
+        .max(1);
+    if cfg
+        .native
+        .lifecycle
+        .iter()
+        .any(|t| t.base == capture.boundary && t.compatibility == "breaking")
+    {
         packages.max(breaking_level)
-    } else { packages }
+    } else {
+        packages
+    }
 }
 
 pub(super) fn product_requirements(
-    root: &Path, cfg: &Config, capture: &Capture, ledger: &development::Ledger,
+    root: &Path,
+    cfg: &Config,
+    capture: &Capture,
+    ledger: &development::Ledger,
     runner: &dyn ProcessRunner,
 ) -> Result<Value, String> {
     let published = development::Ledger::parse(
@@ -552,13 +586,19 @@ pub(super) fn product_requirements(
     let packages = entries.iter().filter(|e| e.compatibility == "breaking").map(|e| {
         json!({"id":e.id,"before":e.before,"after":e.after,"reason":e.reason,"acceptance":e.acceptance})
     }).collect::<Vec<_>>();
-    let transitions = cfg.native.lifecycle.iter()
+    let transitions = cfg
+        .native
+        .lifecycle
+        .iter()
         .filter(|t| t.base == capture.boundary && t.compatibility == "breaking")
-        .map(serde_json::to_value).collect::<Result<Vec<_>,_>>().map_err(|e|e.to_string())?;
+        .map(serde_json::to_value)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?;
     let breaking = !packages.is_empty() || !transitions.is_empty();
     Ok(json!({
         "minimum_level":match level { 3 => "major", 2 => "minor", _ => "patch" },
-        "minimum_version":polyglot::bump_native(&product(version), level)?,
+        "minimum_version":polyglot::bump_native(&product(capture.release_history.as_ref().map(|h| h.product_high_water.max(version)).unwrap_or(version)), level)?,
+        "published_version_high_water":capture.release_history.as_ref().map(|h| h.product_high_water.to_string()),
         "breaking_packages":packages,"breaking_transitions":transitions,
         "acceptance_required":breaking,"acceptance_scope":if breaking {vec!["product"]} else {vec![]},
         "acceptance_fingerprint":if breaking {Some(&capture.fingerprint)} else {None},
@@ -574,18 +614,17 @@ pub fn build(
     runner: &dyn ProcessRunner,
 ) -> Result<Option<FileReleasePlan>, String> {
     let _profile = crate::release_metrics::span("release.plan.build");
-    with_release_history(root, runner, |runner| {
-    let cfg = load(root)?.ok_or("release requires current schema 4 configuration; use --setup-plan for first-use setup; legacy migrations are retired")?;
-    let mut capture = inputs::capture_release(root, &cfg, runner)?;
-    let ledger = development::release_gate(root, &cfg, &mut capture, runner)?;
-    let analysis = analysis::read(root, request, &mut capture)?;
-    if capture.changes.iter().all(|c| c.role == "record")
-        && analysis.as_ref().is_none_or(|a| a.targets.is_empty())
-    {
-        return Ok(None);
-    }
-    let analysis=analysis.ok_or("schema 4 requires final-difference analysis; run --release-preview and supply --release-analysis-file")?;
-    finish(root, message, &cfg, capture, analysis, ledger, runner)
+    with_release_history(root, runner, |cfg, runner| {
+        let mut capture = inputs::capture_release(root, &cfg, runner)?;
+        let ledger = development::release_gate(root, &cfg, &mut capture, runner)?;
+        let analysis = analysis::read(root, request, &mut capture)?;
+        if capture.changes.iter().all(|c| c.role == "record")
+            && analysis.as_ref().is_none_or(|a| a.targets.is_empty())
+        {
+            return Ok(None);
+        }
+        let analysis=analysis.ok_or("schema 4 requires final-difference analysis; run --release-preview and supply --release-analysis-file")?;
+        finish(root, message, &cfg, capture, analysis, ledger, runner)
     })
 }
 
@@ -596,8 +635,7 @@ pub fn preview(
     runner: &dyn ProcessRunner,
 ) -> CommandOutcome {
     let _profile = crate::release_metrics::span("release.plan.preview");
-    let result = with_release_history(root, runner, |runner| {
-        let cfg = load(root)?.ok_or("release requires current schema 4 configuration; use --setup-plan for first-use setup; legacy migrations are retired")?;
+    let result = with_release_history(root, runner, |cfg, runner| {
         let mut capture = inputs::capture_release(root, &cfg, runner)?;
         let ledger = development::release_gate(root, &cfg, &mut capture, runner)?;
         let analysis = analysis::read_preview(root, request, &mut capture)?;
@@ -605,14 +643,16 @@ pub fn preview(
             && analysis.as_ref().is_none_or(|a| a.targets.is_empty())
         {
             let mut value = analysis::requirements(&cfg, &capture);
-            value["product_constraints"] = product_requirements(root, &cfg, &capture, &ledger, runner)?;
+            value["product_constraints"] =
+                product_requirements(root, &cfg, &capture, &ledger, runner)?;
             value["status"] = json!("nothing-to-release");
             value["package_changes"] = json!([]);
             return Ok(value);
         }
         let Some(analysis) = analysis else {
             let mut value = analysis::requirements(&cfg, &capture);
-            value["product_constraints"] = product_requirements(root, &cfg, &capture, &ledger, runner)?;
+            value["product_constraints"] =
+                product_requirements(root, &cfg, &capture, &ledger, runner)?;
             return Ok(value);
         };
         let p = finish(root, message, &cfg, capture, analysis, ledger, runner)?

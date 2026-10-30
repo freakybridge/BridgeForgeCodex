@@ -3,10 +3,139 @@ mod factory_repository;
 
 use super::*;
 use crate::{ProcessOutput, ProcessRequest};
+use std::fs;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 struct Factory(PathBuf);
+
+#[test]
+#[ignore = "explicit real Cargo performance experiment; isolated candidate, no publication"]
+fn release_cache_benchmark() {
+    let label = std::env::var("BFC_BENCH_LABEL").unwrap_or_else(|_| "candidate".into());
+    benchmark_fixture(Factory::new(), false, &label);
+}
+
+#[test]
+#[ignore = "explicit controlled real Cargo comparison; two frozen identical fixtures"]
+fn release_cache_controlled_comparison() {
+    let baseline = Factory::new();
+    let candidate = Factory::new();
+    assert_eq!(
+        crate::source_projection::render(&baseline.0, false).unwrap(),
+        crate::source_projection::render(&candidate.0, false).unwrap()
+    );
+    eprintln!("controlled comparison: both candidate fixtures frozen and byte-identical");
+    let before = benchmark_fixture(baseline, true, "controlled-reference");
+    let after = benchmark_fixture(candidate, false, "controlled-persistent");
+    for (old, new) in before.iter().zip(&after) {
+        assert_eq!(old["phase"], new["phase"]);
+        assert_eq!(
+            old["inputs"], new["inputs"],
+            "comparison candidates must have identical build identities"
+        );
+    }
+    assert_eq!(after[1]["metrics"]["cargo_build_invocations"], 0);
+    assert_eq!(after[1]["metrics"]["cache_hits"], 3);
+}
+
+fn benchmark_fixture(fixture: Factory, reference: bool, label: &str) -> Vec<Value> {
+    let root = &fixture.0;
+    let repository = factory_repository::from_manifest_dir(env!("CARGO_MANIFEST_DIR"));
+    let mut git = ProcessRequest::new("git", root);
+    git.args = vec!["init".into(), "-q".into()];
+    assert_eq!(crate::SystemProcessRunner.run(&git).unwrap().code, 0);
+    assert!(
+        label
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-')
+    );
+    let destination = repository
+        .join(".runtime/tests/release-cache")
+        .join(format!("{label}.json"));
+    fs::create_dir_all(destination.parent().unwrap()).unwrap();
+    let mut results = Vec::new();
+    let mut candidate = BTreeMap::new();
+    for phase in ["cold", "same", "version", "module"] {
+        if phase == "version" {
+            let mut cargo = fs::read_to_string(root.join("Cargo.toml"))
+                .unwrap()
+                .parse::<toml_edit::DocumentMut>()
+                .unwrap();
+            let old = cargo["workspace"]["package"]["version"]
+                .as_str()
+                .unwrap()
+                .parse::<bridgeforge_core::SemVer>()
+                .unwrap();
+            let next = format!("{}.{}.{}", old.major, old.minor, old.patch + 1);
+            cargo["workspace"]["package"]["version"] = toml_edit::value(&next);
+            let mut lock = fs::read_to_string(root.join("Cargo.lock"))
+                .unwrap()
+                .parse::<toml_edit::DocumentMut>()
+                .unwrap();
+            for package in lock["package"].as_array_of_tables_mut().unwrap().iter_mut() {
+                if matches!(
+                    package["name"].as_str(),
+                    Some("bridgeforge-cli" | "bridgeforge-hook")
+                ) {
+                    package["version"] = toml_edit::value(&next);
+                }
+            }
+            candidate.insert(root.join("VERSION"), format!("{next}\n").into_bytes());
+            candidate.insert(root.join("Cargo.toml"), cargo.to_string().into_bytes());
+            candidate.insert(root.join("Cargo.lock"), lock.to_string().into_bytes());
+        }
+        if phase == "module" {
+            let path = root.join("source/core/src/lib.rs");
+            let mut bytes = fs::read(&path).unwrap();
+            bytes.extend_from_slice(b"\n// Isolated performance candidate: one module changes.\n");
+            candidate.insert(path, bytes);
+        }
+        let observed = crate::build_metrics::Observed {
+            runner: &crate::SystemProcessRunner,
+            metrics: Default::default(),
+        };
+        let started = std::time::Instant::now();
+        let run = || {
+            crate::git_sync_plan::WritePlan::prepare(
+                root,
+                candidate.clone(),
+                BTreeMap::new(),
+                true,
+                &observed,
+            )
+        };
+        let plan = if reference {
+            crate::git_sync_plan::with_legacy_reference(run)
+        } else {
+            run()
+        }
+        .unwrap();
+        let inputs = plan
+            .writes
+            .iter()
+            .filter(|(path, _)| {
+                path.file_name()
+                    .and_then(|s| s.to_str())
+                    .is_some_and(|s| s.starts_with("build-receipt-"))
+            })
+            .map(|(_, bytes)| {
+                let receipt: Value = serde_json::from_slice(bytes).unwrap();
+                let mut identity = receipt.as_object().unwrap().clone();
+                identity.remove("binary_sha256");
+                Value::Object(identity)
+            })
+            .collect::<Vec<_>>();
+        results.push(json!({"phase":phase,"inputs":inputs,"elapsed_ms":started.elapsed().as_millis(),"reused":plan.generated_reused,"built":plan.generated_built,"metrics":observed.metrics.into_inner()}));
+        fs::write(
+            &destination,
+            serde_json::to_vec_pretty(&json!({"label":label,"results":results})).unwrap(),
+        )
+        .unwrap();
+        eprintln!("benchmark {label}/{phase}: {}", results.last().unwrap());
+    }
+    results
+}
 
 #[test]
 #[ignore = "child process proves strict inspection needs neither a temp directory nor Git"]
@@ -204,14 +333,14 @@ impl Factory {
     fn new() -> Self {
         static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let repository = factory_repository::from_manifest_dir(env!("CARGO_MANIFEST_DIR"));
-        let root = std::env::temp_dir().join(format!(
-            "bf-factory-runtime-{}-{}-{}",
+        let root = repository.join(".runtime/tests/fr").join(format!(
+            "{}-{}-{}",
             std::process::id(),
             NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap()
-                .as_nanos()
+                .subsec_nanos()
         ));
         fs::create_dir_all(root.join(".git")).unwrap();
         let copy = |source: &str, target: &str| {
@@ -227,8 +356,10 @@ impl Factory {
             "bridgeforge-codex-manifest.json",
             "Cargo.toml",
             "Cargo.lock",
+            ".cargo/config.toml",
             "templates/source-layout.json",
             "templates/hooks/.gitignore",
+            "templates/artifact-roots.gitignore",
             crate::user_agents::SOURCE,
             crate::user_agents::MANIFEST,
         ] {
@@ -273,7 +404,12 @@ impl Factory {
                 }
             }
         }
-        manifest::rebuild(&root, false).unwrap();
+        // Fixture bootstrap installs an internally consistent candidate, without
+        // claiming the public manifest command can activate missing executables.
+        for (path, bytes) in manifest::render_targets(&root).unwrap() {
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, bytes).unwrap();
+        }
         identity(&root).unwrap();
         Self(root)
     }
@@ -347,11 +483,16 @@ impl ProcessRunner for Runner {
                 )?;
             }
             if self.failure == "target" {
-                fs::create_dir_all(self.root.join(".codex/bin"))?;
+                fs::create_dir_all(self.root.join(".build/bridgeforge/bin"))?;
                 fs::write(
-                    self.root.join(".codex/bin/build-receipt-cli.json"),
+                    self.root
+                        .join(".build/bridgeforge/bin/build-receipt-cli.json"),
                     b"external change",
                 )?;
+            }
+            if self.failure == "legacy-new" {
+                fs::create_dir_all(self.root.join(".codex/bin"))?;
+                fs::write(self.root.join(".codex/bin/unknown.txt"), b"external")?;
             }
         } else {
             let contract: Value =
@@ -366,7 +507,7 @@ impl ProcessRunner for Runner {
                 .unwrap();
             out.stdout = serde_json::to_vec(&asset["self_test"]["expected_json"]).unwrap();
             if self.failure == "installed-test"
-                && Path::new(&request.program).starts_with(self.root.join(".codex/bin"))
+                && Path::new(&request.program).starts_with(self.root.join(".build/bridgeforge/bin"))
             {
                 out.code = 1;
             }
@@ -427,7 +568,9 @@ fn factory_prepare_checks_without_writes_and_reuses_healthy_cli_and_hook() {
         assert_eq!(fs::metadata(path).unwrap().modified().unwrap(), time);
     }
     fs::write(
-        fixture.0.join(".codex/bin/build-receipt-cli.json"),
+        fixture
+            .0
+            .join(".build/bridgeforge/bin/build-receipt-cli.json"),
         b"invalid",
     )
     .unwrap();
@@ -444,11 +587,16 @@ fn factory_prepare_stops_on_manifest_mirror_source_build_or_target_drift() {
         "source",
         "target",
         "installed-test",
+        "legacy-new",
     ] {
         let fixture = Factory::new();
         let runner = Runner::new(&fixture.0, failure);
         if failure == "manifest" {
-            fs::write(fixture.0.join("source/hook/src/main.rs"), b"stale source").unwrap();
+            fs::write(
+                fixture.0.join(".codex/managed-skeleton.json"),
+                b"invalid contract",
+            )
+            .unwrap();
         }
         if failure == "mirror" {
             fs::write(
@@ -459,18 +607,38 @@ fn factory_prepare_stops_on_manifest_mirror_source_build_or_target_drift() {
         }
         let result = prepare(&fixture.0, false, &runner);
         assert_eq!(result.code, 2, "{failure}: {}", result.stderr);
-        assert!(!fixture.0.join(".codex/bin/bridgeforge.exe").exists());
-        assert!(!fixture.0.join(".codex/bin/bridgeforge").exists());
         assert!(
             !fixture
                 .0
-                .join(".codex/bin/bridgeforge-factory.exe")
+                .join(".build/bridgeforge/bin/bridgeforge.exe")
                 .exists()
         );
-        assert!(!fixture.0.join(".codex/bin/bridgeforge-factory").exists());
+        assert!(
+            !fixture
+                .0
+                .join(".build/bridgeforge/bin/bridgeforge")
+                .exists()
+        );
+        assert!(
+            !fixture
+                .0
+                .join(".build/bridgeforge/bin/bridgeforge-factory.exe")
+                .exists()
+        );
+        assert!(
+            !fixture
+                .0
+                .join(".build/bridgeforge/bin/bridgeforge-factory")
+                .exists()
+        );
         if failure == "target" {
             assert_eq!(
-                fs::read(fixture.0.join(".codex/bin/build-receipt-cli.json")).unwrap(),
+                fs::read(
+                    fixture
+                        .0
+                        .join(".build/bridgeforge/bin/build-receipt-cli.json")
+                )
+                .unwrap(),
                 b"external change"
             );
         }
@@ -478,6 +646,104 @@ fn factory_prepare_stops_on_manifest_mirror_source_build_or_target_drift() {
             assert_eq!(runner.calls.load(Ordering::Relaxed), 0);
         }
     }
+}
+
+#[test]
+fn legacy_factory_tools_retire_only_after_verified_install() {
+    let fixture = Factory::new();
+    let root = &fixture.0;
+    let old = root.join(".codex/bin");
+    fs::create_dir_all(&old).unwrap();
+    let profiles: Vec<Value> = serde_json::from_str(include_str!(
+        "../../../source/core/src/legacy_artifact_receipts.json"
+    ))
+    .unwrap();
+    let profile = profiles
+        .iter()
+        .find(|p| p["id"] == "codex.bridgeforge-cli")
+        .unwrap();
+    use sha2::{Digest, Sha256};
+    let payload = b"known legacy binary fixture";
+    let record = json!({"schema_version":2,"generated_asset_id":"codex.bridgeforge-cli",
+        "platform":crate::build_receipt::platform_key().unwrap(),"binary_sha256":format!("sha256:{:x}", Sha256::digest(payload)),
+        "source_tree_sha256":profile["source_tree_sha256"],"lockfile_sha256":profile["lockfile_sha256"],
+        "build_recipe_sha256":profile["build_recipe_sha256"],"self_test_sha256":profile["self_test_sha256"]});
+    fs::write(
+        old.join(format!("bridgeforge{}", std::env::consts::EXE_SUFFIX)),
+        payload,
+    )
+    .unwrap();
+    fs::write(
+        old.join("build-receipt-cli.json"),
+        serde_json::to_vec(&record).unwrap(),
+    )
+    .unwrap();
+    fs::write(old.join(".gitignore"), b"*\n!.gitignore\n").unwrap();
+    let before = tree(root);
+    let failed = prepare(root, false, &Runner::new(root, "installed-test"));
+    assert_ne!(failed.code, 0, "{}", failed.stderr);
+    assert_eq!(
+        crate::project_sync::legacy_artifact_retirements(root)
+            .unwrap()
+            .len(),
+        3
+    );
+    for (path, bytes) in &before {
+        assert_eq!(&fs::read(root.join(path)).unwrap(), bytes);
+    }
+    let result = prepare(root, false, &Runner::new(root, "ok"));
+    assert_eq!(result.code, 0, "{}", result.stderr);
+    assert_eq!(fs::read_dir(&old).unwrap().count(), 0);
+    assert_eq!(prepare(root, true, &Runner::new(root, "ok")).code, 0);
+}
+
+#[test]
+fn retirement_failure_restores_old_image_and_preserves_external_file() {
+    let repository = factory_repository::from_manifest_dir(env!("CARGO_MANIFEST_DIR"));
+    let root = repository
+        .join(".runtime/tests/retirement")
+        .join(std::process::id().to_string());
+    fs::create_dir_all(&root).unwrap();
+    let old = root.join("a-image.exe");
+    let later = root.join("z-receipt.json");
+    let new = root.join("new.bin");
+    fs::write(&old, b"old executable").unwrap();
+    fs::write(&later, b"old receipt").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&old, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let retired = BTreeMap::from([
+        (old.clone(), b"old executable".to_vec()),
+        (later.clone(), b"old receipt".to_vec()),
+    ]);
+    let snapshots = BTreeMap::from([
+        (old.clone(), Some(b"old executable".to_vec())),
+        (later.clone(), Some(b"old receipt".to_vec())),
+        (new.clone(), None),
+    ]);
+    let outcome = project_sync::install_generated_transaction_retiring(
+        &root,
+        &BTreeMap::from([(new.clone(), b"new".to_vec())]),
+        &snapshots,
+        &BTreeSet::from([old.clone()]),
+        &retired,
+        || {
+            fs::write(&later, b"external edit").unwrap();
+            Ok(())
+        },
+    );
+    assert!(outcome.unwrap_err().contains("rolled back"));
+    assert_eq!(fs::read(&old).unwrap(), b"old executable");
+    assert_eq!(fs::read(&later).unwrap(), b"external edit");
+    assert!(!new.exists());
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_ne!(fs::metadata(&old).unwrap().permissions().mode() & 0o111, 0);
+    }
+    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
@@ -514,6 +780,38 @@ fn generated_install_rolls_back_own_changes_and_preserves_external_changes() {
     assert!(result.unwrap_err().contains("external change preserved"));
     assert_eq!(fs::read(&a).unwrap(), b"external");
     assert!(!b.exists());
+}
+
+#[test]
+fn retirement_preserves_original_when_copied_target_changes_during_verification() {
+    let repository = factory_repository::from_manifest_dir(env!("CARGO_MANIFEST_DIR"));
+    let root = repository
+        .join(".runtime/tests/relocation-drift")
+        .join(std::process::id().to_string());
+    fs::create_dir_all(&root).unwrap();
+    let old = root.join("old.bin");
+    let new = root.join("new.bin");
+    fs::write(&old, b"original").unwrap();
+    let retired = BTreeMap::from([(old.clone(), b"original".to_vec())]);
+    let snapshots = BTreeMap::from([
+        (old.clone(), Some(b"original".to_vec())),
+        (new.clone(), None),
+    ]);
+    let outcome = project_sync::install_generated_transaction_retiring(
+        &root,
+        &BTreeMap::from([(new.clone(), b"original".to_vec())]),
+        &snapshots,
+        &BTreeSet::new(),
+        &retired,
+        || {
+            fs::write(&new, b"external").unwrap();
+            Ok(())
+        },
+    );
+    assert!(outcome.unwrap_err().contains("installed payload changed"));
+    assert_eq!(fs::read(old).unwrap(), b"original");
+    assert_eq!(fs::read(new).unwrap(), b"external");
+    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]

@@ -113,10 +113,11 @@ pub fn validate_product(
 }
 
 fn binary_path(root: &Path) -> PathBuf {
-    #[cfg(windows)]
-    return root.join(".codex/bin/bridgeforge.exe");
-    #[cfg(not(windows))]
-    return root.join(".codex/bin/bridgeforge");
+    crate::artifact_paths::binary(
+        root,
+        root.join("templates/managed-skeleton.json").is_file(),
+        "bridgeforge",
+    )
 }
 
 pub fn validate(
@@ -315,7 +316,9 @@ fn can_relocate_running_image(root: &Path, destination: &Path) -> Result<bool, S
     ) {
         return Ok(false);
     }
-    let directory = root.join(".codex/bin");
+    let directory = root.join(crate::artifact_paths::bin_dir(
+        root.join("templates/managed-skeleton.json").is_file(),
+    ));
     for ancestor in directory.ancestors().filter(|path| path.exists()) {
         if crate::persistence::is_link_or_reparse(ancestor).map_err(|e| e.to_string())? {
             return Err("managed binary directory traverses a link".into());
@@ -330,7 +333,7 @@ fn can_relocate_running_image(root: &Path, destination: &Path) -> Result<bool, S
 }
 
 fn image_directory(root: &Path) -> Result<PathBuf, String> {
-    let directory = root.join(".runtime/bridgeforge-codex/git-sync-images");
+    let directory = root.join(".build/bridgeforge/git-sync-images");
     for ancestor in directory.ancestors().filter(|p| p.exists()) {
         if crate::persistence::is_link_or_reparse(ancestor).map_err(|e| e.to_string())? {
             return Err("running-image directory traverses a link".into());
@@ -341,8 +344,38 @@ fn image_directory(root: &Path) -> Result<PathBuf, String> {
 }
 
 pub fn cleanup_images(root: &Path) -> Result<(), String> {
+    image_directory(root)?;
+    for path in image_cleanup_candidates(root)? {
+        // A still-running sync may retain its image; never kill it to clean up.
+        if let Err(error) = std::fs::remove_file(path) {
+            if error.kind() != std::io::ErrorKind::PermissionDenied {
+                return Err(error.to_string());
+            }
+        }
+    }
+    Ok(())
+}
+
+pub fn image_cleanup_candidates(root: &Path) -> Result<Vec<PathBuf>, String> {
+    Ok(image_cleanup_selections(root)?
+        .into_iter()
+        .map(|selection| selection.path)
+        .collect())
+}
+
+pub fn image_cleanup_selections(
+    root: &Path,
+) -> Result<Vec<crate::artifact_cleanup::Selection>, String> {
     use sha2::{Digest, Sha256};
-    let directory = image_directory(root)?;
+    let directory = crate::managed_paths::safe_join(
+        root,
+        ".build/bridgeforge/git-sync-images",
+        "old image cleanup",
+    )?;
+    let mut candidates = Vec::new();
+    if !directory.exists() {
+        return Ok(candidates);
+    }
     for entry in std::fs::read_dir(directory).map_err(|e| e.to_string())? {
         let entry = entry.map_err(|e| e.to_string())?;
         let name = entry.file_name().to_string_lossy().into_owned();
@@ -363,15 +396,16 @@ pub fn cleanup_images(root: &Path) -> Result<(), String> {
         }
         let payload = std::fs::read(entry.path()).map_err(|e| e.to_string())?;
         if format!("{:x}", Sha256::digest(payload)) == parts[0] {
-            // Another still-running sync can retain its image; never kill it to clean up.
-            if let Err(error) = std::fs::remove_file(entry.path()) {
-                if error.kind() != std::io::ErrorKind::PermissionDenied {
-                    return Err(error.to_string());
-                }
-            }
+            candidates.push(crate::artifact_cleanup::Selection {
+                path: entry.path(),
+                members: std::collections::BTreeMap::from([(
+                    "".into(),
+                    Some(format!("sha256:{}", parts[0])),
+                )]),
+            });
         }
     }
-    Ok(())
+    Ok(candidates)
 }
 
 #[cfg(all(test, bridgeforge_factory_tests))]

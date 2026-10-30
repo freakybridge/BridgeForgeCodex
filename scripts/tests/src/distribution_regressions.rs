@@ -346,11 +346,12 @@ fn shared_bundle_commit_keeps_components_consistent_when_old_image_is_running() 
 struct Fixture(PathBuf);
 impl Fixture {
     fn new() -> Self {
-        let path = std::env::temp_dir().join(format!(
-            "bfc-distribution-{}-{}",
-            std::process::id(),
-            ID.fetch_add(1, Ordering::Relaxed)
-        ));
+        let path = test_artifacts::root(env!("CARGO_MANIFEST_DIR"), "distribution-regressions")
+            .join(format!(
+                "bfc-distribution-{}-{}",
+                std::process::id(),
+                ID.fetch_add(1, Ordering::Relaxed)
+            ));
         fs::create_dir_all(&path).unwrap();
         Self(path)
     }
@@ -869,3 +870,7 @@ fn git_credentials_verify_private_api_without_exposing_secrets() {
     assert!(error.contains("private"));
     assert!(!error.contains("fixture-secret"));
 }
+
+#[allow(dead_code)]
+#[path = "../support/artifact_paths.rs"]
+mod test_artifacts;

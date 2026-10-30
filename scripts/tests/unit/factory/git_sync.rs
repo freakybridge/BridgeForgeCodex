@@ -88,10 +88,10 @@ struct GeneratedRunner {
 
 fn is_short_cache_probe(program: &Path) -> bool {
     program.parent().is_some_and(|parent| {
-        parent.parent() == Some(std::env::temp_dir().as_path())
-            && parent
-                .file_name()
-                .is_some_and(|name| name.to_string_lossy().starts_with("bf-probe-"))
+        parent.file_name().is_some_and(|name| {
+            name.to_string_lossy().starts_with("bf-probe-")
+                || name.to_string_lossy().starts_with("probe-")
+        })
     })
 }
 
@@ -203,7 +203,12 @@ fn factory_build_failure_and_input_drift_do_not_apply_release() {
             fs::read(repo.0.join("templates/managed-skeleton.json")).unwrap(),
             manifest
         );
-        assert!(!repo.0.join(".codex/bin/build-receipt-cli.json").exists());
+        assert!(
+            !repo
+                .0
+                .join(".deps/bridgeforge/bin/build-receipt-cli.json")
+                .exists()
+        );
         assert_eq!(
             fs::read(repo.0.join(crate::user_agents::MANIFEST)).unwrap(),
             user_manifest
@@ -239,14 +244,14 @@ fn factory_rejected_commit_restores_versions_binaries_receipts_and_index() {
         b"authorized template edit\n",
     )
     .unwrap();
-    fs::create_dir_all(repo.0.join(".codex/bin")).unwrap();
+    fs::create_dir_all(repo.0.join(".deps/bridgeforge/bin")).unwrap();
     let cli = repo.0.join(if cfg!(windows) {
-        ".codex/bin/bridgeforge.exe"
+        ".deps/bridgeforge/bin/bridgeforge.exe"
     } else {
-        ".codex/bin/bridgeforge"
+        ".deps/bridgeforge/bin/bridgeforge"
     });
     fs::write(&cli, b"original binary").unwrap();
-    let receipt = repo.0.join(".codex/bin/build-receipt-cli.json");
+    let receipt = repo.0.join(".deps/bridgeforge/bin/build-receipt-cli.json");
     fs::write(&receipt, b"original receipt").unwrap();
     let before_contract = fs::read(repo.0.join("templates/managed-skeleton.json")).unwrap();
     fs::write(
@@ -338,19 +343,28 @@ fn factory_dirty_sync_and_release_do_not_acquire_maintenance_locks() {
             mode: "ok",
         };
         let request = if release {
-            fixture::analysis(&repo.0, &crate::runner::FactoryRunner::new(&runner), "patch", &[])
-                .unwrap()
+            fixture::analysis(
+                &repo.0,
+                &crate::runner::FactoryRunner::new(&runner),
+                "patch",
+                &[],
+            )
+            .unwrap()
         } else {
             Default::default()
         };
         let runtime_lock = git_sync::lock_factory_runtime(&repo.0, &SystemProcessRunner).unwrap();
         let project_lock = crate::project_sync::ProjectLock::acquire(&repo.0).unwrap();
-        let result = sync(&repo.0, &runner, GitSyncOptions {
-            release,
-            release_request: request,
-            message: Some("fix: synchronize factory change".into()),
-            ..Default::default()
-        });
+        let result = sync(
+            &repo.0,
+            &runner,
+            GitSyncOptions {
+                release,
+                release_request: request,
+                message: Some("fix: synchronize factory change".into()),
+                ..Default::default()
+            },
+        );
         assert_eq!(result.code, 0, "{}", result.stderr);
         let receipt = result.receipt.unwrap();
         assert_eq!(receipt["status"], "synced");
@@ -493,13 +507,13 @@ fn factory_unchanged_generated_inputs_reuse_without_cargo_or_binary_writes() {
         !plan
             .writes
             .keys()
-            .any(|p| p.starts_with(repo.0.join(".codex/bin")))
+            .any(|p| p.starts_with(repo.0.join(".deps/bridgeforge/bin")))
     );
     plan.verify_unchanged(&repo.0).unwrap();
     let cli = repo.0.join(if cfg!(windows) {
-        ".codex/bin/bridgeforge.exe"
+        ".deps/bridgeforge/bin/bridgeforge.exe"
     } else {
-        ".codex/bin/bridgeforge"
+        ".deps/bridgeforge/bin/bridgeforge"
     });
     fs::write(&cli, b"external concurrent replacement").unwrap();
     assert!(
@@ -518,11 +532,11 @@ fn factory_reuse_invalidates_source_lock_binary_and_receipt_mismatches() {
             "source" => repo.0.join("templates/hooks/new.rs"),
             "lock" => repo.0.join("templates/hooks/Cargo.lock"),
             "binary" => repo.0.join(if cfg!(windows) {
-                ".codex/bin/bridgeforge.exe"
+                ".deps/bridgeforge/bin/bridgeforge.exe"
             } else {
-                ".codex/bin/bridgeforge"
+                ".deps/bridgeforge/bin/bridgeforge"
             }),
-            _ => repo.0.join(".codex/bin/build-receipt-cli.json"),
+            _ => repo.0.join(".deps/bridgeforge/bin/build-receipt-cli.json"),
         };
         fs::write(path, b"changed\n").unwrap();
         let runner = GeneratedRunner {
@@ -577,7 +591,8 @@ fn factory_reuse_self_test_failure_rebuilds_and_drift_blocks_apply() {
     }
     impl ProcessRunner for ReuseRunner {
         fn run(&self, request: &ProcessRequest) -> std::io::Result<ProcessOutput> {
-            if Path::new(&request.program).starts_with(self.inner.root.join(".codex/bin"))
+            if Path::new(&request.program)
+                .starts_with(self.inner.root.join(".deps/bridgeforge/bin"))
                 || Path::new(&request.program)
                     .starts_with(self.inner.root.join(crate::artifact_cache::DIRECTORY))
                 || is_short_cache_probe(Path::new(&request.program))
@@ -629,16 +644,16 @@ fn factory_partial_reuse_rejected_commit_preserves_reused_asset_and_restores_mis
     config["release_policy"] = json!("explicit_release");
     fs::write(config_path, serde_json::to_vec(&config).unwrap()).unwrap();
     let hook = repo.0.join(if cfg!(windows) {
-        ".codex/bin/bridgeforge-hook.exe"
+        ".deps/bridgeforge/bin/bridgeforge-hook.exe"
     } else {
-        ".codex/bin/bridgeforge-hook"
+        ".deps/bridgeforge/bin/bridgeforge-hook"
     });
     let cli = repo.0.join(if cfg!(windows) {
-        ".codex/bin/bridgeforge.exe"
+        ".deps/bridgeforge/bin/bridgeforge.exe"
     } else {
-        ".codex/bin/bridgeforge"
+        ".deps/bridgeforge/bin/bridgeforge"
     });
-    let receipt = repo.0.join(".codex/bin/build-receipt-cli.json");
+    let receipt = repo.0.join(".deps/bridgeforge/bin/build-receipt-cli.json");
     let hook_before = fs::read(&hook).unwrap();
     let hook_time = fs::metadata(&hook).unwrap().modified().unwrap();
     fs::write(&cli, b"broken original CLI").unwrap();
@@ -790,8 +805,8 @@ fn mixed_cache_hit_and_build_rejected_commit_restore_all_targets() {
         ".codex/managed-skeleton.json",
         "bridgeforge-codex-manifest.json",
         crate::user_agents::MANIFEST,
-        ".codex/bin/build-receipt-cli.json",
-        ".codex/bin/build-receipt-hook.json",
+        ".deps/bridgeforge/bin/build-receipt-cli.json",
+        ".deps/bridgeforge/bin/build-receipt-hook.json",
     ];
     let mut before = paths
         .into_iter()
@@ -802,7 +817,7 @@ fn mixed_cache_hit_and_build_rejected_commit_restore_all_targets() {
         })
         .collect::<std::collections::BTreeMap<_, _>>();
     for name in ["bridgeforge", "bridgeforge-hook"] {
-        let path = repo.0.join(".codex/bin").join(if cfg!(windows) {
+        let path = repo.0.join(".deps/bridgeforge/bin").join(if cfg!(windows) {
             format!("{name}.exe")
         } else {
             name.into()
@@ -829,8 +844,18 @@ fn mixed_cache_hit_and_build_rejected_commit_restore_all_targets() {
     assert!(result.stderr.contains("rolled back"));
     assert_eq!(fs::read(repo.0.join("VERSION")).unwrap(), b"8.0.0\n");
     assert_eq!(fs::read(repo.0.join(".git/index")).unwrap(), index);
-    assert!(!repo.0.join(".codex/bin/bridgeforge.exe").exists());
-    assert!(!repo.0.join(".codex/bin/bridgeforge-hook.exe").exists());
+    assert!(
+        !repo
+            .0
+            .join(".deps/bridgeforge/bin/bridgeforge.exe")
+            .exists()
+    );
+    assert!(
+        !repo
+            .0
+            .join(".deps/bridgeforge/bin/bridgeforge-hook.exe")
+            .exists()
+    );
     assert_eq!(
         counted.builds.get(),
         1,

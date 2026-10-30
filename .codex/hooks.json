@@ -8,8 +8,8 @@
           {
             "type": "command",
             "bridgeforgeCodexId": "bridgeforge-codex.project-hook.v1:pre-tool",
-            "command": ".codex/bin/bridgeforge-hook pre-tool",
-            "commandWindows": ".codex\\bin\\bridgeforge-hook.exe pre-tool",
+            "command": ".build/bridgeforge/bin/bridgeforge-hook pre-tool",
+            "commandWindows": ".build\\bridgeforge\\bin\\bridgeforge-hook.exe pre-tool",
             "comment": "Sequential dispatcher for shell safety guards and apply_patch write boundaries."
           }
         ]
@@ -22,8 +22,8 @@
           {
             "type": "command",
             "bridgeforgeCodexId": "bridgeforge-codex.project-hook.v1:post-edit",
-            "command": ".codex/bin/bridgeforge-hook post-edit",
-            "commandWindows": ".codex\\bin\\bridgeforge-hook.exe post-edit",
+            "command": ".build/bridgeforge/bin/bridgeforge-hook post-edit",
+            "commandWindows": ".build\\bridgeforge\\bin\\bridgeforge-hook.exe post-edit",
             "comment": "Normalizes apply_patch payloads and runs dependent edit checks in an explicit order."
           }
         ]
@@ -34,8 +34,8 @@
           {
             "type": "command",
             "bridgeforgeCodexId": "bridgeforge-codex.project-hook.v1:post-shell",
-            "command": ".codex/bin/bridgeforge-hook post-shell",
-            "commandWindows": ".codex\\bin\\bridgeforge-hook.exe post-shell",
+            "command": ".build/bridgeforge/bin/bridgeforge-hook post-shell",
+            "commandWindows": ".build\\bridgeforge\\bin\\bridgeforge-hook.exe post-shell",
             "comment": "Records test-command receipts after shell execution."
           }
         ]
@@ -47,8 +47,8 @@
           {
             "type": "command",
             "bridgeforgeCodexId": "bridgeforge-codex.project-hook.v1:stop",
-            "command": ".codex/bin/bridgeforge-hook stop",
-            "commandWindows": ".codex\\bin\\bridgeforge-hook.exe stop"
+            "command": ".build/bridgeforge/bin/bridgeforge-hook stop",
+            "commandWindows": ".build\\bridgeforge\\bin\\bridgeforge-hook.exe stop"
           }
         ]
       }
@@ -59,8 +59,8 @@
           {
             "type": "command",
             "bridgeforgeCodexId": "bridgeforge-codex.project-hook.v1:session-start",
-            "command": ".codex/bin/bridgeforge-hook session-start",
-            "commandWindows": ".codex\\bin\\bridgeforge-hook.exe session-start",
+            "command": ".build/bridgeforge/bin/bridgeforge-hook session-start",
+            "commandWindows": ".build\\bridgeforge\\bin\\bridgeforge-hook.exe session-start",
             "additionalContextLimit": 0,
             "comment": "Validates repository runtime state, then reports cleanup and managed-skill drift."
           }

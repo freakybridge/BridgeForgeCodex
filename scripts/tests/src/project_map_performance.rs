@@ -67,21 +67,22 @@ fn project_map_refresh_performance() {
         .parent()
         .unwrap();
     let binary = repository.join(if cfg!(windows) {
-        ".codex/bin/bridgeforge-hook.exe"
+        ".build/bridgeforge/bin/bridgeforge-hook.exe"
     } else {
-        ".codex/bin/bridgeforge-hook"
+        ".build/bridgeforge/bin/bridgeforge-hook"
     });
     let binary_hash = hash(&fs::read(&binary).unwrap());
     let mut measurements = Vec::new();
     for (files, docs) in [(1000usize, 50usize), (5000, 200)] {
-        let root = std::env::temp_dir().join(format!(
-            "bf-map-bench-{}-{}",
-            std::process::id(),
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let root = test_artifacts::root(env!("CARGO_MANIFEST_DIR"), "project-map-performance")
+            .join(format!(
+                "bf-map-bench-{}-{}",
+                std::process::id(),
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
         let fixture = Fixture(root);
         let root = &fixture.0;
         fs::create_dir_all(root.join("src")).unwrap();
@@ -196,3 +197,7 @@ fn project_map_refresh_performance() {
     }
     println!("{report}");
 }
+
+#[allow(dead_code)]
+#[path = "../support/artifact_paths.rs"]
+mod test_artifacts;

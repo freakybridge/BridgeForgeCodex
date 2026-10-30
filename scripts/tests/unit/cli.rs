@@ -34,6 +34,77 @@ fn retired_operations_fail_before_repository_or_process_access() {
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[test]
+fn baseline_uses_installed_contract_for_factory_and_downstream() {
+    let repository = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .ancestors()
+        .find(|path| path.join("templates/source-layout.json").is_file())
+        .unwrap();
+    for factory in [false, true] {
+        let root = test_artifacts::root(env!("CARGO_MANIFEST_DIR"), "cli").join(format!(
+            "installed-baseline-{}-{factory}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(root.join(".codex")).unwrap();
+        let prefix = if factory { ".codex" } else { "templates" };
+        let mut contract: Value = serde_json::from_slice(
+            &fs::read(repository.join(prefix).join("managed-skeleton.json")).unwrap(),
+        )
+        .unwrap();
+        contract["assets"]
+            .as_array_mut()
+            .unwrap()
+            .retain(|asset| asset["id"] == "codex.hooks-config");
+        contract["generated_assets"] = json!([]);
+        let contract_path = root.join(".codex/managed-skeleton.json");
+        fs::write(&contract_path, serde_json::to_vec(&contract).unwrap()).unwrap();
+        let hooks_path = root.join(".codex/hooks.json");
+        fs::copy(repository.join(prefix).join("hooks.json"), &hooks_path).unwrap();
+        let version = contract["release_version"].as_str().unwrap();
+        if factory {
+            fs::create_dir_all(root.join("templates")).unwrap();
+            fs::copy(
+                repository.join("templates/managed-skeleton.json"),
+                root.join("templates/managed-skeleton.json"),
+            )
+            .unwrap();
+            fs::write(root.join("VERSION"), version).unwrap();
+        } else {
+            fs::write(root.join(".codex/.bridgeforge_codex_version"), version).unwrap();
+        }
+        let args = vec![
+            "check".into(),
+            "baseline".into(),
+            "--root".into(),
+            root.display().to_string(),
+        ];
+        let result = run(&args);
+        assert_eq!(result.code, 0, "factory={factory}: {}", result.stderr);
+        let mut hooks: Value = serde_json::from_slice(&fs::read(&hooks_path).unwrap()).unwrap();
+        hooks["hooks"]["PostToolUse"][0]["hooks"][0]["command"] = json!("unexpected-hook");
+        fs::write(&hooks_path, serde_json::to_vec(&hooks).unwrap()).unwrap();
+        let drift = run(&args);
+        assert_eq!(drift.code, EXIT_BLOCKED);
+        assert!(
+            drift.stderr.contains("managed hook payload drifted"),
+            "{}",
+            drift.stderr
+        );
+        fs::remove_file(&contract_path).unwrap();
+        let missing = run(&args);
+        assert_eq!(missing.code, EXIT_BLOCKED);
+        assert!(
+            missing.stderr.contains("cannot read current baseline"),
+            "{}",
+            missing.stderr
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[test]
 fn retired_asset_migration_arguments_reject_before_reading_stdin_or_project() {
     for flag in [
         "--asset-migration-manifest",
@@ -133,7 +204,7 @@ fn task_development_cli_rejects_malformed_selection_before_forwarding() {
 
 #[test]
 fn todo_contract_query_is_read_only_and_invalid_table_blocks_archive() {
-    let root = std::env::temp_dir().join(format!(
+    let root = test_artifacts::root(env!("CARGO_MANIFEST_DIR"), "cli").join(format!(
         "bf-cli-todo-{}-{}",
         std::process::id(),
         SystemTime::now()
@@ -194,7 +265,7 @@ fn user_instruction_staging_rejects_preview_flags_before_writing() {
 
 #[test]
 fn default_metadata_gate_checks_native_project_skills() {
-    let home = std::env::temp_dir().join(format!(
+    let home = test_artifacts::root(env!("CARGO_MANIFEST_DIR"), "cli").join(format!(
         "bf-skill-gate-{}",
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -233,7 +304,7 @@ fn self_test_has_stable_identity() {
 
 #[test]
 fn ordinary_project_with_factory_named_member_keeps_public_routing() {
-    let root = std::env::temp_dir().join(format!(
+    let root = test_artifacts::root(env!("CARGO_MANIFEST_DIR"), "cli").join(format!(
         "bf-ordinary-factory-{}-{}",
         std::process::id(),
         SystemTime::now()
@@ -265,7 +336,7 @@ fn ordinary_project_with_factory_named_member_keeps_public_routing() {
         "{}",
         result.stderr
     );
-    assert!(!root.join(".codex/bin").exists());
+    assert!(!root.join(".build/bridgeforge/bin").exists());
     fs::remove_dir_all(root).unwrap();
 }
 
@@ -275,7 +346,7 @@ fn factory_relay_requires_current_source_binary_and_receipt_before_running() {
         ProcessOutput, ProcessRequest, ProcessRunner, build_manifest, source_projection,
     };
     use std::cell::Cell;
-    let root = std::env::temp_dir().join(format!(
+    let root = test_artifacts::root(env!("CARGO_MANIFEST_DIR"), "cli").join(format!(
         "bf-factory-relay-{}-{}",
         std::process::id(),
         SystemTime::now()
@@ -287,7 +358,7 @@ fn factory_relay_requires_current_source_binary_and_receipt_before_running() {
         "source/core/src",
         "source/factory/src",
         "templates",
-        ".codex/bin",
+        ".build/bridgeforge/bin",
     ] {
         fs::create_dir_all(root.join(directory)).unwrap();
     }
@@ -308,10 +379,10 @@ fn factory_relay_requires_current_source_binary_and_receipt_before_running() {
     fs::write(root.join("VERSION"), b"6.0.0\n").unwrap();
     fs::write(root.join("templates/managed-skeleton.json"), b"{}").unwrap();
     let binary = root.join(format!(
-        ".codex/bin/bridgeforge-factory{}",
+        ".build/bridgeforge/bin/bridgeforge-factory{}",
         std::env::consts::EXE_SUFFIX
     ));
-    let receipt_path = root.join(".codex/bin/build-receipt-factory.json");
+    let receipt_path = root.join(".build/bridgeforge/bin/build-receipt-factory.json");
     let image = b"fixture-factory-image";
     fs::write(&binary, image).unwrap();
     let projected = source_projection::render(&root, false).unwrap();
@@ -457,7 +528,7 @@ fn git_sync_preflight_is_capability_gated_and_mutually_exclusive() {
         .clone();
     assert!(capabilities.iter().any(|v| v == "git-sync-preflight-v1"));
     assert!(capabilities.iter().any(|v| v == "git-sync-phase-timing-v1"));
-    let root = std::env::temp_dir().join(format!(
+    let root = test_artifacts::root(env!("CARGO_MANIFEST_DIR"), "cli").join(format!(
         "bf-cli-preflight-{}-{}",
         std::process::id(),
         SystemTime::now()
@@ -484,7 +555,7 @@ fn git_sync_preflight_is_capability_gated_and_mutually_exclusive() {
 
 #[test]
 fn ordinary_sync_does_not_require_release_choice_but_release_does() {
-    let root = std::env::temp_dir().join(format!(
+    let root = test_artifacts::root(env!("CARGO_MANIFEST_DIR"), "cli").join(format!(
         "bf-cli-first-use-{}-{}",
         std::process::id(),
         SystemTime::now()
@@ -543,3 +614,7 @@ fn ordinary_sync_does_not_require_release_choice_but_release_does() {
     }
     fs::remove_dir_all(root).unwrap();
 }
+
+#[allow(dead_code)]
+#[path = "../support/artifact_paths.rs"]
+mod test_artifacts;

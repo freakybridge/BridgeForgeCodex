@@ -123,7 +123,7 @@ fn receipt_recognizes_executables_and_never_promotes_shell_composite_results() {
         payload["tool_response"] = json!({"exit_code":0});
         assert_eq!(post::test_receipt(&payload).code, 0);
         assert!(
-            !fixture.root.join(".runtime/test_receipts").exists(),
+            !fixture.root.join(".runtime/tests/test-receipts").exists(),
             "{command}"
         );
     }
@@ -158,15 +158,23 @@ fn receipt_recognizes_executables_and_never_promotes_shell_composite_results() {
         let mut payload = shell_payload(command);
         payload["tool_response"] = response;
         assert_eq!(post::test_receipt(&payload).code, 0);
-        let text =
-            fs::read_to_string(fixture.root.join(".runtime/test_receipts/receipts.jsonl")).unwrap();
+        let text = fs::read_to_string(
+            fixture
+                .root
+                .join(".runtime/tests/test-receipts/receipts.jsonl"),
+        )
+        .unwrap();
         let last: Value = serde_json::from_str(text.lines().last().unwrap()).unwrap();
         assert_eq!(last["exit_code"].as_i64(), expected, "{command}: {last}");
     }
     let payload = json!({"tool_name":"Bash","tool_input":{"command":"'pytest' tests\n"},"tool_response":{"exit_code":3}});
     assert_eq!(post::test_receipt(&payload).code, 0);
-    let text =
-        fs::read_to_string(fixture.root.join(".runtime/test_receipts/receipts.jsonl")).unwrap();
+    let text = fs::read_to_string(
+        fixture
+            .root
+            .join(".runtime/tests/test-receipts/receipts.jsonl"),
+    )
+    .unwrap();
     let last: Value = serde_json::from_str(text.lines().last().unwrap()).unwrap();
     assert_eq!(last["exit_code"], 3);
 }

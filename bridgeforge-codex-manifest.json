@@ -7,6 +7,16 @@
       "target": "~/.codex/skills",
       "skills": [
         {
+          "name": "cleanup",
+          "files": [
+            {
+              "source": "templates/skills/cleanup/SKILL.md",
+              "target": "SKILL.md",
+              "sha256": "sha256:1fdaea1730150a011fa558589d4ec5ae1ddc4f8aa2ec22f84f47b3aac17895f0"
+            }
+          ]
+        },
+        {
           "name": "bridgeforge-codex",
           "files": [
             {
@@ -47,7 +57,7 @@
             {
               "source": "templates/skills/bridgeforge-codex/references/project-hook-independence.md",
               "target": "references/project-hook-independence.md",
-              "sha256": "sha256:fddff29ef1d86c8d23ce2065bb87f152ccf451c66c740fb9afeb8940da318a9a"
+              "sha256": "sha256:d21010e1fbb2b936280e27e6b68b2f1d417bc81246bfcb225794510e749a9218"
             },
             {
               "source": "templates/skills/bridgeforge-codex/references/technical-receipts.md",
@@ -77,7 +87,7 @@
             {
               "source": "templates/skills/archive-scan/SKILL.md",
               "target": "SKILL.md",
-              "sha256": "sha256:fa8e7601f955a4e44fb1463db9b3bc655aecb2f55b44b937ea3a0e33961d1525"
+              "sha256": "sha256:e2ab974e9fc13fb65fd2c28419e1c97c0d0e34c5443a5fa666789558ccf09542"
             }
           ]
         },
@@ -202,7 +212,7 @@
             {
               "source": "templates/skills/find-doc/SKILL.md",
               "target": "SKILL.md",
-              "sha256": "sha256:cf049858783fdcb14610de164ceb21e77c1a3a8fa7c074d9e0ce72c493223390"
+              "sha256": "sha256:74a692b66f96c29e03883c75c077fc10fd6ba026624c56ce27f92512eff2d25e"
             }
           ]
         },
@@ -222,7 +232,7 @@
             {
               "source": "templates/skills/git-sync/SKILL.md",
               "target": "SKILL.md",
-              "sha256": "sha256:119f0c087239f391e09d2a2b183cf0bce029b5ee8ae339a583ca3eb4507c192a"
+              "sha256": "sha256:d44535f3dba65ae323326d83d55197a777e94d68c39c29b0dba947284425d223"
             },
             {
               "source": "templates/skills/git-sync/references/first-use.md",
@@ -232,7 +242,7 @@
             {
               "source": "templates/skills/git-sync/references/schema4.md",
               "target": "references/schema4.md",
-              "sha256": "sha256:870d9c511e51507bdde02ff31cff2c81d4e069261e261a650d0a5f648510ff64"
+              "sha256": "sha256:be5cb513c647f419375a19e77c59ebd6673d6eb70b99359b25eae0633aced7b5"
             },
             {
               "source": "templates/skills/git-sync/references/runtime-context.md",
@@ -307,7 +317,7 @@
             {
               "source": "templates/skills/sync-docs/SKILL.md",
               "target": "SKILL.md",
-              "sha256": "sha256:2736b7ae19b26c9e92a8e2dcff76cf69a440b0da7dc187cc712870aa49847b51"
+              "sha256": "sha256:84e8278811707f2bfa8651f8c71eee5708f02d4889ee9b14d711016104c9b61d"
             }
           ]
         },

@@ -114,13 +114,23 @@ pub fn run_with_identity(
         return outcome;
     }
     if has(args, "--sync-remote") {
-        if has(args, "--skip-fetch") || has(args, "--skip-push") || has(args, "--release-analysis-file") {
-            return blocked("git-sync", "--sync-remote only integrates remote changes; do not supply skip flags or a release analysis");
+        if has(args, "--skip-fetch")
+            || has(args, "--skip-push")
+            || has(args, "--release-analysis-file")
+        {
+            return blocked(
+                "git-sync",
+                "--sync-remote only integrates remote changes; do not supply skip flags or a release analysis",
+            );
         }
-        return crate::git_sync::sync_remote(context.root(), runner, crate::git_sync::GitSyncOptions {
-            remote: value(args, "--remote").unwrap_or_else(|| "origin".into()),
-            ..Default::default()
-        });
+        return crate::git_sync::sync_remote(
+            context.root(),
+            runner,
+            crate::git_sync::GitSyncOptions {
+                remote: value(args, "--remote").unwrap_or_else(|| "origin".into()),
+                ..Default::default()
+            },
+        );
     }
     if has(args, "--setup-status") {
         return bridgeforge_lifecycle::release::setup::status_with(

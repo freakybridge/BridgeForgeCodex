@@ -21,6 +21,7 @@ mod security_guards;
 
 #[cfg(test)]
 mod tests {
+    use crate::test_artifacts;
     use serde_json::json;
     use sha2::{Digest, Sha256};
     use std::collections::BTreeMap;
@@ -53,7 +54,7 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let path = std::env::temp_dir().join(format!(
+        let path = test_artifacts::root(env!("CARGO_MANIFEST_DIR"), "lib").join(format!(
             "bridgeforge-factory-{label}-{}-{token}",
             std::process::id()
         ));
@@ -77,7 +78,7 @@ mod tests {
             let name = entry.file_name();
             if matches!(
                 name.to_str(),
-                Some("target" | ".git" | ".venv" | "__pycache__" | ".runtime")
+                Some("target" | ".git" | ".venv" | "__pycache__" | ".runtime" | ".deps" | ".build")
             ) {
                 continue;
             }
@@ -144,12 +145,17 @@ mod tests {
     fn baseline_rejects_generated_receipt_from_different_source_tree() {
         let temporary = temp_directory("receipt-provenance");
         let project = &temporary.0;
-        fs::create_dir_all(project.join(".codex/bin")).unwrap();
+        fs::create_dir_all(project.join(".deps/bridgeforge/bin")).unwrap();
+        fs::create_dir_all(project.join(".codex")).unwrap();
         fs::write(project.join(".codex/.bridgeforge_codex_version"), "1.0.0\n").unwrap();
         fs::write(project.join("managed.txt"), "managed\n").unwrap();
         let binary = b"fake bridgeforge binary";
-        fs::write(project.join(".codex/bin/bridgeforge.exe"), binary).unwrap();
-        fs::write(project.join(".codex/bin/bridgeforge"), binary).unwrap();
+        fs::write(
+            project.join(".deps/bridgeforge/bin/bridgeforge.exe"),
+            binary,
+        )
+        .unwrap();
+        fs::write(project.join(".deps/bridgeforge/bin/bridgeforge"), binary).unwrap();
 
         let declared_source = format!("sha256:{}", "0".repeat(64));
         let receipt_source = format!("sha256:{}", "1".repeat(64));
@@ -172,7 +178,7 @@ mod tests {
             "self_test_sha256": stable_hash,
         });
         fs::write(
-            project.join(".codex/bin/build-receipt-cli.json"),
+            project.join(".deps/bridgeforge/bin/build-receipt-cli.json"),
             serde_json::to_vec_pretty(&receipt).unwrap(),
         )
         .unwrap();
@@ -197,11 +203,11 @@ mod tests {
                 "manifest": "Cargo.toml",
                 "lockfile": "Cargo.lock",
                 "binary_targets": {
-                    "windows-x86_64": ".codex/bin/bridgeforge.exe",
-                    "linux-x86_64": ".codex/bin/bridgeforge",
-                    "macos-x86_64": ".codex/bin/bridgeforge",
+                    "windows-x86_64": ".deps/bridgeforge/bin/bridgeforge.exe",
+                    "linux-x86_64": ".deps/bridgeforge/bin/bridgeforge",
+                    "macos-x86_64": ".deps/bridgeforge/bin/bridgeforge",
                 },
-                "receipt_target": ".codex/bin/build-receipt-cli.json",
+                "receipt_target": ".deps/bridgeforge/bin/build-receipt-cli.json",
                 "build": {},
                 "self_test": {},
                 "source_tree_sha256": declared_source,
@@ -381,7 +387,7 @@ mod tests {
         }
         let precommit =
             fs::read_to_string(repository.join("templates/.githooks/pre-commit")).unwrap();
-        assert!(precommit.contains("for CLI in .codex/bin"));
+        assert!(precommit.contains("for CLI in .deps/bridgeforge/bin"));
         assert!(precommit.contains("build-receipt-cli.json"));
         assert!(precommit.contains("schema_version"));
         assert!(!precommit.contains("cargo build"));
@@ -432,3 +438,7 @@ mod git_sync_polyglot_runtime;
 mod git_sync_runtime;
 #[cfg(test)]
 mod schema4_fixture;
+
+#[allow(dead_code)]
+#[path = "../support/artifact_paths.rs"]
+mod test_artifacts;

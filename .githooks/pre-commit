@@ -12,16 +12,16 @@ receipt_schema_is_current() {
 }
 
 find_rust_tools() {
-  for RECEIPT in .codex/bin/build-receipt-hook.json .codex/bin/build-receipt-cli.json; do
+  for RECEIPT in .build/bridgeforge/bin/build-receipt-hook.json .build/bridgeforge/bin/build-receipt-cli.json; do
     if [ ! -f "$RECEIPT" ] || ! receipt_schema_is_current "$RECEIPT"; then
       echo "[pre-commit] BLOCKED: managed Rust runtime receipt is missing or obsolete; rerun \$bridgeforge-codex." >&2
       return 2
     fi
   done
-  for CLI in .codex/bin/bridgeforge.exe .codex/bin/bridgeforge; do
+  for CLI in .build/bridgeforge/bin/bridgeforge.exe .build/bridgeforge/bin/bridgeforge; do
     [ -f "$CLI" ] && BRIDGEFORGE="$CLI"
   done
-  for HOOK in .codex/bin/bridgeforge-hook.exe .codex/bin/bridgeforge-hook; do
+  for HOOK in .build/bridgeforge/bin/bridgeforge-hook.exe .build/bridgeforge/bin/bridgeforge-hook; do
     [ -f "$HOOK" ] && BRIDGEFORGE_HOOK="$HOOK"
   done
   [ -n "$BRIDGEFORGE" ] && [ -n "$BRIDGEFORGE_HOOK" ] && return 0

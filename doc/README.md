@@ -8,6 +8,14 @@ delivery_layout: flat
 
 ## 从这里开始
 
+- 已验收：[三任务 autopilot 交付](1_delivery/artifact-layout/requirements_2026-10-30_three-directories.md#用户验收2026-10-30)（2026-10-30 用户验收 TODO-048、TODO-049、release 构建缓存优化及撤回识别修复，并授权受管 release；发布是否成功以实际收据为准）。
+
+- 已验收：[release 中间编译结果复用与缓存锁优化方案](1_delivery/git-sync-performance/plan_2026-10-30_build-cache.md)（持久构建目录与分组锁已实现，固定候选对照及受管收口完成；重复候选明显提速，未宣称冷构建加速）。
+
+- 已验收：[清理 Skill 需求与实施计划](1_delivery/artifact-cleanup/requirements_2026-10-30_cleanup-skill.md)（TODO-049；运行清理保留 config/download，build 仅清理旧版本产物及编译缓存，保留当前程序、对应收据和 `.deps/`；最终 EXE 隔离验证及收口完成，未执行真实项目全量 cleanup）。
+
+- 已验收：[严格三目录布局需求与实施计划](1_delivery/artifact-layout/requirements_2026-10-30_three-directories.md)（TODO-048；三目录、默认检查、Forge 工具迁移、隔离验证及收口完成；用户指定旧目录已删除，最终目录检查零错误，真实下游和用户级安装未更新）。
+
 - 9.1.0 已决定撤回：[临时升级工具的历史验收及 9.0.0 恢复](1_delivery/legacy-seven-upgrade/requirements_2026-10-29_four-projects.md#910-撤回与-900-恢复2026-10-29)（TODO-047 历史验收保留；三个由 Agent 负责的正式下游已迁入 9.0.0，保护文件、基线和重复执行检查通过，CausisRiskSuite 由用户报告完成。工厂产品内容已恢复至原始 9.0.0；远端同步与用户级安装结果以该记录及受管收据为准）。
 
 - 待用户验收：[develop 共用工作流实施计划](1_delivery/forge-simplification/plan_2026-10-28_develop-common-path.md)（TODO-046；D1–D5、S/M/L 差异及 F01–F12 已实施，23 项定向验证、独立审查、3 项最终候选检查及受管收口通过；factory 0.4.0、lifecycle 0.5.0，workflow 0.2.0 仅刷新覆盖，最终工具产物已核对。未提交推送发布、未用户级安装，真实下游及自然调用未验证。前期动机见[收口要求](1_delivery/forge-simplification/notes_2026-10-28_develop-closure.md)）。

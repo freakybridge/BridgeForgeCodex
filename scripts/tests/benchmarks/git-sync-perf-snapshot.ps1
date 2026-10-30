@@ -1,5 +1,8 @@
-param([string]$Source = 'D:\Quant\StratusAgent', [string]$Root = 'D:\Quant\BridgeForgeCodex\.runtime\git-sync-perf', [string]$StashCommit='')
+param([string]$Source = 'D:\Quant\StratusAgent', [string]$Root = '', [string]$StashCommit='')
 $ErrorActionPreference = 'Stop'
+if (-not $Root) { $Root = Join-Path (Split-Path (Split-Path $PSScriptRoot -Parent) -Parent) '../.runtime/tests/git-sync-perf' }
+$Root = [IO.Path]::GetFullPath($Root)
+$toolDirectory = if (Test-Path -LiteralPath (Join-Path $Source 'source/factory/src/dogfood.json')) { '.build/bridgeforge/bin' } else { '.deps/bridgeforge/bin' }
 function Git([string]$At, [string[]]$Arguments) {
     $out = & git.exe --no-optional-locks -C $At @Arguments
     if ($LASTEXITCODE -ne 0) { throw "Git failed: $Arguments" }
@@ -28,8 +31,8 @@ if($StashCommit) {
         & tar -xf (Join-Path $Root 'untracked.tar') -C $sample
         if($LASTEXITCODE -ne 0){throw 'Cannot restore immutable untracked tree'}
     }
-    New-Item -ItemType Directory -Force -Path (Join-Path $sample '.codex/bin') | Out-Null
-    Get-ChildItem -LiteralPath (Join-Path $Source '.codex/bin') -Force | ForEach-Object { Copy-Item -LiteralPath $_.FullName -Destination (Join-Path $sample '.codex/bin') -Recurse -Force }
+    New-Item -ItemType Directory -Force -Path (Join-Path $sample $toolDirectory) | Out-Null
+    Get-ChildItem -LiteralPath (Join-Path $Source $toolDirectory) -Force | ForEach-Object { Copy-Item -LiteralPath $_.FullName -Destination (Join-Path $sample $toolDirectory) -Recurse -Force }
     $receipt=[ordered]@{source=$Source;head=$head;sample=$sample;remote=$seed;tracked_tree_commit=$StashCommit;untracked_tree_commit=if($parents.Count -eq 4){$parents[3]}else{$null};runtime_assets='copied separately; preserve their build receipts'}
     [IO.File]::WriteAllText((Join-Path $Root 'snapshot.json'),($receipt|ConvertTo-Json -Depth 5),[Text.UTF8Encoding]::new($false))
     $receipt|ConvertTo-Json -Compress
@@ -51,8 +54,8 @@ foreach ($path in $paths) {
     } elseif (Test-Path -LiteralPath $dst -PathType Leaf) { Remove-Item -LiteralPath $dst }
 }
 # Runtime assets are copied, never rebuilt in the live source checkout.
-New-Item -ItemType Directory -Force -Path (Join-Path $sample '.codex/bin') | Out-Null
-Get-ChildItem -LiteralPath (Join-Path $Source '.codex/bin') -Force | ForEach-Object { Copy-Item -LiteralPath $_.FullName -Destination (Join-Path $sample '.codex/bin') -Recurse -Force }
+New-Item -ItemType Directory -Force -Path (Join-Path $sample $toolDirectory) | Out-Null
+Get-ChildItem -LiteralPath (Join-Path $Source $toolDirectory) -Force | ForEach-Object { Copy-Item -LiteralPath $_.FullName -Destination (Join-Path $sample $toolDirectory) -Recurse -Force }
 if ((Git $Source @('rev-parse','HEAD')) -ne $head) { throw 'Live HEAD changed; snapshot must be reviewed' }
 foreach ($record in $records) {
     if ((Get-FileHash -LiteralPath (Join-Path $Source $record.path)).Hash -ne $record.sha256) { throw "Live input changed: $($record.path)" }

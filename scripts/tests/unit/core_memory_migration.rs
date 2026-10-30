@@ -9,7 +9,8 @@ fn fixture(name: &str) -> PathBuf {
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    let home = std::env::temp_dir().join(format!("bridgeforge-{name}-{token}"));
+    let home = test_artifacts::root(env!("CARGO_MANIFEST_DIR"), "memory-migration")
+        .join(format!("bridgeforge-{name}-{token}"));
     fs::create_dir_all(&home).unwrap();
     fs::write(
         home.join("bridgeforge-codex-managed.json"),
@@ -225,3 +226,7 @@ fn legacy_snapshot_order_does_not_invalidate_verified_bytes() {
     assert!(snapshot_files(&migrated).is_err());
     fs::remove_dir_all(home).unwrap();
 }
+
+#[allow(dead_code)]
+#[path = "../support/artifact_paths.rs"]
+mod test_artifacts;

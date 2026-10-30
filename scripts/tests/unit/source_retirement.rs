@@ -3,7 +3,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 #[test]
 fn retirement_only_plans_verified_files_and_preserves_unknown_and_project_hooks() {
-    let root = std::env::temp_dir().join(format!(
+    let root = test_artifacts::root(env!("CARGO_MANIFEST_DIR"), "source-retirement").join(format!(
         "bf-retire-{}-{}",
         std::process::id(),
         SystemTime::now()
@@ -60,3 +60,7 @@ fn retirement_only_plans_verified_files_and_preserves_unknown_and_project_hooks(
     );
     fs::remove_dir_all(root).unwrap();
 }
+
+#[allow(dead_code)]
+#[path = "../support/artifact_paths.rs"]
+mod test_artifacts;

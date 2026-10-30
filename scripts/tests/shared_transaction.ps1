@@ -50,13 +50,13 @@ foreach ($scenario in @('rollback', 'committed-cleanup')) {
         needs_swap = $true
         status = 'staged'
     }
-    Copy-Item -LiteralPath (Join-Path $RepositoryRoot '.codex/bin/bridgeforge-hook.exe') -Destination $cli.target
+    Copy-Item -LiteralPath (Join-Path $RepositoryRoot '.build/bridgeforge/bin/bridgeforge-hook.exe') -Destination $cli.target
     [IO.File]::WriteAllText($cli.stage, 'new cli transaction bytes')
     $oldCliHash = Get-Sha256 -Path $cli.target
     $userTarget = Join-Path $fixtureProfile '.codex/AGENTS.md'
     [IO.File]::WriteAllBytes($userTarget, [byte[]]@(255, 0, 34, 13, 10))
     $oldUserHash = Get-Sha256 -Path $userTarget
-    $userPlan = New-UserAgentsPlan -RepositoryRoot $RepositoryRoot -UserProfile $fixtureProfile -OperationId $op -RustCliPlan @{ needs_swap = $false; target = (Join-Path $RepositoryRoot '.codex/bin/bridgeforge.exe') }
+    $userPlan = New-UserAgentsPlan -RepositoryRoot $RepositoryRoot -UserProfile $fixtureProfile -OperationId $op -RustCliPlan @{ needs_swap = $false; target = (Join-Path $RepositoryRoot '.build/bridgeforge/bin/bridgeforge.exe') }
     $fileHash = Get-Sha256 -Path (Join-Path $repo 'SKILL.md')
     $manifest = @{ platforms = @{ codex = @{ skills = @(@{ name = 'probe'; files = @(@{ source = 'SKILL.md'; target = 'SKILL.md'; sha256 = $fileHash }) }) } } } | ConvertTo-Json -Depth 8 | ConvertFrom-Json
     $plans = @(New-UpdatePlan -Manifest $manifest -UserProfile $fixtureProfile -OperationId $op -Commit $commit)
@@ -131,7 +131,7 @@ foreach ($scenario in @('create', 'noop', 'failure', 'interrupted', 'drift', 'ba
     $originalEncoding = [Console]::OutputEncoding
     try {
         [Console]::OutputEncoding = [Text.Encoding]::GetEncoding(437)
-        $userPlan = New-UserAgentsPlan -RepositoryRoot $RepositoryRoot -UserProfile $fixtureProfile -OperationId $op -RustCliPlan @{ needs_swap = $false; target = (Join-Path $RepositoryRoot '.codex/bin/bridgeforge.exe') }
+        $userPlan = New-UserAgentsPlan -RepositoryRoot $RepositoryRoot -UserProfile $fixtureProfile -OperationId $op -RustCliPlan @{ needs_swap = $false; target = (Join-Path $RepositoryRoot '.build/bridgeforge/bin/bridgeforge.exe') }
         Assert-True ([Console]::OutputEncoding.CodePage -eq 437) 'CLI staging did not restore console encoding'
     }
     finally { [Console]::OutputEncoding = $originalEncoding }

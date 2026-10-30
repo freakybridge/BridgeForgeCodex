@@ -12,7 +12,10 @@ impl Drop for Repo {
             .0
             .file_name()
             .is_some_and(|n| n.to_string_lossy().starts_with("bf-schema4-"))
-            && self.0.parent() == Some(std::env::temp_dir().as_path())
+            && self.0.parent()
+                == Some(
+                    test_artifacts::root(env!("CARGO_MANIFEST_DIR"), "release-schema4").as_path(),
+                )
         {
             let _ = fs::remove_dir_all(&self.0);
         }
@@ -37,7 +40,7 @@ fn write(root: &Path, path: &str, bytes: &[u8]) {
 }
 fn fixture(strategy: &str, rust: bool) -> Repo {
     static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-    let root = std::env::temp_dir().join(format!(
+    let root = test_artifacts::root(env!("CARGO_MANIFEST_DIR"), "release-schema4").join(format!(
         "bf-schema4-{}-{}-{}",
         std::process::id(),
         NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
@@ -113,20 +116,41 @@ fn release_host_bookkeeping_is_not_a_toolchain_or_input_change() {
         ("PATH".into(), "stable-tools".into()),
         ("RUSTFLAGS".into(), "-C opt-level=2".into()),
         ("WT_SESSION".into(), "terminal-one".into()),
-        ("PSModuleAnalysisCachePath".into(), "first-shell-cache".into()),
+        (
+            "PSModuleAnalysisCachePath".into(),
+            "first-shell-cache".into(),
+        ),
     ]);
-    let expected = inputs::release_environment_fingerprints(&base).unwrap().planning;
+    let expected = inputs::release_environment_fingerprints(&base)
+        .unwrap()
+        .planning;
     let mut other = base.clone();
     other.insert("WT_SESSION".into(), "terminal-two".into());
-    other.insert("PSModuleAnalysisCachePath".into(), "another-shell-cache".into());
+    other.insert(
+        "PSModuleAnalysisCachePath".into(),
+        "another-shell-cache".into(),
+    );
     other.insert("CODEX_TOOL_CALL_ID".into(), "different-call".into());
-    assert_eq!(inputs::release_environment_fingerprints(&other).unwrap().planning, expected);
-    assert_ne!(inputs::environment_fingerprints(&other).unwrap().planning,
-        inputs::environment_fingerprints(&base).unwrap().planning, "develop keeps its strict host guard");
+    assert_eq!(
+        inputs::release_environment_fingerprints(&other)
+            .unwrap()
+            .planning,
+        expected
+    );
+    assert_ne!(
+        inputs::environment_fingerprints(&other).unwrap().planning,
+        inputs::environment_fingerprints(&base).unwrap().planning,
+        "develop keeps its strict host guard"
+    );
     for key in ["PATH", "RUSTFLAGS", "CUSTOM_BUILD_INPUT"] {
         let mut changed = other.clone();
         changed.insert(key.into(), "changed".into());
-        assert_ne!(inputs::release_environment_fingerprints(&changed).unwrap().planning, expected);
+        assert_ne!(
+            inputs::release_environment_fingerprints(&changed)
+                .unwrap()
+                .planning,
+            expected
+        );
     }
 }
 
@@ -136,7 +160,12 @@ fn release_host_context_probe() {
     let root = PathBuf::from(std::env::var_os("BRIDGEFORGE_RELEASE_HOST_ROOT").unwrap());
     let path = root.join(".runtime/host-analysis.json");
     if !path.exists() {
-        let result = preview(&root, "fix: host fixture", &Request::default(), &SystemProcessRunner);
+        let result = preview(
+            &root,
+            "fix: host fixture",
+            &Request::default(),
+            &SystemProcessRunner,
+        );
         assert_eq!(result.code, 0, "{}", result.stderr);
         let receipt = result.receipt.unwrap();
         write(&root, ".runtime/host-analysis.json", &serde_json::to_vec(&json!({
@@ -144,9 +173,14 @@ fn release_host_context_probe() {
             "product":{"level":"patch","reason":"isolated host regression","compatibility":"compatible"}
         })).unwrap());
     } else {
-        let result = build(&root, "fix: host fixture", &Request {
-            analysis_file: Some(".runtime/host-analysis.json".into())
-        }, &SystemProcessRunner);
+        let result = build(
+            &root,
+            "fix: host fixture",
+            &Request {
+                analysis_file: Some(".runtime/host-analysis.json".into()),
+            },
+            &SystemProcessRunner,
+        );
         if root.join(".runtime/expect-stale").exists() {
             assert!(result.unwrap_err().contains("stale"));
         } else {
@@ -160,19 +194,45 @@ fn release_host_context_cross_process_preserves_only_valid_analysis() {
     let r = fixture("independent", false);
     write(&r.0, "README.md", b"new product content\n");
     for step in 0..3 {
-        if step == 2 { write(&r.0, ".runtime/expect-stale", b"yes"); }
+        if step == 2 {
+            write(&r.0, ".runtime/expect-stale", b"yes");
+        }
         let mut command = ProcessRequest::new(std::env::current_exe().unwrap(), &r.0);
-        command.args = vec!["--exact".into(),
-            format!("{}::release_host_context_probe", module_path!().split_once("::").unwrap().1).into(),
-            "--ignored".into(),"--nocapture".into()];
-        command.env.insert("BRIDGEFORGE_RELEASE_HOST_ROOT".into(), r.0.as_os_str().into());
-        command.env.insert("WT_SESSION".into(), format!("terminal-{step}").into());
-        command.env.insert("PSModuleAnalysisCachePath".into(), format!("shell-cache-{step}").into());
-        command.env.insert("CUSTOM_BUILD_INPUT".into(), if step == 2 {"changed"} else {"stable"}.into());
+        command.args = vec![
+            "--exact".into(),
+            format!(
+                "{}::release_host_context_probe",
+                module_path!().split_once("::").unwrap().1
+            )
+            .into(),
+            "--ignored".into(),
+            "--nocapture".into(),
+        ];
+        command.env.insert(
+            "BRIDGEFORGE_RELEASE_HOST_ROOT".into(),
+            r.0.as_os_str().into(),
+        );
+        command
+            .env
+            .insert("WT_SESSION".into(), format!("terminal-{step}").into());
+        command.env.insert(
+            "PSModuleAnalysisCachePath".into(),
+            format!("shell-cache-{step}").into(),
+        );
+        command.env.insert(
+            "CUSTOM_BUILD_INPUT".into(),
+            if step == 2 { "changed" } else { "stable" }.into(),
+        );
         command.timeout = Duration::from_secs(180);
         let result = SystemProcessRunner.run(&command).unwrap();
         assert!(!result.timed_out);
-        assert_eq!(result.code, 0, "{}\n{}", String::from_utf8_lossy(&result.stdout), String::from_utf8_lossy(&result.stderr));
+        assert_eq!(
+            result.code,
+            0,
+            "{}\n{}",
+            String::from_utf8_lossy(&result.stdout),
+            String::from_utf8_lossy(&result.stderr)
+        );
     }
 }
 
@@ -188,17 +248,37 @@ fn release_host_explicit_project_variable_still_invalidates_analysis() {
     });
     write(&r.0, CONFIG, &serde_json::to_vec(&cfg).unwrap());
     for step in 0..2 {
-        if step == 1 { write(&r.0, ".runtime/expect-stale", b"yes"); }
+        if step == 1 {
+            write(&r.0, ".runtime/expect-stale", b"yes");
+        }
         let mut command = ProcessRequest::new(std::env::current_exe().unwrap(), &r.0);
-        command.args = vec!["--exact".into(),
-            format!("{}::release_host_context_probe", module_path!().split_once("::").unwrap().1).into(),
-            "--ignored".into(),"--nocapture".into()];
-        command.env.insert("BRIDGEFORGE_RELEASE_HOST_ROOT".into(), r.0.as_os_str().into());
-        command.env.insert("WT_SESSION".into(), format!("declared-input-{step}").into());
+        command.args = vec![
+            "--exact".into(),
+            format!(
+                "{}::release_host_context_probe",
+                module_path!().split_once("::").unwrap().1
+            )
+            .into(),
+            "--ignored".into(),
+            "--nocapture".into(),
+        ];
+        command.env.insert(
+            "BRIDGEFORGE_RELEASE_HOST_ROOT".into(),
+            r.0.as_os_str().into(),
+        );
+        command
+            .env
+            .insert("WT_SESSION".into(), format!("declared-input-{step}").into());
         command.timeout = Duration::from_secs(180);
         let result = SystemProcessRunner.run(&command).unwrap();
         assert!(!result.timed_out);
-        assert_eq!(result.code, 0, "{}\n{}", String::from_utf8_lossy(&result.stdout), String::from_utf8_lossy(&result.stderr));
+        assert_eq!(
+            result.code,
+            0,
+            "{}\n{}",
+            String::from_utf8_lossy(&result.stdout),
+            String::from_utf8_lossy(&result.stderr)
+        );
     }
 }
 
@@ -862,7 +942,10 @@ fn schema4_formal_boundary_cannot_reintroduce_old_release_model() {
     git(&r.0, &["commit", "-m", "chore: invalid release"]);
     write(&r.0, CONFIG, &payload);
     let error = build(&r.0, "fix: next", &Request::default(), &SystemProcessRunner).unwrap_err();
-    assert!(error.contains("post-cutover published release"), "{error}");
+    assert!(
+        error.contains("release history must preserve product-packages model"),
+        "{error}"
+    );
 }
 
 fn external_cargo_fixture() -> Repo {
@@ -1178,9 +1261,8 @@ fn schema4_reused_classifier_rejects_contract_drift_before_its_path_is_captured(
         &r.0,
         &["commit", "-m", "chore: commit migration before drift probe"],
     );
-    // An empty graft file preserves history but deliberately disables the
-    // object cache, making the classifier's release-boundary read observable.
-    write(&r.0, ".git/info/grafts", b"");
+    // Disable only the optional object cache. History interpretation remains
+    // real and verified; grafts are not an acceptable test cache switch.
     let mut value: Value = serde_json::from_slice(&fs::read(r.0.join(CONFIG)).unwrap()).unwrap();
     value["build_inputs"] = json!(["recipe.json"]);
     write(&r.0, CONFIG, &serde_json::to_vec(&value).unwrap());
@@ -1193,9 +1275,11 @@ fn schema4_reused_classifier_rejects_contract_drift_before_its_path_is_captured(
         spec: format!("{boundary}:.codex/managed-skeleton.json"),
         changed: std::cell::Cell::new(false),
     };
-    let error = capture(&r.0, &load(&r.0).unwrap().unwrap(), &runner)
+    let reader = history_cache::Reader::uncached(&r.0, &runner);
+    let error = inputs::capture_release(&r.0, &load(&r.0).unwrap().unwrap(), &reader)
         .err()
         .unwrap();
+    reader.verify_unchanged().unwrap();
     assert!(runner.changed.get());
     assert!(error.contains("ownership contract changed"), "{error}");
 }
@@ -2846,3 +2930,7 @@ fn schema4_required_checks_combine_their_declared_object_scopes() {
         .contains("required release evidence missing")
     );
 }
+
+#[allow(dead_code)]
+#[path = "../support/artifact_paths.rs"]
+mod test_artifacts;

@@ -11,8 +11,8 @@ impl Fixture {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let root =
-            std::env::temp_dir().join(format!("bf-persistence-{}-{nonce}", std::process::id()));
+        let root = test_artifacts::root(env!("CARGO_MANIFEST_DIR"), "persistence-contract")
+            .join(format!("bf-persistence-{}-{nonce}", std::process::id()));
         fs::create_dir(&root).unwrap();
         Self(root)
     }
@@ -132,3 +132,7 @@ fn public_write_preserves_windows_long_path_replacement() {
     assert_eq!(fs::read(&path).unwrap(), b"replacement");
     assert_eq!(fs::read_dir(&parent).unwrap().count(), 1);
 }
+
+#[allow(dead_code)]
+#[path = "../../support/artifact_paths.rs"]
+mod test_artifacts;

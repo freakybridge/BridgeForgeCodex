@@ -422,7 +422,7 @@ pub fn test_receipt(payload: &Value) -> StepResult {
     let sha1 = format!("{:x}", hasher.finalize());
     let receipt = json!({"ts":timestamp,"kind":kind,"cmd":command.chars().take(200).collect::<String>(),"sha1":&sha1[..12],"exit_code":exit,"source":source,"interrupted":interrupted,"attributable":attributable});
     let root = repo_root();
-    let directory = root.join(".runtime/test_receipts");
+    let directory = root.join(bridgeforge_core::artifact_paths::TEST_RECEIPTS);
     if let Err(error) = fs::create_dir_all(&directory) {
         return StepResult::failed("test-receipt directory", error);
     }
@@ -464,7 +464,7 @@ pub fn test_receipt(payload: &Value) -> StepResult {
         );
     }
     StepResult::output(format!(
-        "[test-receipt] {} exit={} source={} sha1={} -> .runtime/test_receipts/receipts.jsonl",
+        "[test-receipt] {} exit={} source={} sha1={} -> .runtime/tests/test-receipts/receipts.jsonl",
         kind,
         exit.map(|value| value.to_string())
             .unwrap_or_else(|| "None".into()),

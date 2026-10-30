@@ -8,14 +8,15 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 struct Temp(PathBuf);
 impl Temp {
     fn new() -> Self {
-        let path = std::env::temp_dir().join(format!(
-            "bf-process-{}-{}",
-            std::process::id(),
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let path =
+            test_artifacts::root(env!("CARGO_MANIFEST_DIR"), "process-runtime").join(format!(
+                "bf-process-{}-{}",
+                std::process::id(),
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
         fs::create_dir(&path).unwrap();
         Self(path)
     }
@@ -212,3 +213,7 @@ fn missing_program_remains_an_error() {
     let request = ProcessRequest::new(temp.0.join("nonexistent.exe"), &temp.0);
     assert!(SystemProcessRunner.run(&request).is_err());
 }
+
+#[allow(dead_code)]
+#[path = "../support/artifact_paths.rs"]
+mod test_artifacts;

@@ -10,14 +10,16 @@ use std::process::{Command, Output};
 struct Fixture(PathBuf);
 impl Fixture {
     fn new(kind: &str) -> Self {
-        let path = std::env::temp_dir().join(format!(
-            "bridgeforge-python-native-{kind}-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let path = test_artifacts::root(env!("CARGO_MANIFEST_DIR"), "release-python-native").join(
+            format!(
+                "bridgeforge-python-native-{kind}-{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ),
+        );
         fs::create_dir_all(&path).unwrap();
         Self(path)
     }
@@ -57,8 +59,11 @@ impl Fixture {
 impl Drop for Fixture {
     fn drop(&mut self) {
         // Constrain recursive cleanup to the exact generated direct temp child.
-        if let (Ok(actual), Ok(temp)) = (self.0.canonicalize(), std::env::temp_dir().canonicalize())
-        {
+        if let (Ok(actual), Ok(temp)) = (
+            self.0.canonicalize(),
+            test_artifacts::root(env!("CARGO_MANIFEST_DIR"), "release-python-native")
+                .canonicalize(),
+        ) {
             if actual.parent() == Some(temp.as_path())
                 && actual
                     .file_name()
@@ -326,3 +331,7 @@ fn python_native_pdm_real_lock_accepts_adapter_versions_and_content_hash() {
     assert_eq!(lock, fs::read(root.0.join("pdm.lock")).unwrap());
     root.no_build_artifacts();
 }
+
+#[allow(dead_code)]
+#[path = "../support/artifact_paths.rs"]
+mod test_artifacts;

@@ -10,10 +10,195 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-pub const DIRECTORY: &str = ".runtime/bridgeforge-codex/build-artifact-cache";
+pub const DIRECTORY: &str = crate::artifact_paths::BUILD_CACHE;
 const OWNER: &str = "bridgeforge-generated-artifact-cache-v1";
 const MAX_BYTES: u64 = 256 * 1024 * 1024;
 const KEEP: usize = 2;
+pub const LEGACY_DIRECTORY: &str = ".runtime/bridgeforge-codex/build-artifact-cache";
+
+/// Read-only selection for explicit cleanup. Keep the owner and coordination
+/// lock; entries with unknown files or changed bytes are never selected.
+/// A partially deleted entry can be retried while its last-deleted metadata
+/// still proves every remaining file. Empty owned key directories are harmless.
+pub fn cleanup_candidates(root: &Path) -> Result<Vec<PathBuf>, String> {
+    Ok(cleanup_selections(root)?
+        .into_iter()
+        .map(|selection| selection.path)
+        .collect())
+}
+
+pub fn cleanup_selections(root: &Path) -> Result<Vec<crate::artifact_cleanup::Selection>, String> {
+    let directory = crate::managed_paths::safe_join(root, DIRECTORY, "cleanup artifact cache")?;
+    let Some(bytes) =
+        crate::managed_paths::read_metadata(&directory.join("owner.json"), 16 * 1024)?
+    else {
+        return Ok(Vec::new());
+    };
+    let project = root
+        .canonicalize()
+        .map_err(|e| e.to_string())?
+        .to_string_lossy()
+        .into_owned();
+    let expected = Owner {
+        schema: 1,
+        owner: OWNER.into(),
+        project: project.clone(),
+    };
+    if parse::<Owner>(&bytes).ok().as_ref() != Some(&expected) {
+        return Ok(Vec::new());
+    }
+    let mut result = Vec::new();
+    for item in fs::read_dir(&directory).map_err(|e| e.to_string())? {
+        let item = item.map_err(|e| e.to_string())?;
+        let key = item.file_name().to_string_lossy().into_owned();
+        if key.len() != 64
+            || !key.bytes().all(|b| b.is_ascii_hexdigit())
+            || !item.file_type().map_err(|e| e.to_string())?.is_dir()
+        {
+            continue;
+        }
+        let path = item.path();
+        safe(&path)?;
+        let files = fs::read_dir(&path)
+            .map_err(|e| e.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?;
+        if files.is_empty() {
+            result.push(crate::artifact_cleanup::Selection {
+                path,
+                members: BTreeMap::from([("".into(), None)]),
+            });
+            continue;
+        }
+        let candidate = (|| -> Result<BTreeMap<String, Option<String>>, String> {
+            let metadata = plain(&path.join("entry.json"), 64 * 1024)?;
+            let mut members = BTreeMap::from([
+                ("".into(), None),
+                ("entry.json".into(), Some(hash(&metadata))),
+            ]);
+            let entry: Entry = parse(&metadata)?;
+            if entry.schema != 1
+                || entry.owner != OWNER
+                || entry.project != project
+                || entry.key != key
+                || Cache::key(&entry.identity)? != key
+            {
+                return Err("unknown cache entry".into());
+            }
+            let binary = binary_name(&entry.identity)?;
+            for file in files {
+                let name = file.file_name().to_string_lossy().into_owned();
+                let expected_hash = if name == binary {
+                    &entry.binary_sha256
+                } else if name == "receipt.json" {
+                    &entry.receipt_sha256
+                } else if name == "entry.json" {
+                    continue;
+                } else {
+                    return Err("unowned cache member".into());
+                };
+                if hash(&plain(&file.path(), MAX_BYTES)?) != *expected_hash {
+                    return Err("changed cache member".into());
+                }
+                members.insert(name, Some(expected_hash.clone()));
+            }
+            Ok(members)
+        })();
+        if let Ok(members) = candidate {
+            result.push(crate::artifact_cleanup::Selection { path, members });
+        }
+    }
+    Ok(result)
+}
+
+/// Read-only ownership proof. An old lock inode stays in runtime so concurrent
+/// old clients cannot acquire a different inode after retirement.
+pub fn legacy_files(root: &Path) -> Result<BTreeMap<PathBuf, Vec<u8>>, String> {
+    let directory = crate::managed_paths::safe_join(root, LEGACY_DIRECTORY, "legacy cache")?;
+    if !directory.exists() {
+        return Ok(BTreeMap::new());
+    }
+    let project = root
+        .canonicalize()
+        .map_err(|e| e.to_string())?
+        .to_string_lossy()
+        .into_owned();
+    let owner_path = directory.join("owner.json");
+    let owner_bytes = crate::managed_paths::read_metadata(&owner_path, 16 * 1024)?;
+    let mut files = BTreeMap::new();
+    if let Some(bytes) = &owner_bytes {
+        let owner: Owner = parse(bytes)?;
+        if owner
+            != (Owner {
+                schema: 1,
+                owner: OWNER.into(),
+                project: project.clone(),
+            })
+        {
+            return Err("legacy cache ownership mismatch; preserve it".into());
+        }
+        files.insert(owner_path, bytes.clone());
+    }
+    let cache = Cache {
+        root: root.into(),
+        directory: directory.clone(),
+        project,
+        environment: String::new(),
+        build_context: root.into(),
+        protected: BTreeSet::new(),
+        _lock: None,
+    };
+    for item in fs::read_dir(&directory).map_err(|e| e.to_string())? {
+        let item = item.map_err(|e| e.to_string())?;
+        let name = item.file_name().to_string_lossy().into_owned();
+        safe(&item.path())?;
+        if name == "owner.json" {
+            continue;
+        }
+        if name == "cache.lock" {
+            if !fs::symlink_metadata(item.path())
+                .map_err(|e| e.to_string())?
+                .is_file()
+            {
+                return Err("legacy cache lock is not a regular file".into());
+            }
+            continue;
+        }
+        if owner_bytes.is_none()
+            && name.len() == 64
+            && name.bytes().all(|b| b.is_ascii_hexdigit())
+            && item.file_type().map_err(|e| e.to_string())?.is_dir()
+            && fs::read_dir(item.path())
+                .map_err(|e| e.to_string())?
+                .next()
+                .is_none()
+        {
+            continue;
+        }
+        if owner_bytes.is_none() {
+            return Err("unowned legacy cache contents; preserve them".into());
+        }
+        let (entry, metadata) = cache.owned(&name)?;
+        let binary = item.path().join(binary_name(&entry.identity)?);
+        let payload = plain(&binary, MAX_BYTES)?;
+        let receipt_path = item.path().join("receipt.json");
+        let receipt = plain(&receipt_path, 64 * 1024)?;
+        if hash(&payload) != entry.binary_sha256 || hash(&receipt) != entry.receipt_sha256 {
+            return Err("legacy cache bytes drifted; preserve them".into());
+        }
+        files.insert(item.path().join("entry.json"), metadata);
+        files.insert(binary, payload);
+        files.insert(receipt_path, receipt);
+    }
+    Ok(files)
+}
+
+pub fn lock_legacy(root: &Path) -> Result<Option<FileLock>, String> {
+    if legacy_files(root)?.is_empty() {
+        return Ok(None);
+    }
+    FileLock::acquire(&root.join(LEGACY_DIRECTORY).join("cache.lock")).map(Some)
+}
 
 #[derive(Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
@@ -115,11 +300,16 @@ struct Probe {
     file_birth: Option<SystemTime>,
 }
 impl Probe {
-    fn create(name: &str, payload: &[u8]) -> Result<Self, String> {
-        let directory =
-            std::env::temp_dir().join(format!("bf-probe-{}-{}", std::process::id(), now()));
+    fn create(project: Option<&Path>, name: &str, payload: &[u8]) -> Result<Self, String> {
+        let directory = if let Some(root) = project {
+            crate::artifact_paths::temporary_build(root, "probe")?
+        } else {
+            std::env::temp_dir().join(format!("bf-probe-{}-{}", std::process::id(), now()))
+        };
         safe(&directory)?;
-        fs::create_dir(&directory).map_err(|e| e.to_string())?;
+        if project.is_none() {
+            fs::create_dir(&directory).map_err(|e| e.to_string())?;
+        }
         let mut probe = Self {
             binary: directory.join(name),
             directory_birth: fs::metadata(&directory).ok().and_then(|m| m.created().ok()),
@@ -274,7 +464,21 @@ pub fn environment(root: &Path, runner: &dyn ProcessRunner) -> Option<String> {
                 Ok(_) => {
                     let bytes = plain(&path, 1024 * 1024).ok()?;
                     let text = std::str::from_utf8(&bytes).ok()?;
-                    let document = text.parse::<toml_edit::DocumentMut>().ok()?;
+                    let mut document = text.parse::<toml_edit::DocumentMut>().ok()?;
+                    // Managed commands provide an explicit target directory.
+                    // The repository's default output location has no effect on
+                    // their compiler identity; all other build settings remain
+                    // conservative cache opt-outs.
+                    if let Some(build) = document
+                        .get_mut("build")
+                        .and_then(|v| v.as_table_like_mut())
+                    {
+                        if build.len() == 1
+                            && build.get("target-dir").and_then(|v| v.as_str()).is_some()
+                        {
+                            document.remove("build");
+                        }
+                    }
                     if document.iter().any(|(name, _)| {
                         !matches!(name, "net" | "http" | "registries" | "registry" | "source")
                     }) {
@@ -306,7 +510,7 @@ pub fn environment(root: &Path, runner: &dyn ProcessRunner) -> Option<String> {
                         } else {
                             canonical
                         },
-                        hash(&bytes),
+                        hash(document.to_string().as_bytes()),
                     );
                 }
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
@@ -385,6 +589,32 @@ fn footprint(path: &Path) -> Result<u64, String> {
 }
 
 impl Cache {
+    /// Persistent source/target slots require a held cache lock. Unlike the
+    /// optional legacy API, contention and ownership errors cannot become misses.
+    pub fn open_project(
+        root: &Path,
+        context: &Path,
+        runner: &dyn ProcessRunner,
+    ) -> Result<Option<Self>, String> {
+        Self::try_open(root, context, runner)
+    }
+
+    pub fn compiler_environment(&self) -> &str {
+        &self.environment
+    }
+
+    pub fn verify_compiler_environment(
+        &self,
+        actual: &Path,
+        runner: &dyn ProcessRunner,
+    ) -> Result<(), String> {
+        for context in [actual, self.build_context.as_path()] {
+            if environment(context, runner).as_deref() != Some(self.environment.as_str()) {
+                return Err("cache compiler inputs changed or actual Cargo context differs".into());
+            }
+        }
+        Ok(())
+    }
     /// User-owned public artifacts share one cache across projects. This is only
     /// opened during product preparation, never during project planning.
     pub fn open_shared(
@@ -485,9 +715,7 @@ impl Cache {
     }
     /// Plans may cache derived bytes outside the project, never installed files.
     pub fn open_temporary(root: &Path, context: &Path, runner: &dyn ProcessRunner) -> Option<Self> {
-        let project = root.canonicalize().ok()?.to_string_lossy().into_owned();
-        let key = hash(project.as_bytes());
-        let directory = std::env::temp_dir().join(format!("bridgeforge-artifacts-{}", &key[7..]));
+        let directory = root.join(DIRECTORY);
         match Self::open_directory(root, context, directory, runner) {
             Ok(Some(cache)) => Some(cache),
             Ok(None) => {
@@ -555,6 +783,10 @@ impl Cache {
             return Err("artifact cache root ownership mismatch".into());
         }
         let lock = FileLock::acquire(&directory.join("cache.lock"))?;
+        let locked_owner: Owner = parse(&plain(&directory.join("owner.json"), 16 * 1024)?)?;
+        if locked_owner != owner {
+            return Err("artifact cache owner changed while acquiring lock".into());
+        }
         let cache = Self {
             root: root.to_path_buf(),
             directory,
@@ -654,7 +886,9 @@ impl Cache {
             return Err("cache payload hash mismatch".into());
         }
         verify_payload(asset, &payload, &receipt)?;
-        let probe = Probe::create(&binary_name(&identity)?, &payload)?;
+        let project_scope =
+            (self.directory == self.root.join(DIRECTORY)).then_some(self.root.as_path());
+        let probe = Probe::create(project_scope, &binary_name(&identity)?, &payload)?;
         let mut request = ProcessRequest::new(probe.binary.as_os_str(), &self.root);
         request.args = asset["self_test"]["args"]
             .as_array()

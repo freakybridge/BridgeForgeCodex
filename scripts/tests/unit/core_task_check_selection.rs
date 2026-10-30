@@ -25,7 +25,7 @@ fn task_selection_allows_only_appended_cargo_test_filters() {
                 "--package",
                 "library",
                 "--target-dir",
-                ".runtime/target",
+                ".build/target",
                 "--",
                 "--test-threads=1",
             ],
@@ -34,7 +34,7 @@ fn task_selection_allows_only_appended_cargo_test_filters() {
                 "--package",
                 "library",
                 "--target-dir",
-                ".runtime/target",
+                ".build/target",
                 "task_filter",
                 "--",
                 "--test-threads=1",
@@ -70,8 +70,8 @@ fn task_selection_cannot_split_option_values_or_replace_flags() {
             vec!["test", "--package", "other", "library"],
         ),
         (
-            vec!["test", "--target-dir", ".runtime/target"],
-            vec!["test", "--target-dir", "other", ".runtime/target"],
+            vec!["test", "--target-dir", ".build/target"],
+            vec!["test", "--target-dir", "other", ".build/target"],
         ),
         (
             vec!["test", "--locked", "--lib"],
@@ -143,7 +143,7 @@ fn task_selection_rejects_successful_cargo_runs_with_zero_executed_tests() {
         }
     }
     let check = command(&["test", "--lib", "specific_test"]);
-    let root = std::env::temp_dir();
+    let root = test_artifacts::root(env!("CARGO_MANIFEST_DIR"), "task-check-selection");
     let error = run_check(&root, &check, None, true, &CargoResult(0), None).unwrap_err();
     assert!(error.contains("executed zero tests"));
     assert!(run_check(&root, &check, None, true, &CargoResult(1), None).is_ok());
@@ -168,3 +168,7 @@ fn task_selection_rejects_successful_cargo_runs_with_zero_executed_tests() {
         assert!(verify_cargo_execution(&command(&["test", "--", flag]), b"", false).is_err());
     }
 }
+
+#[allow(dead_code)]
+#[path = "../support/artifact_paths.rs"]
+mod test_artifacts;

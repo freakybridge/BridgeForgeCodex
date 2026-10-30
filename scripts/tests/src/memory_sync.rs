@@ -23,7 +23,7 @@ struct TempDirectory {
 impl TempDirectory {
     fn new(label: &str) -> Self {
         let id = TEMP_ID.fetch_add(1, Ordering::Relaxed);
-        let path = std::env::temp_dir().join(format!(
+        let path = test_artifacts::root(env!("CARGO_MANIFEST_DIR"), "memory-sync").join(format!(
             "bridgeforge-memory-test-{label}-{}-{id}",
             std::process::id()
         ));
@@ -323,3 +323,7 @@ fn atomic_write_replaces_content_without_leaving_stage_files() {
         .collect::<Vec<_>>();
     assert_eq!(names, vec![target.file_name().unwrap().to_os_string()]);
 }
+
+#[allow(dead_code)]
+#[path = "../support/artifact_paths.rs"]
+mod test_artifacts;

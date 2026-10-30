@@ -336,14 +336,10 @@ pub(super) fn build(
     runner: &dyn ProcessRunner,
 ) -> Result<BTreeMap<PathBuf, Vec<u8>>, String> {
     validate(files)?;
-    let nonce = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_err(|e| e.to_string())?
-        .as_nanos();
-    let temporary = Temporary(std::env::temp_dir().join(format!(
-        "bridgeforge-project-package-{}-{nonce}",
-        std::process::id()
-    )));
+    let temporary = Temporary(bridgeforge_core::artifact_paths::temporary_build(
+        root,
+        "project-package",
+    )?);
     let snapshot = temporary.0.join("package");
     fs::create_dir_all(&snapshot).map_err(|e| e.to_string())?;
     let fingerprint = input.identity(hook, contract)?;

@@ -296,13 +296,46 @@ pub(super) fn validate_baseline(
     validate_workspace: bool,
     initial_product_manifests: Option<&[String]>,
 ) -> Result<(String, String), String> {
+    validate_baseline_state(
+        root,
+        runner,
+        candidate,
+        validate_workspace,
+        initial_product_manifests,
+    )
+    .map(|(head, boundary, _)| (head, boundary))
+}
+
+pub(super) fn validate_baseline_state(
+    root: &Path,
+    runner: &dyn ProcessRunner,
+    candidate: Option<&rust::RustConfig>,
+    validate_workspace: bool,
+    initial_product_manifests: Option<&[String]>,
+) -> Result<(String, String, Option<schema4::withdrawal::History>), String> {
     explicit_release_policy(root)?;
     if git(root, runner, &["rev-parse", "--is-shallow-repository"])?.trim() != "false" {
         return Err("explicit release requires complete Git history".into());
     }
     let head = git(root, runner, &["rev-parse", "HEAD"])?;
     let head = head.trim();
-    let boundary = release_boundary(root, head, runner, initial_product_manifests)?;
+    let configuration = super::schema4::load(root)?;
+    if !configuration.as_ref().is_some_and(|cfg| cfg.current_model)
+        && schema4::withdrawal::has_current_history(root, head, runner)?
+    {
+        return Err(
+            "committed product-packages configuration cannot be removed or downgraded".into(),
+        );
+    }
+    let history = configuration
+        .as_ref()
+        .filter(|cfg| cfg.current_model)
+        .map(|cfg| schema4::withdrawal::audit(root, cfg, head, runner))
+        .transpose()?;
+    let boundary = match &history {
+        Some(history) => history.boundary.clone(),
+        None => release_boundary(root, head, runner, initial_product_manifests)?,
+    };
     let boundary = boundary.as_str();
     let version = fs::read_to_string(root.join("VERSION")).map_err(|e| e.to_string())?;
     let baseline = revision_payload(root, boundary, "VERSION", runner)?
@@ -336,5 +369,5 @@ pub(super) fn validate_baseline(
     } else if validate_workspace {
         validate_native_versions(root, version.trim().parse::<SemVer>()?)?;
     }
-    Ok((head.to_string(), boundary.to_string()))
+    Ok((head.to_string(), boundary.to_string(), history))
 }

@@ -10,7 +10,7 @@ struct Fixture {
 }
 impl Fixture {
     fn new() -> Self {
-        let root = std::env::temp_dir().join(format!(
+        let root = test_artifacts::root(env!("CARGO_MANIFEST_DIR"), "high-cost").join(format!(
             "bf-high-cost-{}-{}",
             std::process::id(),
             SystemTime::now()
@@ -247,3 +247,7 @@ fn high_cost_log_quoted_spoofs_truncation_and_steering_are_conservative() {
     );
     assert_eq!(fast_from_rows(&[steer, first], "a"), None);
 }
+
+#[allow(dead_code)]
+#[path = "../support/artifact_paths.rs"]
+mod test_artifacts;

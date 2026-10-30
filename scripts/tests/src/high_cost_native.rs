@@ -17,7 +17,8 @@ fn high_cost_native_stop_reaches_tenth_round_without_extra_request() {
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    let root = std::env::temp_dir().join(format!("bf-cost-native-{}-{stamp}", std::process::id()));
+    let root = test_artifacts::root(env!("CARGO_MANIFEST_DIR"), "high-cost-native")
+        .join(format!("bf-cost-native-{}-{stamp}", std::process::id()));
     let home = root.join("home");
     let project = root.join("project");
     fs::create_dir_all(&home).unwrap();
@@ -257,3 +258,7 @@ fn transcript(directory: &Path) -> Option<std::path::PathBuf> {
     }
     None
 }
+
+#[allow(dead_code)]
+#[path = "../support/artifact_paths.rs"]
+mod test_artifacts;

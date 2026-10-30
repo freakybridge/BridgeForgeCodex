@@ -17,7 +17,7 @@ New-Item -ItemType Directory -Path (Join-Path $source 'source'),$profileRoot -Fo
 [IO.File]::WriteAllText((Join-Path $source 'Cargo.toml'),"[workspace]`n")
 [IO.File]::WriteAllText((Join-Path $source 'Cargo.lock'),"version = 4`n")
 [IO.File]::WriteAllText((Join-Path $source 'source/main.rs'),"fn main() {}`n")
-$script:FixtureCli=Join-Path $RepositoryRoot '.codex/bin/bridgeforge.exe'
+$script:FixtureCli=Join-Path $RepositoryRoot '.build/bridgeforge/bin/bridgeforge.exe'
 function cargo {
     $arguments=@($args)
     if($arguments -notcontains '--locked' -or $arguments[-2] -ne '--bin' -or $arguments[-1] -ne 'bridgeforge'){throw 'Incorrect updater build recipe'}

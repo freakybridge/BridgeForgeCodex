@@ -25,6 +25,7 @@ pub(super) struct Capture {
     pub fingerprint: String,
     pub validation_fingerprint: String,
     pub product_version: String,
+    pub release_history: Option<super::withdrawal::History>,
     pub environment_guard: Option<EnvironmentGuard>,
     pub portable_python: Option<String>,
     pub environment: String,
@@ -358,8 +359,15 @@ pub(super) fn release_environment_fingerprints(
     values: &BTreeMap<String, String>,
 ) -> Result<EnvironmentSnapshot, String> {
     let mut effective = values.clone();
-    for name in ["CODEX_TOOL_CALL_ID", "WT_SESSION", "WT_PROFILE_ID", "TERM_SESSION_ID",
-        "SHLVL", "_", "PSModuleAnalysisCachePath"] {
+    for name in [
+        "CODEX_TOOL_CALL_ID",
+        "WT_SESSION",
+        "WT_PROFILE_ID",
+        "TERM_SESSION_ID",
+        "SHLVL",
+        "_",
+        "PSModuleAnalysisCachePath",
+    ] {
         effective.remove(name);
     }
     environment_fingerprints(&effective)
@@ -422,7 +430,8 @@ fn capture_with_reader(
     runner: &history_cache::Reader<'_>,
     release: bool,
 ) -> Result<Capture, String> {
-    let (head, boundary) = history::validate_baseline(root, runner, None, false, None)?;
+    let (head, boundary, release_history) =
+        history::validate_baseline_state(root, runner, None, false, None)?;
     super::prefetch_history(cfg, &head, runner)?;
     let inventory = independent::inventory(root, runner)?;
     let status = independent::status(root, runner)?;
@@ -694,6 +703,7 @@ fn capture_with_reader(
         return Err("repository changed during schema 4 input capture".into());
     }
     Ok(Capture {
+        release_history,
         modes: if current.packages.is_empty() && baseline.packages.is_empty() {
             BTreeMap::new()
         } else {

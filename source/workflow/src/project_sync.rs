@@ -103,6 +103,78 @@ fn sha_raw(payload: &[u8]) -> String {
 }
 
 const LEGACY_RECEIPT: &str = ".codex/bin/build-receipt.json";
+const ARTIFACT_LAYOUT_INPUT: &str = "artifact-layout:legacy-runtime";
+
+pub fn legacy_artifact_retirements(root: &Path) -> Result<BTreeMap<PathBuf, Vec<u8>>, String> {
+    let mut project = crate::project_hooks::legacy_artifacts(root)?;
+    if let Some((path, bytes)) = legacy_receipt(root)? {
+        project.insert(path, bytes);
+    }
+    let mut files =
+        bridgeforge_core::artifact_migration::legacy_runtime_with_owned(root, &project)?;
+    files.extend(bridgeforge_core::artifact_migration::legacy_build_outputs(
+        root,
+    )?);
+    files.extend(bridgeforge_core::artifact_migration::legacy_test_outputs(
+        root,
+    )?);
+    Ok(files)
+}
+
+pub fn legacy_artifact_relocations(root: &Path) -> Result<BTreeMap<PathBuf, Vec<u8>>, String> {
+    let mut writes = BTreeMap::new();
+    for (old, bytes) in bridgeforge_core::artifact_migration::legacy_test_outputs(root)? {
+        let target = bridgeforge_core::artifact_migration::relocated_test_output(root, &old)?;
+        if transaction_file_state(&target)?.is_some_and(|present| present != bytes) {
+            return Err(format!(
+                "legacy test relocation conflict: {}",
+                target.display()
+            ));
+        }
+        writes.insert(target, bytes);
+    }
+    for (old, bytes) in bridgeforge_core::artifact_migration::legacy_build_outputs(root)? {
+        let target = bridgeforge_core::artifact_migration::relocated_build_output(root, &old)?;
+        if transaction_file_state(&target)?.is_some_and(|present| present != bytes) {
+            return Err(format!(
+                "legacy build relocation conflicts with existing output: {}",
+                target.display()
+            ));
+        }
+        writes.insert(target, bytes);
+    }
+    for (old, bytes) in crate::project_hooks::legacy_artifacts(root)? {
+        let target = safe_join(
+            root,
+            &format!(
+                "{}/{}",
+                bridgeforge_core::artifact_paths::FACTORY_BIN,
+                old.file_name()
+                    .ok_or("project hook output name missing")?
+                    .to_string_lossy()
+            ),
+            "project hook relocation",
+        )?;
+        if transaction_file_state(&target)?.is_some_and(|present| present != bytes) {
+            return Err(format!(
+                "project hook relocation conflicts with existing output: {}",
+                target.display()
+            ));
+        }
+        writes.insert(target, bytes);
+    }
+    Ok(writes)
+}
+
+fn legacy_runtime_fingerprint(
+    root: &Path,
+    files: &BTreeMap<PathBuf, Vec<u8>>,
+) -> Result<String, String> {
+    let records = files.iter().map(|(path, bytes)| {
+        Ok(json!({"path":path.strip_prefix(root).map_err(|e| e.to_string())?.to_string_lossy().replace('\\', "/"),"sha256":sha_raw(bytes)}))
+    }).collect::<Result<Vec<_>, String>>()?;
+    crate::manifest::canonical_sha(&json!(records))
+}
 const RETIRED_SYNC_ROLE: &str = "mechanical-sync-worker";
 const RETIRED_SYNC_TARGET: &str = ".codex/agents/mechanical-sync-worker.toml";
 const RETIRED_SYNC_INPUT: &str = "retired:mechanical-sync-worker:inputs";
@@ -1235,6 +1307,69 @@ pub fn build_plan_with_inputs(
         });
     }
     plan_legacy_receipt_retirement(&project_root, &mut safe, &mut deletes)?;
+    if contract["generated_assets"]
+        .as_array()
+        .is_some_and(|assets| {
+            !assets.is_empty()
+                && assets.iter().all(|a| {
+                    a["receipt_target"].as_str().is_some_and(|p| {
+                        bridgeforge_core::artifact_paths::within(
+                            p,
+                            bridgeforge_core::artifact_paths::PROJECT_BIN,
+                        )
+                    })
+                })
+        })
+    {
+        let old = legacy_artifact_retirements(&project_root)?;
+        generated_source_fingerprints.insert(
+            ARTIFACT_LAYOUT_INPUT.into(),
+            legacy_runtime_fingerprint(&project_root, &old)?,
+        );
+        for (path, bytes) in legacy_artifact_relocations(&project_root)? {
+            let relative = relative_posix(&project_root, &path)?;
+            safe.push(SyncAction {
+                id: format!("relocated:runtime:{relative}"),
+                target: relative,
+                operation: "relocate".into(),
+                risk: false,
+                before_sha256: transaction_file_state(&path)?.as_deref().map(sha_raw),
+                after_sha256: sha_raw(&bytes),
+            });
+            writes.insert(path, bytes);
+        }
+        let hooks = project_root.join(".codex/hooks.json");
+        if let Some(payload) = writes.get(&hooks) {
+            let changed =
+                crate::project_hooks::migrate_legacy_registration(&project_root, payload)?;
+            for action in safe
+                .iter_mut()
+                .chain(risk.iter_mut())
+                .filter(|a| a.target == ".codex/hooks.json")
+            {
+                action.after_sha256 = sha_git(&changed);
+            }
+            writes.insert(hooks, changed);
+        }
+        for (path, bytes) in old {
+            let relative = path
+                .strip_prefix(&project_root)
+                .map_err(|e| e.to_string())?
+                .to_string_lossy()
+                .replace('\\', "/");
+            safe.push(SyncAction {
+                id: format!("retired:runtime:{relative}"),
+                target: relative,
+                operation: "delete".into(),
+                risk: false,
+                before_sha256: Some(sha_git(&bytes)),
+                after_sha256: sha_git(&[]),
+            });
+            if !deletes.contains(&path) {
+                deletes.push(path);
+            }
+        }
+    }
     plan_project_map_retirement(&project_root, &mut safe, &mut deletes)?;
     plan_sync_role_retirement(
         &project_root,
@@ -1683,6 +1818,19 @@ fn apply_plan_internal(
         return Err("risk actions require --confirmed-risk".into());
     }
     let _lock = ProjectLock::acquire(&plan.project_root)?;
+    let _legacy_cache = bridgeforge_core::artifact_cache::lock_legacy(&plan.project_root)?;
+    if let Some(expected) = plan
+        .generated_source_fingerprints
+        .get(ARTIFACT_LAYOUT_INPUT)
+    {
+        let current = legacy_artifact_retirements(&plan.project_root)?;
+        if !current.is_empty() {
+            bridgeforge_core::process_activity::legacy_clients_quiet(&plan.project_root)?;
+        }
+        if &legacy_runtime_fingerprint(&plan.project_root, &current)? != expected {
+            return Err("legacy runtime changed after plan; preserve it and regenerate".into());
+        }
+    }
     if let Some(upgrade) = &plan.release_upgrade {
         upgrade.verify(&plan.project_root)?;
     }
@@ -1780,6 +1928,7 @@ fn apply_plan_internal(
         let digest = if action.id.starts_with("migration.")
             || action.id.starts_with("migration-status:")
             || action.id.starts_with("public:")
+            || action.id.starts_with("relocated:runtime:")
         {
             sha_raw
         } else {
@@ -1868,6 +2017,7 @@ fn apply_plan_internal(
             )?;
             expected_after.insert(path.clone(), Some(payload.clone()));
         }
+        verify_written_payloads(&plan.writes, Some(&stamp_path))?;
         for path in &plan.deletes {
             let original = legacy
                 .as_ref()
@@ -1904,6 +2054,14 @@ fn apply_plan_internal(
         if let Some(observer) = before_stamp {
             observer(&plan.project_root, &stamp_path)?;
         }
+        verify_written_payloads(&plan.writes, Some(&stamp_path))?;
+        if plan
+            .generated_source_fingerprints
+            .contains_key(ARTIFACT_LAYOUT_INPUT)
+            && !legacy_artifact_retirements(&plan.project_root)?.is_empty()
+        {
+            return Err("legacy artifact contents appeared during migration".into());
+        }
         if plan
             .generated_source_fingerprints
             .contains_key(RETIRED_SYNC_INPUT)
@@ -1924,6 +2082,7 @@ fn apply_plan_internal(
             &stamp_payload,
         )?;
         expected_after.insert(stamp_path.clone(), Some(stamp_payload.clone()));
+        verify_written_payloads(&plan.writes, None)?;
         if let Some(evidence) = evidence.as_mut() {
             for (path, bytes) in &expected_after {
                 evidence.include(path.clone(), bytes.clone());
@@ -2333,6 +2492,32 @@ pub fn install_generated_transaction(
     binaries: &BTreeSet<PathBuf>,
     verify_after: impl FnOnce() -> Result<(), String>,
 ) -> Result<(), String> {
+    install_generated_transaction_retiring(
+        root,
+        writes,
+        snapshots,
+        binaries,
+        &BTreeMap::new(),
+        verify_after,
+    )
+}
+
+pub fn install_generated_transaction_retiring(
+    root: &Path,
+    writes: &BTreeMap<PathBuf, Vec<u8>>,
+    snapshots: &BTreeMap<PathBuf, Option<Vec<u8>>>,
+    binaries: &BTreeSet<PathBuf>,
+    retirements: &BTreeMap<PathBuf, Vec<u8>>,
+    verify_after: impl FnOnce() -> Result<(), String>,
+) -> Result<(), String> {
+    for (path, bytes) in retirements {
+        if writes.contains_key(path)
+            || snapshots.get(path).and_then(Option::as_ref) != Some(bytes)
+            || transaction_file_state(path)?.as_ref() != Some(bytes)
+        {
+            return Err(format!("retirement input drifted: {}", path.display()));
+        }
+    }
     for path in writes.keys() {
         let before = snapshots
             .get(path)
@@ -2351,6 +2536,7 @@ pub fn install_generated_transaction(
             atomic_write(path, payload)
         }
     };
+    let mut deleted = BTreeSet::new();
     let result = (|| {
         for (path, payload) in writes {
             if &transaction_file_state(path)?
@@ -2366,10 +2552,37 @@ pub fn install_generated_transaction(
                 write(path, payload)?;
             }
         }
-        verify_after()
+        verify_after()?;
+        verify_written_payloads(writes, None)?;
+        for (path, bytes) in retirements {
+            delete_unchanged_file(path, Some(bytes))?;
+            deleted.insert(path.clone());
+        }
+        verify_written_payloads(writes, None)?;
+        if !retirements.is_empty() && !legacy_artifact_retirements(root)?.is_empty() {
+            return Err("legacy artifact contents appeared during migration".into());
+        }
+        if !retirements.is_empty() {
+            bridgeforge_core::process_activity::legacy_clients_quiet(root)?;
+        }
+        Ok(())
     })();
     if let Err(error) = result {
         let mut failures = Vec::new();
+        for path in deleted.iter().rev() {
+            match transaction_file_state(path) {
+                Ok(None) => {
+                    if let Err(error) = write(path, &retirements[path]) {
+                        failures.push(format!("{}: {error}", path.display()));
+                    }
+                }
+                Ok(Some(current)) if current == retirements[path] => (),
+                _ => failures.push(format!(
+                    "{}: external change preserved during retirement rollback",
+                    path.display()
+                )),
+            }
+        }
         for (target, before) in snapshots
             .iter()
             .rev()
@@ -2414,6 +2627,24 @@ pub fn install_generated_transaction(
                 failures.join("; ")
             )
         });
+    }
+    Ok(())
+}
+
+fn verify_written_payloads(
+    writes: &BTreeMap<PathBuf, Vec<u8>>,
+    excluded: Option<&Path>,
+) -> Result<(), String> {
+    for (path, bytes) in writes {
+        if excluded == Some(path.as_path()) {
+            continue;
+        }
+        if transaction_file_state(path)?.as_ref() != Some(bytes) {
+            return Err(format!(
+                "installed payload changed during transaction: {}",
+                path.display()
+            ));
+        }
     }
     Ok(())
 }

@@ -16,7 +16,7 @@ fn lock_holder_process() {
 
 #[test]
 fn os_lock_excludes_contenders_and_recovers_after_process_death() {
-    let root = std::env::temp_dir().join(format!(
+    let root = test_artifacts::root(env!("CARGO_MANIFEST_DIR"), "file-lock").join(format!(
         "bfc-file-lock-{}-{}",
         std::process::id(),
         SystemTime::now()
@@ -64,3 +64,7 @@ fn os_lock_excludes_contenders_and_recovers_after_process_death() {
     drop(FileLock::acquire(&path).expect("process death must release the OS lock"));
     fs::remove_dir_all(root).unwrap();
 }
+
+#[allow(dead_code)]
+#[path = "../support/artifact_paths.rs"]
+mod test_artifacts;

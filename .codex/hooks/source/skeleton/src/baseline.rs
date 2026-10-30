@@ -230,6 +230,12 @@ pub fn validate_contract(value: &Value) -> Result<(), String> {
     if value.get("retired_assets").is_some() {
         keys.push("retired_assets");
     }
+    if let Some(layout) = value.get("artifact_layout") {
+        if layout != bridgeforge_core::artifact_paths::CONTRACT {
+            return Err("unsupported managed artifact_layout".into());
+        }
+        keys.push("artifact_layout");
+    }
     exact_keys(value, &keys, "current baseline top-level")?;
     if value["schema_version"].as_u64() != Some(4)
         || value["host"].as_str() != Some("codex")
@@ -385,6 +391,9 @@ pub fn validate_contract(value: &Value) -> Result<(), String> {
         if asset["strategy"].as_str() == Some("merge") {
             let validation = &asset["merge_validation"];
             match asset["merge_policy"].as_str() {
+                Some("artifact-roots")
+                    if validation["format"].as_str()
+                        == Some(bridgeforge_core::artifact_paths::CONTRACT) => {}
                 Some("git-attributes-default-lf")
                     if validation["format"].as_str() == Some("git-attributes-default-lf-v1")
                         && validation["required"]
@@ -503,17 +512,27 @@ fn verify_gitattributes_read_only(payload: &[u8]) -> Result<(), String> {
     Ok(())
 }
 
-fn verify_gitattributes(payload: &[u8]) -> Result<(), String> {
+fn verify_gitattributes(payload: &[u8], project: Option<&Path>) -> Result<(), String> {
     std::str::from_utf8(payload).map_err(|_| ".gitattributes is not valid UTF-8".to_string())?;
+    if verify_gitattributes_read_only(payload).is_ok() {
+        return Ok(());
+    }
     let token = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|error| error.to_string())?
         .as_nanos();
-    let root = std::env::temp_dir().join(format!(
-        "bridgeforge-gitattributes-{}-{token}",
-        std::process::id()
-    ));
-    fs::create_dir(&root).map_err(|error| format!("cannot create attribute sandbox: {error}"))?;
+    let root = if let Some(project) = project {
+        bridgeforge_core::artifact_paths::temporary_build(project, "attributes")?
+    } else {
+        std::env::temp_dir().join(format!(
+            "bridgeforge-gitattributes-{}-{token}",
+            std::process::id()
+        ))
+    };
+    if project.is_none() {
+        fs::create_dir(&root)
+            .map_err(|error| format!("cannot create attribute sandbox: {error}"))?;
+    }
     let temporary = TempDirectory(root.clone());
     fs::write(root.join(".gitattributes"), payload)
         .map_err(|error| format!("cannot prepare attribute sandbox: {error}"))?;
@@ -719,13 +738,14 @@ fn verify_hooks(payload: &[u8], asset: &Value) -> Result<(), String> {
 }
 
 pub fn verify_asset_payload(asset: &Value, payload: &[u8]) -> Result<String, String> {
-    verify_asset_payload_mode(asset, payload, false)
+    verify_asset_payload_mode(asset, payload, false, None)
 }
 
 fn verify_asset_payload_mode(
     asset: &Value,
     payload: &[u8],
     zero_write: bool,
+    project: Option<&Path>,
 ) -> Result<String, String> {
     let id = asset["id"]
         .as_str()
@@ -783,11 +803,17 @@ fn verify_asset_payload_mode(
         }
     } else if strategy == "merge" {
         match asset["merge_policy"].as_str() {
+            Some("artifact-roots") => {
+                let problems = bridgeforge_core::artifact_paths::ignore_problems(Some(payload))?;
+                if !problems.is_empty() {
+                    return Err(problems.join("; "));
+                }
+            }
             Some("git-attributes-default-lf") => {
                 if zero_write {
                     verify_gitattributes_read_only(payload)?;
                 } else {
-                    verify_gitattributes(payload)?;
+                    verify_gitattributes(payload, project)?;
                 }
             }
             Some("codex-hooks") => verify_hooks(payload, asset)?,
@@ -992,7 +1018,7 @@ fn verify_contract_assets(
             let target = safe_target(root, &asset["target"], "managed verification asset")?;
             let payload = fs::read(&target)
                 .map_err(|e| format!("managed asset is missing: {}: {e}", asset["id"]))?;
-            let checked = verify_asset_payload_mode(asset, &payload, zero_write)?;
+            let checked = verify_asset_payload_mode(asset, &payload, zero_write, Some(root))?;
             if let Some(e) = evidence.as_deref_mut() {
                 e.include(target, Some(payload));
             }
@@ -1168,7 +1194,7 @@ pub fn verify_index(root: &Path, runner: &dyn ProcessRunner) -> Result<BaselineR
             .as_str()
             .ok_or("staged asset target is missing")?;
         let payload = git_index_blob(root, target, runner)?;
-        let result = verify_asset_payload(asset, &payload)?;
+        let result = verify_asset_payload_mode(asset, &payload, false, Some(root))?;
         if let Some(id) = result.strip_prefix("skip:") {
             skipped.push(id.to_string());
         } else {

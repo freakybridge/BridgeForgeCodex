@@ -4,7 +4,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 #[test]
 fn explicit_memory_parameters_cannot_bypass_consent_or_scope() {
-    let home = std::env::temp_dir().join(format!(
+    let home = test_artifacts::root(env!("CARGO_MANIFEST_DIR"), "cli-memory").join(format!(
         "bf-auth-scope-{}",
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -66,7 +66,8 @@ fn every_lifecycle_event_queues_and_reuses_worker_without_network() {
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    let home = std::env::temp_dir().join(format!("bfc-lifecycle-queue-{token}"));
+    let home = test_artifacts::root(env!("CARGO_MANIFEST_DIR"), "cli-memory")
+        .join(format!("bfc-lifecycle-queue-{token}"));
     let state = home.join(".bridgeforge-codex/native-memory-sync");
     fs::create_dir_all(&state).unwrap();
     let remote = "https://github.com/offline-fixture/bridgeforge-codex-memories";
@@ -126,7 +127,7 @@ fn every_lifecycle_event_queues_and_reuses_worker_without_network() {
 
 #[test]
 fn memory_session_start_notifies_failure_once_and_rearms_after_recovery() {
-    let home = std::env::temp_dir().join(format!(
+    let home = test_artifacts::root(env!("CARGO_MANIFEST_DIR"), "cli-memory").join(format!(
         "bf-memory-notice-{}",
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -186,7 +187,7 @@ fn memory_session_start_notifies_failure_once_and_rearms_after_recovery() {
 
 #[test]
 fn memory_hook_failure_notifies_and_busy_does_not_erase_the_failure() {
-    let home = std::env::temp_dir().join(format!(
+    let home = test_artifacts::root(env!("CARGO_MANIFEST_DIR"), "cli-memory").join(format!(
         "bf-memory-failed-hook-{}",
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -220,7 +221,7 @@ fn memory_hook_failure_notifies_and_busy_does_not_erase_the_failure() {
 
 #[test]
 fn memory_status_rejects_corrupt_state_and_missing_baseline_without_writes() {
-    let home = std::env::temp_dir().join(format!(
+    let home = test_artifacts::root(env!("CARGO_MANIFEST_DIR"), "cli-memory").join(format!(
         "bf-memory-corrupt-state-{}",
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -264,7 +265,7 @@ fn memory_status_rejects_corrupt_state_and_missing_baseline_without_writes() {
 #[test]
 fn memory_conflict_and_stale_pending_notices_respect_acknowledgement() {
     for kind in ["conflicted", "degraded"] {
-        let home = std::env::temp_dir().join(format!(
+        let home = test_artifacts::root(env!("CARGO_MANIFEST_DIR"), "cli-memory").join(format!(
             "bf-memory-{kind}-{}",
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -329,7 +330,8 @@ fn memory_hook_repair_requires_prior_authorization() {
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    let home = std::env::temp_dir().join(format!("bridgeforge-memory-repair-{token}"));
+    let home = test_artifacts::root(env!("CARGO_MANIFEST_DIR"), "cli-memory")
+        .join(format!("bridgeforge-memory-repair-{token}"));
     fs::create_dir_all(&home).unwrap();
     let outcome = run(&[
         "memory-sync".into(),
@@ -348,7 +350,8 @@ fn memory_status_reports_consent_runtime_remote_health_and_alert_fields() {
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    let home = std::env::temp_dir().join(format!("bridgeforge-memory-status-{token}"));
+    let home = test_artifacts::root(env!("CARGO_MANIFEST_DIR"), "cli-memory")
+        .join(format!("bridgeforge-memory-status-{token}"));
     fs::create_dir_all(&home).unwrap();
     let outcome = run(&[
         "memory-sync".into(),
@@ -388,7 +391,8 @@ fn memory_status_agrees_for_windows_path_separator_aliases_without_writing() {
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    let home = std::env::temp_dir().join(format!("memory-cli-path-alias-{token}"));
+    let home = test_artifacts::root(env!("CARGO_MANIFEST_DIR"), "cli-memory")
+        .join(format!("memory-cli-path-alias-{token}"));
     fs::create_dir_all(&home).unwrap();
     let binary = std::env::current_exe().unwrap();
     let document = bridgeforge_memory::user_config::expected_document(&binary, &home);
@@ -423,7 +427,8 @@ fn memory_status_is_read_only_and_alert_remains_until_acknowledged() {
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    let home = std::env::temp_dir().join(format!("bridgeforge-memory-health-{token}"));
+    let home = test_artifacts::root(env!("CARGO_MANIFEST_DIR"), "cli-memory")
+        .join(format!("bridgeforge-memory-health-{token}"));
     let state = home.join(".bridgeforge-codex/native-memory-sync");
     fs::create_dir_all(&state).unwrap();
     bridgeforge_memory::record_health(&state, "failed", Some("simulated failure"), None).unwrap();
@@ -490,3 +495,7 @@ fn memory_status_is_read_only_and_alert_remains_until_acknowledged() {
     })));
     fs::remove_dir_all(home).unwrap();
 }
+
+#[allow(dead_code)]
+#[path = "../support/artifact_paths.rs"]
+mod test_artifacts;

@@ -37,7 +37,8 @@ fn manifest_retirement_rolls_back_and_preserves_external_recreation() {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    let root = std::env::temp_dir().join(format!("bf-manifest-retirement-{token}"));
+    let root = test_artifacts::root(env!("CARGO_MANIFEST_DIR"), "manifest")
+        .join(format!("bf-manifest-retirement-{token}"));
     fs::create_dir_all(&root).unwrap();
     let retired = root.join("retired.rs");
     for external in [false, true] {
@@ -228,7 +229,7 @@ fn consumer_lock_follows_candidate_native_versions_and_dependency_closure() {
 #[test]
 fn manifest_install_failure_rolls_back_own_writes_and_preserves_external_edits() {
     use std::time::{SystemTime, UNIX_EPOCH};
-    let root = std::env::temp_dir().join(format!(
+    let root = test_artifacts::root(env!("CARGO_MANIFEST_DIR"), "manifest").join(format!(
         "bf-manifest-tx-{}-{}",
         std::process::id(),
         SystemTime::now()
@@ -307,3 +308,7 @@ fn manifest_install_failure_rolls_back_own_writes_and_preserves_external_edits()
     assert!(!c.exists());
     fs::remove_dir_all(root).unwrap();
 }
+
+#[allow(dead_code)]
+#[path = "../support/artifact_paths.rs"]
+mod test_artifacts;

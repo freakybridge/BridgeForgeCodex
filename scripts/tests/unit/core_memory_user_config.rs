@@ -44,7 +44,7 @@ fn python_hook_fixture(home: &Path) -> Value {
 #[cfg(windows)]
 #[test]
 fn exact_official_python_handlers_migrate_to_rust_and_preserve_external_hooks() {
-    let home = std::env::temp_dir()
+    let home = test_artifacts::root(env!("CARGO_MANIFEST_DIR"), "memory-user-config")
         .join(format!(
             "bf-python-hook-{}",
             SystemTime::now()
@@ -74,7 +74,7 @@ fn exact_official_python_handlers_migrate_to_rust_and_preserve_external_hooks() 
 #[cfg(windows)]
 #[test]
 fn partial_official_python_hooks_migrate_and_fill_missing_events() {
-    let home = std::env::temp_dir()
+    let home = test_artifacts::root(env!("CARGO_MANIFEST_DIR"), "memory-user-config")
         .join(format!(
             "bf-python-partial-{}",
             SystemTime::now()
@@ -110,7 +110,7 @@ fn partial_official_python_hooks_migrate_and_fill_missing_events() {
 #[cfg(windows)]
 #[test]
 fn modified_python_handler_blocks_entire_migration_without_writes() {
-    let home = std::env::temp_dir()
+    let home = test_artifacts::root(env!("CARGO_MANIFEST_DIR"), "memory-user-config")
         .join(format!(
             "bf-python-drift-{}",
             SystemTime::now()
@@ -198,15 +198,19 @@ fn powershell_host_preserves_native_arguments_stdin_streams_and_exit_code() {
     use std::io::Write;
     use std::os::windows::process::CommandExt;
     use std::process::{Command, Stdio};
-    let folder = std::env::temp_dir().join(format!(
-        "bf shell ' dollar$ tick` {}",
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
+    let folder =
+        test_artifacts::root(env!("CARGO_MANIFEST_DIR"), "memory-user-config").join(format!(
+            "bf shell ' dollar$ tick` {}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
     fs::create_dir_all(&folder).unwrap();
-    let binary = folder.join("probe.exe");
+    let build_folder = test_artifacts::build_root(env!("CARGO_MANIFEST_DIR"), "memory-user-config")
+        .join(folder.file_name().unwrap());
+    fs::create_dir_all(&build_folder).unwrap();
+    let binary = build_folder.join("probe.exe");
     let root = factory_repository::from_manifest_dir(env!("CARGO_MANIFEST_DIR"));
     let built = Command::new("rustc")
         .arg(root.join("scripts/tests/fixtures/native_memory_shell_probe.rs"))
@@ -262,19 +266,21 @@ fn powershell_host_preserves_native_arguments_stdin_streams_and_exit_code() {
         );
         assert!(!output.stderr.is_empty());
     }
+    fs::remove_dir_all(build_folder).unwrap();
     fs::remove_dir_all(folder).unwrap();
 }
 
 #[cfg(windows)]
 #[test]
 fn exact_legacy_rust_hooks_migrate_but_command_suffixes_block() {
-    let home = std::env::temp_dir().join(format!(
-        "bf-rust-legacy-{}",
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
+    let home =
+        test_artifacts::root(env!("CARGO_MANIFEST_DIR"), "memory-user-config").join(format!(
+            "bf-rust-legacy-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
     fs::create_dir_all(&home).unwrap();
     let binary = home.join("bin/bridgeforge.exe");
     let mut legacy = expected_document(&binary, &home);
@@ -346,7 +352,8 @@ fn native_memory_hook_path_aliases_are_healthy_and_repair_is_noop() {
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    let home = std::env::temp_dir().join(format!("memory hook aliases {token}"));
+    let home = test_artifacts::root(env!("CARGO_MANIFEST_DIR"), "memory-user-config")
+        .join(format!("memory hook aliases {token}"));
     let forward_home = PathBuf::from(home.to_string_lossy().replace('\\', "/"));
     let backward_home = PathBuf::from(home.to_string_lossy().replace('/', "\\"));
     let binary = Path::new(r"C:\Program Files\BridgeForge\bridgeforge.exe");
@@ -387,7 +394,8 @@ fn native_memory_path_aliases_do_not_hide_real_hook_changes() {
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    let home = std::env::temp_dir().join(format!("memory-hook-drift-{token}"));
+    let home = test_artifacts::root(env!("CARGO_MANIFEST_DIR"), "memory-user-config")
+        .join(format!("memory-hook-drift-{token}"));
     let binary = Path::new(r"C:\tools\bridgeforge.exe");
     fs::create_dir_all(&home).unwrap();
     for change in [
@@ -487,7 +495,8 @@ fn native_memory_powershell_single_quotes_allow_trailing_path_separator() {
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    let home = std::env::temp_dir().join(format!("memory-hook-trailing-{token}"));
+    let home = test_artifacts::root(env!("CARGO_MANIFEST_DIR"), "memory-user-config")
+        .join(format!("memory-hook-trailing-{token}"));
     let spelling = PathBuf::from(format!("{}/", home.to_string_lossy().replace('\\', "/")));
     let binary = Path::new("C:/tools/bridgeforge.exe");
     fs::create_dir_all(&home).unwrap();
@@ -512,7 +521,8 @@ fn user_hooks_writer_refuses_an_active_shared_lock() {
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    let home = std::env::temp_dir().join(format!("bridgeforge-user-hooks-lock-{token}"));
+    let home = test_artifacts::root(env!("CARGO_MANIFEST_DIR"), "memory-user-config")
+        .join(format!("bridgeforge-user-hooks-lock-{token}"));
     fs::create_dir_all(home.join(".bridgeforge-codex")).unwrap();
     let held = UserHooksLock::acquire(&home).unwrap();
     let error = merge_user_hooks(&home, Path::new("bridgeforge")).unwrap_err();
@@ -534,7 +544,8 @@ fn annotated_quoted_and_inline_tables_are_edited_without_duplication() {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let home = std::env::temp_dir().join(format!("bridgeforge-toml-{token}"));
+        let home = test_artifacts::root(env!("CARGO_MANIFEST_DIR"), "memory-user-config")
+            .join(format!("bridgeforge-toml-{token}"));
         fs::create_dir_all(&home).unwrap();
         fs::write(home.join("config.toml"), input).unwrap();
         assert!(enable_memories(&home, true).unwrap());
@@ -574,7 +585,8 @@ fn invalid_or_wrong_shaped_toml_is_rejected_without_writing() {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let home = std::env::temp_dir().join(format!("bridgeforge-toml-invalid-{token}"));
+        let home = test_artifacts::root(env!("CARGO_MANIFEST_DIR"), "memory-user-config")
+            .join(format!("bridgeforge-toml-invalid-{token}"));
         fs::create_dir_all(&home).unwrap();
         let config = home.join("config.toml");
         fs::write(&config, input).unwrap();
@@ -585,3 +597,7 @@ fn invalid_or_wrong_shaped_toml_is_rejected_without_writing() {
         fs::remove_dir_all(home).unwrap();
     }
 }
+
+#[allow(dead_code)]
+#[path = "../support/artifact_paths.rs"]
+mod test_artifacts;

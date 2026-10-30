@@ -34,9 +34,9 @@ release 先运行 `git-sync --sync-remote`：受管 fetch、必要快进及本�
 生成完整 product 分析，绑定本次 fingerprint；子包版本和累计理由来自已收口账本，不重新判级升包。已明确且仍适用的不兼容决定直接复用，未知或未接受影响不得猜测通过。显示目标与理由不再次索取已有发布授权。
 
 ```text
-.codex/bin/bridgeforge git-sync --sync-remote
-.codex/bin/bridgeforge git-sync --release-preview --message-file .runtime/message.txt
-.codex/bin/bridgeforge git-sync --release --skip-fetch --release-analysis-file .runtime/release-analysis.json --message-file .runtime/message.txt
+.deps/bridgeforge/bin/bridgeforge git-sync --sync-remote
+.deps/bridgeforge/bin/bridgeforge git-sync --release-preview --message-file .runtime/message.txt
+.deps/bridgeforge/bin/bridgeforge git-sync --release --skip-fetch --release-analysis-file .runtime/release-analysis.json --message-file .runtime/message.txt
 ```
 
 分析文件由 Agent 在预览后生成，不是上例自动产生。实际 release 内部构建并校验最终计划，然后立即进入写入和提交；通常省略外层带分析预览，仅需要独立只读审阅完整计划时选用。无需同一宿主进程；实际输入及必要环境一致即可使用分析，真实变化仍须重新核验，不只替换旧 fingerprint。

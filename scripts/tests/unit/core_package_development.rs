@@ -8,6 +8,9 @@ mod eol_tests;
 #[path = "core_package_lightweight.rs"]
 mod lightweight_tests;
 
+#[path = "core_release_withdrawal.rs"]
+mod withdrawal_tests;
+
 fn task_development_fixture(dependency: bool) -> Repo {
     let r = fixture("unconfigured", true);
     write(
@@ -2408,11 +2411,12 @@ fn package_development_check_policy_change_does_not_reopen_version() {
 #[test]
 fn package_development_real_cargo_verifies_final_manifest_and_lock() {
     let r = fixture("independent", true);
+    write(&r.0, ".gitignore", b".runtime/\n.build/\n.deps/\n");
     configure(&r.0, false);
     change(&r.0, true);
     write(&r.0, "pkg/src/lib.rs", b"pub fn value()->u8{2}\n#[test] fn final_candidate(){assert_eq!(value(),2);assert_eq!(env!(\"CARGO_PKG_VERSION\"),\"1.0.1\");}\n");
     let mut cfg: Value = serde_json::from_slice(&fs::read(r.0.join(CONFIG)).unwrap()).unwrap();
-    cfg["development"]["a"]["checks"] = json!([{"id":"cargo-test","program":"cargo","args":["test","--locked","--manifest-path","pkg/Cargo.toml","--target-dir",".runtime/target"]}]);
+    cfg["development"]["a"]["checks"] = json!([{"id":"cargo-test","program":"cargo","args":["test","--locked","--manifest-path","pkg/Cargo.toml","--target-dir",".build/target"]}]);
     write(&r.0, CONFIG, &serde_json::to_vec(&cfg).unwrap());
     let q = request(&r.0, "patch", false, &SystemProcessRunner);
     let a = close(&r.0, &q, &SystemProcessRunner);

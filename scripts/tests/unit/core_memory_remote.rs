@@ -6,7 +6,7 @@ mod performance;
 struct RestoreFixture(PathBuf);
 impl RestoreFixture {
     fn new() -> Self {
-        let path = std::env::temp_dir().join(format!(
+        let path = test_artifacts::root(env!("CARGO_MANIFEST_DIR"), "memory-remote").join(format!(
             "bf-restore-{}-{}",
             std::process::id(),
             SystemTime::now()
@@ -882,3 +882,7 @@ fn replacement_retains_old_tree_for_writers_with_open_handles() {
     assert_eq!(fs::read(backup.join("note.md")).unwrap(), b"old late write");
     assert_eq!(fs::read(memories.join("note.md")).unwrap(), b"new");
 }
+
+#[allow(dead_code)]
+#[path = "../support/artifact_paths.rs"]
+mod test_artifacts;
