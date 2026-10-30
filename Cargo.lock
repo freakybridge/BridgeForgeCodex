@@ -58,7 +58,7 @@ dependencies = [
 
 [[package]]
 name = "bridgeforge-cli"
-version = "13.0.0"
+version = "13.0.1"
 dependencies = [
  "bridgeforge-checks",
  "bridgeforge-core",
@@ -72,7 +72,7 @@ dependencies = [
 
 [[package]]
 name = "bridgeforge-core"
-version = "10.0.0"
+version = "10.0.1"
 dependencies = [
  "chrono",
  "libc",
@@ -104,7 +104,7 @@ dependencies = [
 
 [[package]]
 name = "bridgeforge-hook"
-version = "13.0.0"
+version = "13.0.1"
 dependencies = [
  "bridgeforge-checks",
  "bridgeforge-core",
@@ -167,7 +167,7 @@ dependencies = [
 
 [[package]]
 name = "bridgeforge-workflow"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "bridgeforge-checks",
  "bridgeforge-core",

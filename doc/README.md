@@ -8,6 +8,8 @@ delivery_layout: flat
 
 ## 从这里开始
 
+- 已验收：[旧工具目录保留与 StratusAgent 骨架升级](0_architecture/design/codex-project-sync.md#用户验收旧工具目录保留与-stratusagent-升级2026-10-31)（core 10.0.1、workflow 0.9.1；8 项检查 184 个用例及独立退役 1 项通过，真实 StratusAgent 9.0.0→13.0.0，151 项现有改动、15 个保护文件和项目专区原样保留；公共工具自检及独立复核通过，已授权 Forge release。项目自有 Hook 业务运行未验证）。
+
 - 待执行：[BridgePilot 产品演进与跨项目总管开发计划](1_delivery/bridgepilot-evolution/plan_2026-10-30_bridgepilot-evolution.md)（TODO-050；现有 BridgeForgeCodex 演进为 BP，工程能力归入 `source/forge/`，与无 `src/` 层的 `source/orchestrator/` 平行；覆盖需求、Codex 工作流、持久化、暂停换机、迁移任务及首版验收。仅获准计划落盘，尚未实施、验证或发布）。
 
 - 已验收：[统一产品清单与安装管理边界](0_architecture/design/codex-project-sync.md#用户验收与发布授权2026-10-30)（三个旧源清单合并至根 bridgeforge-manifest.json；资产历史、忽略内容和退役测试拆分一并验收；受管收口、143 项最终候选测试及最终工具核验通过，已授权 release；真实下游和用户级安装未执行）。

@@ -592,7 +592,6 @@ fn factory_prepare_stops_on_manifest_mirror_source_build_or_target_drift() {
         "source",
         "target",
         "installed-test",
-        "legacy-new",
     ] {
         let fixture = Factory::new();
         let runner = Runner::new(&fixture.0, failure);
@@ -651,6 +650,23 @@ fn factory_prepare_stops_on_manifest_mirror_source_build_or_target_drift() {
             assert_eq!(runner.calls.load(Ordering::Relaxed), 0);
         }
     }
+}
+
+#[test]
+fn factory_prepare_preserves_unowned_legacy_files_created_during_build() {
+    let fixture = Factory::new();
+    let runner = Runner::new(&fixture.0, "legacy-new");
+    let result = prepare(&fixture.0, false, &runner);
+    assert_eq!(result.code, 0, "{}", result.stderr);
+    assert_eq!(
+        fs::read(fixture.0.join(".codex/bin/unknown.txt")).unwrap(),
+        b"external"
+    );
+    assert_eq!(prepare(&fixture.0, true, &runner).code, 0);
+    assert_eq!(
+        fs::read(fixture.0.join(".codex/bin/unknown.txt")).unwrap(),
+        b"external"
+    );
 }
 
 #[test]
@@ -785,6 +801,42 @@ fn generated_install_rolls_back_own_changes_and_preserves_external_changes() {
     assert!(result.unwrap_err().contains("external change preserved"));
     assert_eq!(fs::read(&a).unwrap(), b"external");
     assert!(!b.exists());
+}
+
+#[test]
+fn generated_install_rolls_back_ignore_retirement_when_private_file_appears() {
+    let root = factory_repository::from_manifest_dir(env!("CARGO_MANIFEST_DIR"))
+        .join(".runtime/tests/generated-ignore-retirement")
+        .join(std::process::id().to_string());
+    let ignore = root.join(".codex/bin/.gitignore");
+    let private = root.join(".codex/bin/project_late.exe");
+    let installed = root.join("public.bin");
+    fs::create_dir_all(ignore.parent().unwrap()).unwrap();
+    let policy = b"*\n!.gitignore\n".to_vec();
+    fs::write(&ignore, &policy).unwrap();
+    let retired = BTreeMap::from([(ignore.clone(), policy.clone())]);
+    let snapshots = BTreeMap::from([
+        (ignore.clone(), Some(policy.clone())),
+        (installed.clone(), None),
+    ]);
+    let result = project_sync::install_generated_transaction_retiring(
+        &root,
+        &BTreeMap::from([(installed.clone(), b"new public file".to_vec())]),
+        &snapshots,
+        &BTreeSet::new(),
+        &retired,
+        || {
+            fs::write(&private, b"late independent program").unwrap();
+            Ok(())
+        },
+    );
+    let error = result.unwrap_err();
+    assert!(error.contains("rolled back"), "{error}");
+    assert!(error.contains("project files appeared"), "{error}");
+    assert_eq!(fs::read(ignore).unwrap(), policy);
+    assert_eq!(fs::read(private).unwrap(), b"late independent program");
+    assert!(!installed.exists());
+    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]

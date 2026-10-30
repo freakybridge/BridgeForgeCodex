@@ -15,6 +15,23 @@
 
 > **追溯说明**：v0.1.0 - v0.7.0 基于 git log 历史回溯标记，**git tag 仅从 v0.8.0 开始打**。早期未启用版本号管理是 setup_agent 自打脸问题（要求下游用但自己没用），v0.8.0 修补。
 
+## [13.0.1] - 2026-10-31
+
+### Fixed
+
+- [product][repo][meta] 修复骨架升级对项目自有 Hook 文件的保留
+
+### Release analysis
+
+- Product: 修复已支持骨架升级对混合旧工具目录的误阻断：只退役通过既有校验的公共工具，原地保留项目自有 Hook 文件及其忽略规则，并在并发新增项目文件时回滚忽略规则退役。补齐两份已发布公共源码的精确历史证明，保持公共工具校验、项目 Hook 独立维护及原配置接口。已完成子包受管收口、必要验证与 StratusAgent 真实升级验收，本次发布只升级主程序。
+- `checks`: 0.2.1 -> 0.2.1 (Revalidate the unchanged consumer against the corrected core/workflow dependency closure; let managed closure retain its version when content is unchanged.)
+- `core`: 10.0.0 -> 10.0.1 (Preserve opaque project files and their ignore policy while retiring only receipt-proven public runtime files.)
+- `factory`: 0.10.0 -> 0.10.0 (Revalidate the unchanged consumer against the corrected core/workflow dependency closure; let managed closure retain its version when content is unchanged.)
+- `lifecycle`: 0.8.1 -> 0.8.1 (Revalidate the unchanged consumer against the corrected core/workflow dependency closure; let managed closure retain its version when content is unchanged.)
+- `memory`: 0.1.0 -> 0.1.0 (Revalidate the unchanged consumer against the corrected core/workflow dependency closure; let managed closure retain its version when content is unchanged.)
+- `skeleton`: 0.5.1 -> 0.5.1 (Revalidate the unchanged consumer against the corrected core/workflow dependency closure; let managed closure retain its version when content is unchanged.)
+- `workflow`: 0.9.0 -> 0.9.1 (Keep private Hook registration independent from public retirement and roll back ignore retirement when project files appear concurrently.)
+
 ## [13.0.0] - 2026-10-31
 
 ### Changed

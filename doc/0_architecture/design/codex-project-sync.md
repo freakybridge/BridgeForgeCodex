@@ -58,7 +58,7 @@ before 包或迁移账本。
 
 公共产物由用户级 updater 准备，缓存位于当前用户 .codex/.cache/bridgeforge/public-build，身份绑定源码、锁、配方、自检与编译环境，不绑定下游项目。沿用 artifact_cache 的 ownership、锁、内容校验和容量限制；public-ready 存放有界引用收据。项目 Apply 只读捕获字节，不编译、自检或更新 recency，缺失或损坏时需重新准备。
 
-项目 Hook 独立维护边界固定在代码中，不依赖策略文件。init/adopt/update 和公共构建、基线检查均不编译或验证项目 Hook 业务源码；更新公共注册时保留项目 handler 和扩展字段。旧策略及迁移状态原样保留并忽略，不再生成提示或记录。项目自行构建、安装和维护注册；公共布局迁移不搬移项目程序或改写其路径，归属不明时保留并报告阻断。
+项目 Hook 独立维护边界固定在代码中，不依赖策略文件。init/adopt/update 和公共构建、基线检查均不编译或验证项目 Hook 业务源码；更新公共注册时保留项目 handler 和扩展字段。旧策略及迁移状态原样保留并忽略，不再生成提示或记录。项目自行构建、安装和维护注册；公共布局迁移不搬移项目程序或改写其路径。旧工具目录中的非公共普通文件原地保留，不要求项目登记或解析项目收据；目录中仍有这类文件时，同时保留原 `.gitignore`。公共工具的归属、内容或配对校验失败，以及链接、异常目录仍会阻断。
 
 core 的 build_inputs 负责输入快照及漂移验证，generated_assets 负责隔离构建、自测和收据，public_artifacts 负责用户级准备和只读交付。工厂自身构建及 Git 同步仍使用受管构建能力；普通下游 project-sync 不直接编译。初次 CLI 引导结果按相同身份进入缓存，并与公共 Hook 共用依赖输出。
 
@@ -165,3 +165,24 @@ Windows 上当前 CLI 的运行映像不能直接覆盖：新程序先写入同�
 受管子包收口：core 9.0.0→10.0.0、factory 0.9.0→0.10.0、workflow 0.8.0→0.9.0（源清单合同不兼容）；skeleton 0.5.0→0.5.1、lifecycle 0.8.0→0.8.1、checks 0.2.0→0.2.1（适配调整）；memory 0.1.0 不变，仅刷新依赖覆盖。验收时主程序仍为 12.0.0，正式发布版本以受管 release 收据为准。
 
 最终产物准备返回 `prepared=3`、`self_test_executed=true`；随后只读检查为 `current / reused=3 / built=0`，manifest 为 `ok / changed=false`，factory-version 为 healthy，`git diff --check` 通过。真实下游、用户级安装、旧入口到新入口的真实联网升级及自然 Hook 生命周期未执行，不能据此宣称通过。
+
+## 用户验收：旧工具目录保留与 StratusAgent 升级（2026-10-31）
+
+用户通过 `$summary accept` 验收本次修复及真实下游升级，并单独调用 `$git-sync release` 授权 BridgeForge 受管提交、推送和发布。范围为公共工具退役与项目文件保留、必要历史归属证明、回归与 dogfood，以及 StratusAgent 骨架更新；本事项没有单独登记的既有 TODO，不结算其他事项。本段记录验收与发布授权，正式发布结果由 CHANGELOG、Git 提交和受管收据确认。
+
+触发原因与修复：旧 `.codex/bin/` 混有公共工具及 `project_stratus_runtime.exe` 和项目构建记录，而 `.codex/project-hooks.json` 登记为空。原同步器把无法证明为公共工具的普通文件作为整次升级阻塞。现在只退役收据和内容均通过校验的公共工具，其他普通文件及所需忽略规则原地保留，公共退役不再读取项目 Hook 登记。若计划退役 `.gitignore` 后出现新的项目文件，项目升级和共享安装均在收尾检查中阻断并回滚；生产进程保护保持不变。
+
+另两份退役公共源码缺少旧版本证明，已分别从不可变提交 `ed6b20f1c3ed952699896576f04eeea26c5dad2e` 核对源文件与真实下游字节，将精确 source、target 和 hash 补入 `asset_history`。没有以项目文件名或下游清单声明推断所有权，也没有放宽未知内容删除条件。
+
+工程验证及传播证据：
+
+- 源码与产品传播：修复位于 `source/core/src/artifact_migration.rs`、`source/workflow/src/project_sync.rs`；统一根清单及下游生成合同包含两条历史证明，公共八包 dogfood 投影同步完成。
+- Fixture：受管 `develop --apply --packages core,workflow` 返回 `development-closed`，8 项检查、184 个用例通过；最终版本的旧工具退役测试在 develop 外独立运行，实际 1 项通过。覆盖混合目录保留、损坏公共工具与异常目录阻断、计划指纹漂移、共享安装并发回滚和项目 Hook 独立维护。
+- 验证过程边界：旧测试曾要求陌生普通文件导致整次失败，已改为验证原样保留，原公共输入与目标漂移阻断场景继续保留。新增项目事务用例曾被真实 develop 父进程保护拦住，最终改用指纹及共享收尾单元检查，并以真实共享安装回滚覆盖副作用；未改进程保护、未忽略失败用例。
+- 真实下游：StratusAgent 已由 9.0.0 更新至 13.0.0，使用本次受管构建的本地修复候选。实际收据为 `applied / succeeded / ready`，84 项动作，项目阶段 Cargo 调用为 0；新计划无 gap、无 blocker。47 项风险替换均独立核对为历史公共内容，未与升级前改动重叠。
+- 保留核验：升级前 151 项改动、15 个保护文件、AGENTS 项目专区及 Git HEAD 全部保持一致；旧目录只余项目 Hook 程序、构建记录及 `.gitignore`。独立复核另行重算文件摘要及公共产物摘要，未发现问题。
+- Runtime：真实下游新安装公共 CLI 与 Hook 自检均为 `ok`。Windows 无窗口 Hook 须用隐藏进程入口捕获 stdout/stderr 并等待退出；直接 shell 调用曾因管道提前关闭失败，未将该次调用算作通过。项目自有 Hook 未构建或执行，交易业务与自然 Hook 生命周期未验证。
+
+子包通过受管流程收口为 core 10.0.0→10.0.1、workflow 0.9.0→0.9.1，其余五包保持版本，仅刷新必要依赖覆盖。工厂最终产物准备为 `prepared=3 / self_test_executed=true`；随后只读核验为 `current / reused=3 / built=0`，manifest 无漂移，factory-version healthy。未手工修改版本账本，也未把下游业务改动纳入 Forge 发布。
+
+本机原始证据位于 `.runtime/tests/stratus-upgrade/` 的 `develop-receipt.json`、`project-plan-final.json`、`project-update-receipt.json`、`preservation-verification.json` 和已安装工具自检收据；测试日志位于 `.runtime/tests/development/`，不加入 Git。用户级正式安装的入口刷新已完成于此前的 13.0.0 安装事务，本次验收不表示随后发布版本已重新安装到用户级或下游。

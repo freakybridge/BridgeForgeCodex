@@ -367,6 +367,15 @@ fn prepared_public_artifacts_are_shared_and_update_preserves_project_hooks() {
             std::env::consts::EXE_SUFFIX
         ));
         write(&private_binary, b"project-owned executable");
+        let legacy_binary = project.join(".codex/bin/project_demo.exe");
+        let legacy_receipt = project.join(".codex/bin/build-receipt-project-demo.json");
+        let legacy_ignore = project.join(".codex/bin/.gitignore");
+        write(&legacy_binary, b"independent legacy executable");
+        write(
+            &legacy_receipt,
+            b"opaque project receipt, not public evidence",
+        );
+        write(&legacy_ignore, b"*\r\n!.gitignore\r\n# project policy\r\n");
         write(
             &project.join(".codex/project-hooks.json"),
             b"invalid private registry",
@@ -392,6 +401,19 @@ fn prepared_public_artifacts_are_shared_and_update_preserves_project_hooks() {
         let fingerprint = update.aggregate_fingerprint.clone();
         attach_prepared_public(&mut update, &contract_bytes, &prepared_path).unwrap();
         apply_plan(update, &fingerprint, true).unwrap();
+        for (path, expected) in [
+            (&legacy_binary, b"independent legacy executable".as_slice()),
+            (
+                &legacy_receipt,
+                b"opaque project receipt, not public evidence".as_slice(),
+            ),
+            (
+                &legacy_ignore,
+                b"*\r\n!.gitignore\r\n# project policy\r\n".as_slice(),
+            ),
+        ] {
+            assert_eq!(fs::read(path).unwrap(), expected);
+        }
         assert_eq!(
             fs::read(&private_binary).unwrap(),
             b"project-owned executable"

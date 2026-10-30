@@ -100,19 +100,14 @@ const LEGACY_RECEIPT: &str = ".codex/bin/build-receipt.json";
 const ARTIFACT_LAYOUT_INPUT: &str = "artifact-layout:legacy-runtime";
 
 pub fn legacy_artifact_retirements(root: &Path) -> Result<BTreeMap<PathBuf, Vec<u8>>, String> {
-    let project_hooks = if root.join(".codex/bin").is_dir() {
-        crate::project_hooks::legacy_artifacts(root)?
-    } else {
-        BTreeMap::new()
-    };
-    let mut project = project_hooks.clone();
+    // Independent project programs and receipts remain opaque, including those
+    // in the old public-tool directory. No private registry proof is required.
+    let mut project = BTreeMap::new();
     if let Some((path, bytes)) = legacy_receipt(root)? {
         project.insert(path, bytes);
     }
     let mut files =
         bridgeforge_core::artifact_migration::legacy_runtime_with_owned(root, &project)?;
-    // Recognized private binaries remain project-owned, even in the old layout.
-    files.retain(|path, _| !project_hooks.contains_key(path));
     files.extend(bridgeforge_core::artifact_migration::legacy_build_outputs(
         root,
     )?);
@@ -120,6 +115,30 @@ pub fn legacy_artifact_retirements(root: &Path) -> Result<BTreeMap<PathBuf, Vec<
         root,
     )?);
     Ok(files)
+}
+
+fn verify_legacy_artifact_retirement(root: &Path, ignore_retired: bool) -> Result<(), String> {
+    if !legacy_artifact_retirements(root)?.is_empty() {
+        return Err("legacy artifact contents appeared during migration".into());
+    }
+    if ignore_retired {
+        let directory = root.join(".codex/bin");
+        match fs::read_dir(&directory) {
+            Ok(mut entries) => {
+                if entries
+                    .next()
+                    .transpose()
+                    .map_err(|e| e.to_string())?
+                    .is_some()
+                {
+                    return Err("project files appeared during ignore retirement; preserve the ignore policy".into());
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => (),
+            Err(error) => return Err(error.to_string()),
+        }
+    }
+    Ok(())
 }
 
 pub fn legacy_artifact_relocations(root: &Path) -> Result<BTreeMap<PathBuf, Vec<u8>>, String> {
@@ -1765,9 +1784,12 @@ fn apply_plan_internal(
         if plan
             .generated_source_fingerprints
             .contains_key(ARTIFACT_LAYOUT_INPUT)
-            && !legacy_artifact_retirements(&plan.project_root)?.is_empty()
         {
-            return Err("legacy artifact contents appeared during migration".into());
+            verify_legacy_artifact_retirement(
+                &plan.project_root,
+                plan.deletes
+                    .contains(&plan.project_root.join(".codex/bin/.gitignore")),
+            )?;
         }
         if plan
             .generated_source_fingerprints
@@ -2184,8 +2206,11 @@ pub fn install_generated_transaction_retiring(
             deleted.insert(path.clone());
         }
         verify_written_payloads(writes, None)?;
-        if !retirements.is_empty() && !legacy_artifact_retirements(root)?.is_empty() {
-            return Err("legacy artifact contents appeared during migration".into());
+        if !retirements.is_empty() {
+            verify_legacy_artifact_retirement(
+                root,
+                retirements.contains_key(&root.join(".codex/bin/.gitignore")),
+            )?;
         }
         if !retirements.is_empty() {
             bridgeforge_core::process_activity::legacy_clients_quiet(root)?;

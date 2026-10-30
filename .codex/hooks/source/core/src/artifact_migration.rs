@@ -225,23 +225,33 @@ pub fn legacy_runtime_with_owned(
         owned.insert(binary_path, binary);
         owned.insert(receipt_path, document);
     }
-    if let Some(bytes) = crate::managed_paths::read_metadata(&directory.join(".gitignore"), 4096)? {
-        if String::from_utf8_lossy(&bytes).replace("\r\n", "\n") != "*\n!.gitignore\n" {
-            return Err("legacy binary ignore file has external changes; preserve it".into());
-        }
-        recognized.insert(".gitignore".into());
-        owned.insert(directory.join(".gitignore"), bytes);
-    }
+    let mut preserved = false;
     for entry in fs::read_dir(&directory).map_err(|e| e.to_string())? {
         let entry = entry.map_err(|e| e.to_string())?;
         if !entry.file_type().map_err(|e| e.to_string())?.is_file()
-            || !recognized.contains(&entry.file_name().to_string_lossy().to_string())
+            || crate::persistence::is_link_or_reparse(&entry.path()).map_err(|e| e.to_string())?
         {
             return Err(format!(
-                "unknown legacy runtime entry preserved: {}",
+                "unsafe legacy runtime entry preserved: {}",
                 entry.path().display()
             ));
         }
+        let name = entry.file_name();
+        if name != ".gitignore" && !recognized.contains(&name.to_string_lossy().to_string()) {
+            // Unowned regular files are opaque project data, not retirements.
+            preserved = true;
+        }
+    }
+    // Keep the directory's ignore policy whenever project files remain. Their
+    // contents and receipts are outside the public runtime ownership contract.
+    if !preserved
+        && let Some(bytes) =
+            crate::managed_paths::read_metadata(&directory.join(".gitignore"), 4096)?
+    {
+        if String::from_utf8_lossy(&bytes).replace("\r\n", "\n") != "*\n!.gitignore\n" {
+            return Err("legacy binary ignore file has external changes; preserve it".into());
+        }
+        owned.insert(directory.join(".gitignore"), bytes);
     }
     Ok(owned)
 }
