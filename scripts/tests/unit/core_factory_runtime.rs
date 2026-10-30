@@ -1,3 +1,7 @@
+#[allow(dead_code)]
+#[path = "../support/product_manifest.rs"]
+mod fixture_product;
+
 #[path = "../support/factory_root.rs"]
 mod factory_repository;
 
@@ -352,23 +356,25 @@ impl Factory {
             "VERSION",
             "CHANGELOG.md",
             "AGENTS.md",
-            "templates/managed-skeleton.json",
-            "bridgeforge-codex-manifest.json",
+            "bridgeforge-manifest.json",
             "Cargo.toml",
             "Cargo.lock",
-            "templates/source-layout.json",
             "templates/hooks/.gitignore",
-            "templates/artifact-roots.gitignore",
             crate::user_agents::SOURCE,
-            crate::user_agents::MANIFEST,
         ] {
             copy(path, path);
         }
         let contract: Value = serde_json::from_slice(
-            &fs::read(repository.join("templates/managed-skeleton.json")).unwrap(),
+            &fixture_product::read(repository.join("bridgeforge-manifest.json")).unwrap(),
         )
         .unwrap();
         for asset in contract["assets"].as_array().unwrap() {
+            if let Some(bytes) = bridgeforge_skeleton::content::inline_source(asset).unwrap() {
+                let target = root.join(asset["target"].as_str().unwrap());
+                fs::create_dir_all(target.parent().unwrap()).unwrap();
+                fs::write(target, bytes).unwrap();
+                continue;
+            }
             let source = asset["source"].as_str().unwrap();
             let target = asset["target"].as_str().unwrap();
             copy(source, source);
@@ -392,7 +398,7 @@ impl Factory {
             fs::write(target, bytes).unwrap();
         }
         let distribution: Value = serde_json::from_slice(
-            &fs::read(root.join("bridgeforge-codex-manifest.json")).unwrap(),
+            &fixture_product::read_shared(root.join("bridgeforge-manifest.json")).unwrap(),
         )
         .unwrap();
         for platform in distribution["platforms"].as_object().unwrap().values() {

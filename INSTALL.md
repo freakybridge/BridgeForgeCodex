@@ -88,6 +88,18 @@ Skills 由产品管理，避免覆盖来源不明或被人工修改的 Skill 文
 骨架 Hook 与项目自有 Hook 独立维护，边界固定在代码中。安装和升级仅维护公共源码、产物与公共注册，保留项目 Hook 源码、程序、收据、注册及扩展字段。旧 project-hook-policy.json 和迁移状态文件保留并忽略；项目 Hook 的构建、安装、路径迁移和业务验证由项目自己的开发流程负责。
 Hook 不创建、修改或删除该文件，也不生成或覆盖其备份；旧版安装留下的内容原样保留。
 
+## 统一清单格式的入口刷新
+
+产品根清单已统一为 `bridgeforge-manifest.json`，包含 `user_instructions`、`shared_skills` 和 `project_skeleton`。三个旧源清单不再保留；下游项目的 `.codex/managed-skeleton.json` 继续由项目分区自动生成。
+
+此前已安装的薄入口仍查找 `bridgeforge-codex-manifest.json`，首次更新到统一清单版本可能报“Missing root distribution manifest”。这不是下游项目文件损坏。请从可信的产品仓库运行现有安装入口，完成一次用户级入口刷新：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/install-shared-skills.ps1
+```
+
+安装入口重新获取并验证官方 main，再运行新 checkout 内的 updater；它不依赖旧薄入口解析新清单。共享 Skills 的归属冲突校验、用户 AGENTS 原始字节备份及事务回滚保持有效，不手工复制或伪造旧清单来绕过校验。刷新后新开会话，再从目标项目执行 `$bridgeforge-codex`。若旧入口留下未完成事务，先按现有事务诊断恢复，不删除日志。
+
 ## 旧 BridgeForge 用户重新安装
 
 旧 `$bridgeforge` 到 `$bridgeforge-codex` 的自动迁移已经退役。请直接执行上面的“首次安装”

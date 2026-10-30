@@ -1,3 +1,7 @@
+#[allow(dead_code)]
+#[path = "../support/product_manifest.rs"]
+mod fixture_product;
+
 use super::*;
 use std::{
     fs,
@@ -222,7 +226,7 @@ fn managed_factory_child_replaces_loaded_parent_and_rejects_unmanaged_peers() {
         ));
         fs::create_dir_all(root.join(".build/bridgeforge/bin")).unwrap();
         fs::create_dir_all(root.join("templates")).unwrap();
-        fs::write(root.join("templates/managed-skeleton.json"), b"{}").unwrap();
+        fixture_product::write(root.join("bridgeforge-manifest.json"), b"{}").unwrap();
         let parent = root.join(relative);
         fs::create_dir_all(parent.parent().unwrap()).unwrap();
         let before = fs::read(std::env::current_exe().unwrap()).unwrap();

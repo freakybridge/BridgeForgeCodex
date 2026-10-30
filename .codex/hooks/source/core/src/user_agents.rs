@@ -6,7 +6,7 @@ use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::Path;
 
-pub const MANIFEST: &str = "user-agents-manifest.json";
+pub const MANIFEST: &str = crate::product_manifest::FILE;
 pub const SOURCE: &str = "templates/user/AGENTS.md";
 
 fn hash(bytes: &[u8]) -> String {
@@ -91,9 +91,7 @@ pub fn stage(root: &Path, profile: &Path, operation: &str) -> Result<Value, Stri
     if staged.exists() || backup.exists() {
         return Err("user instruction transaction paths already exist".into());
     }
-    let declared: Value =
-        serde_json::from_slice(&fs::read(root.join(MANIFEST)).map_err(|e| e.to_string())?)
-            .map_err(|e| e.to_string())?;
+    let declared = crate::product_manifest::section(root, "user_instructions")?;
     let expected: Value =
         serde_json::from_slice(&render_manifest(root)?).map_err(|e| e.to_string())?;
     if declared != expected {

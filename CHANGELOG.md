@@ -15,6 +15,23 @@
 
 > **追溯说明**：v0.1.0 - v0.7.0 基于 git log 历史回溯标记，**git tag 仅从 v0.8.0 开始打**。早期未启用版本号管理是 setup_agent 自打脸问题（要求下游用但自己没用），v0.8.0 修补。
 
+## [13.0.0] - 2026-10-31
+
+### Changed
+
+- [product][repo][meta] 统一产品清单并保持独立管理边界 **BREAKING:**
+
+### Release analysis
+
+- Product: 合并根 bridgeforge-manifest.json 并移除旧源清单及两个零散配置来源；消费者与安装入口改用分区合同，旧更新器需一次入口刷新。保留管理边界，下游仅生成项目清单；另按追加授权保存BridgePilot演进计划，尚不实施。
+- `checks`: 0.2.0 -> 0.2.1 (Dependency coverage refresh only; package source unchanged.; Adapt instruction contract fallback to project_skeleton; installed downstream contract remains unchanged.)
+- `core`: 9.0.0 -> 10.0.0 (Replace separate user instruction manifest input with unified product manifest and expose validated section readers.)
+- `factory`: 0.8.1 -> 0.10.0 (Consolidate factory source-layout and artifact-roots sidecar inputs into managed-skeleton asset_history and inline content.; Replace three source manifests with one sectioned source and update atomic generation, snapshots and shared installer. Full unchanged final-candidate factory regression passed 37 tests before a test-only PowerShell module-import correction; retain those logs and rerun manifest plus shared-distribution checks.)
+- `lifecycle`: 0.8.0 -> 0.8.1 (Dependency coverage refresh only; validate managed contract input binding.; Recognize unified factory source marker without changing downstream lifecycle semantics.)
+- `memory`: 0.1.0 -> 0.1.0 (No source change; refresh dependency coverage after core input contract migration.)
+- `skeleton`: 0.4.0 -> 0.5.1 (Add optional embedded asset history and inline asset content validation; preserve file-backed contracts and exact retirement protection.; Recognize unified factory source marker; downstream schema and asset ownership remain unchanged.)
+- `workflow`: 0.7.0 -> 0.9.0 (Support inline asset content in project synchronization while preserving existing file-backed assets and gitignore merge behavior.; Read project synchronization sources exclusively from unified manifest project_skeleton section; downstream writes remain project-only.)
+
 ## [12.0.0] - 2026-10-30
 
 ### Added

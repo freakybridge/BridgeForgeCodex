@@ -10,6 +10,7 @@ if ($errors.Count) { throw ($errors | Out-String) }
 foreach ($function in $ast.FindAll({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true)) {
     if ($function.Name -ne 'Invoke-Main') { . ([scriptblock]::Create($function.Extent.Text)) }
 }
+$ManifestName = 'bridgeforge-manifest.json'
 $CommandHomeName = '.bridgeforge-codex'
 $CommandHomeLogName = '.bridgeforge-codex-home-update.json'
 $TestCrashAfterActionCount = 0
@@ -26,6 +27,7 @@ foreach ($scenario in @('rollback', 'committed-cleanup')) {
     $bin = Join-Path $fixtureProfile '.codex/bin'
     $skills = Join-Path $fixtureProfile '.codex/skills'
     New-Item -ItemType Directory -Path $repo, $bin, $skills -Force | Out-Null
+    Copy-Item -LiteralPath (Join-Path $RepositoryRoot $ManifestName) -Destination (Join-Path $repo $ManifestName)
     [IO.File]::WriteAllText((Join-Path $repo 'SKILL.md'), 'new skill')
     $op = [Guid]::NewGuid().ToString('N')
     $commit = 'a' * 40
@@ -82,7 +84,7 @@ foreach ($scenario in @('rollback', 'committed-cleanup')) {
         $TestFailAfterSwap = if ($scenario -eq 'rollback') { 'codex:1' } else { '' }
         $failed = $false
         try {
-            Invoke-UpdateTransaction -RepositoryRoot $repo -Manifest $manifest -Commit $commit -ManifestHash ('b' * 64) -UserProfile $fixtureProfile -LogPath $log -OperationId $op -PlatformPlans $plans -CommandHomePlan $bundleHome -RustCliPlan $cli -UserAgentsPlan $userPlan
+            Invoke-UpdateTransaction -RepositoryRoot $repo -Manifest $manifest -Commit $commit -ManifestHash ("sha256:$(Get-Sha256 -Path (Join-Path $RepositoryRoot $ManifestName))") -UserProfile $fixtureProfile -LogPath $log -OperationId $op -PlatformPlans $plans -CommandHomePlan $bundleHome -RustCliPlan $cli -UserAgentsPlan $userPlan
         }
         catch {
             if ($scenario -ne 'rollback' -or $_.Exception.Message -notlike '*Injected test failure*') { throw }
@@ -152,7 +154,7 @@ foreach ($scenario in @('create', 'noop', 'failure', 'interrupted', 'drift', 'ba
             Install-UserAgents -Plan $userPlan -UserProfile $fixtureProfile -OperationId $op
         }
         else {
-            Invoke-UpdateTransaction -RepositoryRoot $RepositoryRoot -Manifest $manifest -Commit ('a' * 40) -ManifestHash ('b' * 64) -UserProfile $fixtureProfile -LogPath $log -OperationId $op -PlatformPlans $plans -UserAgentsPlan $userPlan
+            Invoke-UpdateTransaction -RepositoryRoot $RepositoryRoot -Manifest $manifest -Commit ('a' * 40) -ManifestHash ("sha256:$(Get-Sha256 -Path (Join-Path $RepositoryRoot $ManifestName))") -UserProfile $fixtureProfile -LogPath $log -OperationId $op -PlatformPlans $plans -UserAgentsPlan $userPlan
         }
     }
     catch {
@@ -181,7 +183,7 @@ foreach ($scenario in @('create', 'noop', 'failure', 'interrupted', 'drift', 'ba
 # Source provenance (canonical main) is tested by the updater; this case checks packaging and swap.
 $fixtureProfile = Join-Path $Base 'autopilot-install'
 New-Item -ItemType Directory -Path (Join-Path $fixtureProfile '.codex/skills') -Force | Out-Null
-$catalog = [IO.File]::ReadAllText((Join-Path $RepositoryRoot 'bridgeforge-codex-manifest.json')) | ConvertFrom-Json
+$catalog = ([IO.File]::ReadAllText((Join-Path $RepositoryRoot 'bridgeforge-manifest.json')) | ConvertFrom-Json).shared_skills
 $selected = @($catalog.platforms.codex.skills | Where-Object { $_.name -in @('autopilot', 'confirm') })
 Assert-True ($selected.Count -eq 2 -and @($selected.name | Select-Object -Unique).Count -eq 2) 'Budget Skills are missing or duplicated in the distribution catalog'
 $manifest = @{ platforms = @{ codex = @{ skills = $selected } } } | ConvertTo-Json -Depth 12 | ConvertFrom-Json
@@ -189,7 +191,7 @@ $op = [Guid]::NewGuid().ToString('N')
 $TestFailAfterSwap = ''
 $plans = @(New-UpdatePlan -Manifest $manifest -UserProfile $fixtureProfile -OperationId $op -Commit ('a' * 40))
 $log = Join-Path $fixtureProfile '.bridgeforge-codex-shared-update.json'
-Invoke-UpdateTransaction -RepositoryRoot $RepositoryRoot -Manifest $manifest -Commit ('a' * 40) -ManifestHash ('b' * 64) -UserProfile $fixtureProfile -LogPath $log -OperationId $op -PlatformPlans $plans
+Invoke-UpdateTransaction -RepositoryRoot $RepositoryRoot -Manifest $manifest -Commit ('a' * 40) -ManifestHash ("sha256:$(Get-Sha256 -Path (Join-Path $RepositoryRoot $ManifestName))") -UserProfile $fixtureProfile -LogPath $log -OperationId $op -PlatformPlans $plans
 foreach ($skill in $selected) {
     foreach ($file in $skill.files) {
         $installed = Join-Path (Join-Path (Join-Path $fixtureProfile '.codex/skills') $skill.name) $file.target
@@ -230,7 +232,7 @@ foreach ($scenario in @('retire', 'retire-drift')) {
     $plans = @(New-UpdatePlan -Manifest $manifest -UserProfile $fixtureProfile -OperationId $op -Commit ('b' * 40))
     Assert-True (@($plans[0].actions | Where-Object { $_.kind -eq 'remove' }).Count -eq 2) 'Missing retirement actions'
     $log = Join-Path $fixtureProfile '.bridgeforge-codex-shared-update.json'
-    Invoke-UpdateTransaction -RepositoryRoot $RepositoryRoot -Manifest $manifest -Commit ('b' * 40) -ManifestHash ('c' * 64) -UserProfile $fixtureProfile -LogPath $log -OperationId $op -PlatformPlans $plans
+    Invoke-UpdateTransaction -RepositoryRoot $RepositoryRoot -Manifest $manifest -Commit ('b' * 40) -ManifestHash ("sha256:$(Get-Sha256 -Path (Join-Path $RepositoryRoot $ManifestName))") -UserProfile $fixtureProfile -LogPath $log -OperationId $op -PlatformPlans $plans
     foreach ($name in @('snapshot', 'resume')) { Assert-True (-not (Test-Path -LiteralPath (Join-Path $skillsRoot $name))) 'Retired Skill remains installed' }
     Assert-True (Test-Path -LiteralPath (Join-Path $skillsRoot 'summary/references/switch-mode.md')) 'Cross-machine handoff reference was not installed'
 }

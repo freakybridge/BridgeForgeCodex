@@ -4,10 +4,17 @@
 > 入口：`bridgeforge project-sync`
 
 bridgeforge-codex 只维护 Codex 当前产品面。公共资产 ownership 的唯一产品来源是
-`templates/managed-skeleton.json` schema 4；普通资产保存当前版本的稳定 asset id、显式
-source/target、ownership strategy 和当前 hash/projection；生成资产另保存源码树、锁文件、
-构建配方、自检合同、目标平台二进制路径与收据路径。合同禁止历史版本集合、retirement、
-adaptation proof 与 glob ownership。
+根 `bridgeforge-manifest.json` 的 `project_skeleton` 分区使用 schema 4；下游 `.codex/managed-skeleton.json` 只由该分区生成，不携带用户级指令或共享 Skills。普通资产保存当前版本的稳定 asset id、显式
+source 或内嵌 content、显式 target、ownership strategy 和当前 hash/projection；source 与
+content 互斥。生成资产另保存源码树、锁文件、构建配方、自检合同、目标平台二进制路径与收据路径。
+
+同一清单的 asset_history 保存公共源码的迁移与退役历史（稳定 ID、新旧路径、历史哈希及提交来源），
+由工厂派生 retired_assets；两者不一致时拒绝合同。它只用于公共源码的精确识别和安全清理，
+不决定项目业务代码是否可修改。原 source-layout.json 已合并，不再维护独立文件。
+
+根 .gitignore 的三条产物目录忽略规则作为 root.artifact-ignore 的 content 内嵌保存，
+不再读取 artifact-roots.gitignore。创建时使用内嵌内容，更新时保留项目自有规则；满足要求时
+原样保留，不满足时追加必要规则。合同继续禁止 glob ownership 和针对业务资产的隐式迁移。
 
 ## 版本分流
 
@@ -30,7 +37,7 @@ adaptation proof 与 glob ownership。
   -> 零写阻断
 ```
 
-固定分界线在 `templates/managed-skeleton.json` 的 `compatibility_baseline` 声明，首版为
+固定分界线在根 `bridgeforge-manifest.json` 的 `project_skeleton.compatibility_baseline` 声明，首版为
 1.8.6；manifest 重建只更新 `release_version`，不自动抬高分界线。两条路径均只安装最新目标，
 不积累逐版本 adapter。基线内兼容路径不枚举整个 `.codex` 做破坏性重建，按受管边界更新并
 保留项目文件、区域、Hook 和表格行；已有 whole 资产替换仍需确认。旧于目标版本时允许
@@ -99,7 +106,7 @@ probe canonical commit + reuse/stage product source
 
 可捕获失败恢复本事务能够证明归属的改动；外部编辑保留并报告回滚未完成。Apply、`$git-sync` 与 pre-commit 复用 baseline 规则，规划不额外执行完整健康检查。编码门禁通过 NUL 文件列表与 Git 原始 blob 检查实际 index 内容，不能以工作区内容代替暂存字节；项目 Skill 检查覆盖 `.codex/skills`，工厂额外检查共享 `skills`。pre-commit 只读检查 worktree 与 Git index，
 不得生成文件或执行 `git add`；`$git-sync` 在写入前生成完整 `SyncWritePlan`，并在提交前失败时
-恢复自动写入和完整 index。工厂 `git-sync` 的计划先将版本变更投影到仓库外快照，渲染 manifest，按锁定 Cargo 配方构建 Hook / CLI 并生成实测收据；完整计划包含版本、Cargo manifests / locks、CHANGELOG、三份清单、二进制和收据。构建后复核原始输入、源码文件集合、目标原值、仓库身份及 index，任何漂移均阻断写入。安装后先验证含生成产物的完整 baseline，再暂存和提交。构建与安装持有 project-sync 锁，整个同步仍持有 Git common-dir 锁；两者均由系统句柄持有，进程退出释放。
+恢复自动写入和完整 index。工厂 `git-sync` 的计划先将版本变更投影到仓库外快照，渲染 manifest，按锁定 Cargo 配方构建 Hook / CLI 并生成实测收据；完整计划包含版本、Cargo manifests / locks、CHANGELOG、统一根清单与项目投影、二进制和收据。构建后复核原始输入、源码文件集合、目标原值、仓库身份及 index，任何漂移均阻断写入。安装后先验证含生成产物的完整 baseline，再暂存和提交。构建与安装持有 project-sync 锁，整个同步仍持有 Git common-dir 锁；两者均由系统句柄持有，进程退出释放。
 
 Git 拉取上游与实际推送目标分别判定：上游负责快进更新；推送是否必要和最终 ahead/behind 使用实际 push 目标。两者不同时，先刷新实际推送 remote，再验证目标；仅上游 `0/0` 不能报告 synced。批量暂存前的敏感文件保护使用不折叠目录的 NUL 状态列表，覆盖新目录内的文件。
 
@@ -143,3 +150,18 @@ Windows 上当前 CLI 的运行映像不能直接覆盖：新程序先写入同�
 - 普通骨架升级不语义改写项目 Skills 或旧 Rule／Memory；项目资料仍按所属资产保留或经明确决定处理。
 - 项目 `find-doc` / `sync-docs` 映射在 project-sync 事务内按精确路径登记为 required-preserve；事务完成后的受管 Hook 可按自动索引合同重建，禁止扩大为 glob ownership。
 - Claude、switch、project finalizer 与 harness parity 不属于当前产品面，也不保留识别谱系。
+
+## 用户验收与发布授权（2026-10-30）
+
+用户通过 `$summary accept` 确认本次交付符合需求，并单独调用 `$git-sync release` 授权受管提交、推送和发布。验收范围为统一根清单、相关生成与安装入口、资产历史及忽略内容合并，以及退役测试独立执行；没有与该独立事项唯一对应的既有 TODO，不结算其他条目。
+
+- 唯一产品源为根 `bridgeforge-manifest.json`，分别保存 `user_instructions`、`shared_skills`、`project_skeleton`；三个旧源清单已删除。各消费者只使用所属分区，下游 `.codex/managed-skeleton.json` 自动生成且只携带项目分区。
+- 原 `source-layout.json` 的可追溯迁移资料改名为 `asset_history`，用于识别公共资产历史归属，不表示业务代码修改权限；原 `artifact-roots.gitignore` 的内容内嵌为资产 `content`，继续保留项目自有忽略规则。
+- 安装事务绑定整份根清单的捕获哈希，准备后及提交前发现任一分区漂移均拒绝或回滚。旧更新器无法直接读取新文件名；一次入口刷新按根 `INSTALL.md` 执行。
+- 独立退役测试在 develop 外运行，其余检查由 develop 执行。曾遇运行中的 Memory 同步进程保护，保留进程并在自然退出后原命令通过。新安装测试曾因受限执行器的 PowerShell 模块搜索环境缺少 Get-FileHash 而失败；按现有测试方式显式加载系统 Utility 模块后通过，未改变产品安装行为。
+
+工程证据：本次最终受管 develop 返回 `development-closed`、`checks.executed=9`、`reused=0`，共 143 个用例通过；完整工厂候选回归另有 37 项通过，最后独立退役测试 1 项通过。结果分别在 `.runtime/tests/unified-manifest/development-result.json`、`.runtime/tests/development/`、`.runtime/tests/unified-manifest-first-candidate/`；本地日志不入 Git。独立只读复核未发现新增阻断。
+
+受管子包收口：core 9.0.0→10.0.0、factory 0.9.0→0.10.0、workflow 0.8.0→0.9.0（源清单合同不兼容）；skeleton 0.5.0→0.5.1、lifecycle 0.8.0→0.8.1、checks 0.2.0→0.2.1（适配调整）；memory 0.1.0 不变，仅刷新依赖覆盖。验收时主程序仍为 12.0.0，正式发布版本以受管 release 收据为准。
+
+最终产物准备返回 `prepared=3`、`self_test_executed=true`；随后只读检查为 `current / reused=3 / built=0`，manifest 为 `ok / changed=false`，factory-version 为 healthy，`git diff --check` 通过。真实下游、用户级安装、旧入口到新入口的真实联网升级及自然 Hook 生命周期未执行，不能据此宣称通过。

@@ -649,7 +649,7 @@ fn sync_impl(
             "autostash_retained":autostashed
         }));
     }
-    let factory = root.join("templates/managed-skeleton.json").is_file();
+    let factory = root.join("bridgeforge-manifest.json").is_file();
     let policy_path = root.join(".codex/bridgeforge-version.json");
     let policy_before = fs::read(&policy_path).ok();
     if let Err(error) = crate::release::explicit_release_policy(root) {

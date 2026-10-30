@@ -8,6 +8,20 @@ use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
+/// Inline payloads are text-only and mutually exclusive with file sources.
+pub fn inline_source(asset: &Value) -> Result<Option<&[u8]>, String> {
+    let Some(value) = asset.get("content") else {
+        return Ok(None);
+    };
+    if asset.get("source").is_some() || asset.get("render").is_some() {
+        return Err("inline asset content cannot also declare source or render".into());
+    }
+    value
+        .as_str()
+        .map(|text| Some(text.as_bytes()))
+        .ok_or_else(|| "inline asset content must be a string".into())
+}
+
 fn marker_replace(
     current: &[u8],
     source: &[u8],
@@ -408,7 +422,10 @@ pub fn render(
                     if !text.is_empty() && !text.ends_with('\n') {
                         text.push('\n');
                     }
-                    text.push_str(bridgeforge_core::artifact_paths::IGNORE_RULES);
+                    text.push_str(
+                        std::str::from_utf8(source_payload)
+                            .map_err(|_| "artifact ignore source is not UTF-8")?,
+                    );
                     text.into_bytes()
                 }
             }

@@ -24,6 +24,7 @@ pub mod runtime;
 pub mod semver;
 pub mod source_projection;
 pub mod user_agents;
+pub mod product_manifest;
 pub use build_manifest as manifest;
 pub use semver::SemVer;
 use serde::{Deserialize, Serialize};

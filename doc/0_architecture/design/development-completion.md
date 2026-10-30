@@ -31,6 +31,20 @@
 - 性能任务先建立同方法基线，优先测受影响场景；定位并修正问题后再扩大测量。分别记录被测命令与夹具准备/清理耗时。后者过重时先评估夹具复用，不仅靠增加样本和时间。修复后按实际影响复测；复用其他候选数据时说明分支依据、候选身份与统计限制。
 - 长检查开始前核对已有实际耗时与剩余工作。新失败先分析影响再决定重测；不得以固定档位不断追加测试、构建或时长代替排查和范围选择。
 
+### 工厂退役测试的独立执行
+
+当本次验证包含 `factory-unit` 完整组、工厂运行时组或旧工具退役行为时，主对话自动按以下顺序执行，不要求用户另行补跑：
+
+1. 在启动 `develop --validate` / `develop --apply` 之前，独立执行下面的退役测试；已有结果覆盖本次最终源码、版本及依赖时可以复用。命令必须退出成功且实际运行 1 项测试。失败或存在其他活动 BridgeForge 进程时停止相关收口，保留进程保护，不终止其他任务，也不把阻断当作通过。
+2. 独立测试通过后，再调用受管 `develop` 执行其余所选检查。`.codex/bridgeforge-version.json` 的 `factory-unit` 使用精确完整测试名的 `--skip` 排除该项；不将独立命令重新登记为 `develop` 子检查，不使用 `--ignored` 或修改测试本身来隐藏失败。
+3. `develop` 退出后，如本轮写入了新子包版本或改变了该测试的其他实际输入，独立测试必须对最终内容再运行一次。两部分都通过才可交付；独立结果单独报告，不冒充受管检查收据。最终独立检查失败时不得宣称开发完成或发布就绪，保留已有受管记录并报告缺口，不手工回改版本账本。
+
+```powershell
+cargo test --locked --offline --config scripts/tests/factory-cargo.toml --manifest-path Cargo.toml --target-dir .build/bridgeforge/test-target -p bridgeforge-factory --lib factory_runtime::tests::legacy_factory_tools_retire_only_after_verified_install -- --exact --test-threads=1 --nocapture --logfile ../../.runtime/tests/development/factory-legacy-retirement.log
+```
+
+分离原因：退役保护会拒绝测试目录之外仍在运行的 BridgeForge 程序；受管 `develop` 父进程也在此范围内。独立执行保留真实进程保护，不能在测试内绕过它。原有独立 workspace 全量测试仍包含这一项，只有受管 `factory-unit` 排除它。
+
 ## 4. 证据复用与交付
 
 1. 记录检查命令或收据、覆盖场景、真实结果与对应输入；有现成指纹时复用，不为小任务搭建额外指纹系统。

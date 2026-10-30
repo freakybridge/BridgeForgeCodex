@@ -108,7 +108,7 @@ BridgeForgeCodex/
 │   └── skills/bridgeforge-codex/ # $bridgeforge-codex 产品入口
 ├── scripts/                 # PowerShell 用户级安装入口
 ├── doc/                     # 架构、交付、Bug、参考与归档
-├── bridgeforge-codex-manifest.json # Codex-only 正式分发清单
+├── bridgeforge-manifest.json       # 用户指令、共享 Skills 与项目骨架的唯一源清单
 ├── VERSION
 └── CHANGELOG.md
 ```

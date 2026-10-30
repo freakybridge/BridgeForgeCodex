@@ -1,4 +1,8 @@
 //! The real managed CLI, with only a temporary local Git remote.
+#[allow(dead_code)]
+#[path = "../support/product_manifest.rs"]
+mod fixture_product;
+
 use bridgeforge_core::{ProcessRequest, ProcessRunner, SystemProcessRunner};
 use serde_json::{Value, json};
 use std::{
@@ -323,9 +327,8 @@ fn real_cli_release_preview_after_project_sync_source_relocation() {
     updated["retired_assets"] = json!([{"id":"managed.memory","target":OLD,"known_hashes":[hash]}]);
     write(&factory, "VERSION", b"8.0.1\n");
     write(&factory, "source/memory/src/ownership.rs", payload);
-    write(
-        &factory,
-        "templates/managed-skeleton.json",
+    fixture_product::install(
+        &factory.join("bridgeforge-manifest.json"),
         &serde_json::to_vec(&updated).unwrap(),
     );
     let plan = build_plan(&root, &factory, SyncMode::Update).unwrap();

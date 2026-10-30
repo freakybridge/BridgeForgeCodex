@@ -1,3 +1,7 @@
+#[allow(dead_code)]
+#[path = "../support/product_manifest.rs"]
+mod fixture_product;
+
 use super::*;
 
 #[test]
@@ -37,7 +41,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 fn baseline_uses_installed_contract_for_factory_and_downstream() {
     let repository = Path::new(env!("CARGO_MANIFEST_DIR"))
         .ancestors()
-        .find(|path| path.join("templates/source-layout.json").is_file())
+        .find(|path| path.join("bridgeforge-manifest.json").is_file())
         .unwrap();
     for factory in [false, true] {
         let root = test_artifacts::root(env!("CARGO_MANIFEST_DIR"), "cli").join(format!(
@@ -66,8 +70,8 @@ fn baseline_uses_installed_contract_for_factory_and_downstream() {
         if factory {
             fs::create_dir_all(root.join("templates")).unwrap();
             fs::copy(
-                repository.join("templates/managed-skeleton.json"),
-                root.join("templates/managed-skeleton.json"),
+                repository.join("bridgeforge-manifest.json"),
+                root.join("bridgeforge-manifest.json"),
             )
             .unwrap();
             fs::write(root.join("VERSION"), version).unwrap();
@@ -316,7 +320,7 @@ fn cleanup_factory_routing_requires_the_private_tool_before_deleting_anything() 
     fs::create_dir_all(root.join("templates")).unwrap();
     fs::create_dir_all(root.join(".build")).unwrap();
     fs::write(root.join("source/factory/Cargo.toml"), b"factory marker").unwrap();
-    fs::write(root.join("templates/managed-skeleton.json"), b"{}").unwrap();
+    fixture_product::write(root.join("bridgeforge-manifest.json"), b"{}").unwrap();
     fs::write(root.join(".build/sample.bin"), b"preserved on failure").unwrap();
     let result = run(&[
         "cleanup".into(),
@@ -411,7 +415,7 @@ fn factory_relay_requires_current_source_binary_and_receipt_before_running() {
         .unwrap();
     }
     fs::write(root.join("VERSION"), b"6.0.0\n").unwrap();
-    fs::write(root.join("templates/managed-skeleton.json"), b"{}").unwrap();
+    fixture_product::write(root.join("bridgeforge-manifest.json"), b"{}").unwrap();
     let binary = root.join(format!(
         ".build/bridgeforge/bin/bridgeforge-factory{}",
         std::env::consts::EXE_SUFFIX

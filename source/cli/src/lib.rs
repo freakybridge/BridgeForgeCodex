@@ -21,7 +21,7 @@ fn factory_command(args: &[String]) -> CommandOutcome {
 
 fn is_factory_repository(root: &Path) -> bool {
     root.join("source/factory/Cargo.toml").is_file()
-        && root.join("templates/managed-skeleton.json").is_file()
+        && root.join("bridgeforge-manifest.json").is_file()
 }
 
 fn read_factory_file(path: &Path, limit: u64) -> Result<Vec<u8>, String> {
@@ -302,7 +302,7 @@ fn check(command: &str, args: &[String]) -> CommandOutcome {
                 let mut roots = vec![context.root().join(".codex/skills")];
                 if context
                     .root()
-                    .join("bridgeforge-codex-manifest.json")
+                    .join("bridgeforge-manifest.json")
                     .is_file()
                 {
                     roots.push(context.root().join("templates/skills"));
@@ -465,7 +465,7 @@ fn project_sync_inner(args: &[String]) -> CommandOutcome {
             "project asset decisions require --confirmed-preservation-manifest",
         );
     }
-    let contract_bytes = match fs::read(template_root.join("templates/managed-skeleton.json")) {
+    let contract_bytes = match bridgeforge_core::product_manifest::project_bytes(&template_root) {
         Ok(bytes) => bytes,
         Err(error) => return blocked("project-sync", error),
     };

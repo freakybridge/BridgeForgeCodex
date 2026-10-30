@@ -1,3 +1,7 @@
+#[allow(dead_code)]
+#[path = "../support/product_manifest.rs"]
+mod fixture_product;
+
 use bridgeforge_lifecycle::release::{
     FileReleasePlan, schema4, verify_release_inputs, verify_release_inventory,
     verify_release_status,
@@ -86,7 +90,7 @@ fn legacy_factory_release_updates_all_three_cargo_manifests_and_locks() {
     )
     .unwrap();
     fs::write(temp.0.join(".gitignore"), b".runtime/\n").unwrap();
-    fs::write(temp.0.join("templates/managed-skeleton.json"), b"{}").unwrap();
+    fixture_product::write(temp.0.join("bridgeforge-manifest.json"), b"{}").unwrap();
     for name in ["VERSION", "CHANGELOG.md"] {
         fs::copy(source.join(name), temp.0.join(name)).unwrap();
     }

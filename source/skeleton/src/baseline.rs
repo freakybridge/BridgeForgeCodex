@@ -209,6 +209,80 @@ fn safe_relative_string(value: &Value) -> bool {
         })
 }
 
+/// Derive the executable retirement list from traceable asset history.
+pub fn retired_assets_from_history(history: &Value) -> Result<Value, String> {
+    exact_keys(
+        history,
+        &["schema", "format", "relocations", "retirements"],
+        "asset history",
+    )?;
+    if history["schema"] != 1 || history["format"] != "bridgeforge-asset-history-v1" {
+        return Err("invalid asset history identity".into());
+    }
+    let id_pattern = Regex::new(r"^[a-z0-9][a-z0-9._-]*$").map_err(|e| e.to_string())?;
+    let mut result = Vec::new();
+    let mut paths = BTreeSet::new();
+    let mut sources = BTreeSet::new();
+    for (section, path_key) in [
+        ("relocations", "previous_target"),
+        ("retirements", "target"),
+    ] {
+        for row in history[section]
+            .as_array()
+            .ok_or("asset history entries must be arrays")?
+        {
+            let mut fields = vec!["id", path_key, "known_hashes"];
+            if section == "relocations"
+                && (row.get("source").is_some() || row.get("target").is_some())
+            {
+                fields.extend(["source", "target"]);
+                if !safe_relative_string(&row["source"])
+                    || !safe_relative_string(&row["target"])
+                    || !sources.insert(row["source"].as_str().unwrap().to_owned())
+                {
+                    return Err("invalid or duplicate asset history source".into());
+                }
+            }
+            exact_keys(row, &fields, "asset history entry")?;
+            let target = row[path_key].as_str().ok_or("asset history path missing")?;
+            if !row["id"].as_str().is_some_and(|id| id_pattern.is_match(id))
+                || !safe_relative_string(&row[path_key])
+                || !target.starts_with(".codex/hooks/")
+                || !paths.insert(target.to_ascii_lowercase())
+            {
+                return Err("invalid or duplicate asset history identity".into());
+            }
+            let records = row["known_hashes"]
+                .as_array()
+                .filter(|r| !r.is_empty())
+                .ok_or("asset history requires historical hashes")?;
+            let mut hashes = Vec::new();
+            for record in records {
+                exact_keys(
+                    record,
+                    &["sha256", "revision", "source"],
+                    "asset history provenance",
+                )?;
+                if !hash_string(&record["sha256"])
+                    || !safe_relative_string(&record["source"])
+                    || !record["revision"]
+                        .as_str()
+                        .is_some_and(|r| r.len() == 40 && r.bytes().all(|b| b.is_ascii_hexdigit()))
+                {
+                    return Err("invalid asset history provenance".into());
+                }
+                hashes.push(record["sha256"].clone());
+            }
+            if section == "retirements" || row["target"] != row["previous_target"] {
+                result.push(
+                    serde_json::json!({"id":row["id"],"target":target,"known_hashes":hashes}),
+                );
+            }
+        }
+    }
+    Ok(Value::Array(result))
+}
+
 pub fn validate_contract(value: &Value) -> Result<(), String> {
     let mut keys = vec![
         "schema_version",
@@ -229,6 +303,9 @@ pub fn validate_contract(value: &Value) -> Result<(), String> {
     }
     if value.get("retired_assets").is_some() {
         keys.push("retired_assets");
+    }
+    if value.get("asset_history").is_some() {
+        keys.push("asset_history");
     }
     if let Some(layout) = value.get("artifact_layout") {
         if layout != bridgeforge_core::artifact_paths::CONTRACT {
@@ -257,6 +334,7 @@ pub fn validate_contract(value: &Value) -> Result<(), String> {
     let allowed_asset = [
         "id",
         "source",
+        "content",
         "target",
         "strategy",
         "current_sha256",
@@ -326,7 +404,8 @@ pub fn validate_contract(value: &Value) -> Result<(), String> {
         let target = asset["target"].as_str().ok_or("asset target is missing")?;
         if !id_pattern.is_match(id)
             || !ids.insert(id.to_string())
-            || !safe_relative_string(&asset["source"])
+            || (crate::content::inline_source(asset)?.is_none()
+                && !safe_relative_string(&asset["source"]))
             || !safe_relative_string(&asset["target"])
             || !targets.insert(target.to_lowercase())
             || !matches!(
@@ -336,6 +415,11 @@ pub fn validate_contract(value: &Value) -> Result<(), String> {
             || !hash_string(&asset["current_sha256"])
         {
             return Err(format!("invalid or duplicate asset identity: {id}"));
+        }
+        if let Some(bytes) = crate::content::inline_source(asset)? {
+            if asset["current_sha256"].as_str() != Some(sha(bytes).as_str()) {
+                return Err(format!("inline asset content hash drifted: {id}"));
+            }
         }
         if let Some(managed) = asset.get("managed_blocks") {
             if !managed.is_object()
@@ -407,6 +491,11 @@ pub fn validate_contract(value: &Value) -> Result<(), String> {
                         && validation["required"].is_object() => {}
                 _ => return Err(format!("asset {id} merge ownership is invalid")),
             }
+        }
+    }
+    if let Some(history) = value.get("asset_history") {
+        if retired_assets_from_history(history)? != value["retired_assets"] {
+            return Err("retired assets differ from asset history".into());
         }
     }
     let generated = value["generated_assets"]
@@ -865,7 +954,7 @@ fn verify_mode(
     let contract = load(&contract_path)?;
     let version = contract["release_version"].as_str().unwrap().to_string();
     let stamp = safe_target(root, &contract["stamp"], "current baseline stamp")?;
-    let factory = root.join("templates/managed-skeleton.json").is_file();
+    let factory = root.join("bridgeforge-manifest.json").is_file();
     let stamp_version = if stamp.is_file() {
         fs::read_to_string(&stamp)
             .map_err(|error| error.to_string())?
@@ -1000,7 +1089,7 @@ fn verify_contract_assets(
     }
     let mut checked = Vec::new();
     let mut skipped = Vec::new();
-    let factory = root.join("templates/managed-skeleton.json").is_file();
+    let factory = root.join("bridgeforge-manifest.json").is_file();
     for asset in contract["assets"].as_array().unwrap() {
         if factory
             && asset["id"].as_str() == Some("codex.doc.readme")
@@ -1097,7 +1186,7 @@ pub fn verify_index(root: &Path, runner: &dyn ProcessRunner) -> Result<BaselineR
     let stamp_path = contract["stamp"]
         .as_str()
         .ok_or("staged stamp path is missing")?;
-    let staged_identity = if root.join("templates/managed-skeleton.json").is_file() {
+    let staged_identity = if root.join("bridgeforge-manifest.json").is_file() {
         "VERSION"
     } else {
         stamp_path
@@ -1112,7 +1201,7 @@ pub fn verify_index(root: &Path, runner: &dyn ProcessRunner) -> Result<BaselineR
     }
     let mut checked = Vec::new();
     let mut skipped = Vec::new();
-    let factory = root.join("templates/managed-skeleton.json").is_file();
+    let factory = root.join("bridgeforge-manifest.json").is_file();
     for asset in contract["assets"]
         .as_array()
         .ok_or("staged assets are missing")?

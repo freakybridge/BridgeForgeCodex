@@ -1,3 +1,7 @@
+#[allow(dead_code)]
+#[path = "../support/product_manifest.rs"]
+mod fixture_product;
+
 use bridgeforge_core::{ProcessOutput, ProcessRequest, ProcessRunner, SystemProcessRunner};
 use bridgeforge_memory::remote::{
     apply_conflict_choices, reconcile, resolve_conflict_with_choices,
@@ -142,8 +146,8 @@ fn project_sync_plan_apply_and_fingerprint_gate_are_transactional() {
         }],
         "generated_assets": []
     });
-    write(
-        &factory.join("templates/managed-skeleton.json"),
+    fixture_product::install(
+        &factory.join("bridgeforge-manifest.json"),
         format!("{}\n", serde_json::to_string_pretty(&contract).unwrap()).as_bytes(),
     );
 
@@ -191,7 +195,7 @@ fn project_settings_remain_project_owned_across_init_adopt_and_update() {
         .unwrap();
     let factory = temp.0.join("factory");
     let mut contract: serde_json::Value = serde_json::from_slice(
-        &fs::read(repository.join("templates/managed-skeleton.json")).unwrap(),
+        &fixture_product::read(repository.join("bridgeforge-manifest.json")).unwrap(),
     )
     .unwrap();
     for key in ["assets", "retired_assets"] {
@@ -202,6 +206,9 @@ fn project_settings_remain_project_owned_across_init_adopt_and_update() {
     // Exercise the real distributed file contract without compiling binaries.
     contract["generated_assets"] = json!([]);
     for asset in contract["assets"].as_array().unwrap() {
+        if asset.get("content").is_some() {
+            continue;
+        }
         let source = asset["source"].as_str().unwrap();
         write(
             &factory.join(source),
@@ -212,9 +219,8 @@ fn project_settings_remain_project_owned_across_init_adopt_and_update() {
         &factory.join("VERSION"),
         &fs::read(repository.join("VERSION")).unwrap(),
     );
-    let contract_path = factory.join("templates/managed-skeleton.json");
-    write(
-        &contract_path,
+    let contract_path = factory.join("bridgeforge-manifest.json");
+    fixture_product::install(&contract_path,
         &serde_json::to_vec_pretty(&contract).unwrap(),
     );
     let original = b"{\r\n  \"effortLevel\":\"high\", \"permissions\":{}, \"custom\":42\r\n}\r\n";
@@ -290,14 +296,13 @@ fn project_settings_remain_project_owned_across_init_adopt_and_update() {
     ] {
         let project = temp.0.join(name);
         fs::create_dir_all(&project).unwrap();
-        write(&contract_path, &serde_json::to_vec_pretty(&legacy).unwrap());
+        fixture_product::install(&contract_path, &serde_json::to_vec_pretty(&legacy).unwrap());
         let plan = build_plan(&project, &factory, SyncMode::Init).unwrap();
         let fingerprint = plan.aggregate_fingerprint.clone();
         apply_plan(plan, &fingerprint, true).unwrap();
         let path = project.join(".codex/settings.json");
         write(&path, bytes);
-        write(
-            &contract_path,
+        fixture_product::install(&contract_path,
             &serde_json::to_vec_pretty(&contract).unwrap(),
         );
         let plan = build_plan(&project, &factory, SyncMode::Update).unwrap();
@@ -319,7 +324,7 @@ fn prepared_public_artifacts_are_shared_and_update_preserves_project_hooks() {
         .unwrap();
     let codex = temp.0.join("profile/.codex");
     fs::create_dir_all(&codex).unwrap();
-    let contract_bytes = fs::read(factory.join("templates/managed-skeleton.json")).unwrap();
+    let contract_bytes = fixture_product::read(factory.join("bridgeforge-manifest.json")).unwrap();
     let contract: serde_json::Value = serde_json::from_slice(&contract_bytes).unwrap();
     let prepared =
         public_artifacts::prepare(factory, &codex, None, None, None, &SystemProcessRunner).unwrap();
@@ -491,8 +496,8 @@ fn project_sync_retired_assets_require_exact_preservation_decisions() {
         }],
         "generated_assets": []
     });
-    write(
-        &factory.join("templates/managed-skeleton.json"),
+    fixture_product::install(
+        &factory.join("bridgeforge-manifest.json"),
         format!(
             "{}\n",
             serde_json::to_string_pretty(&current_contract).unwrap()
@@ -610,8 +615,8 @@ fn destructive_rebuild_requires_unknown_file_decisions_and_retires_old_project_m
         }],
         "generated_assets": []
     });
-    write(
-        &factory.join("templates/managed-skeleton.json"),
+    fixture_product::install(
+        &factory.join("bridgeforge-manifest.json"),
         format!("{}\n", serde_json::to_string_pretty(&contract).unwrap()).as_bytes(),
     );
     write(&project.join(".codex/find-doc.map.md"), b"project map\n");

@@ -8,6 +8,10 @@ delivery_layout: flat
 
 ## 从这里开始
 
+- 待执行：[BridgePilot 产品演进与跨项目总管开发计划](1_delivery/bridgepilot-evolution/plan_2026-10-30_bridgepilot-evolution.md)（TODO-050；现有 BridgeForgeCodex 演进为 BP，工程能力归入 `source/forge/`，与无 `src/` 层的 `source/orchestrator/` 平行；覆盖需求、Codex 工作流、持久化、暂停换机、迁移任务及首版验收。仅获准计划落盘，尚未实施、验证或发布）。
+
+- 已验收：[统一产品清单与安装管理边界](0_architecture/design/codex-project-sync.md#用户验收与发布授权2026-10-30)（三个旧源清单合并至根 bridgeforge-manifest.json；资产历史、忽略内容和退役测试拆分一并验收；受管收口、143 项最终候选测试及最终工具核验通过，已授权 release；真实下游和用户级安装未执行）。
+
 - 已验收：[三任务 autopilot 交付](1_delivery/artifact-layout/requirements_2026-10-30_three-directories.md#用户验收2026-10-30)（2026-10-30 用户验收 TODO-048、TODO-049、release 构建缓存优化及撤回识别修复，并授权受管 release；发布是否成功以实际收据为准）。
 
 - 已验收：[release 中间编译结果复用与缓存锁优化方案](1_delivery/git-sync-performance/plan_2026-10-30_build-cache.md)（持久构建目录与分组锁已实现，固定候选对照及受管收口完成；重复候选明显提速，未宣称冷构建加速）。

@@ -50,7 +50,7 @@ fn factory_context(args: &[String]) -> Result<ProjectContext, String> {
     let context = context(args)?;
     if !context
         .root()
-        .join("templates/managed-skeleton.json")
+        .join("bridgeforge-manifest.json")
         .is_file()
     {
         return Err("factory commands require the factory repository".into());

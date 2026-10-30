@@ -203,7 +203,8 @@
             "scripts/tests/unit/core_build_inputs.rs",
             "scripts/tests/unit/core_process_activity.rs",
             "scripts/tests/unit/core_process_context.rs",
-            "source/workflow/src/artifact_cleanup.rs"
+            "source/workflow/src/artifact_cleanup.rs",
+            "scripts/tests/support/product_manifest.rs"
           ],
           "program": "cargo",
           "timeout_seconds": 3600
@@ -230,7 +231,9 @@
             "--",
             "--test-threads=1",
             "--logfile",
-            "../../.runtime/tests/development/factory-unit-tests.log"
+            "../../.runtime/tests/development/factory-unit-tests.log",
+            "--skip",
+            "factory_runtime::tests::legacy_factory_tools_retire_only_after_verified_install"
           ],
           "id": "factory-unit",
           "inputs": [
@@ -239,7 +242,7 @@
             ".codex/skills/git-sync/references/schema4.md",
             ".codex/skills/git-sync/SKILL.md",
             "AGENTS.md",
-            "bridgeforge-codex-manifest.json",
+            "bridgeforge-manifest.json",
             "CHANGELOG.md",
             "scripts/bridgeforge_codex_shared_update.ps1",
             "scripts/tests/Cargo.lock",
@@ -293,7 +296,6 @@
             "templates/doc/5_project_knowledgebase/.gitkeep",
             "templates/doc/README.md",
             "templates/hooks.json",
-            "templates/managed-skeleton.json",
             "templates/hooks/.gitignore",
             "templates/skills/archive-scan/SKILL.md",
             "templates/skills/autopilot/references/runtime.md",
@@ -338,16 +340,50 @@
             "templates/skills/summary/SKILL.md",
             "templates/skills/sync-docs/SKILL.md",
             "templates/skills/todo/SKILL.md",
-            "templates/source-layout.json",
             "templates/user/AGENTS.md",
-            "user-agents-manifest.json",
             "VERSION",
             "scripts/tests/support/current_fixture.rs",
             "scripts/tests/support/release_plan.rs",
-            "scripts/tests/support/artifact_paths.rs"
+            "scripts/tests/support/artifact_paths.rs",
+            "scripts/tests/support/product_manifest.rs"
           ],
           "program": "cargo",
           "timeout_seconds": 3600
+        },
+        {
+          "id": "factory-distribution",
+          "program": "cargo",
+          "args": [
+            "test",
+            "--locked",
+            "--offline",
+            "--manifest-path",
+            "scripts/tests/Cargo.toml",
+            "--target-dir",
+            ".build/bridgeforge/integration-target",
+            "distribution_regressions::shared_",
+            "--",
+            "--test-threads=1",
+            "--nocapture",
+            "--logfile",
+            "../../.runtime/tests/development/factory-distribution.log"
+          ],
+          "inputs": [
+            "scripts/tests/Cargo.toml",
+            "scripts/tests/Cargo.lock",
+            "scripts/tests/src/lib.rs",
+            "scripts/tests/src/distribution_regressions.rs",
+            "scripts/tests/support/product_manifest.rs",
+            "scripts/tests/support/artifact_paths.rs",
+            "scripts/tests/shared_manifest.ps1",
+            "scripts/tests/shared_transaction.ps1",
+            "scripts/tests/shared_source_reuse.ps1",
+            "scripts/tests/shared_cli_reuse.ps1",
+            "scripts/bridgeforge_codex_shared_update.ps1",
+            "scripts/install-shared-skills.ps1",
+            "bridgeforge-manifest.json"
+          ],
+          "timeout_seconds": 600
         }
       ]
     },
@@ -479,8 +515,9 @@
             "templates/AGENTS.md",
             "templates/doc/README.md",
             "templates/hooks.json",
-            "templates/managed-skeleton.json",
-            "scripts/tests/support/artifact_paths.rs"
+            "bridgeforge-manifest.json",
+            "scripts/tests/support/artifact_paths.rs",
+            "scripts/tests/support/product_manifest.rs"
           ],
           "program": "cargo",
           "timeout_seconds": 3600
@@ -520,11 +557,12 @@
             "scripts/tests/unit/core_project_sync.rs",
             "scripts/tests/unit/source_retirement.rs",
             "templates/hooks.json",
-            "templates/managed-skeleton.json",
+            "bridgeforge-manifest.json",
             "scripts/tests/support/current_fixture.rs",
             "scripts/tests/support/release_plan.rs",
             "scripts/tests/support/artifact_paths.rs",
-            "scripts/tests/unit/workflow_artifact_cleanup.rs"
+            "scripts/tests/unit/workflow_artifact_cleanup.rs",
+            "scripts/tests/support/product_manifest.rs"
           ],
           "program": "cargo",
           "timeout_seconds": 3600
@@ -533,11 +571,17 @@
           "id": "workflow-settings-preservation",
           "program": "cargo",
           "args": [
-            "test", "--locked", "--offline",
-            "--manifest-path", "scripts/tests/Cargo.toml",
-            "--target-dir", ".build/bridgeforge/integration-target",
+            "test",
+            "--locked",
+            "--offline",
+            "--manifest-path",
+            "scripts/tests/Cargo.toml",
+            "--target-dir",
+            ".build/bridgeforge/integration-target",
             "project_settings_remain_project_owned",
-            "--", "--test-threads=1", "--logfile",
+            "--",
+            "--test-threads=1",
+            "--logfile",
             "../../.runtime/tests/development/workflow-settings-preservation.log"
           ],
           "inputs": [
@@ -546,8 +590,9 @@
             "scripts/tests/src/lib.rs",
             "scripts/tests/src/runtime_flows.rs",
             "scripts/tests/support/artifact_paths.rs",
-            "templates/managed-skeleton.json",
-            "templates/config.toml"
+            "bridgeforge-manifest.json",
+            "templates/config.toml",
+            "scripts/tests/support/product_manifest.rs"
           ],
           "timeout_seconds": 600
         },
@@ -575,9 +620,10 @@
             "scripts/tests/src/lib.rs",
             "scripts/tests/src/runtime_flows.rs",
             "scripts/tests/support/artifact_paths.rs",
-            "templates/managed-skeleton.json",
+            "bridgeforge-manifest.json",
             "templates/config.toml",
-            "templates/hooks.json"
+            "templates/hooks.json",
+            "scripts/tests/support/product_manifest.rs"
           ],
           "timeout_seconds": 900
         }

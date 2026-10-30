@@ -15,7 +15,8 @@ fn task_root(manifest_dir: &str, task: &str, area: &str) -> PathBuf {
     let repository = Path::new(manifest_dir)
         .ancestors()
         .find(|path| {
-            path.join("templates/source-layout.json").is_file() && path.join("Cargo.toml").is_file()
+            path.join("bridgeforge-manifest.json").is_file()
+                && path.join("Cargo.toml").is_file()
         })
         .expect("test task must locate the factory workspace");
     let path = repository.join(area).join("tests").join(task);

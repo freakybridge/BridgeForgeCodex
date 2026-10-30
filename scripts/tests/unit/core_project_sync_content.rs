@@ -1,3 +1,7 @@
+#[allow(dead_code)]
+#[path = "../support/product_manifest.rs"]
+mod fixture_product;
+
 #[path = "../support/factory_root.rs"]
 mod factory_repository;
 
@@ -110,7 +114,7 @@ fn markdown_upgrade_selects_the_only_table_with_managed_keys() {
 fn real_template_upgrades_legacy_markdown_without_old_contract_or_losing_index() {
     let factory = factory_repository::from_manifest_dir(env!("CARGO_MANIFEST_DIR"));
     let contract: Value =
-        serde_json::from_slice(&fs::read(factory.join("templates/managed-skeleton.json")).unwrap())
+        serde_json::from_slice(&fixture_product::read(factory.join("bridgeforge-manifest.json")).unwrap())
             .unwrap();
     let asset = contract["assets"]
         .as_array()

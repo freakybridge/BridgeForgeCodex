@@ -171,7 +171,7 @@ fn factory_root() -> PathBuf {
 }
 
 fn contract_and_asset(id: &str) -> (Value, Value) {
-    let contract = load(&factory_root().join("templates/managed-skeleton.json")).unwrap();
+    let contract = bridgeforge_core::product_manifest::project(&factory_root()).unwrap();
     let asset = contract["assets"]
         .as_array()
         .unwrap()
@@ -212,6 +212,45 @@ fn contract_schema_is_exact_and_asset_identities_are_unique() {
         parse_unique_json(br#"{"schema_version":4,"schema_version":4}"#, "contract")
             .unwrap_err()
             .contains("duplicate JSON key")
+    );
+}
+
+#[test]
+fn asset_history_and_inline_sources_reject_inconsistent_contracts() {
+    let (contract, _) = contract_and_asset("root.artifact-ignore");
+    validate_contract(&contract).unwrap();
+    let index = contract["assets"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .position(|a| a["id"] == "root.artifact-ignore")
+        .unwrap();
+    for content in [serde_json::json!(42), serde_json::json!("changed")] {
+        let mut invalid = contract.clone();
+        invalid["assets"][index]["content"] = content;
+        assert!(validate_contract(&invalid).is_err());
+    }
+    let mut ambiguous = contract.clone();
+    ambiguous["assets"][index]["source"] = serde_json::json!("templates/missing");
+    assert!(
+        validate_contract(&ambiguous)
+            .unwrap_err()
+            .contains("cannot also declare")
+    );
+    let mut invalid = contract.clone();
+    invalid["asset_history"]["retirements"][0]["known_hashes"][0]["revision"] =
+        serde_json::json!("unknown");
+    assert!(
+        validate_contract(&invalid)
+            .unwrap_err()
+            .contains("provenance")
+    );
+    let mut drifted = contract.clone();
+    drifted["retired_assets"].as_array_mut().unwrap().pop();
+    assert!(
+        validate_contract(&drifted)
+            .unwrap_err()
+            .contains("differ from asset history")
     );
 }
 

@@ -348,7 +348,7 @@ fn finish(
             )?,
         )?;
     }
-    let kind = if root.join("templates/managed-skeleton.json").is_file() {
+    let kind = if root.join("bridgeforge-manifest.json").is_file() {
         ReleaseKind::Factory
     } else {
         ReleaseKind::Business

@@ -1,3 +1,7 @@
+#[allow(dead_code)]
+#[path = "../support/product_manifest.rs"]
+mod fixture_product;
+
 #[cfg(test)]
 mod build_provenance;
 #[cfg(test)]
@@ -21,7 +25,7 @@ mod security_guards;
 
 #[cfg(test)]
 mod tests {
-    use crate::test_artifacts;
+    use crate::{test_artifacts, fixture_product};
     use serde_json::json;
     use sha2::{Digest, Sha256};
     use std::collections::BTreeMap;
@@ -258,9 +262,9 @@ mod tests {
                 },
             }],
         });
-        let source_contract = project.join("templates/managed-skeleton.json");
+        let source_contract = project.join("bridgeforge-manifest.json");
         let active_contract = project.join(".codex/managed-skeleton.json");
-        fs::write(&source_contract, serde_json::to_vec(&contract).unwrap()).unwrap();
+        fixture_product::write(&source_contract, serde_json::to_vec(&contract).unwrap()).unwrap();
         let mut hooks = json!({"hooks":{"PreToolUse":[{
             "matcher":"Bash",
             "hooks":[{
@@ -298,7 +302,7 @@ mod tests {
             let before = files(project);
             let rebuilt = bridgeforge_factory::manifest::render_managed_contract(project).unwrap();
             assert_eq!(files(project), before, "render must not write files");
-            fs::write(&source_contract, &rebuilt).unwrap();
+            fixture_product::write(&source_contract, &rebuilt).unwrap();
             fs::write(&active_contract, &rebuilt).unwrap();
             bridgeforge_skeleton::baseline::verify(project, None, false).unwrap();
             assert_eq!(
@@ -332,12 +336,12 @@ mod tests {
         let repository = root();
         assert!(!bridgeforge_factory::manifest::rebuild(&repository, true).unwrap());
         let contract =
-            fs::read_to_string(repository.join("templates/managed-skeleton.json")).unwrap();
+            fixture_product::read_to_string(repository.join("bridgeforge-manifest.json")).unwrap();
         assert!(!contract.contains(".py\""));
         assert!(contract.contains("codex.bridgeforge-cli"));
         assert!(contract.contains("codex.hooks"));
         let distribution: serde_json::Value = serde_json::from_slice(
-            &fs::read(repository.join("bridgeforge-codex-manifest.json")).unwrap(),
+            &fixture_product::read_shared(repository.join("bridgeforge-manifest.json")).unwrap(),
         )
         .unwrap();
         for platform in distribution["platforms"].as_object().unwrap().values() {

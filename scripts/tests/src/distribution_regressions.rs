@@ -1,3 +1,7 @@
+#[allow(dead_code)]
+#[path = "../support/product_manifest.rs"]
+mod fixture_product;
+
 use bridgeforge_core::{ProcessOutput, ProcessRequest, ProcessRunner};
 use bridgeforge_workflow::project_sync::{
     SyncMode, apply_plan, build_plan, build_plan_with_inputs,
@@ -72,7 +76,7 @@ fn distributed_roles_match_skill_references_and_dogfood() {
         .nth(2)
         .unwrap();
     let contract: Value =
-        serde_json::from_slice(&fs::read(root.join("templates/managed-skeleton.json")).unwrap())
+        serde_json::from_slice(&fixture_product::read(root.join("bridgeforge-manifest.json")).unwrap())
             .unwrap();
     let roles = contract["assets"]
         .as_array()
@@ -215,7 +219,7 @@ fn project_maps_are_not_fixed_managed_payloads() {
         .nth(2)
         .unwrap();
     let contract: Value =
-        serde_json::from_slice(&fs::read(root.join("templates/managed-skeleton.json")).unwrap())
+        serde_json::from_slice(&fixture_product::read(root.join("bridgeforge-manifest.json")).unwrap())
             .unwrap();
     for asset in contract["assets"].as_array().unwrap() {
         let target = asset["target"].as_str().unwrap();
@@ -249,6 +253,40 @@ fn shared_source_reuse_keeps_source_and_failure_gates() {
         "Bypass".into(),
         "-File".into(),
         root.join("scripts/tests/shared_source_reuse.ps1")
+            .into_os_string(),
+        "-RepositoryRoot".into(),
+        root.as_os_str().to_owned(),
+        "-Base".into(),
+        fixture.0.as_os_str().to_owned(),
+    ];
+    request.timeout = std::time::Duration::from_secs(60);
+    let output = bridgeforge_core::SystemProcessRunner.run(&request).unwrap();
+    assert!(!output.timed_out);
+    assert_eq!(
+        output.code,
+        0,
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn shared_manifest_separates_scopes_and_rolls_back_drift() {
+    let fixture = Fixture::new();
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .ancestors()
+        .nth(2)
+        .unwrap();
+    let mut request = ProcessRequest::new("powershell.exe", root);
+    request.args = vec![
+        "-NoProfile".into(),
+        "-NonInteractive".into(),
+        "-ExecutionPolicy".into(),
+        "Bypass".into(),
+        "-File".into(),
+        root.join("scripts/tests/shared_manifest.ps1")
             .into_os_string(),
         "-RepositoryRoot".into(),
         root.as_os_str().to_owned(),
@@ -380,8 +418,8 @@ fn minimal(f: &Fixture) -> (PathBuf, PathBuf) {
     let project = f.0.join("project");
     fs::create_dir_all(&project).unwrap();
     write(&factory.join("templates/example.txt"), b"managed\n");
-    write(
-        &factory.join("templates/managed-skeleton.json"),
+    fixture_product::install(
+        &factory.join("bridgeforge-manifest.json"),
         serde_json::to_vec_pretty(&contract()).unwrap(),
     );
     (factory, project)
@@ -564,8 +602,8 @@ fn knowledge_seed_initializes_and_upgrades_without_owning_topic_bytes() {
         let mut current = contract();
         current["release_version"] = json!("8.0.10");
         current["compatibility_baseline"] = json!("8.0.6");
-        write(
-            &factory.join("templates/managed-skeleton.json"),
+        fixture_product::install(
+            &factory.join("bridgeforge-manifest.json"),
             serde_json::to_vec(&current).unwrap(),
         );
         if existing {
@@ -577,7 +615,7 @@ fn knowledge_seed_initializes_and_upgrades_without_owning_topic_bytes() {
             .nth(2)
             .unwrap();
         let real: Value = serde_json::from_slice(
-            &fs::read(repository.join("templates/managed-skeleton.json")).unwrap(),
+            &fixture_product::read(repository.join("bridgeforge-manifest.json")).unwrap(),
         )
         .unwrap();
         let seed = real["assets"]
@@ -591,8 +629,8 @@ fn knowledge_seed_initializes_and_upgrades_without_owning_topic_bytes() {
         current["assets"].as_array_mut().unwrap().push(seed.clone());
         current["release_version"] = json!("8.1.0");
         write(&factory.join(seed["source"].as_str().unwrap()), b"");
-        write(
-            &factory.join("templates/managed-skeleton.json"),
+        fixture_product::install(
+            &factory.join("bridgeforge-manifest.json"),
             serde_json::to_vec(&current).unwrap(),
         );
         let plan = build_plan(&project, &factory, SyncMode::Auto).unwrap();
@@ -604,8 +642,8 @@ fn knowledge_seed_initializes_and_upgrades_without_owning_topic_bytes() {
         write(&topic, b"project knowledge\r\n");
         write(&target, b"project-owned seed\r\n");
         current["release_version"] = json!("8.1.1");
-        write(
-            &factory.join("templates/managed-skeleton.json"),
+        fixture_product::install(
+            &factory.join("bridgeforge-manifest.json"),
             serde_json::to_vec(&current).unwrap(),
         );
         let plan = build_plan(&project, &factory, SyncMode::Update).unwrap();

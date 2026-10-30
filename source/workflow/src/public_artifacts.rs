@@ -65,11 +65,7 @@ pub fn locate_cli(
     codex_root: &Path,
     runner: &dyn ProcessRunner,
 ) -> Result<Value, String> {
-    let contract = crate::json::parse_unique_json(
-        &fs::read(product_root.join("templates/managed-skeleton.json"))
-            .map_err(|e| e.to_string())?,
-        "public contract",
-    )?;
+    let contract = bridgeforge_core::product_manifest::project(product_root)?;
     let path = prepared_path(codex_root, &contract)?;
     let bytes =
         crate::managed_paths::read_metadata(&path, 128 * 1024)?.ok_or("no prepared public CLI")?;
@@ -209,8 +205,7 @@ pub fn prepare_with_product_version(
 ) -> Result<Value, String> {
     let started = Instant::now();
     let source = crate::source_projection::source_root(product_root);
-    let contract_bytes = fs::read(product_root.join("templates/managed-skeleton.json"))
-        .map_err(|e| e.to_string())?;
+    let contract_bytes = bridgeforge_core::product_manifest::project_bytes(product_root)?;
     let contract = crate::json::parse_unique_json(&contract_bytes, "public product contract")?;
     let version = fs::read_to_string(product_root.join("VERSION")).map_err(|e| e.to_string())?;
     if contract["release_version"].as_str() != Some(version.trim()) {
@@ -329,7 +324,7 @@ pub fn prepare_with_product_version(
             return Err("unowned public receipt is preserved".into());
         }
     }
-    if fs::read(product_root.join("templates/managed-skeleton.json")).map_err(|e| e.to_string())?
+    if bridgeforge_core::product_manifest::project_bytes(product_root)?
         != contract_bytes
     {
         return Err("public contract changed during preparation".into());

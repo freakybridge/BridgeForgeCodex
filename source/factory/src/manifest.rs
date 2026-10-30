@@ -244,11 +244,16 @@ fn render_contract(
     overlay: &BTreeMap<String, Vec<u8>>,
     factory: bool,
 ) -> Result<Vec<u8>, String> {
-    let path = root.join("templates/managed-skeleton.json");
-    let mut contract: Value = serde_json::from_slice(
-        &fs::read(&path).map_err(|error| format!("cannot read managed contract: {error}"))?,
-    )
-    .map_err(|error| format!("invalid managed contract: {error}"))?;
+    let contract = bridgeforge_core::product_manifest::project(root)?;
+    render_contract_value(root, overlay, factory, contract)
+}
+
+fn render_contract_value(
+    root: &Path,
+    overlay: &BTreeMap<String, Vec<u8>>,
+    factory: bool,
+    mut contract: Value,
+) -> Result<Vec<u8>, String> {
     if contract["schema_version"].as_u64() != Some(4)
         || contract["baseline_model"].as_str() != Some("current-only")
     {
@@ -268,38 +273,16 @@ fn render_contract(
     } else {
         None
     };
-    let layout = if projected.is_some() {
-        let bytes =
-            fs::read(root.join("templates/source-layout.json")).map_err(|e| e.to_string())?;
-        let layout = crate::json::parse_unique_json(&bytes, "source layout")?;
-        if layout["schema"] != 1
-            || layout["format"] != "bridgeforge-source-layout-v1"
-            || !layout["relocations"].is_array()
-        {
-            return Err("invalid source layout contract".into());
-        }
-        Some(layout)
+    let history = if projected.is_some() {
+        let history = contract
+            .get("asset_history")
+            .ok_or("managed contract asset_history is missing")?
+            .clone();
+        contract["retired_assets"] = crate::baseline::retired_assets_from_history(&history)?;
+        Some(history)
     } else {
         None
     };
-    if let Some(layout) = &layout {
-        contract["retired_assets"] = json!(
-            layout["relocations"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .filter(|r| r["target"] != r["previous_target"])
-                .map(|r| json!({"id":r["id"],"target":r["previous_target"],
-                "known_hashes":r["known_hashes"].as_array().into_iter().flatten()
-                    .map(|h| h["sha256"].clone()).collect::<Vec<_>>() }))
-                .chain(layout["retirements"].as_array().into_iter().flatten().map(
-                    |r| json!({"id":r["id"],"target":r["target"],
-                        "known_hashes":r["known_hashes"].as_array().into_iter().flatten()
-                            .map(|h|h["sha256"].clone()).collect::<Vec<_>>() })
-                ))
-                .collect::<Vec<_>>()
-        );
-    }
     let sources = if let Some(files) = &projected {
         files.keys().cloned().collect()
     } else {
@@ -321,13 +304,6 @@ fn render_contract(
         })
         .cloned()
         .collect::<Vec<_>>();
-    if (projected.is_some() || root.join("templates/artifact-roots.gitignore").is_file())
-        && !assets.iter().any(|a| a["id"] == "root.artifact-ignore")
-    {
-        assets.push(json!({"id":"root.artifact-ignore","source":"templates/artifact-roots.gitignore",
-            "target":".gitignore","strategy":"merge","merge_policy":"artifact-roots","current_sha256":"",
-            "merge_validation":{"format":artifact_paths::CONTRACT}}));
-    }
     for relative in &sources {
         let source = if projected.is_some() && relative == ".gitignore" {
             "templates/hooks/.gitignore".into()
@@ -336,7 +312,7 @@ fn render_contract(
         } else {
             format!("templates/hooks/{relative}")
         };
-        let existing_id = layout
+        let existing_id = history
             .as_ref()
             .and_then(|l| l["relocations"].as_array())
             .and_then(|entries| entries.iter().find(|a| a["source"] == source))
@@ -360,8 +336,10 @@ fn render_contract(
         assets.push(asset);
     }
     for asset in &mut assets {
-        let source = asset["source"].as_str().ok_or("asset source is missing")?;
-        let payload = if let Some(bytes) = projected.as_ref().and_then(|files| files.get(source)) {
+        let source = asset["source"].as_str().unwrap_or("");
+        let payload = if let Some(bytes) = bridgeforge_skeleton::content::inline_source(asset)? {
+            bytes.to_vec()
+        } else if let Some(bytes) = projected.as_ref().and_then(|files| files.get(source)) {
             bytes.clone()
         } else if let Some(bytes) = overlay.get(source) {
             bytes.clone()
@@ -473,10 +451,7 @@ fn render_contract(
 }
 
 pub fn render_distribution_manifest(root: &Path) -> Result<Vec<u8>, String> {
-    let path = root.join("bridgeforge-codex-manifest.json");
-    let mut manifest: Value =
-        serde_json::from_slice(&fs::read(&path).map_err(|error| error.to_string())?)
-            .map_err(|error| error.to_string())?;
+    let mut manifest = bridgeforge_core::product_manifest::section(root, "shared_skills")?;
     let platforms = manifest["platforms"]
         .as_object_mut()
         .ok_or("distribution manifest platforms are missing")?;
@@ -518,9 +493,14 @@ fn factory_entrypoints(root: &Path) -> Result<BTreeMap<String, Vec<u8>>, String>
         ) {
             continue;
         }
-        let source = asset["source"].as_str().ok_or("factory source missing")?;
         let target = asset["target"].as_str().ok_or("factory target missing")?;
-        let payload = factory_payload(id, fs::read(root.join(source)).map_err(|e| e.to_string())?)?;
+        let payload = if let Some(bytes) = bridgeforge_skeleton::content::inline_source(asset)? {
+            bytes.to_vec()
+        } else {
+            let source = asset["source"].as_str().ok_or("factory source missing")?;
+            fs::read(safe_join(root, source)?).map_err(|e| e.to_string())?
+        };
+        let payload = factory_payload(id, payload)?;
         let current =
             crate::managed_paths::read_metadata(&safe_join(root, target)?, 16 * 1024 * 1024)?;
         let rendered = bridgeforge_skeleton::content::render(
@@ -536,23 +516,20 @@ fn factory_entrypoints(root: &Path) -> Result<BTreeMap<String, Vec<u8>>, String>
     Ok(outputs)
 }
 
+pub(crate) fn render_product_manifest(root: &Path, overlay: &BTreeMap<String, Vec<u8>>) -> Result<Vec<u8>, String> {
+    let mut product = bridgeforge_core::product_manifest::load(root)?;
+    product["project_skeleton"] = serde_json::from_slice(&render_managed_contract_with_overlay(root, overlay)?).map_err(|e| e.to_string())?;
+    product["shared_skills"] = serde_json::from_slice(&render_distribution_manifest(root)?).map_err(|e| e.to_string())?;
+    product["user_instructions"] = serde_json::from_slice(&crate::user_agents::render_manifest(root)?).map_err(|e| e.to_string())?;
+    let mut bytes = serde_json::to_vec_pretty(&product).map_err(|e| e.to_string())?;
+    bytes.push(b'\n');
+    Ok(bytes)
+}
+
 pub(crate) fn render_targets(root: &Path) -> Result<Vec<(PathBuf, Vec<u8>)>, String> {
-    let contract = render_managed_contract(root)?;
-    let distribution = render_distribution_manifest(root)?;
     let mut targets = vec![
-        (
-            root.join("templates/managed-skeleton.json"),
-            contract.clone(),
-        ),
-        (
-            root.join(".codex/managed-skeleton.json"),
-            render_factory_contract(root, &BTreeMap::new())?,
-        ),
-        (root.join("bridgeforge-codex-manifest.json"), distribution),
-        (
-            root.join(crate::user_agents::MANIFEST),
-            crate::user_agents::render_manifest(root)?,
-        ),
+        (root.join(bridgeforge_core::product_manifest::FILE), render_product_manifest(root, &BTreeMap::new())?),
+        (root.join(".codex/managed-skeleton.json"), render_factory_contract(root, &BTreeMap::new())?),
     ];
     if crate::source_projection::available(root) {
         targets.extend(
@@ -591,10 +568,11 @@ fn projection_targets_from_writes(
 ) -> Result<Vec<(PathBuf, Option<Vec<u8>>)>, String> {
     let contract = writes
         .iter()
-        .find(|(path, _)| path == &root.join("templates/managed-skeleton.json"))
+        .find(|(path, _)| path == &root.join(bridgeforge_core::product_manifest::FILE))
         .ok_or("managed contract output missing")?;
-    let contract: Value = serde_json::from_slice(&contract.1).map_err(|e| e.to_string())?;
-    crate::baseline::validate_contract(&contract)?;
+    let product = bridgeforge_core::product_manifest::parse(&contract.1)?;
+    let contract = &product["project_skeleton"];
+    crate::baseline::validate_contract(contract)?;
     let mut targets = writes
         .into_iter()
         .map(|(p, b)| (p, Some(b)))
@@ -752,21 +730,13 @@ pub fn development_projection(
         .map(|(p, b)| (format!(".codex/hooks/{p}"), b))
         .collect::<BTreeMap<_, _>>();
     outputs.extend(crate::dogfood::render(root)?);
-    let contract = render_managed_contract_with_overlay(root, native)?;
-    outputs.insert("templates/managed-skeleton.json".into(), contract.clone());
+    outputs.insert(bridgeforge_core::product_manifest::FILE.into(), render_product_manifest(root, native)?);
     outputs.insert(
         ".codex/managed-skeleton.json".into(),
         render_factory_contract(root, native)?,
     );
     outputs.extend(factory_entrypoints(root)?);
-    outputs.insert(
-        "bridgeforge-codex-manifest.json".into(),
-        render_distribution_manifest(root)?,
-    );
-    outputs.insert(
-        crate::user_agents::MANIFEST.into(),
-        crate::user_agents::render_manifest(root)?,
-    );
+
     if root.join("scripts/tests/Cargo.toml").is_file() {
         outputs.insert(
             "scripts/tests/Cargo.lock".into(),

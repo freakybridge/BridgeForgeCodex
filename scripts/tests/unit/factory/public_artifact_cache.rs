@@ -1,3 +1,7 @@
+#[allow(dead_code)]
+#[path = "../../support/product_manifest.rs"]
+mod fixture_product;
+
 use bridgeforge_core::{ProcessOutput, ProcessRequest, ProcessRunner};
 use serde_json::{Value, json};
 use std::{
@@ -169,8 +173,8 @@ fn bootstrap_product_identity_is_explicit_and_preserves_provenance_guards() {
     fs::write(workspace.join("Cargo.lock"), b"version=4\n").unwrap();
     fs::write(workspace.join("src/main.rs"), b"fn main(){}\n").unwrap();
     fs::write(f.0.join("VERSION"), b"6.0.0\n").unwrap();
-    fs::write(
-        f.0.join("templates/managed-skeleton.json"),
+    fixture_product::write(
+        f.0.join("bridgeforge-manifest.json"),
         br#"{"release_version":"6.0.0","generated_assets":[]}"#,
     )
     .unwrap();
@@ -262,7 +266,7 @@ fn project_plan_builds_are_reused_without_writing_project_targets() {
     fs::write(workspace.join("src/main.rs"), b"fn main() {}\n").unwrap();
     fs::write(f.0.join("VERSION"), b"8.0.0\n").unwrap();
     fs::create_dir_all(f.0.join("templates")).unwrap();
-    fs::write(f.0.join("templates/managed-skeleton.json"),br#"{"schema_version":4,"baseline_model":"current-only","compatibility_baseline":"1.0.0","assets":[],"generated_assets":[]}"#).unwrap();
+    fixture_product::write(f.0.join("bridgeforge-manifest.json"),br#"{"schema_version":4,"baseline_model":"current-only","compatibility_baseline":"1.0.0","assets":[],"generated_assets":[]}"#).unwrap();
     let contract: Value =
         serde_json::from_slice(&crate::manifest::render_managed_contract(&f.0).unwrap()).unwrap();
     let r = Builds {

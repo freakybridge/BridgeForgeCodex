@@ -148,8 +148,9 @@ fn claims_positive_autoload(text: &str) -> bool {
 fn managed_public_hash(root: &Path) -> Option<String> {
     for path in [
         root.join(".codex/managed-skeleton.json"),
-        root.join("templates/managed-skeleton.json"),
+        root.join(bridgeforge_core::product_manifest::FILE),
     ] {
+        let unified = path.file_name().is_some_and(|name| name == bridgeforge_core::product_manifest::FILE);
         let Ok(value) = fs::read_to_string(path)
             .ok()
             .and_then(|text| serde_json::from_str::<Value>(&text).ok())
@@ -157,6 +158,7 @@ fn managed_public_hash(root: &Path) -> Option<String> {
         else {
             continue;
         };
+        let value = if unified { &value["project_skeleton"] } else { &value };
         if let Some(hash) = value["assets"]
             .as_array()
             .and_then(|assets| assets.iter().find(|asset| asset["id"] == "root.agents"))

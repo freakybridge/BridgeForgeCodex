@@ -1,6 +1,28 @@
+#[allow(dead_code)]
+#[path = "../support/product_manifest.rs"]
+mod fixture_product;
+
 use super::*;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
+
+#[test]
+fn unified_manifest_rejects_ambiguous_sections_before_staging() {
+    let f = Fixture::new();
+    let original: Value = serde_json::from_slice(&fs::read(f.0.join(MANIFEST)).unwrap()).unwrap();
+    for name in ["user_instructions", "shared_skills", "project_skeleton"] {
+        let mut invalid = original.clone();
+        invalid.as_object_mut().unwrap().remove(name);
+        fs::write(f.0.join(MANIFEST), serde_json::to_vec(&invalid).unwrap()).unwrap();
+        assert!(f.run().is_err());
+        assert!(!f.profile().join(".codex").exists());
+    }
+    let duplicate = br#"{"schema_version":1,"user_instructions":{},"shared_skills":{},"project_skeleton":{},"project_skeleton":{}}"#;
+    assert!(crate::product_manifest::parse(duplicate).is_err());
+    let mut extra = original;
+    extra["unexpected"] = json!({});
+    assert!(crate::product_manifest::parse(&serde_json::to_vec(&extra).unwrap()).is_err());
+}
 
 static NEXT: AtomicUsize = AtomicUsize::new(0);
 struct Fixture(PathBuf);
@@ -14,7 +36,7 @@ impl Fixture {
         fs::create_dir_all(root.join("templates/user")).unwrap();
         fs::create_dir_all(root.join("profile")).unwrap();
         fs::write(root.join(SOURCE), "# 偏好\n内容\n").unwrap();
-        fs::write(root.join(MANIFEST), render_manifest(&root).unwrap()).unwrap();
+        fixture_product::write_section(root.join(MANIFEST), "user_instructions", render_manifest(&root).unwrap()).unwrap();
         Self(root)
     }
     fn profile(&self) -> PathBuf {
@@ -84,10 +106,10 @@ fn invalid_source_contract_and_non_file_target_block_before_staging() {
     fs::write(f.0.join(SOURCE), "changed").unwrap();
     assert!(f.run().unwrap_err().contains("hash differs"));
     assert!(!f.profile().join(".codex").exists());
-    fs::write(f.0.join(MANIFEST), render_manifest(&f.0).unwrap()).unwrap();
+    fixture_product::write_section(f.0.join(MANIFEST), "user_instructions", render_manifest(&f.0).unwrap()).unwrap();
     let mut manifest: Value =
         serde_json::from_slice(&fs::read(f.0.join(MANIFEST)).unwrap()).unwrap();
-    manifest["target"] = json!("~/.codex/config.toml");
+    manifest["user_instructions"]["target"] = json!("~/.codex/config.toml");
     fs::write(f.0.join(MANIFEST), serde_json::to_vec(&manifest).unwrap()).unwrap();
     assert!(f.run().unwrap_err().contains("identity"));
     fs::create_dir_all(f.target()).unwrap();

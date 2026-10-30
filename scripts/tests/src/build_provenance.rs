@@ -1,3 +1,7 @@
+#[allow(dead_code)]
+#[path = "../support/product_manifest.rs"]
+mod fixture_product;
+
 use bridgeforge_core::{ProcessOutput, ProcessRequest, ProcessRunner};
 use bridgeforge_workflow::project_sync::build_generated_assets;
 use serde_json::{Value, json};
@@ -200,8 +204,8 @@ impl Fixture {
         fs::write(root.join("VERSION"), "1.8.0\n").unwrap();
         let initial = json!({"schema_version":4,"baseline_model": "current-only", "compatibility_baseline": "1.0.0",
             "assets":[],"generated_assets":[]});
-        fs::write(
-            root.join("templates/managed-skeleton.json"),
+        fixture_product::write(
+            root.join("bridgeforge-manifest.json"),
             serde_json::to_vec(&initial).unwrap(),
         )
         .unwrap();

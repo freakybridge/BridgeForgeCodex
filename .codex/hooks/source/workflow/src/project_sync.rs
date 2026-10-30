@@ -492,24 +492,28 @@ fn render_asset(
     allow_structure_upgrade: bool,
 ) -> Result<(Vec<u8>, Option<Vec<u8>>), String> {
     let id = asset["id"].as_str().ok_or("asset id is missing")?;
-    let source_raw = asset["source"]
-        .as_str()
-        .ok_or_else(|| format!("asset source is missing: {id}"))?;
     let target_raw = asset["target"]
         .as_str()
         .ok_or_else(|| format!("asset target is missing: {id}"))?;
-    let source = safe_join(template_root, source_raw, "asset source")?;
     let target = safe_join(project_root, target_raw, "asset target")?;
-    let source_payload = if matches!(
-        asset["render"].as_str(),
-        Some("public-runtime-workspace" | "public-runtime-lock")
-    ) {
-        crate::source_projection::render(template_root, true)?
-            .remove(source_raw)
-            .ok_or("projected asset source is missing")?
+    let source_payload = if let Some(bytes) = content::inline_source(asset)? {
+        bytes.to_vec()
     } else {
-        fs::read(&source)
-            .map_err(|error| format!("cannot read asset source {source_raw}: {error}"))?
+        let source_raw = asset["source"]
+            .as_str()
+            .ok_or_else(|| format!("asset source is missing: {id}"))?;
+        let source = safe_join(template_root, source_raw, "asset source")?;
+        if matches!(
+            asset["render"].as_str(),
+            Some("public-runtime-workspace" | "public-runtime-lock")
+        ) {
+            crate::source_projection::render(template_root, true)?
+                .remove(source_raw)
+                .ok_or("projected asset source is missing")?
+        } else {
+            fs::read(&source)
+                .map_err(|error| format!("cannot read asset source {source_raw}: {error}"))?
+        }
     };
     let current = if target.is_file() {
         Some(fs::read(&target).map_err(|error| error.to_string())?)
@@ -528,9 +532,7 @@ fn render_asset(
 }
 
 fn read_contract(template_root: &Path) -> Result<(Value, Vec<u8>), String> {
-    let path = template_root.join("templates/managed-skeleton.json");
-    let bytes =
-        fs::read(&path).map_err(|error| format!("cannot read managed contract: {error}"))?;
+    let bytes = bridgeforge_core::product_manifest::project_bytes(template_root)?;
     let value = crate::json::parse_unique_json(&bytes, "managed contract")?;
     if value["schema_version"].as_u64() != Some(4)
         || value["baseline_model"].as_str() != Some("current-only")

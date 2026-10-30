@@ -1,4 +1,29 @@
+#[allow(dead_code)]
+#[path = "../support/product_manifest.rs"]
+mod fixture_product;
+
 use super::*;
+
+#[test]
+fn unified_manifest_emits_one_source_and_project_only_projection() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).ancestors().nth(2).unwrap();
+    let before = fs::read(root.join(bridgeforge_core::product_manifest::FILE)).unwrap();
+    let writes = render_targets(root).unwrap();
+    assert_eq!(writes.iter().filter(|(p, _)| p == &root.join(bridgeforge_core::product_manifest::FILE)).count(), 1);
+    for old in ["user-agents-manifest.json", "bridgeforge-codex-manifest.json", "templates/managed-skeleton.json"] {
+        assert!(!writes.iter().any(|(p, _)| p == &root.join(old)));
+    }
+    let (_, bytes) = writes.iter().find(|(p, _)| p == &root.join(bridgeforge_core::product_manifest::FILE)).unwrap();
+    let combined = bridgeforge_core::product_manifest::parse(bytes).unwrap();
+    assert_eq!(combined["project_skeleton"], serde_json::from_slice::<Value>(&render_managed_contract(root).unwrap()).unwrap());
+    assert_eq!(combined["user_instructions"], serde_json::from_slice::<Value>(&crate::user_agents::render_manifest(root).unwrap()).unwrap());
+    assert_eq!(combined["shared_skills"], serde_json::from_slice::<Value>(&render_distribution_manifest(root).unwrap()).unwrap());
+    let (_, downstream) = writes.iter().find(|(p, _)| p == &root.join(".codex/managed-skeleton.json")).unwrap();
+    let downstream: Value = serde_json::from_slice(downstream).unwrap();
+    assert!(downstream.get("user_instructions").is_none());
+    assert!(downstream.get("shared_skills").is_none());
+    assert_eq!(fs::read(root.join(bridgeforge_core::product_manifest::FILE)).unwrap(), before);
+}
 
 #[test]
 fn manifest_projection_rejects_out_of_scope_retirement_before_io() {
@@ -8,7 +33,7 @@ fn manifest_projection_rejects_out_of_scope_retirement_before_io() {
         .parent()
         .unwrap();
     let writes = render_targets(root).unwrap();
-    let contract_path = root.join("templates/managed-skeleton.json");
+    let contract_path = root.join("bridgeforge-manifest.json");
     let bytes = &writes.iter().find(|(p, _)| p == &contract_path).unwrap().1;
     let original = fs::read(root.join("source/memory/src/lib.rs")).unwrap();
     for target in [
@@ -16,7 +41,7 @@ fn manifest_projection_rejects_out_of_scope_retirement_before_io() {
         ".codex/hooks/project_custom/lib.rs",
     ] {
         let mut contract: Value = serde_json::from_slice(bytes).unwrap();
-        contract["retired_assets"] =
+        contract["project_skeleton"]["retired_assets"] =
             json!([{"id":"retired.invalid","target":target,"known_hashes":[sha_git(&original)]}]);
         let invalid = vec![(
             contract_path.clone(),
@@ -131,13 +156,13 @@ fn factory_skill_mirrors_are_explicit_private_and_readonly() {
 }
 
 #[test]
-fn actual_source_layout_preserves_asset_ids_and_public_boundary_without_writes() {
+fn asset_history_preserves_asset_ids_and_public_boundary_without_writes() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .unwrap()
         .parent()
         .unwrap();
-    let before = fs::read(root.join("templates/managed-skeleton.json")).unwrap();
+    let before = fixture_product::read(root.join("bridgeforge-manifest.json")).unwrap();
     let rendered = render_managed_contract(root).unwrap();
     let contract: Value = serde_json::from_slice(&rendered).unwrap();
     crate::baseline::validate_contract(&contract).unwrap();
@@ -153,9 +178,15 @@ fn actual_source_layout_preserves_asset_ids_and_public_boundary_without_writes()
                 .contains("invalid retired source asset")
         );
     }
-    let layout: Value =
-        serde_json::from_slice(&fs::read(root.join("templates/source-layout.json")).unwrap())
-            .unwrap();
+    let layout = &contract["asset_history"];
+    assert_eq!(
+        contract["asset_history"],
+        serde_json::from_slice::<Value>(&before).unwrap()["asset_history"]
+    );
+    assert_eq!(
+        render_contract_value(root, &BTreeMap::new(), false, contract.clone()).unwrap(),
+        rendered
+    );
     let assets = contract["assets"].as_array().unwrap();
     for row in layout["relocations"]
         .as_array()
@@ -170,14 +201,15 @@ fn actual_source_layout_preserves_asset_ids_and_public_boundary_without_writes()
         assert_eq!(item["id"], row["id"]);
         assert_eq!(item["target"], row["target"]);
     }
-    assert!(
-        assets
-            .iter()
-            .all(|a| !a["source"].as_str().unwrap().starts_with("source/factory/"))
-    );
+    assert!(assets.iter().all(|a| {
+        !a["source"]
+            .as_str()
+            .unwrap_or("")
+            .starts_with("source/factory/")
+    }));
     assert_eq!(contract["generated_assets"].as_array().unwrap().len(), 2);
     assert_eq!(
-        fs::read(root.join("templates/managed-skeleton.json")).unwrap(),
+        fixture_product::read(root.join("bridgeforge-manifest.json")).unwrap(),
         before
     );
 }

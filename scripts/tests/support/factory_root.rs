@@ -6,8 +6,7 @@ pub(crate) fn from_manifest_dir(manifest_dir: &str) -> &Path {
         .ancestors()
         .find(|root| {
             root.join("VERSION").is_file()
-                && root.join("templates/managed-skeleton.json").is_file()
-                && root.join("bridgeforge-codex-manifest.json").is_file()
+                && root.join("bridgeforge-manifest.json").is_file()
         })
         .unwrap_or_else(|| panic!("factory test repository not found above {manifest_dir}"))
 }

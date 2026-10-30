@@ -760,7 +760,7 @@ fn classify(
     changed: &[String],
     runner: &dyn ProcessRunner,
 ) -> Result<ReleaseKind, String> {
-    if root.join("templates/managed-skeleton.json").is_file() {
+    if root.join("bridgeforge-manifest.json").is_file() {
         return Ok(ReleaseKind::Factory);
     }
     let contract_path = root.join(".codex/managed-skeleton.json");

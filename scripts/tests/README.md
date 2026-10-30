@@ -4,6 +4,8 @@
 
 开发收口按[工厂分层验证合同](../../doc/0_architecture/design/development-completion.md)选择必要检查并复用有效证据。下列是完整检查命令，不是每轮开发的默认执行列表。独立发布候选准备及其专用清单已退役；正常 develop 的确定性检查复用保留。工厂测试在根九包 workspace 执行；公共八包投影只做独立构建。
 
+受管 `factory-unit` 排除 `factory_runtime::tests::legacy_factory_tools_retire_only_after_verified_install`，该项由主对话在 `develop` 进程之外独立执行，其余检查仍由 `develop` 执行。执行顺序、失败处理和最终版本复验要求见[工厂退役测试的独立执行](../../doc/0_architecture/design/development-completion.md#工厂退役测试的独立执行)。这项测试仍保留在下列独立 workspace 全量命令中。
+
 ```powershell
 cargo test --locked --config scripts/tests/factory-cargo.toml --manifest-path Cargo.toml --target-dir .build/bridgeforge/test-target --workspace -- --test-threads=1
 cargo check --locked --manifest-path .codex/hooks/Cargo.toml --target-dir .build/bridgeforge/cargo/public-check --workspace

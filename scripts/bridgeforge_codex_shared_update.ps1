@@ -25,7 +25,7 @@ Set-StrictMode -Version 2.0
 
 $CanonicalRemote = "https://github.com/freakybridge/BridgeForgeCodex.git"
 $CanonicalBranch = "main"
-$ManifestName = "bridgeforge-codex-manifest.json"
+$ManifestName = "bridgeforge-manifest.json"
 $OperationLogName = ".bridgeforge-codex-shared-update.json"
 $CommandHomeName = ".bridgeforge-codex"
 $CommandHomeLogName = ".bridgeforge-codex-home-update.json"
@@ -490,6 +490,15 @@ function Get-PlatformManifest {
     return $property.Value
 }
 
+function Assert-ProductManifestHash {
+    param([Parameter(Mandatory = $true)][string]$RepositoryRoot, [Parameter(Mandatory = $true)][string]$Expected)
+    $path = Join-Path $RepositoryRoot $ManifestName
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf) -or
+        "sha256:$(Get-Sha256 -Path $path)" -ne $Expected) {
+        throw "Product manifest changed after planning."
+    }
+}
+
 function Assert-Manifest {
     param(
         [Parameter(Mandatory = $true)][string]$RepositoryRoot,
@@ -500,7 +509,16 @@ function Assert-Manifest {
     if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
         throw "Missing root distribution manifest: $ManifestName"
     }
-    $manifest = Read-JsonFile -Path $manifestPath
+    $capturedHash = "sha256:$(Get-Sha256 -Path $manifestPath)"
+    $product = Read-JsonFile -Path $manifestPath
+    Assert-ExactJsonProperties -Value $product -Expected @("schema_version", "user_instructions", "shared_skills", "project_skeleton") -Label "Product manifest"
+    if ([int]$product.schema_version -ne 1) { throw "Unsupported product manifest schema." }
+    foreach ($section in @("user_instructions", "shared_skills", "project_skeleton")) {
+        if ($null -eq $product.$section -or $product.$section -isnot [PSCustomObject]) {
+            throw "Product manifest section '$section' must be an object."
+        }
+    }
+    $manifest = $product.shared_skills
     Assert-ExactJsonProperties `
         -Value $manifest `
         -Expected @("schema_version", "canonical_remote", "branch", "platforms") `
@@ -587,10 +605,11 @@ function Assert-Manifest {
             throw "Codex must distribute the bridgeforge-codex command bundle."
         }
     }
+    Assert-ProductManifestHash -RepositoryRoot $RepositoryRoot -Expected $capturedHash
     return @{
         value = $manifest
         path = $manifestPath
-        hash = "sha256:$(Get-Sha256 -Path $manifestPath)"
+        hash = $capturedHash
     }
 }
 
@@ -1227,6 +1246,7 @@ function Invoke-UpdateTransaction {
         $RustCliPlan,
         $UserAgentsPlan
     )
+    Assert-ProductManifestHash -RepositoryRoot $RepositoryRoot -Expected $ManifestHash
     Initialize-BundlePlan -Plan $CommandHomePlan -Kind "home"
     Initialize-BundlePlan -Plan $RustCliPlan -Kind "cli"
     # User instruction witnesses come from Rust staging, before the transaction.
@@ -1338,6 +1358,7 @@ function Invoke-UpdateTransaction {
             throw "User instructions changed before shared commit."
         }
         Assert-RustCliState -Plan $RustCliPlan -RepositoryRoot $RepositoryRoot -Installed
+        Assert-ProductManifestHash -RepositoryRoot $RepositoryRoot -Expected $ManifestHash
         $log.committed = $true
         Write-JsonAtomic -Path $LogPath -Value $log
     }
@@ -1993,7 +2014,10 @@ function Invoke-Main {
                 [bool]$rustCliPlan.needs_swap
             )
             $phase = [Diagnostics.Stopwatch]::StartNew()
-            try { Assert-RustCliState -Plan $rustCliPlan -RepositoryRoot $repositoryRoot }
+            try {
+                Assert-RustCliState -Plan $rustCliPlan -RepositoryRoot $repositoryRoot
+                Assert-ProductManifestHash -RepositoryRoot $repositoryRoot -Expected $manifestResult.hash
+            }
             finally { Complete-PhaseTiming -Name 'component_validation' -Stopwatch $phase }
             if (-not $needsTransaction) {
                 Write-Host "bridgeforge-codex shared skills already current at commit $commit."

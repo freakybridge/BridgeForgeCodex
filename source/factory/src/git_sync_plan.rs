@@ -85,14 +85,11 @@ impl WritePlan {
             return Ok(plan);
         }
 
-        let managed = join(root, "templates/managed-skeleton.json")?;
-        let distribution = join(root, "bridgeforge-codex-manifest.json")?;
+        let managed = join(root, bridgeforge_core::product_manifest::FILE)?;
         let managed_bytes = fs::read(&managed).map_err(|e| e.to_string())?;
-        let distribution_bytes = fs::read(&distribution).map_err(|e| e.to_string())?;
-        let contract: serde_json::Value =
-            serde_json::from_slice(&managed_bytes).map_err(|e| e.to_string())?;
-        let skills: serde_json::Value =
-            serde_json::from_slice(&distribution_bytes).map_err(|e| e.to_string())?;
+        let product = bridgeforge_core::product_manifest::parse(&managed_bytes)?;
+        let contract = &product["project_skeleton"];
+        let skills = &product["shared_skills"];
         let mut paths = BTreeSet::from(["VERSION".to_string()]);
         paths.insert(crate::user_agents::SOURCE.into());
         paths.insert(crate::user_agents::MANIFEST.into());
@@ -110,8 +107,6 @@ impl WritePlan {
                     paths.insert(relative.into());
                 }
             }
-            paths.insert("templates/artifact-roots.gitignore".into());
-            paths.insert("templates/source-layout.json".into());
             paths.insert("templates/hooks/.gitignore".into());
             if root.join("scripts/tests/Cargo.toml").is_file() {
                 paths.insert("scripts/tests/Cargo.toml".into());
@@ -141,6 +136,9 @@ impl WritePlan {
             .as_array()
             .ok_or("missing factory assets")?
         {
+            if bridgeforge_skeleton::content::inline_source(asset)?.is_some() {
+                continue;
+            }
             let source = asset["source"].as_str().ok_or("missing asset source")?;
             let target = asset["target"].as_str().ok_or("missing asset target")?;
             if !source.ends_with(".py")
@@ -171,7 +169,6 @@ impl WritePlan {
             }
         }
         plan.inputs.insert(managed.clone(), managed_bytes);
-        plan.inputs.insert(distribution.clone(), distribution_bytes);
         for relative in paths {
             let path = join(root, &relative)?;
             plan.inputs
@@ -188,19 +185,13 @@ impl WritePlan {
             fs::write(target, payload).map_err(|e| e.to_string())?;
         }
         let managed_after = crate::manifest::render_managed_contract(&temporary.0)?;
-        let distribution_after = crate::manifest::render_distribution_manifest(&temporary.0)?;
         let public_after: serde_json::Value =
             serde_json::from_slice(&managed_after).map_err(|e| e.to_string())?;
         let contract_after = crate::manifest::runtime_contract(&temporary.0, &public_after)?;
-        writes.insert(managed, managed_after.clone());
+        writes.insert(managed, crate::manifest::render_product_manifest(&temporary.0, &BTreeMap::new())?);
         writes.insert(
             join(root, ".codex/managed-skeleton.json")?,
             crate::manifest::render_factory_contract(&temporary.0, &BTreeMap::new())?,
-        );
-        writes.insert(distribution, distribution_after);
-        writes.insert(
-            join(root, crate::user_agents::MANIFEST)?,
-            crate::user_agents::render_manifest(&temporary.0)?,
         );
         if modern {
             for (relative, payload) in

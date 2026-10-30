@@ -310,7 +310,7 @@ pub fn edit_requires_instruction_check(payloads: &[Value]) -> bool {
             || matches!(
                 relative.as_str(),
                 ".codex/managed-skeleton.json"
-                    | "templates/managed-skeleton.json"
+                    | "bridgeforge-manifest.json"
                     | ".codex/hooks.json"
                     | "templates/hooks.json"
                     | ".codex/config.toml"

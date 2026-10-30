@@ -18,10 +18,7 @@ pub fn check(root: &Path) -> FactoryVersionReport {
         .unwrap_or_default()
         .trim()
         .to_string();
-    let contract: serde_json::Value = fs::read(root.join("templates/managed-skeleton.json"))
-        .ok()
-        .and_then(|payload| serde_json::from_slice(&payload).ok())
-        .unwrap_or_default();
+    let contract = bridgeforge_core::product_manifest::project(root).unwrap_or_default();
     let contract_version = contract["release_version"]
         .as_str()
         .unwrap_or("")
