@@ -289,7 +289,6 @@
             "templates/agents/light-explorer.toml",
             "templates/agents/review-auditor.toml",
             "templates/agents/xhigh-auditor.toml",
-            "templates/bin/.gitignore",
             "templates/config.toml",
             "templates/doc/3_reference/codex-hook-signals.md",
             "templates/doc/3_reference/project-rust-hooks.md",

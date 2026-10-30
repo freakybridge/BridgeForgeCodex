@@ -95,7 +95,11 @@ pub fn run_with_runner(args: &[String], inner: &dyn ProcessRunner) -> CommandOut
         return blocked("factory", "a command is required");
     };
     match command {
-        "cleanup" => bridgeforge_workflow::artifact_cleanup::command(args, &runner),
+        "cleanup" => bridgeforge_workflow::artifact_cleanup::command_with_contract(
+            args,
+            &runner,
+            &manifest::runtime_contract,
+        ),
         "self-test" if has(args, "--json") => self_test(),
         "manifest" => match context(args) {
             Ok(context) => match manifest::rebuild(

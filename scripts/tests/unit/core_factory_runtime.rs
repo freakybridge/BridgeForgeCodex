@@ -356,7 +356,6 @@ impl Factory {
             "bridgeforge-codex-manifest.json",
             "Cargo.toml",
             "Cargo.lock",
-            ".cargo/config.toml",
             "templates/source-layout.json",
             "templates/hooks/.gitignore",
             "templates/artifact-roots.gitignore",

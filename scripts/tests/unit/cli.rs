@@ -303,6 +303,40 @@ fn self_test_has_stable_identity() {
 }
 
 #[test]
+fn cleanup_factory_routing_requires_the_private_tool_before_deleting_anything() {
+    let root = test_artifacts::root(env!("CARGO_MANIFEST_DIR"), "cli").join(format!(
+        "cleanup-routing-{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    fs::create_dir_all(root.join("source/factory")).unwrap();
+    fs::create_dir_all(root.join("templates")).unwrap();
+    fs::create_dir_all(root.join(".build")).unwrap();
+    fs::write(root.join("source/factory/Cargo.toml"), b"factory marker").unwrap();
+    fs::write(root.join("templates/managed-skeleton.json"), b"{}").unwrap();
+    fs::write(root.join(".build/sample.bin"), b"preserved on failure").unwrap();
+    let result = run(&[
+        "cleanup".into(),
+        "--root".into(),
+        root.display().to_string(),
+    ]);
+    assert_eq!(result.code, EXIT_BLOCKED);
+    assert!(
+        result.stderr.contains("factory runtime is not prepared"),
+        "{}",
+        result.stderr
+    );
+    assert_eq!(
+        fs::read(root.join(".build/sample.bin")).unwrap(),
+        b"preserved on failure"
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn ordinary_project_with_factory_named_member_keeps_public_routing() {
     let root = test_artifacts::root(env!("CARGO_MANIFEST_DIR"), "cli").join(format!(
         "bf-ordinary-factory-{}-{}",

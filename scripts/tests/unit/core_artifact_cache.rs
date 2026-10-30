@@ -62,7 +62,7 @@ fn explicit_cleanup_selects_verified_entries_and_can_retry_partial_deletion() {
 
 #[cfg(windows)]
 #[test]
-fn explicit_cleanup_binds_ownership_before_capture_and_holds_preserved_cache_lock() {
+fn explicit_cleanup_binds_ownership_and_removes_cache_lock_after_occupancy_ends() {
     use crate::artifact_cleanup::{BuildPolicy, Plan};
     let f = Fixture::new();
     let root = f.0.canonicalize().unwrap();
@@ -102,9 +102,9 @@ fn explicit_cleanup_binds_ownership_before_capture_and_holds_preserved_cache_loc
     fs::write(entry.join("bridgeforge.exe"), &payload).unwrap();
     let complete = Plan::capture_with_build(&root, policy).unwrap().execute();
     assert_eq!(complete.status, "completed", "{:?}", complete.failures);
-    assert_eq!(complete.deleted_files, 3);
+    assert_eq!(complete.deleted_files, 5);
     assert!(!entry.exists());
-    assert!(root.join(DIRECTORY).join("cache.lock").exists());
+    assert!(!root.join(DIRECTORY).exists());
     assert!(Cache::open(&root, &root, &runner()).is_some());
 }
 impl ProcessRunner for Runner {

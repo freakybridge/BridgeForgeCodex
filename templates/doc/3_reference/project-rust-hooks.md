@@ -19,7 +19,7 @@
 
 项目自行声明第三方依赖，不使用 bridgeforge_core 或骨架目录中的源码。Windows main 使用 #![cfg_attr(windows, windows_subsystem = "windows")]；启动子进程也需保持隐藏窗口、stdin/stdout/stderr、退出码及超时/子进程树语义。迁移时不能只替换成缺少超时处理的 Command::output。
 
-在项目开发流程中生成并保存锁文件，用项目自己的 cargo build --locked --release 入口构建，验证原业务行为，再安装到 .codex/bin/project_demo.exe。不依赖下一次骨架升级来补构建。项目可采用自己的目录和构建脚本，但要自己维护完整调用链。
+在项目开发流程中生成并保存锁文件，从项目根通过自己的入口构建，例如 `cargo build --locked --release --manifest-path .codex/hooks/project_demo/Cargo.toml --target-dir .build/project-hooks/demo/target`，验证原业务行为，再安装到 `.build/bridgeforge/bin/project_demo.exe`。不依赖根 `.cargo` 配置或下一次骨架升级来补构建。项目可采用自己的构建脚本，但输出仍须显式位于 `.build/`，并自行维护完整调用链。
 
 ## 注册与调用
 
@@ -30,8 +30,8 @@
         "SessionStart": [
           {"hooks": [{
             "type": "command",
-            "command": ".codex/bin/project_demo check",
-            "commandWindows": ".codex/bin/project_demo.exe check",
+            "command": ".build/bridgeforge/bin/project_demo check",
+            "commandWindows": ".build/bridgeforge/bin/project_demo.exe check",
             "timeout": 150
           }]}
         ]
@@ -48,10 +48,10 @@
 
 用户明确授权迁移后，在项目内补齐独立 manifest/lock/main，去掉骨架私有依赖，保持原输入输出、参数、退出码、超时及隐藏启动行为。完整依赖分析、构建和业务验证只在显式迁移中执行；普通 update 不执行项目代码或业务事件。
 
-仍保留 .codex/hooks/project_<id>/、.codex/bin/project_<id>.exe 和可识别旧登记的项目，在自己的构建、安装及行为验收完成后，可用项目 CLI 记录证据：
+仍保留 `.codex/hooks/project_<id>/` 和可识别旧登记的项目，在完成三目录迁移、独立构建、安装及行为验收后，可用项目 CLI 记录证据。当前程序位于 `.build/bridgeforge/bin/project_<id>.exe`，历史 `.codex/bin/` 不能继续作为新构建输出：
 
-    .codex/bin/bridgeforge project-hook-migration status --root .
-    .codex/bin/bridgeforge project-hook-migration verify --root . --confirmed-behavior
+    .deps/bridgeforge/bin/bridgeforge project-hook-migration status --root .
+    .deps/bridgeforge/bin/bridgeforge project-hook-migration verify --root . --confirmed-behavior
 
 status 只读；verify 是独立维护动作，会核对独立 workspace/依赖、执行锁定构建并与已安装程序比对，成功才保存完成记录。它不修改业务代码、不生成入口、不替用户验证实际业务事件；项目采用不同布局时应按明确的项目迁移方案验证，不能猜测路径。
 

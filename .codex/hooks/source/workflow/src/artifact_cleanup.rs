@@ -11,6 +11,15 @@ use std::{
 };
 
 pub fn command(args: &[String], runner: &dyn ProcessRunner) -> CommandOutcome {
+    command_with_contract(args, runner, &|_, contract| Ok(contract.clone()))
+}
+
+/// The factory adds its private executable through its owning manifest adapter.
+pub fn command_with_contract(
+    args: &[String],
+    runner: &dyn ProcessRunner,
+    contract: &dyn Fn(&Path, &Value) -> Result<Value, String>,
+) -> CommandOutcome {
     let result = (|| {
         let mut root = None;
         let mut preview = false;
@@ -38,7 +47,7 @@ pub fn command(args: &[String], runner: &dyn ProcessRunner) -> CommandOutcome {
         }
         let root = root.ok_or("cleanup requires an explicit --root project path")?;
         eligible(&root, runner)?;
-        let plan = Plan::capture_with_build(&root, build_policy(&root)?)?;
+        let plan = Plan::capture_with_build(&root, build_policy_with_contract(&root, contract)?)?;
         let report = if preview {
             plan.preview()
         } else {
@@ -62,32 +71,50 @@ pub fn command(args: &[String], runner: &dyn ProcessRunner) -> CommandOutcome {
     })
 }
 
+#[cfg(all(test, bridgeforge_factory_tests))]
 fn build_policy(root: &Path) -> Result<BuildPolicy, String> {
+    build_policy_with_contract(root, &|_, contract| Ok(contract.clone()))
+}
+
+fn build_policy_with_contract(
+    root: &Path,
+    transform: &dyn Fn(&Path, &Value) -> Result<Value, String>,
+) -> Result<BuildPolicy, String> {
     use bridgeforge_checks::artifact_layout::{CONFIG, CleanupRole};
     let canonical = root.canonicalize().map_err(|e| e.to_string())?;
     let root = canonical.as_path();
     let path = crate::managed_paths::safe_join(root, CONFIG, "cleanup output roles")?;
     let bytes = crate::managed_paths::read_metadata(&path, 16 * 1024 * 1024)?;
     let mut policy = BuildPolicy::default();
-    for selection in bridgeforge_core::artifact_cache::cleanup_selections(root)?
-        .into_iter()
-        .chain(bridgeforge_core::runtime::image_cleanup_selections(root)?)
+    let contract_path = ".codex/managed-skeleton.json";
+    let contract_bytes = crate::managed_paths::read_metadata(
+        &crate::managed_paths::safe_join(root, contract_path, "cleanup products")?,
+        16 * 1024 * 1024,
+    )?
+    .ok_or("cleanup product contract missing")?;
+    let contract = transform(
+        root,
+        &crate::json::parse_unique_json(&contract_bytes, "cleanup products")?,
+    )?;
+    let platform = bridgeforge_core::build_receipt::platform_key()?;
+    for asset in contract["generated_assets"]
+        .as_array()
+        .ok_or("cleanup generated assets missing")?
     {
-        let path = &selection.path;
-        policy.remove.push(
-            path.strip_prefix(root)
-                .map_err(|e| e.to_string())?
-                .to_string_lossy()
-                .replace('\\', "/"),
-        );
-        policy.selections.push(selection);
+        for value in [&asset["binary_targets"][platform], &asset["receipt_target"]] {
+            let path = value
+                .as_str()
+                .ok_or("cleanup generated product path missing")?;
+            crate::managed_paths::safe_join(root, path, "cleanup generated product")?;
+            if artifact_paths::within(path, artifact_paths::BUILD) {
+                policy.keep.push(path.to_owned());
+                policy.directories.insert(path.to_owned(), false);
+            }
+        }
     }
-    let owner = format!("{}/owner.json", artifact_paths::BUILD_CACHE);
-    let owner_path = crate::managed_paths::safe_join(root, &owner, "cleanup cache owner")?;
-    policy.witnesses.insert(
-        owner,
-        crate::managed_paths::read_metadata(&owner_path, 16 * 1024)?,
-    );
+    policy
+        .witnesses
+        .insert(contract_path.into(), Some(contract_bytes));
     let hook_bytes =
         crate::managed_paths::read_metadata(&root.join(".codex/hooks.json"), 16 * 1024 * 1024)?;
     let registry_bytes = crate::managed_paths::read_metadata(
@@ -109,9 +136,8 @@ fn build_policy(root: &Path) -> Result<BuildPolicy, String> {
         .witnesses
         .insert(crate::project_hooks::REGISTRY_PATH.into(), registry_bytes);
     for hook in crate::project_hooks::hooks(&hooks)? {
-        let target = format!(".build/bridgeforge/project-hooks/{}/target", hook.id);
-        policy.directories.insert(target.clone(), true);
-        policy.remove.push(target);
+        policy.directories.insert(hook.binary(), false);
+        policy.directories.insert(hook.receipt(), false);
         policy.keep.extend([hook.binary(), hook.receipt()]);
     }
     if let Some(bytes) = &bytes {
@@ -133,7 +159,6 @@ fn build_policy(root: &Path) -> Result<BuildPolicy, String> {
             match output.cleanup {
                 Some(CleanupRole::Keep) => policy.keep.push(path),
                 Some(CleanupRole::Cache | CleanupRole::History) => policy.remove.push(path),
-                None if output.kind == artifact_paths::Kind::Build => policy.keep.push(path),
                 None => (),
             }
         }

@@ -5,15 +5,16 @@
 开发收口按[工厂分层验证合同](../../doc/0_architecture/design/development-completion.md)选择必要检查并复用有效证据。下列是完整检查命令，不是每轮开发的默认执行列表。独立发布候选准备及其专用清单已退役；正常 develop 的确定性检查复用保留。工厂测试在根九包 workspace 执行；公共八包投影只做独立构建。
 
 ```powershell
-cargo test --locked --config scripts/tests/factory-cargo.toml --manifest-path Cargo.toml --workspace -- --test-threads=1
-cargo check --locked --manifest-path .codex/hooks/Cargo.toml --workspace
-cargo test --locked --manifest-path scripts/tests/Cargo.toml -- --test-threads=1
+cargo test --locked --config scripts/tests/factory-cargo.toml --manifest-path Cargo.toml --target-dir .build/bridgeforge/test-target --workspace -- --test-threads=1
+cargo check --locked --manifest-path .codex/hooks/Cargo.toml --target-dir .build/bridgeforge/cargo/public-check --workspace
+cargo test --locked --manifest-path scripts/tests/Cargo.toml --target-dir .build/bridgeforge/integration-target -- --test-threads=1
 ```
 
 私有单元测试实体位于本目录的 unit 子目录，通过工厂专用配置启用
 `bridgeforge_factory_tests`。产品中只保留条件注册，不下发测试实体，也不通过 Cargo feature
-自动启用。下游正常构建及 `cargo test --all-features` 不需要本工厂的 scripts/tests；
+自动启用。下游正常构建及 `cargo test --all-features --target-dir .build/bridgeforge/test-target` 不需要本工厂的 scripts/tests；
 工厂私有单元测试必须使用带配置的根 workspace 命令，并按影响范围添加 package / test filter；筛选到 0 项不能当作验证通过。
+上述命令从仓库根目录执行，`--target-dir` 位于 Cargo 参数区（测试程序参数分隔符 `--` 之前）。不依赖根 `.cargo/config.toml` 或全局环境变量设置输出目录；新增实际编译调用也须显式指定 `.build/` 下的目标。
 
 当前覆盖：
 

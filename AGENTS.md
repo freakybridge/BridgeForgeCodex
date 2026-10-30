@@ -133,15 +133,17 @@
 
 本工厂的 Git 同步与开发收口入口为 `.build/bridgeforge/bin/bridgeforge-factory.exe git-sync` 和 `develop`。Git 同步使用已安装工具和一次聚合预检，不前置准备或独立 self-test；工具缺失、不匹配时报告维护缺口，不自动安装升级。develop 使用当前已准备工具，仅工具缺失、不匹配或本次确需新构建时执行受管准备，不为每个阶段重复构建或 self-test。公共 CLI 保留兼容转发，但工厂直接入口避免额外转发进程；发布结果确需刷新产物时仍由受管事务处理。
 
-本工厂的显式产物清理入口为 `.build/bridgeforge/bin/bridgeforge-factory.exe cleanup --root .`，只读预览追加 `--dry-run`。build 范围仅限历史编译产物，当前工具及其收据保留；直接使用本项目入口，不采用外部清理执行器。
+本工厂的显式产物清理入口为 `.build/bridgeforge/bin/bridgeforge-factory.exe cleanup --root .`，只读预览追加 `--dry-run`。`.build` 只保留受管登记的当前工具、项目当前成品及对应收据，其余全部清理；项目成品通过 `.codex/artifact-layout.json` 的 `cleanup: keep` 声明，包含所需 DLL 和资源。直接使用本项目入口，不采用外部清理执行器。
 
 工厂显式工具刷新及开发必要构建的受管准备入口为下列第一条命令，不再作为日常 Git 同步前置。它通过锁定 Cargo 启动当前源码工厂工具，按需准备 CLI、Hook 和工厂工具；准备失败停止，不对工厂执行下游 adopt/apply。只读检查直接使用已具备 `factory-runtime-prepare-v1` 的工厂工具的 `build-assets --factory --project-root . --check`；没有该能力时报告工具不可用，不用 Cargo 引导冒充零写入检查。完整说明见 INSTALL.md。
 
+本工厂不新增根 `.cargo` 配置目录。下面的命令从仓库根执行，编译、检查和测试必须显式指定 `.build/` 下的输出目录；不依赖 Cargo 默认 `target` 或全局环境变量。
+
 ```powershell
-cargo run --locked --release --manifest-path Cargo.toml --bin bridgeforge-factory -- build-assets --factory --project-root .
-cargo build --locked --release --manifest-path Cargo.toml
-cargo test --locked --config scripts/tests/factory-cargo.toml --manifest-path Cargo.toml --workspace
-cargo test --locked --manifest-path scripts/tests/Cargo.toml
+cargo run --locked --release --manifest-path Cargo.toml --target-dir .build/bridgeforge/cargo/local --bin bridgeforge-factory -- build-assets --factory --project-root .
+cargo build --locked --release --manifest-path Cargo.toml --target-dir .build/bridgeforge/cargo/local
+cargo test --locked --config scripts/tests/factory-cargo.toml --manifest-path Cargo.toml --target-dir .build/bridgeforge/test-target --workspace
+cargo test --locked --manifest-path scripts/tests/Cargo.toml --target-dir .build/bridgeforge/integration-target
 .build\bridgeforge\bin\bridgeforge-factory.exe manifest --root . --check
 .build\bridgeforge\bin\bridgeforge-factory.exe check factory-version --root .
 ```

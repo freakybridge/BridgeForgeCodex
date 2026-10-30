@@ -12,7 +12,7 @@ delivery_layout: flat
 
 - 已验收：[release 中间编译结果复用与缓存锁优化方案](1_delivery/git-sync-performance/plan_2026-10-30_build-cache.md)（持久构建目录与分组锁已实现，固定候选对照及受管收口完成；重复候选明显提速，未宣称冷构建加速）。
 
-- 已验收：[清理 Skill 需求与实施计划](1_delivery/artifact-cleanup/requirements_2026-10-30_cleanup-skill.md)（TODO-049；运行清理保留 config/download，build 仅清理旧版本产物及编译缓存，保留当前程序、对应收据和 `.deps/`；最终 EXE 隔离验证及收口完成，未执行真实项目全量 cleanup）。
+- 已验收：[清理 Skill 最新规则与真实清理](1_delivery/artifact-cleanup/requirements_2026-10-30_cleanup-skill.md#用户验收当前成品保留规则2026-10-30)（TODO-049；build 仅保留当前成品及对应收据，其余全部清理；81 项定向测试、独立复核及受管子包收口完成，真实 Forge cleanup completed、剩余 0；runtime/deps 保护范围不变，下游和用户级安装未验证）。
 
 - 已验收：[严格三目录布局需求与实施计划](1_delivery/artifact-layout/requirements_2026-10-30_three-directories.md)（TODO-048；三目录、默认检查、Forge 工具迁移、隔离验证及收口完成；用户指定旧目录已删除，最终目录检查零错误，真实下游和用户级安装未更新）。
 

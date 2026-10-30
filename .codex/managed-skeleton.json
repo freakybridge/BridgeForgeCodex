@@ -1,6 +1,6 @@
 {
   "schema_version": 4,
-  "release_version": "10.0.0",
+  "release_version": "11.0.0",
   "release_model": "product-packages",
   "host": "codex",
   "stamp": ".codex/.bridgeforge_codex_version",
@@ -18,7 +18,7 @@
       "source": "templates/doc/3_reference/project-rust-hooks.md",
       "target": "doc/3_reference/project-rust-hooks.md",
       "strategy": "whole",
-      "current_sha256": "sha256:2f4d65723c30cf743b23ed3220c50cffcda9110e93c13584000239f01987e3b8"
+      "current_sha256": "sha256:15434d76e2d73b356e1ce6bc6e5870f53aff8da5f3dd06f7e3ee9e732258cc05"
     },
     {
       "id": "root.gitattributes",
@@ -432,7 +432,7 @@
       "source": "Cargo.lock",
       "target": ".codex/hooks/Cargo.lock",
       "strategy": "whole",
-      "current_sha256": "sha256:a09ea5c4d32073e54e1707f74bfc6f319671018ef83aca69bd0196e0532af3c4",
+      "current_sha256": "sha256:8d2a78f149e8ef43e22c6592ee11e76a7f0d4b0670ffd6e756f947102e2b955f",
       "render": "public-runtime-lock"
     },
     {
@@ -440,7 +440,7 @@
       "source": "Cargo.toml",
       "target": ".codex/hooks/Cargo.toml",
       "strategy": "whole",
-      "current_sha256": "sha256:512541368437773aade70d61a42cf8cbb4e6fa3bbd483ef7e78581c0125ad3d1",
+      "current_sha256": "sha256:64ca81fe7a4007dfc9583906b469cf7b9f96ec273f194d7346d5cc6d4921185a",
       "render": "public-runtime-workspace"
     },
     {
@@ -539,7 +539,7 @@
       "source": "source/cli/src/lib.rs",
       "target": ".codex/hooks/source/cli/src/lib.rs",
       "strategy": "whole",
-      "current_sha256": "sha256:8e76d01a114e2ef55069a0c057b19efb147c01ae172534c4ae326f0d67580eaf"
+      "current_sha256": "sha256:f3ba7eac6dc773c781edc7bf7e3d13d96352764ce788db38541a92d6aef02fe9"
     },
     {
       "id": "codex.hooks.source-cli-src-main-rs",
@@ -560,7 +560,7 @@
       "source": "source/core/Cargo.toml",
       "target": ".codex/hooks/source/core/Cargo.toml",
       "strategy": "whole",
-      "current_sha256": "sha256:5bdf3903182ef9065b155ed3277d099029a236bc53847e0bd69f43febafe7cd5"
+      "current_sha256": "sha256:2681107e4f389d1a5fe1794a0977a55e6a0120be4bc9ff371a5c56327ec834c6"
     },
     {
       "id": "codex.hooks.crates-bridgeforge-core-src-artifact-cache-rs",
@@ -574,7 +574,7 @@
       "source": "source/core/src/artifact_cleanup.rs",
       "target": ".codex/hooks/source/core/src/artifact_cleanup.rs",
       "strategy": "whole",
-      "current_sha256": "sha256:569e0526033b31f1840ec4ab98d504fe43a608851c56c4eba0bb0c9dcdef6c86"
+      "current_sha256": "sha256:c257001ee7ff46f3e0de7e36b7badbb99c3e2101df1d4b85ed96a313659810b3"
     },
     {
       "id": "codex.hooks.source-core-src-artifact-migration-rs",
@@ -1169,14 +1169,14 @@
       "source": "source/workflow/Cargo.toml",
       "target": ".codex/hooks/source/workflow/Cargo.toml",
       "strategy": "whole",
-      "current_sha256": "sha256:6689d4747e95fee783ee0ec5219e520d02ca90fc1b6a7872df11c58efa274965"
+      "current_sha256": "sha256:d3eec03941c646812a936060f3b015a538c968b945447a8cd620aa44a785e03e"
     },
     {
       "id": "codex.hooks.source-workflow-src-artifact-cleanup-rs",
       "source": "source/workflow/src/artifact_cleanup.rs",
       "target": ".codex/hooks/source/workflow/src/artifact_cleanup.rs",
       "strategy": "whole",
-      "current_sha256": "sha256:8ead0b567dba4951fa0512b12d565dc25329dafeacf8d6c11760a38907a15a1e"
+      "current_sha256": "sha256:e1a757119ea96d5d6a24c526697358e7d245002e5360dbf1a3107b16a8d6e46a"
     },
     {
       "id": "codex.hooks.source-workflow-src-git-command-rs",
@@ -1292,8 +1292,8 @@
           "status": "ok"
         }
       },
-      "source_tree_sha256": "sha256:7fa9089df7e589bd611de8cd2a1b42820f93531784b158ef89e85fbd64df4b9d",
-      "lockfile_sha256": "sha256:a09ea5c4d32073e54e1707f74bfc6f319671018ef83aca69bd0196e0532af3c4",
+      "source_tree_sha256": "sha256:f8ab5aa012f7487cb41b862f0861a260ab8e58e0b27a7d9bc4a58f51e2b13c92",
+      "lockfile_sha256": "sha256:8d2a78f149e8ef43e22c6592ee11e76a7f0d4b0670ffd6e756f947102e2b955f",
       "build_recipe_sha256": "sha256:d26d34aa838a1a1f5556ef92f492d2abc7b415c2163e2a4c9ea7e07121dad78a",
       "self_test_sha256": "sha256:74a8b4a4c20ff1f5cc6660697138c151d9ed2172e6d57e75cce671d773e98f5a",
       "source_projection": "public-runtime-v1"
@@ -1338,8 +1338,8 @@
           "status": "ok"
         }
       },
-      "source_tree_sha256": "sha256:7fa9089df7e589bd611de8cd2a1b42820f93531784b158ef89e85fbd64df4b9d",
-      "lockfile_sha256": "sha256:a09ea5c4d32073e54e1707f74bfc6f319671018ef83aca69bd0196e0532af3c4",
+      "source_tree_sha256": "sha256:f8ab5aa012f7487cb41b862f0861a260ab8e58e0b27a7d9bc4a58f51e2b13c92",
+      "lockfile_sha256": "sha256:8d2a78f149e8ef43e22c6592ee11e76a7f0d4b0670ffd6e756f947102e2b955f",
       "build_recipe_sha256": "sha256:079aefde96a8925913b7b6cd3ee9d8c7086014ad5e4b6e3f74a911b2ce49e537",
       "self_test_sha256": "sha256:6b0426352bb099a61fae52600d4f684c0e11bca644fa767a9b79d224e939b0e0",
       "source_projection": "public-runtime-v1"

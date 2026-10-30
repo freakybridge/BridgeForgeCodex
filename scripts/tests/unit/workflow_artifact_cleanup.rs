@@ -125,6 +125,14 @@ fn cleanup_command_preserves_dependencies_and_returns_receipt_without_repopulati
     f.put(".build/bridgeforge/cargo/local/result.bin", b"result");
     f.put(".build/bridgeforge/bin/current.exe", b"current");
     f.put(".build/bridgeforge/bin/receipt.json", b"receipt");
+    f.put(
+        ".codex/artifact-layout.json",
+        &serde_json::to_vec(&json!({"schema":1,"outputs":[
+            {"path":".build/bridgeforge/bin/current.exe","kind":"build","cleanup":"keep"},
+            {"path":".build/bridgeforge/bin/receipt.json","kind":"build","cleanup":"keep"}
+        ]}))
+        .unwrap(),
+    );
     let report = f.run(false);
     assert_eq!(report.code, 0, "{:?}", report.receipt);
     assert_eq!(report.receipt.unwrap()["status"], "completed");
@@ -149,7 +157,9 @@ fn cleanup_declared_current_outputs_override_cache_and_history_with_policy_drift
     let layout = json!({"schema":1,"outputs":[
         {"path":".build/app","kind":"build","directory":true,"cleanup":"cache"},
         {"path":".build/app/current.exe","kind":"build","cleanup":"keep"},
-        {"path":".build/app/current.receipt.json","kind":"build"},
+        {"path":".build/app/current.receipt.json","kind":"build","cleanup":"keep"},
+        {"path":".build/app/unclassified.bin","kind":"build"},
+        {"path":".build/app/resources","kind":"build","directory":true,"cleanup":"keep"},
         {"path":".build/releases/previous","kind":"build","directory":true,"cleanup":"history"}
     ]});
     f.put(
@@ -159,6 +169,9 @@ fn cleanup_declared_current_outputs_override_cache_and_history_with_policy_drift
     f.put(".build/app/current.exe", b"current");
     f.put(".build/app/current.receipt.json", b"receipt");
     f.put(".build/app/cache.obj", b"cache");
+    f.put(".build/app/unclassified.bin", b"not a current product");
+    f.put(".build/app/resources/runtime.dll", b"current DLL");
+    f.put(".build/app/resources/data.json", b"current resource");
     f.put(".build/releases/previous/old.exe", b"old");
     f.put(".build/unknown/data.bin", b"unknown");
     let plan = Plan::capture_with_build(&f.0, build_policy(&f.0).unwrap()).unwrap();
@@ -182,21 +195,59 @@ fn cleanup_declared_current_outputs_override_cache_and_history_with_policy_drift
     );
     assert!(!f.0.join(".build/app/cache.obj").exists());
     assert!(!f.0.join(".build/releases/previous").exists());
+    assert!(!f.0.join(".build/unknown").exists());
+    assert!(!f.0.join(".build/app/unclassified.bin").exists());
     assert_eq!(
-        fs::read(f.0.join(".build/unknown/data.bin")).unwrap(),
-        b"unknown"
+        fs::read(f.0.join(".build/app/resources/runtime.dll")).unwrap(),
+        b"current DLL"
     );
-    assert!(
-        result.receipt.unwrap()["skipped_build_paths"]
-            .as_array()
-            .unwrap()
-            .contains(&json!(".build/unknown"))
+    assert_eq!(
+        fs::read(f.0.join(".build/app/resources/data.json")).unwrap(),
+        b"current resource"
     );
+    assert_eq!(result.receipt.unwrap()["skipped_build_paths"], json!([]));
 }
 
 #[allow(dead_code)]
 #[path = "../support/artifact_paths.rs"]
 mod test_artifacts;
+
+#[cfg(windows)]
+#[test]
+fn cleanup_generated_products_are_exact_and_contract_drift_blocks_deletion() {
+    let f = Fixture::new();
+    let path = f.0.join(".codex/managed-skeleton.json");
+    let mut contract: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    contract["generated_assets"] = json!([{
+        "binary_targets":{"windows-x86_64":".build/tools/current.exe"},
+        "receipt_target":".build/tools/current.json"
+    }]);
+    let bytes = serde_json::to_vec(&contract).unwrap();
+    fs::write(&path, &bytes).unwrap();
+    f.put(".build/tools/current.exe", b"current");
+    f.put(".build/tools/current.json", b"receipt");
+    f.put(".build/tools/old.exe", b"old");
+    let plan = Plan::capture_with_build(&f.0, build_policy(&f.0).unwrap()).unwrap();
+    contract["generated_assets"] = json!([]);
+    fs::write(&path, serde_json::to_vec(&contract).unwrap()).unwrap();
+    let blocked = plan.execute();
+    assert_eq!(blocked.status, "blocked");
+    assert_eq!(blocked.deleted_files, 0);
+    fs::write(&path, bytes).unwrap();
+    let result = Plan::capture_with_build(&f.0, build_policy(&f.0).unwrap())
+        .unwrap()
+        .execute();
+    assert_eq!(result.status, "completed", "{:?}", result.failures);
+    assert_eq!(result.deleted_files, 1);
+    assert_eq!(
+        fs::read(f.0.join(".build/tools/current.exe")).unwrap(),
+        b"current"
+    );
+    assert_eq!(
+        fs::read(f.0.join(".build/tools/current.json")).unwrap(),
+        b"receipt"
+    );
+}
 
 #[test]
 fn cleanup_output_type_mismatch_and_invalid_roles_delete_nothing() {
@@ -232,9 +283,9 @@ fn cleanup_old_image_selection_rejects_replacement_then_completes() {
         Sha256::digest(bytes)
     );
     f.put(&name, bytes);
-    let policy = build_policy(&f.0).unwrap();
+    let plan = Plan::capture_with_build(&f.0, build_policy(&f.0).unwrap()).unwrap();
     f.put(&name, b"unknown replacement");
-    assert!(Plan::capture_with_build(&f.0, policy).is_err());
+    assert_eq!(plan.execute().status, "blocked");
     f.put(&name, bytes);
     let result = f.run(false);
     assert_eq!(result.code, 0, "{:?}", result.receipt);
@@ -252,6 +303,9 @@ fn cleanup_actual_project_factory_keeps_program_and_receipt_usable() {
     fs::create_dir_all(binary.parent().unwrap()).unwrap();
     fs::copy(&source, &binary).unwrap();
     let receipt = fs::read(source.with_file_name("build-receipt-factory.json")).unwrap();
+    f.put(".codex/artifact-layout.json", &serde_json::to_vec(&json!({"schema":1,"outputs":[
+        {"path":".build/bridgeforge/bin/build-receipt-factory.json","kind":"build","cleanup":"keep"}
+    ]})).unwrap());
     f.put(
         ".build/bridgeforge/bin/build-receipt-factory.json",
         &receipt,

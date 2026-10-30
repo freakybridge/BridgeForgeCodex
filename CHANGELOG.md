@@ -15,6 +15,23 @@
 
 > **追溯说明**：v0.1.0 - v0.7.0 基于 git log 历史回溯标记，**git tag 仅从 v0.8.0 开始打**。早期未启用版本号管理是 setup_agent 自打脸问题（要求下游用但自己没用），v0.8.0 修补。
 
+## [11.0.0] - 2026-10-30
+
+### Added
+
+- [product][repo][meta] 清理构建余留并精确保留当前成品 **BREAKING:**
+
+### Release analysis
+
+- Product: cleanup 改为仅保留当前成品及对应收据，其他 build 内容默认清理；修复真实占用、只读文件和合法字面文件名判断，构建入口显式指定 .build 输出目录。
+- `checks`: 0.2.0 -> 0.2.0 (Refresh unchanged consumer coverage against the compatible core cleanup fix; no consumer source or public API change.; Refresh unchanged consumer coverage against the compatible readonly cleanup fix; no consumer source or public API change.; Refresh unchanged consumer coverage against the compatible cleanup literal-path fix; no consumer source or public API change.; Validate necessary dependent build coverage; no independent source change.)
+- `core`: 8.0.0 -> 9.0.0 (Fix cleanup false blocking on project cwd/arguments and protected dependency executables; retain target handles, locks and image protections.; Allow authorized readonly cleanup targets through the verified Windows deletion handle without changing attributes; preserve protected hardlinks, access checks, locks and failure reporting.; Validate literal enumerated cleanup paths without manifest glob restrictions; preserve project boundaries, protected paths, native names and ancestor reparse checks for files and directories.; Cleanup build keep-list deletes non-current outputs and retains registered products and receipts.)
+- `factory`: 0.7.0 -> 0.8.0 (Refresh unchanged consumer coverage against the compatible core cleanup fix; no consumer source or public API change.; Refresh unchanged consumer coverage against the compatible readonly cleanup fix; no consumer source or public API change.; Refresh unchanged consumer coverage against the compatible cleanup literal-path fix; no consumer source or public API change.; Cleanup build keep-list deletes non-current outputs and retains registered products and receipts.)
+- `lifecycle`: 0.7.0 -> 0.7.0 (Refresh unchanged consumer coverage against the compatible core cleanup fix; no consumer source or public API change.; Refresh unchanged consumer coverage against the compatible readonly cleanup fix; no consumer source or public API change.; Refresh unchanged consumer coverage against the compatible cleanup literal-path fix; no consumer source or public API change.; Validate necessary dependent build coverage; no independent source change.)
+- `memory`: 0.1.0 -> 0.1.0 (Refresh unchanged consumer coverage against the compatible core cleanup fix; no consumer source or public API change.; Refresh unchanged consumer coverage against the compatible readonly cleanup fix; no consumer source or public API change.; Refresh unchanged consumer coverage against the compatible cleanup literal-path fix; no consumer source or public API change.; Validate necessary dependent build coverage; no independent source change.)
+- `skeleton`: 0.3.0 -> 0.3.0 (Refresh unchanged consumer coverage against the compatible core cleanup fix; no consumer source or public API change.; Refresh unchanged consumer coverage against the compatible readonly cleanup fix; no consumer source or public API change.; Refresh unchanged consumer coverage against the compatible cleanup literal-path fix; no consumer source or public API change.; Validate necessary dependent build coverage; no independent source change.)
+- `workflow`: 0.5.0 -> 0.6.0 (Refresh unchanged consumer coverage against the compatible core cleanup fix; no consumer source or public API change.; Refresh unchanged consumer coverage against the compatible readonly cleanup fix; no consumer source or public API change.; Refresh unchanged consumer coverage against the compatible cleanup literal-path fix; no consumer source or public API change.; Cleanup build keep-list deletes non-current outputs and retains registered products and receipts.)
+
 ## [10.0.0] - 2026-10-30
 
 ### Added

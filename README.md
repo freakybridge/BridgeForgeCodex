@@ -22,7 +22,7 @@ Native Memory 与受管项目 Hook 全部由 Rust 承载，不要求 Python 或�
 ```powershell
 git clone https://github.com/freakybridge/BridgeForgeCodex.git "$env:USERPROFILE\tools\bridgeforge-codex"
 Set-Location "$env:USERPROFILE\tools\bridgeforge-codex"
-cargo build --locked --release --manifest-path .\Cargo.toml --bin bridgeforge
+cargo build --locked --release --manifest-path .\Cargo.toml --target-dir .build/bridgeforge/cargo/local --bin bridgeforge
 & powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install-shared-skills.ps1
 ```
 

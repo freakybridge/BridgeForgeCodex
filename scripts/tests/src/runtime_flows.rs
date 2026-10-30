@@ -486,6 +486,12 @@ fn project_sync_real_init_builds_and_applies_generated_assets() {
     .into_iter()
     .map(Into::into)
     .collect();
+    request.args.extend([
+        "--target-dir".into(),
+        crate::test_artifacts::build_root(env!("CARGO_MANIFEST_DIR"), "runtime-flows")
+            .join(temp.0.file_name().unwrap())
+            .into_os_string(),
+    ]);
     request.timeout = std::time::Duration::from_secs(180);
     request.env_remove = vec!["RUSTFLAGS".into(), "CARGO_ENCODED_RUSTFLAGS".into()];
     let result = SystemProcessRunner.run(&request).unwrap();

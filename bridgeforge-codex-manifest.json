@@ -12,7 +12,7 @@
             {
               "source": "templates/skills/cleanup/SKILL.md",
               "target": "SKILL.md",
-              "sha256": "sha256:1fdaea1730150a011fa558589d4ec5ae1ddc4f8aa2ec22f84f47b3aac17895f0"
+              "sha256": "sha256:48e9c29d59e97231dcaf904884d9a55938aea784386ca39db2a89cd41410a46e"
             }
           ]
         },
@@ -324,6 +324,11 @@
         {
           "name": "todo",
           "files": [
+            {
+              "source": "templates/skills/todo/references/contract.md",
+              "target": "references/contract.md",
+              "sha256": "sha256:4cc018e083ba61dc657d67f6da67789f1ebc8b2cfae4421e756e761f14a1375e"
+            },
             {
               "source": "templates/skills/todo/SKILL.md",
               "target": "SKILL.md",

@@ -586,7 +586,7 @@ pub fn run(args: &[String]) -> CommandOutcome {
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
     if matches!(
         args.first().map(String::as_str),
-        Some("git-sync" | "develop")
+        Some("git-sync" | "develop" | "cleanup")
     ) && is_factory_repository(&root)
     {
         return factory_command(args);

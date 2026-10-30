@@ -41,6 +41,36 @@ fn inspect(path: &Path) -> Result<Entry, String> {
     })
 }
 
+/// The deletion set contains literal filesystem paths, not manifest patterns.
+/// Keep native path components intact (including brackets and Unicode names).
+fn validate_cleanup_target(root: &Path, path: &Path) -> Result<(), String> {
+    use std::path::Component;
+    let relative = path
+        .strip_prefix(root)
+        .map_err(|_| format!("cleanup target escapes project root: {}", path.display()))?;
+    if relative.components().count() < 2
+        || relative
+            .components()
+            .any(|part| !matches!(part, Component::Normal(_)))
+        || !(relative.starts_with(RUNTIME) || relative.starts_with(BUILD))
+        || [CONFIG, DOWNLOAD]
+            .iter()
+            .any(|protected| crate::artifact_paths::within(&relative.to_string_lossy(), protected))
+        || (cfg!(windows) && relative.to_string_lossy().contains(':'))
+    {
+        return Err(format!(
+            "cleanup target is outside the deletion boundary: {}",
+            path.display()
+        ));
+    }
+    // Recheck every ancestor, including the project root, without resolving or
+    // following links. Existing deletion handles still bind the actual objects.
+    for ancestor in path.ancestors() {
+        inspect(ancestor)?;
+    }
+    Ok(())
+}
+
 pub struct Plan {
     root: PathBuf,
     entries: Vec<Entry>,
@@ -50,48 +80,17 @@ pub struct Plan {
     skipped: Vec<String>,
 }
 
-/// Exact build roles from the owning producer or project layout declaration.
-/// Unknown paths remain untouched; `keep` always takes precedence.
-#[derive(Clone, Debug)]
+/// Exact current products from the owning producer or project declaration.
+/// Every other build path is selected; `keep` always takes precedence.
+#[derive(Clone, Debug, Default)]
 pub struct BuildPolicy {
+    // Retained for producer selection evidence compatibility. Deletion no longer
+    // requires an opt-in remove role.
     pub remove: Vec<String>,
     pub keep: Vec<String>,
     pub directories: BTreeMap<String, bool>,
     pub selections: Vec<Selection>,
     pub witnesses: BTreeMap<String, Option<Vec<u8>>>,
-}
-impl Default for BuildPolicy {
-    fn default() -> Self {
-        Self {
-            remove: [
-                ".build/bridgeforge/cargo/local",
-                ".build/bridgeforge/cargo/public/target",
-                ".build/bridgeforge/cargo/factory/target",
-                ".build/bridgeforge/test-target",
-            ]
-            .map(str::to_owned)
-            .to_vec(),
-            keep: vec![
-                crate::artifact_paths::FACTORY_BIN.into(),
-                format!("{}/owner.json", crate::artifact_paths::BUILD_CACHE),
-                format!("{}/cache.lock", crate::artifact_paths::BUILD_CACHE),
-                ".build/bridgeforge/cargo/public/source".into(),
-                ".build/bridgeforge/cargo/public/inputs.json".into(),
-                ".build/bridgeforge/cargo/factory/source".into(),
-                ".build/bridgeforge/cargo/factory/inputs.json".into(),
-            ],
-            directories: [
-                ".build/bridgeforge/cargo/local",
-                ".build/bridgeforge/cargo/public/target",
-                ".build/bridgeforge/cargo/factory/target",
-                ".build/bridgeforge/test-target",
-            ]
-            .map(|path| (path.to_owned(), true))
-            .into(),
-            witnesses: BTreeMap::new(),
-            selections: Vec::new(),
-        }
-    }
 }
 
 impl BuildPolicy {
@@ -207,23 +206,11 @@ fn collect_build(
     {
         return Ok(());
     }
-    let selected = policy
-        .remove
-        .iter()
-        .any(|remove| crate::artifact_paths::within(&relative, remove));
     let protects_descendant = policy
         .keep
         .iter()
         .any(|keep| crate::artifact_paths::within(keep, &relative));
-    let contains_selection = policy
-        .remove
-        .iter()
-        .any(|remove| crate::artifact_paths::within(remove, &relative));
-    if !selected && !contains_selection {
-        skipped.push(relative);
-        return Ok(());
-    }
-    if selected && !protects_descendant {
+    if !protects_descendant {
         targets.push(relative.clone());
         entries.push(entry.clone());
     }
@@ -238,8 +225,6 @@ fn collect_build(
                 skipped,
             )?;
         }
-    } else if !selected {
-        skipped.push(relative);
     }
     Ok(())
 }
@@ -277,20 +262,6 @@ impl Plan {
                 let relative = relative.to_string_lossy().replace('\\', "/");
                 if crate::artifact_paths::within(&relative, BUILD) {
                     build.keep.push(relative);
-                    // A verified cache unit owns the payload and its receipts as
-                    // one unit. Keep that unit when it contains this executor.
-                    for selection in &build.selections {
-                        if image.starts_with(&selection.path) {
-                            build.keep.push(
-                                selection
-                                    .path
-                                    .strip_prefix(&root)
-                                    .map_err(|e| e.to_string())?
-                                    .to_string_lossy()
-                                    .replace('\\', "/"),
-                            );
-                        }
-                    }
                 }
             }
         }
@@ -304,6 +275,9 @@ impl Plan {
         let mut targets = Vec::new();
         let mut skipped = Vec::new();
         build.validate(&root)?;
+        // A missing declared product does not justify retaining empty parents.
+        // Recapture still detects newly appearing entries before deletion.
+        build.keep.retain(|relative| root.join(relative).exists());
         for relative in [RUNTIME, BUILD, DEPS] {
             let path = crate::managed_paths::safe_join(&root, relative, "cleanup boundary")?;
             match fs::symlink_metadata(&path) {
@@ -381,18 +355,6 @@ impl Plan {
                             .to_string_lossy()
                             .replace('\\', "/"),
                     );
-                    for selection in &build.selections {
-                        if entry.path.starts_with(&selection.path) {
-                            build.keep.push(
-                                selection
-                                    .path
-                                    .strip_prefix(&root)
-                                    .map_err(|e| e.to_string())?
-                                    .to_string_lossy()
-                                    .replace('\\', "/"),
-                            );
-                        }
-                    }
                 }
             }
             build.keep.sort();
@@ -559,41 +521,24 @@ impl Plan {
                 continue;
             }
             let image = image.canonicalize().unwrap_or(image);
-            if image.starts_with(self.root.join(DEPS))
-                || self.entries.iter().any(|e| !e.directory && e.path == image)
-            {
+            if self.entries.iter().any(|e| !e.directory && e.path == image) {
                 return Err(format!(
                     "active process {pid} uses cleanup target {}",
                     image.display()
                 ));
             }
         }
-        // Deny new writers and path replacement while preflighting all entries.
-        // Existing writers/locks fail before the first deletion.
-        crate::process_activity::project_quiet(&self.root)?;
+        // Occupancy is checked against the deletion set, not a process's cwd,
+        // command line or protected dependency image. Hold all target handles
+        // before deleting anything; incompatible writers/readers and locks fail
+        // here even when the owning process is installed outside the project.
         let _root_guards = self
             .roots
             .iter()
             .map(|e| windows::Guard::open(e))
             .collect::<Result<Vec<_>, _>>()?;
-        let cache_lock = crate::managed_paths::safe_join(
-            &self.root,
-            &format!("{}/cache.lock", crate::artifact_paths::BUILD_CACHE),
-            "cleanup cache coordination",
-        )?;
-        let _cache_guard = match fs::symlink_metadata(&cache_lock) {
-            Ok(_) => {
-                let entry = inspect(&cache_lock)?;
-                if entry.directory {
-                    return Err("cache coordination lock is not a file".into());
-                }
-                let guard = windows::Guard::open(&entry)?;
-                guard.lock()?;
-                Some(guard)
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-            Err(error) => return Err(error.to_string()),
-        };
+        // Cache coordination files are deletion targets too. Acquire and lock
+        // them once with the complete target set, before the first deletion.
         let mut files = self
             .entries
             .iter()
@@ -602,10 +547,10 @@ impl Plan {
         files.sort_by_key(|e| {
             (
                 e.path == own_image,
-                e.path.file_name().is_some_and(|s| s == "entry.json"),
                 e.path
                     .file_name()
                     .is_some_and(|s| s.to_string_lossy().ends_with(".lock")),
+                e.path.file_name().is_some_and(|s| s == "entry.json"),
             )
         });
         let mut identities = BTreeMap::new();
@@ -642,18 +587,8 @@ impl Plan {
                 guard.lock()?;
             }
         }
-        crate::process_activity::project_quiet(&self.root)?;
         for entry in files {
-            crate::managed_paths::safe_join(
-                &self.root,
-                &entry
-                    .path
-                    .strip_prefix(&self.root)
-                    .unwrap()
-                    .to_string_lossy()
-                    .replace('\\', "/"),
-                "cleanup target",
-            )?;
+            validate_cleanup_target(&self.root, &entry.path)?;
             if inspect(&entry.path)? != *entry {
                 return Err(format!("cleanup file drifted: {}", entry.path.display()));
             }
@@ -679,6 +614,7 @@ impl Plan {
             .collect::<Vec<_>>();
         directories.sort_by_key(|e| std::cmp::Reverse(e.path.components().count()));
         for entry in directories {
+            validate_cleanup_target(&self.root, &entry.path)?;
             if fs::read_dir(&entry.path)
                 .map_err(|e| e.to_string())?
                 .next()
@@ -792,18 +728,6 @@ mod windows {
                     entry.path.display()
                 )
             })?;
-            if file
-                .metadata()
-                .map_err(|e| e.to_string())?
-                .permissions()
-                .readonly()
-                && !entry.directory
-            {
-                return Err(format!(
-                    "readonly cleanup target preserved: {}",
-                    entry.path.display()
-                ));
-            }
             Ok(Self {
                 file,
                 path: entry.path.clone(),
@@ -833,10 +757,14 @@ mod windows {
         pub(super) fn remove(self) -> Result<(), String> {
             // Delete only the opened object and retain the image-section check.
             // A mapped executor inside the deletion set is rejected in preflight.
+            // Ignore READONLY for this deletion only. Never clear attributes:
+            // failed deletions and surviving hard links retain their exact state.
+            // DELETE access, sharing checks and file locks remain mandatory.
             let info = FILE_DISPOSITION_INFO_EX {
                 Flags: FILE_DISPOSITION_FLAG_DELETE
                     | FILE_DISPOSITION_FLAG_POSIX_SEMANTICS
-                    | FILE_DISPOSITION_FLAG_FORCE_IMAGE_SECTION_CHECK,
+                    | FILE_DISPOSITION_FLAG_FORCE_IMAGE_SECTION_CHECK
+                    | FILE_DISPOSITION_FLAG_IGNORE_READONLY_ATTRIBUTE,
             };
             if unsafe {
                 SetFileInformationByHandle(
