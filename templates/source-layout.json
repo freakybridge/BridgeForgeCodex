@@ -1677,19 +1677,6 @@
       ]
     },
     {
-      "id": "codex.hooks.crates-bridgeforge-core-src-project-hook-migration-rs",
-      "previous_target": ".codex/hooks/crates/bridgeforge-core/src/project_hook_migration.rs",
-      "source": "source/workflow/src/project_hook_migration.rs",
-      "target": ".codex/hooks/source/workflow/src/project_hook_migration.rs",
-      "known_hashes": [
-        {
-          "sha256": "sha256:7fdabfd31b5ee65b7295e4726df8ca39ddc046f124b2eed32926101a2e6af528",
-          "revision": "ecbffed0c053f6f61e70fc0d96e5f34970a88415",
-          "source": "templates/hooks/crates/bridgeforge-core/src/project_hook_migration.rs"
-        }
-      ]
-    },
-    {
       "id": "codex.hooks.crates-bridgeforge-core-src-project-hooks-rs",
       "previous_target": ".codex/hooks/crates/bridgeforge-core/src/project_hooks.rs",
       "source": "source/skeleton/src/project_hooks.rs",
@@ -1734,34 +1721,6 @@
           "sha256": "sha256:75addf700619dc3e84ae6e4d96c5984f984d15ddd83127cdfb0e704544b9263b",
           "revision": "ead038109a8c5c0f15576d7e272125f2586ace01",
           "source": "templates/hooks/crates/bridgeforge-core/src/project_hooks.rs"
-        }
-      ]
-    },
-    {
-      "id": "codex.hooks.crates-bridgeforge-core-src-project-hooks-package-rs",
-      "previous_target": ".codex/hooks/crates/bridgeforge-core/src/project_hooks/package.rs",
-      "source": "source/skeleton/src/project_hooks/package.rs",
-      "target": ".codex/hooks/source/skeleton/src/project_hooks/package.rs",
-      "known_hashes": [
-        {
-          "sha256": "sha256:ad2c4085ef4a4f549e16f886842cb301ae2b4165ff711bed8870fcc7ebedcbfc",
-          "revision": "ecbffed0c053f6f61e70fc0d96e5f34970a88415",
-          "source": "templates/hooks/crates/bridgeforge-core/src/project_hooks/package.rs"
-        },
-        {
-          "sha256": "sha256:dedd79c74eeb3643a6f745ceca72a77c8075cddfd7a8a217f1c1d3cb323537cc",
-          "revision": "76643c9e8c2c405ac24709987684a74542d04e94",
-          "source": "templates/hooks/crates/bridgeforge-core/src/project_hooks/package.rs"
-        },
-        {
-          "sha256": "sha256:1870d1933162a565d5b37844ea45766644c4447df7138f5d3be0820dc5608a83",
-          "revision": "4520df3ab153860201d628fb84440f7a69c86473",
-          "source": "templates/hooks/crates/bridgeforge-core/src/project_hooks/package.rs"
-        },
-        {
-          "sha256": "sha256:c0a822128cd82c88ec633d023b72a84b65556b7a21e9685b54bfa0d5cf2968dc",
-          "revision": "0425b2da9ed5bf285ff6268ccd55b68e0d846c86",
-          "source": "templates/hooks/crates/bridgeforge-core/src/project_hooks/package.rs"
         }
       ]
     },
@@ -3009,6 +2968,65 @@
           "sha256": "sha256:7cf687291cc98e21e84acefc9ab74b59d023065c9fa524c069a7ddeab7760745",
           "revision": "64ee6ba9fa87ba1d3d5a2252eb5a768927585ffd",
           "source": "source/workflow/src/release_check_cache.rs"
+        }
+      ]
+    },
+    {
+      "id": "codex.hooks.crates-bridgeforge-core-src-project-hook-migration-rs",
+      "target": ".codex/hooks/crates/bridgeforge-core/src/project_hook_migration.rs",
+      "known_hashes": [
+        {
+          "sha256": "sha256:7fdabfd31b5ee65b7295e4726df8ca39ddc046f124b2eed32926101a2e6af528",
+          "revision": "ecbffed0c053f6f61e70fc0d96e5f34970a88415",
+          "source": "templates/hooks/crates/bridgeforge-core/src/project_hook_migration.rs"
+        }
+      ]
+    },
+    {
+      "id": "codex.hooks.crates-bridgeforge-core-src-project-hook-migration-rs",
+      "target": ".codex/hooks/source/workflow/src/project_hook_migration.rs",
+      "known_hashes": [
+        {
+          "sha256": "sha256:0f278a9cf5134bd795316460a24c8a0bd040537138548886b728dc1aa938da19",
+          "revision": "ea7adad11b275650ee99a6cabeccd3a4c9039c50",
+          "source": "source/workflow/src/project_hook_migration.rs"
+        }
+      ]
+    },
+    {
+      "id": "codex.hooks.crates-bridgeforge-core-src-project-hooks-package-rs",
+      "target": ".codex/hooks/crates/bridgeforge-core/src/project_hooks/package.rs",
+      "known_hashes": [
+        {
+          "sha256": "sha256:ad2c4085ef4a4f549e16f886842cb301ae2b4165ff711bed8870fcc7ebedcbfc",
+          "revision": "ecbffed0c053f6f61e70fc0d96e5f34970a88415",
+          "source": "templates/hooks/crates/bridgeforge-core/src/project_hooks/package.rs"
+        },
+        {
+          "sha256": "sha256:dedd79c74eeb3643a6f745ceca72a77c8075cddfd7a8a217f1c1d3cb323537cc",
+          "revision": "76643c9e8c2c405ac24709987684a74542d04e94",
+          "source": "templates/hooks/crates/bridgeforge-core/src/project_hooks/package.rs"
+        },
+        {
+          "sha256": "sha256:1870d1933162a565d5b37844ea45766644c4447df7138f5d3be0820dc5608a83",
+          "revision": "4520df3ab153860201d628fb84440f7a69c86473",
+          "source": "templates/hooks/crates/bridgeforge-core/src/project_hooks/package.rs"
+        },
+        {
+          "sha256": "sha256:c0a822128cd82c88ec633d023b72a84b65556b7a21e9685b54bfa0d5cf2968dc",
+          "revision": "0425b2da9ed5bf285ff6268ccd55b68e0d846c86",
+          "source": "templates/hooks/crates/bridgeforge-core/src/project_hooks/package.rs"
+        }
+      ]
+    },
+    {
+      "id": "codex.hooks.crates-bridgeforge-core-src-project-hooks-package-rs",
+      "target": ".codex/hooks/source/skeleton/src/project_hooks/package.rs",
+      "known_hashes": [
+        {
+          "sha256": "sha256:96b1efe195f2cdfa5367ec1f3b05e346bdeeb6a01c8e7af810722f9810f0d29d",
+          "revision": "ea7adad11b275650ee99a6cabeccd3a4c9039c50",
+          "source": "source/skeleton/src/project_hooks/package.rs"
         }
       ]
     }

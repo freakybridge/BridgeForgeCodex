@@ -185,7 +185,6 @@
             "source/skeleton/src/content.rs",
             "source/skeleton/src/lib.rs",
             "source/skeleton/src/project_hooks.rs",
-            "source/skeleton/src/project_hooks/package.rs",
             "source/workflow/Cargo.toml",
             "source/workflow/src/git_command.rs",
             "source/workflow/src/git_sync.rs",
@@ -193,7 +192,6 @@
             "source/workflow/src/git_sync_preflight.rs",
             "source/workflow/src/git_sync_timing.rs",
             "source/workflow/src/lib.rs",
-            "source/workflow/src/project_hook_migration.rs",
             "source/workflow/src/project_sync.rs",
             "source/workflow/src/public_artifacts.rs",
             "source/workflow/src/source_retirement.rs",
@@ -296,9 +294,7 @@
             "templates/doc/README.md",
             "templates/hooks.json",
             "templates/managed-skeleton.json",
-            "templates/project-hook-policy.json",
             "templates/hooks/.gitignore",
-            "templates/settings.json",
             "templates/skills/archive-scan/SKILL.md",
             "templates/skills/autopilot/references/runtime.md",
             "templates/skills/autopilot/SKILL.md",
@@ -484,7 +480,6 @@
             "templates/doc/README.md",
             "templates/hooks.json",
             "templates/managed-skeleton.json",
-            "templates/settings.json",
             "scripts/tests/support/artifact_paths.rs"
           ],
           "program": "cargo",
@@ -522,7 +517,6 @@
             "scripts/tests/support/git_repository.rs",
             "scripts/tests/support/schema4_agent.rs",
             "scripts/tests/unit/core_git_sync.rs",
-            "scripts/tests/unit/core_project_hook_migration.rs",
             "scripts/tests/unit/core_project_sync.rs",
             "scripts/tests/unit/source_retirement.rs",
             "templates/hooks.json",
@@ -534,6 +528,58 @@
           ],
           "program": "cargo",
           "timeout_seconds": 3600
+        },
+        {
+          "id": "workflow-settings-preservation",
+          "program": "cargo",
+          "args": [
+            "test", "--locked", "--offline",
+            "--manifest-path", "scripts/tests/Cargo.toml",
+            "--target-dir", ".build/bridgeforge/integration-target",
+            "project_settings_remain_project_owned",
+            "--", "--test-threads=1", "--logfile",
+            "../../.runtime/tests/development/workflow-settings-preservation.log"
+          ],
+          "inputs": [
+            "scripts/tests/Cargo.toml",
+            "scripts/tests/Cargo.lock",
+            "scripts/tests/src/lib.rs",
+            "scripts/tests/src/runtime_flows.rs",
+            "scripts/tests/support/artifact_paths.rs",
+            "templates/managed-skeleton.json",
+            "templates/config.toml"
+          ],
+          "timeout_seconds": 600
+        },
+        {
+          "id": "workflow-hook-independence",
+          "program": "cargo",
+          "args": [
+            "test",
+            "--locked",
+            "--offline",
+            "--manifest-path",
+            "scripts/tests/Cargo.toml",
+            "--target-dir",
+            ".build/bridgeforge/integration-target",
+            "prepared_public_artifacts_are_shared_and_update_preserves_project_hooks",
+            "--",
+            "--test-threads=1",
+            "--nocapture",
+            "--logfile",
+            "../../.runtime/tests/development/workflow-hook-independence.log"
+          ],
+          "inputs": [
+            "scripts/tests/Cargo.toml",
+            "scripts/tests/Cargo.lock",
+            "scripts/tests/src/lib.rs",
+            "scripts/tests/src/runtime_flows.rs",
+            "scripts/tests/support/artifact_paths.rs",
+            "templates/managed-skeleton.json",
+            "templates/config.toml",
+            "templates/hooks.json"
+          ],
+          "timeout_seconds": 900
         }
       ]
     }

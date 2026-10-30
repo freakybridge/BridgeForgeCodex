@@ -190,6 +190,35 @@ fn validate(bytes: &[u8], capture: &Capture) -> Result<Analysis, String> {
     Ok(analysis)
 }
 
+/// Explicit scopes restrict the requirement; an unscoped check covers all
+/// affected objects. Never extend a scoped requirement to unrelated objects.
+pub(super) fn required_check_scopes(
+    cfg: &Config,
+    affected: &BTreeSet<String>,
+) -> BTreeMap<String, BTreeSet<String>> {
+    cfg.required_checks
+        .iter()
+        .filter_map(|id| {
+            let scope = cfg
+                .check_scopes
+                .get(id)
+                .map(|scope| {
+                    affected
+                        .iter()
+                        .filter(|object| scope.contains(object))
+                        .cloned()
+                        .collect()
+                })
+                .unwrap_or_else(|| affected.clone());
+            if scope.is_empty() {
+                None
+            } else {
+                Some((id.clone(), scope))
+            }
+        })
+        .collect()
+}
+
 pub(super) fn validate_checks(
     root: &Path,
     cfg: &Config,
@@ -204,7 +233,6 @@ pub(super) fn validate_checks(
         return Err("Python validation evidence requires explicit python_environment interpreter/runtime/dependency roots".into());
     }
     let mut seen = BTreeSet::new();
-    let mut covered = BTreeSet::new();
     for check in &analysis.checks {
         if !seen.insert(check.id.clone()) || check.id.trim().is_empty() {
             return Err("duplicate/empty release evidence id".into());
@@ -229,9 +257,7 @@ pub(super) fn validate_checks(
             ));
         }
         match check.status.as_str() {
-            "passed" => {
-                covered.extend(check.scope.iter().cloned());
-            }
+            "passed" => {}
             "historical-unrelated" => {
                 if check.scope.iter().any(|id| affected.contains(id)) {
                     return Err(format!(
@@ -274,25 +300,11 @@ pub(super) fn validate_checks(
             .inputs
             .insert(root.join(&check.artifact), Some(bytes));
     }
-    for id in &cfg.required_checks {
-        let applicable = cfg
-            .check_scopes
-            .get(id)
-            .map(|scope| {
-                affected
-                    .iter()
-                    .filter(|id| scope.contains(id))
-                    .cloned()
-                    .collect::<BTreeSet<_>>()
-            })
-            .unwrap_or_else(|| affected.clone());
-        if applicable.is_empty() {
-            continue;
-        }
+    for (id, applicable) in required_check_scopes(cfg, affected) {
         let check = analysis
             .checks
             .iter()
-            .find(|c| &c.id == id)
+            .find(|c| c.id == id)
             .ok_or_else(|| format!("required release evidence missing: {id}"))?;
         if check.status != "passed" || !applicable.iter().all(|id| check.scope.contains(id)) {
             return Err(format!(
@@ -300,17 +312,33 @@ pub(super) fn validate_checks(
             ));
         }
     }
-    if !cfg.required_checks.is_empty() && !affected.is_subset(&covered) {
-        return Err("required evidence does not collectively cover affected release scope".into());
-    }
     Ok(())
 }
 
-pub(super) fn requirements(cfg: &Config, capture: &Capture) -> Value {
+pub(super) fn requirements(cfg: &Config, capture: &Capture, ledger: &development::Ledger) -> Value {
     let mut affected = super::plan::affected(cfg, capture);
     affected.extend(capture.release_packages.iter().cloned());
+    let mut evidence_scope = affected.clone();
+    evidence_scope.insert("product".into());
+    // Called only after release_gate succeeded. These are references to the
+    // existing ledger, not new validation certificates or test-cache claims.
+    let coverage = capture
+        .release_packages
+        .iter()
+        .filter_map(|id| {
+            ledger.latest(id).map(|entry| {
+                (
+                    id.clone(),
+                    json!({
+                        "version":entry.after,"record_hash":entry.hash,
+                        "evidence_schema":entry.evidence_schema
+                    }),
+                )
+            })
+        })
+        .collect::<BTreeMap<_, _>>();
     json!({"schema":1,"status":"analysis-required","fingerprint":capture.fingerprint,"validation_fingerprint":capture.validation_fingerprint,"version_strategy":cfg.strategy,
         "version_before":capture.product_version,
         "changes":capture.changes,"affected_packages":affected,"packages":capture.current.packages.iter().map(|(id,p)|json!({"id":id,"language":p.language,"manifest":p.manifest,"version":p.version})).collect::<Vec<_>>(),
-        "required_checks":cfg.required_checks,"check_scopes":cfg.check_scopes,"python_environment_required":cfg.native.adapters.python.is_some() && cfg.python_environment.is_none(),"product_manifests":cfg.product_manifests,"release_model":"product-packages","writes":[]})
+        "required_checks":cfg.required_checks,"check_scopes":cfg.check_scopes,"applicable_required_checks":required_check_scopes(cfg, &evidence_scope),"version_coverage":coverage,"development_validation":"not-executed-by-release","python_environment_required":cfg.native.adapters.python.is_some() && cfg.python_environment.is_none(),"product_manifests":cfg.product_manifests,"release_model":"product-packages","writes":[]})
 }

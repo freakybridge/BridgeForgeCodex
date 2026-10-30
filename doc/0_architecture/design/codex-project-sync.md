@@ -51,11 +51,11 @@ before 包或迁移账本。
 
 公共产物由用户级 updater 准备，缓存位于当前用户 .codex/.cache/bridgeforge/public-build，身份绑定源码、锁、配方、自检与编译环境，不绑定下游项目。沿用 artifact_cache 的 ownership、锁、内容校验和容量限制；public-ready 存放有界引用收据。项目 Apply 只读捕获字节，不编译、自检或更新 recency，缺失或损坏时需重新准备。
 
-项目 Hook 独立维护。project-hook-policy.json 声明所有权及一次性迁移；普通 update 不捕获完整工程、编译或核对开发收据。首次有限识别后提示去重，实际不兼容仍阻断。显式迁移由项目提供独立 manifest/lock/main、构建和已安装程序；骨架不补业务代码。旧显式构建 API 的兼容夹具不代表普通 update 仍使用旧路径。
+项目 Hook 独立维护边界固定在代码中，不依赖策略文件。init/adopt/update 和公共构建、基线检查均不编译或验证项目 Hook 业务源码；更新公共注册时保留项目 handler 和扩展字段。旧策略及迁移状态原样保留并忽略，不再生成提示或记录。项目自行构建、安装和维护注册；公共布局迁移不搬移项目程序或改写其路径，归属不明时保留并报告阻断。
 
 core 的 build_inputs 负责输入快照及漂移验证，generated_assets 负责隔离构建、自测和收据，public_artifacts 负责用户级准备和只读交付。工厂自身构建及 Git 同步仍使用受管构建能力；普通下游 project-sync 不直接编译。初次 CLI 引导结果按相同身份进入缓存，并与公共 Hook 共用依赖输出。
 
-project_sync 拥有只读项目计划、内部准备、固定公共产物挂接、项目锁、安装、版本戳与回滚，不重做公共版本选择。project_hook_migration 负责一次性识别与显式独立验证；git_sync_plan 保留工厂构建职责。共享构建不反向调用项目同步。用户级事务成功后，项目失败不撤销共享安装。
+project_sync 拥有只读项目计划、内部准备、固定公共产物挂接、项目锁、安装、版本戳与回滚，不重做公共版本选择。git_sync_plan 保留工厂构建职责。共享构建不反向调用项目同步。用户级事务成功后，项目失败不撤销共享安装。
 
 `source_root` 与 `target_source_root`、Cargo 参数/超时、输入验证、自测、清理错误和收据 schema 均保持原合同。开发证据见[R02 需求卡](../../1_delivery/shared-generated-build/requirements_2026-10-11_R02.md)。
 

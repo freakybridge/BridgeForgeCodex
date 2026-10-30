@@ -40,19 +40,12 @@
 
 将自己的条目合入已有配置，不覆盖公共条目。bridgeforgeCodexId 的 bridgeforge-codex.project-hook.v1: 前缀归骨架所有，项目不能冒用。不同项目各自注册并调用自己的程序，不在用户级重复登记公共项目 Hook。
 
-旧 .codex/project-hooks.json、bridgeforgeProjectHookId 等登记可在迁移完成前保留供一次性识别；新工程不需要骨架生成注册。公共更新不能因项目修改业务 Hook 就自动重写项目注册。
+旧 .codex/project-hooks.json、bridgeforgeProjectHookId 和 hooks.json 中的 bridgeforgeProjectHooks 登记原样保留，不自动改写或拆分。新工程由项目直接维护 native handler，不需要骨架生成注册。
 
-## 旧版本的一次性兼容迁移
+## 已有项目的维护
 
-旧单文件模式曾借用骨架依赖，普通 update 按固定声明提示一次。仅发现旧耦合不阻断，程序与注册原样保留；只有目标升级明确破坏原运行合同才阻断。骨架版本、workspace 哈希变化或“已经提示”都不能作为迁移完成证明。
+独立维护边界固定在代码中，不依赖 project-hook-policy.json。骨架不再读取旧策略或迁移状态、不再生成迁移提示，也不提供 project-hook-migration status/verify；旧文件留在项目中并被忽略。
 
-用户明确授权迁移后，在项目内补齐独立 manifest/lock/main，去掉骨架私有依赖，保持原输入输出、参数、退出码、超时及隐藏启动行为。完整依赖分析、构建和业务验证只在显式迁移中执行；普通 update 不执行项目代码或业务事件。
+旧项目程序和收据不会随公共布局迁移搬移，注册不会自动改路径。用户授权项目维护后，由项目补齐独立 manifest/lock/main、去掉骨架私有依赖，按自己的锁定入口构建、安装和验证。新产物进入 .build/；历史 .codex/bin 路径需要项目自行完成迁移和调用链验证。公共迁移遇到归属不明的旧文件时保留并报告阻断，不猜测删除。
 
-仍保留 `.codex/hooks/project_<id>/` 和可识别旧登记的项目，在完成三目录迁移、独立构建、安装及行为验收后，可用项目 CLI 记录证据。当前程序位于 `.build/bridgeforge/bin/project_<id>.exe`，历史 `.codex/bin/` 不能继续作为新构建输出：
-
-    .deps/bridgeforge/bin/bridgeforge project-hook-migration status --root .
-    .deps/bridgeforge/bin/bridgeforge project-hook-migration verify --root . --confirmed-behavior
-
-status 只读；verify 是独立维护动作，会核对独立 workspace/依赖、执行锁定构建并与已安装程序比对，成功才保存完成记录。它不修改业务代码、不生成入口、不替用户验证实际业务事件；项目采用不同布局时应按明确的项目迁移方案验证，不能猜测路径。
-
-迁移状态与本机提示去重分别保存，待办跨骨架升版保留，已提示不是已完成。只读预览不保存提示状态；未知状态保留并报告。构建脚本和项目代码是受信任的可执行输入，不能把编译叫作安全沙箱。真实外部写入或删除仍须在明确授权的环境验收。
+骨架基线只校验公共资产，项目源码、锁文件或业务收据的变化不触发骨架重编译。项目 Hook 是否仍能正确运行，由项目开发与实际业务测试证明；骨架更新成功不等于业务验收。

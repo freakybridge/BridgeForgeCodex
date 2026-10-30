@@ -113,7 +113,7 @@ fn factory_skill_mirrors_are_explicit_private_and_readonly() {
         })
         .collect::<BTreeMap<_, _>>();
     let outputs = crate::dogfood::render(root).unwrap();
-    assert_eq!(outputs.len(), 4);
+    assert_eq!(outputs.len(), contract["assets"].as_array().unwrap().len());
     let public: Value = serde_json::from_slice(&render_managed_contract(root).unwrap()).unwrap();
     for asset in contract["assets"].as_array().unwrap() {
         let source = asset["source"].as_str().unwrap();

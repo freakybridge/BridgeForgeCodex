@@ -785,12 +785,34 @@ impl Fingerprints {
 
     fn mismatch(&self, entry: Option<&Entry>) -> String {
         let Some(entry) = entry else {
-            return "missing version coverage record".into();
+            return "missing version coverage record [record-missing]; inspect existing managed validation/closure before deciding whether checks are needed".into();
         };
         if !self.content_matches(entry) {
-            return "package content changed".into();
+            return "package content changed [content-changed]".into();
         }
-        "package dependency/build coverage changed or is not recorded".into()
+        let current = if entry.content == self.content {
+            self
+        } else {
+            self.raw.as_deref().unwrap_or(self)
+        };
+        let mut missing = Vec::new();
+        let mut changed = Vec::new();
+        for (key, value) in &current.components {
+            match entry
+                .evidence_components
+                .as_ref()
+                .and_then(|old| old.get(key))
+            {
+                None => missing.push(key.as_str()),
+                Some(old) if old != value => changed.push(key.as_str()),
+                _ => {}
+            }
+        }
+        format!(
+            "package dependency/build coverage mismatch [coverage-mismatch]; missing components: [{}]; changed components: [{}]; inspect record compatibility separately from changed inputs",
+            missing.join(", "),
+            changed.join(", ")
+        )
     }
 }
 
@@ -1394,7 +1416,7 @@ pub(super) fn release_gate(
             .collect::<Vec<_>>()
             .join("; ");
         return Err(format!(
-            "package development closure required: {reasons}; complete validation and managed version closure before release (release does not run develop)"
+            "package development closure required: {reasons}; release stopped without running checks; reconcile existing managed evidence first, report only unresolved affected packages (release does not run develop)"
         ));
     }
     for id in scope {
@@ -1406,14 +1428,14 @@ pub(super) fn release_gate(
                 .flat_map(|policy| &policy.release_artifacts)
             {
                 let expected = entry.artifacts.get(path).ok_or_else(|| {
-                    format!("{id}: declared release artifact has no verified coverage: {path}; run develop")
+                    format!("{id}: declared release artifact has no verified coverage: {path} [artifact-unrecorded]; reconcile this deliverable's managed evidence; release does not run develop")
                 })?;
                 let bytes = config::read_current(root, path)?.ok_or_else(|| {
-                    format!("{id}: development artifact missing: {path}; run develop")
+                    format!("{id}: development artifact missing: {path} [artifact-missing]; restore the exact recorded deliverable or separately validate its replacement; release does not run develop")
                 })?;
                 if digest(&bytes) != *expected {
                     return Err(format!(
-                        "{id}: development artifact changed: {path}; run develop"
+                        "{id}: development artifact changed: {path} [artifact-changed]; this deliverable needs matching evidence; release does not run develop"
                     ));
                 }
                 capture.inputs.insert(root.join(path), Some(bytes));

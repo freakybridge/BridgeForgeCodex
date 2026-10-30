@@ -61,7 +61,7 @@ $BRIDGEFORGE = Join-Path $env:USERPROFILE ".codex\bin\bridgeforge.exe"
 
 普通 update 不检查 Native Memory 同步状态，不执行 reconcile、首次启用或常规 repair。只有目标版本明确要求迁移用户级 Hook 注册时才读取 [Native Memory 状态处理](references/native-memory.md)，按既有授权保留启用/禁用状态；主动 Memory 维护仍是独立任务。
 
-项目自有 Hook 由项目独立开发、构建和注册，普通 update 保留其程序与注册，不检查开发产物是否最新，不扫描完整源码或编译。同步器只按明确迁移声明做有限的一次性识别：仅有旧耦合提示可继续；明确不兼容才阻断。收到首次迁移提示时读取 [项目 Hook 独立迁移](references/project-hook-independence.md)；不得自动实施迁移或把“已提示”记为完成。
+项目自有 Hook 由项目独立开发、构建和注册；骨架维护只更新公共 Hook，保留项目程序、收据与注册，不扫描完整源码、编译或记录迁移状态。此边界固定在代码中，不依赖策略文件。用户询问或明确要求维护项目 Hook 时读取 [项目 Hook 独立维护](references/project-hook-independence.md)，在项目自身开发流程执行。
 
 ## 4. 读取唯一模式手册并生成计划
 

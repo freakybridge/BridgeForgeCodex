@@ -4,8 +4,8 @@
 
 当前项目合同：
 
-- plan：`schema`、`status=planned|current`、`readiness`、`mode`、版本、`safe/risk/gaps/blockers`、`preservation_manifest`、`confirmation_required`、`aggregate_fingerprint`，以及 `public_installation_required` 和 `hook_migration`。公共安装未核对前不能仅因项目内容无变化就结束整个 update。`preservation_manifest.compatibility_baseline` 是固定分界线，`destructive_rebuild` 表示本次是否重建；不得用目标版本代替分界线。
-- apply 成功：`status=applied`、`execution_status=succeeded`、`project_readiness=ready`、`current_version`、`aggregate_fingerprint`、`applied`、`rollback_performed=false`、`stamp_written_last` 和 `preserved_asset_ids`。实际安装最后写戳；no-op 的 applied 为空且不重写版本戳。旧语义迁移字段已移除。`hook_migration` 是独立项目 Hook 的一次性提示，不是 Native Memory 健康状态。
+- plan：`schema`、`status=planned|current`、`readiness`、`mode`、版本、`safe/risk/gaps/blockers`、`preservation_manifest`、`confirmation_required`、`aggregate_fingerprint`，以及 `public_installation_required`。公共安装未核对前不能仅因项目内容无变化就结束整个 update。`preservation_manifest.compatibility_baseline` 是固定分界线，`destructive_rebuild` 表示本次是否重建；不得用目标版本代替分界线。
+- apply 成功：`status=applied`、`execution_status=succeeded`、`project_readiness=ready`、`current_version`、`aggregate_fingerprint`、`applied`、`rollback_performed=false`、`stamp_written_last` 和 `preserved_asset_ids`。实际安装最后写戳；no-op 的 applied 为空且不重写版本戳。旧语义迁移字段及 `hook_migration` 已移除，项目 Hook 不再生成迁移提示或状态。
 - apply 失败：combined 的 `machine` 为 `status=blocked` 和 `error`；只有错误明确包含完整回滚结果时才能声明已回滚，不能从退出码推断。原始问题留在技术收据，用户显示稳定中文结果。
 
 用户级 updater 的 commit 与刷新收据单独核对，不属于项目 apply JSON。迁移源/目标完整清单来自紧邻 apply 的 plan，并以指纹、manifest hash、实际文件终态相互核对。

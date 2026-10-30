@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use crate::StepResult;
 use crate::post::source_tree_hash;
-use crate::util::{atomic_write, codex_root, repo_root, run_command};
+use crate::util::{codex_root, repo_root, run_command};
 
 fn git(args: &[String], timeout: Duration) -> Option<std::process::Output> {
     let root = repo_root();
@@ -145,37 +145,6 @@ pub fn config_health(strict: bool) -> StepResult {
         stdout,
         stderr: String::new(),
     }
-}
-
-pub fn enforce_no_effort() -> StepResult {
-    let path = repo_root().join(".codex/settings.json");
-    let Ok(text) = fs::read_to_string(&path) else {
-        return StepResult::ok();
-    };
-    let Ok(mut value) = serde_json::from_str::<Value>(&text) else {
-        return StepResult::ok();
-    };
-    let Some(map) = value.as_object_mut() else {
-        return StepResult::ok();
-    };
-    let Some(removed) = map.shift_remove("effortLevel") else {
-        return StepResult::ok();
-    };
-    if let Err(error) = atomic_write(&path.with_extension("json.bak"), text.as_bytes()) {
-        return StepResult::failed("enforce-no-effortlevel backup", error);
-    }
-    let mut bytes = match serde_json::to_vec_pretty(&value) {
-        Ok(bytes) => bytes,
-        Err(error) => return StepResult::failed("enforce-no-effortlevel serialization", error),
-    };
-    bytes.push(b'\n');
-    if let Err(error) = atomic_write(&path, &bytes) {
-        return StepResult::failed("enforce-no-effortlevel", error);
-    }
-    StepResult::output(format!(
-        "[enforce-no-effortlevel] removed project-level effortLevel={} from .codex/settings.json (effort is governed at user-global level only).",
-        removed
-    ))
 }
 
 pub fn githooks_path() -> StepResult {

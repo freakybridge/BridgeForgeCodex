@@ -299,31 +299,6 @@ fn merge_managed_markdown(
     Ok(merged.into_bytes())
 }
 
-fn retired_managed_hook(command: &str) -> bool {
-    const RETIRED: &[&str] = &[
-        "hook_dispatcher.py",
-        "cargo_default_run_check.py",
-        "config_health_check.py",
-        "cross_project_write_guard.py",
-        "encoding_check.py",
-        "enforce_no_effortlevel.py",
-        "fallback_smell_check.py",
-        "git_add_all_guard.py",
-        "githooks_path_check.py",
-        "instruction_source_check.py",
-        "non_ascii_shell_guard.py",
-        "project_structure_check.py",
-        "requirements_check.py",
-        "session_snapshot.py",
-        "show_state.py",
-        "skill_metadata_check.py",
-        "skill_sync_check.py",
-        "test_receipt.py",
-        "user_config_write_guard.py",
-    ];
-    RETIRED.iter().any(|name| command.contains(name))
-}
-
 fn merge_project_hooks(source: &[u8], current: Option<&[u8]>) -> Result<Vec<u8>, String> {
     let canonical: Value = serde_json::from_slice(source)
         .map_err(|error| format!("canonical project hooks are invalid: {error}"))?;
@@ -357,12 +332,6 @@ fn merge_project_hooks(source: &[u8], current: Option<&[u8]>) -> Result<Vec<u8>,
                     return Err(format!(
                         "project hook has a non-canonical managed identity: {event}"
                     ));
-                }
-                if handler["command"]
-                    .as_str()
-                    .is_some_and(retired_managed_hook)
-                {
-                    continue;
                 }
                 kept.push(handler.clone());
             }

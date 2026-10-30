@@ -188,6 +188,127 @@ fn upgrade_fixture(previous: &str, release: &str) -> (PathBuf, PathBuf, PathBuf)
 }
 
 #[test]
+fn legacy_project_hook_outputs_are_preserved_without_relocation() {
+    let (root, project, factory) = upgrade_fixture("8.0.1", "8.1.0");
+    let registration = json!({"hooks":{"Stop":[{"matcher":"","hooks":[{
+        "type":"command","bridgeforgeProjectHookId":"demo:0","timeout":150,
+        "command":".codex/bin/project_demo","commandWindows":".codex/bin/project_demo.exe"
+    }]}]},"bridgeforgeProjectHooks":{"schema_version":1,"hooks":[{"id":"demo","events":[{"event":"Stop"}]}]}});
+    let native = serde_json::to_vec(&registration).unwrap();
+    write_role_input(&project, ".codex/hooks.json", &native);
+    let binary = format!(".codex/bin/project_demo{}", std::env::consts::EXE_SUFFIX);
+    let receipt = serde_json::to_vec(&json!({"schema_version":1,"id":"demo",
+        "input_sha256":sha_raw(b"old source"),"platform":std::env::consts::OS,
+        "binary_sha256":sha_raw(b"old executable")}))
+    .unwrap();
+    write_role_input(&project, &binary, b"old executable");
+    write_role_input(
+        &project,
+        ".codex/bin/build-receipt-project-demo.json",
+        &receipt,
+    );
+    assert!(legacy_artifact_retirements(&project).unwrap().is_empty());
+    assert!(legacy_artifact_relocations(&project).unwrap().is_empty());
+    let plan = build_plan(&project, &factory, SyncMode::Update).unwrap();
+    let fingerprint = plan.aggregate_fingerprint.clone();
+    apply_plan(plan, &fingerprint, true).unwrap();
+    assert_eq!(fs::read(project.join(&binary)).unwrap(), b"old executable");
+    assert_eq!(
+        fs::read(project.join(".codex/bin/build-receipt-project-demo.json")).unwrap(),
+        receipt
+    );
+    assert_eq!(fs::read(project.join(".codex/hooks.json")).unwrap(), native);
+    assert!(!project.join(".build/bridgeforge/bin").exists());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn project_hooks_are_independent_without_policy_and_old_state_is_preserved() {
+    struct NoBuild;
+    impl crate::ProcessRunner for NoBuild {
+        fn run(&self, _: &crate::ProcessRequest) -> std::io::Result<crate::ProcessOutput> {
+            panic!("skeleton maintenance must not invoke a private build");
+        }
+    }
+    for policy in [
+        None,
+        Some(b"{}".as_slice()),
+        Some(b"invalid old policy".as_slice()),
+    ] {
+        for mode in [SyncMode::Adopt, SyncMode::Update] {
+            let (root, project, factory) = upgrade_fixture("8.0.1", "8.1.0");
+            if matches!(mode, SyncMode::Adopt) {
+                fs::remove_file(project.join(".codex/.bridgeforge_codex_version")).unwrap();
+            }
+            let private = [
+                (
+                    ".codex/project-hooks.json",
+                    b"invalid private registry".as_slice(),
+                ),
+                (
+                    ".codex/hooks/project_demo/entrypoint.rs",
+                    b"invalid private source".as_slice(),
+                ),
+                (
+                    ".codex/hooks/project_demo/Cargo.lock",
+                    b"invalid private lock".as_slice(),
+                ),
+                (
+                    ".build/bridgeforge/bin/project_demo.exe",
+                    b"private binary".as_slice(),
+                ),
+                (
+                    ".build/bridgeforge/bin/build-receipt-project-demo.json",
+                    b"invalid private receipt".as_slice(),
+                ),
+                (
+                    ".codex/project-hook-migrations.json",
+                    b"old opaque state".as_slice(),
+                ),
+            ];
+            for (path, bytes) in private {
+                write_role_input(&project, path, bytes);
+            }
+            let policy_path = project.join(".codex/project-hook-policy.json");
+            if let Some(bytes) = policy {
+                fs::write(&policy_path, bytes).unwrap();
+            }
+            let choices =
+                json!({"preserve":["P:project-hook-bundle:.codex/hooks/project_demo"],"delete":[]});
+            let mut plan = build_plan_with_inputs(
+                &project,
+                &factory,
+                mode,
+                matches!(mode, SyncMode::Adopt).then_some(&choices),
+            )
+            .unwrap();
+            assert!(plan.gaps.is_empty(), "{:?}", plan.gaps);
+            assert!(plan.blockers.is_empty(), "{:?}", plan.blockers);
+            assert!(
+                serde_json::to_value(&plan)
+                    .unwrap()
+                    .get("hook_migration")
+                    .is_none()
+            );
+            let contract: Value = serde_json::from_slice(
+                &fs::read(factory.join("templates/managed-skeleton.json")).unwrap(),
+            )
+            .unwrap();
+            attach_generated_assets(&mut plan, &factory, &project, &contract, &NoBuild).unwrap();
+            build_generated_assets(&project, &contract, &NoBuild).unwrap();
+            let fingerprint = plan.aggregate_fingerprint.clone();
+            apply_plan(plan, &fingerprint, true).unwrap();
+            crate::baseline::verify(&project, None, true).unwrap();
+            for (path, bytes) in private {
+                assert_eq!(fs::read(project.join(path)).unwrap(), bytes);
+            }
+            assert_eq!(fs::read(&policy_path).ok().as_deref(), policy);
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+}
+
+#[test]
 fn retired_legacy_assets_use_project_preservation_without_semantic_migration() {
     for previous in ["8.0.0", "8.0.1"] {
         let (root, project, factory) = upgrade_fixture(previous, "8.1.0");
@@ -1486,7 +1607,6 @@ fn transaction_fixture(valid_asset_hash: bool) -> (PathBuf, SyncPlan) {
         confirmation_required: false,
         aggregate_fingerprint: fingerprint,
         public_installation_required: false,
-        hook_migration: Value::Null,
         project_root: root.clone(),
         writes: BTreeMap::from([
             (asset_path, b"new\n".to_vec()),
@@ -1495,7 +1615,6 @@ fn transaction_fixture(valid_asset_hash: bool) -> (PathBuf, SyncPlan) {
         ]),
         deletes: Vec::new(),
         generated_source_fingerprints,
-        project_hook_inputs: Vec::new(),
         project_hook_reads: BTreeMap::new(),
         public_actions: Vec::new(),
         release_upgrade: None,
@@ -1578,241 +1697,6 @@ fn failed_prospective_check_restores_project_hook_payloads_and_retired_source() 
 }
 
 #[test]
-fn project_hook_registration_serialization_is_stable_on_next_merge() {
-    let (root, _) = transaction_fixture(true);
-    fs::create_dir_all(root.join(".codex/hooks/project_demo")).unwrap();
-    fs::write(
-        root.join(".codex/hooks/project_demo/entrypoint.rs"),
-        b"pub fn run(_:Vec<String>)->i32{0}",
-    )
-    .unwrap();
-    let config = json!({"hooks":{},"bridgeforgeProjectHooks":{"schema_version":1,"hooks":[{"id":"demo","events":[{"event":"Stop"}]}]}});
-    fs::write(
-        root.join(".codex/hooks.json"),
-        serde_json::to_vec(&config).unwrap(),
-    )
-    .unwrap();
-    let contract =
-        json!({"generated_assets":[{"source_tree_sha256":"source","lockfile_sha256":"lock"}]});
-    let mut writes = BTreeMap::new();
-    plan_project_hooks(
-        &root,
-        &contract,
-        &mut writes,
-        &[],
-        &mut Vec::new(),
-        &mut Vec::new(),
-        &mut BTreeMap::new(),
-    )
-    .unwrap();
-    let payload = writes.get(&root.join(".codex/hooks.json")).unwrap();
-    assert_eq!(
-        content::render(
-            "fixture",
-            b"{\"hooks\":{}}",
-            Some(payload),
-            &json!({"merge_policy":"codex-hooks"}),
-            &root,
-            false,
-        )
-        .unwrap(),
-        *payload,
-        "first install must already use the stable hook JSON encoding"
-    );
-    let native: Value = serde_json::from_slice(payload).unwrap();
-    assert!(
-        native
-            .as_object()
-            .unwrap()
-            .keys()
-            .all(|key| matches!(key.as_str(), "description" | "hooks"))
-    );
-    let registry = writes
-        .get(&root.join(crate::project_hooks::REGISTRY_PATH))
-        .unwrap();
-    assert_eq!(
-        serde_json::from_slice::<Value>(registry).unwrap(),
-        config["bridgeforgeProjectHooks"]
-    );
-    for (path, payload) in &writes {
-        fs::write(path, payload).unwrap();
-    }
-    let mut next_writes = BTreeMap::new();
-    let (_, reads) = plan_project_hooks(
-        &root,
-        &contract,
-        &mut next_writes,
-        &[],
-        &mut Vec::new(),
-        &mut Vec::new(),
-        &mut BTreeMap::new(),
-    )
-    .unwrap();
-    assert!(
-        next_writes.is_empty(),
-        "canonical registry must not be rewritten"
-    );
-    assert!(reads.contains_key(crate::project_hooks::REGISTRY_PATH));
-    fs::write(
-        root.join(".codex/hooks.json"),
-        serde_json::to_vec(&config).unwrap(),
-    )
-    .unwrap();
-    fs::write(
-        root.join(crate::project_hooks::REGISTRY_PATH),
-        br#"{"schema_version":1,"hooks":[]}"#,
-    )
-    .unwrap();
-    assert!(
-        plan_project_hooks(
-            &root,
-            &contract,
-            &mut BTreeMap::new(),
-            &[],
-            &mut Vec::new(),
-            &mut Vec::new(),
-            &mut BTreeMap::new()
-        )
-        .unwrap_err()
-        .contains("conflicting")
-    );
-    fs::remove_dir_all(root).unwrap();
-}
-
-#[test]
-fn project_hook_registry_migration_is_atomic_and_rejects_input_drift() {
-    let (root, mut plan) = transaction_fixture(true);
-    let original=br#"{"description":"keep","hooks":{},"bridgeforgeProjectHooks":{"schema_version":1,"hooks":[]}}"#;
-    fs::write(root.join(".codex/hooks.json"), original).unwrap();
-    let (inputs, reads) = plan_project_hooks(
-        &root,
-        &json!({}),
-        &mut plan.writes,
-        &[],
-        &mut plan.safe,
-        &mut plan.risk,
-        &mut plan.generated_source_fingerprints,
-    )
-    .unwrap();
-    plan.project_hook_inputs = inputs;
-    plan.project_hook_reads = reads;
-    plan.confirmation_required = true;
-    plan.aggregate_fingerprint = plan_fingerprint(
-        &plan.mode,
-        &plan.current_version,
-        &plan.safe,
-        &plan.risk,
-        &plan.preservation_manifest,
-        &plan.generated_source_fingerprints,
-    )
-    .unwrap();
-    let fingerprint = plan.aggregate_fingerprint.clone();
-    assert!(apply_plan(plan.clone(), &fingerprint, false).is_err());
-    let registry_path = root.join(crate::project_hooks::REGISTRY_PATH);
-    assert!(!registry_path.exists());
-    fs::write(&registry_path, b"unexpected").unwrap();
-    assert!(
-        apply_plan(plan.clone(), &fingerprint, true)
-            .unwrap_err()
-            .contains("input changed after plan")
-    );
-    fs::remove_file(&registry_path).unwrap();
-    let observer = |_: &Path, _: &Path| {
-        assert!(registry_path.is_file());
-        assert!(
-            serde_json::from_slice::<Value>(&fs::read(root.join(".codex/hooks.json")).unwrap())
-                .unwrap()
-                .get("bridgeforgeProjectHooks")
-                .is_none()
-        );
-        Err("injected after registry migration".into())
-    };
-    assert!(
-        apply_plan_internal(plan.clone(), &fingerprint, true, Some(&observer))
-            .unwrap_err()
-            .contains("rolled back")
-    );
-    assert!(!registry_path.exists());
-    assert_eq!(fs::read(root.join(".codex/hooks.json")).unwrap(), original);
-    apply_plan(plan, &fingerprint, true).unwrap();
-    assert_eq!(
-        serde_json::from_slice::<Value>(&fs::read(registry_path).unwrap()).unwrap(),
-        json!({"schema_version":1,"hooks":[]})
-    );
-    fs::remove_dir_all(root).unwrap();
-}
-
-#[test]
-fn project_hook_package_plan_tracks_dependency_files_and_rejects_inventory_drift() {
-    let (root, mut plan) = transaction_fixture(true);
-    let directory = root.join(".codex/hooks/project_demo");
-    fs::create_dir_all(&directory).unwrap();
-    for (path, bytes) in [
-        ("entrypoint.rs", "pub fn run(_:Vec<String>)->i32{0}"),
-        (
-            "Cargo.toml",
-            "[package]\nname=\"demo\"\nversion=\"0.1.0\"\n",
-        ),
-        ("Cargo.lock", "version=4\n"),
-        ("helper.rs", "const VALUE:i32=1;"),
-    ] {
-        fs::write(directory.join(path), bytes).unwrap();
-    }
-    fs::write(root.join(".codex/hooks.json"), br#"{"hooks":{},"bridgeforgeProjectHooks":{"schema_version":1,"hooks":[{"id":"demo","events":[{"event":"Stop"}]}]}}"#).unwrap();
-    let (inputs, reads) = plan_project_hooks(
-        &root,
-        &json!({}),
-        &mut plan.writes,
-        &[],
-        &mut plan.safe,
-        &mut plan.risk,
-        &mut plan.generated_source_fingerprints,
-    )
-    .unwrap();
-    assert!(reads.contains_key(".codex/hooks/project_demo/Cargo.lock"));
-    assert!(
-        inputs[0]
-            .1
-            .package
-            .as_ref()
-            .unwrap()
-            .contains_key("helper.rs")
-    );
-    plan.project_hook_reads = reads;
-    verify_project_hook_reads(&plan).unwrap();
-    let before = plan_fingerprint(
-        &plan.mode,
-        &plan.current_version,
-        &[],
-        &[],
-        &json!({}),
-        &plan.generated_source_fingerprints,
-    )
-    .unwrap();
-    let mut changed = plan.generated_source_fingerprints.clone();
-    changed.insert("project-hook:input:demo".into(), "changed".into());
-    assert_ne!(
-        before,
-        plan_fingerprint(
-            &plan.mode,
-            &plan.current_version,
-            &[],
-            &[],
-            &json!({}),
-            &changed
-        )
-        .unwrap()
-    );
-    fs::write(directory.join("new.rs"), "new").unwrap();
-    assert!(
-        verify_project_hook_reads(&plan)
-            .unwrap_err()
-            .contains("inventory")
-    );
-    fs::remove_dir_all(root).unwrap();
-}
-
-#[test]
 fn stamp_is_last_and_finalize_failure_rolls_back_every_write() {
     let (root, plan) = transaction_fixture(true);
     let fingerprint = plan.aggregate_fingerprint.clone();
@@ -1860,14 +1744,7 @@ fn recorded_transaction_fixture() -> (PathBuf, SyncPlan) {
     let (root, mut plan) = transaction_fixture(true);
     let path = root.join(".codex/managed-skeleton.json");
     let mut contract: Value = serde_json::from_slice(&plan.writes[&path]).unwrap();
-    for (id, target, bytes) in [
-        (
-            "codex.project-hook-policy",
-            crate::project_hook_migration::POLICY,
-            b"{}".as_slice(),
-        ),
-        ("unchanged.asset", "unchanged.txt", b"retained".as_slice()),
-    ] {
+    for (id, target, bytes) in [("unchanged.asset", "unchanged.txt", b"retained".as_slice())] {
         fs::write(root.join(target), bytes).unwrap();
         contract["assets"].as_array_mut().unwrap().push(json!({
             "id":id,"source":format!("templates/{target}"),"target":target,

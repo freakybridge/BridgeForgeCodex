@@ -12,11 +12,3 @@ pub use bridgeforge_core::{
 pub mod baseline;
 pub mod content;
 pub mod project_hooks;
-pub fn migration_enabled(contract: &serde_json::Value) -> bool {
-    contract["assets"].as_array().is_some_and(|a| {
-        a.iter().any(|a| {
-            a["id"] == "codex.project-hook-policy"
-                && a["target"] == ".codex/project-hook-policy.json"
-        })
-    })
-}

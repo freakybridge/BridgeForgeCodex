@@ -83,6 +83,11 @@ Skills 由产品管理，避免覆盖来源不明或被人工修改的 Skill 文
 指令由根或嵌套 `AGENTS.md` 原生加载，机器可判约束由 Hook 或 pre-commit 执行，操作流程
 由 Skill 执行，长说明放在 `doc/`。
 
+项目 `.codex/settings.json` 由项目自行管理。BridgeForge 初始化、接管、升级和生命周期
+
+骨架 Hook 与项目自有 Hook 独立维护，边界固定在代码中。安装和升级仅维护公共源码、产物与公共注册，保留项目 Hook 源码、程序、收据、注册及扩展字段。旧 project-hook-policy.json 和迁移状态文件保留并忽略；项目 Hook 的构建、安装、路径迁移和业务验证由项目自己的开发流程负责。
+Hook 不创建、修改或删除该文件，也不生成或覆盖其备份；旧版安装留下的内容原样保留。
+
 ## 旧 BridgeForge 用户重新安装
 
 旧 `$bridgeforge` 到 `$bridgeforge-codex` 的自动迁移已经退役。请直接执行上面的“首次安装”

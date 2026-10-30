@@ -531,14 +531,7 @@ fn factory_entrypoints(root: &Path) -> Result<BTreeMap<String, Vec<u8>>, String>
             root,
             false,
         )?;
-        outputs.insert(
-            target.into(),
-            if id == "codex.hooks-config" {
-                bridgeforge_skeleton::project_hooks::migrate_legacy_registration(root, &rendered)?
-            } else {
-                rendered
-            },
-        );
+        outputs.insert(target.into(), rendered);
     }
     Ok(outputs)
 }

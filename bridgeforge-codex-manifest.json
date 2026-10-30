@@ -27,7 +27,7 @@
             {
               "source": "templates/skills/bridgeforge-codex/SKILL.md",
               "target": "SKILL.md",
-              "sha256": "sha256:d467e767257f1c5d0af9c303a500dd2ec39c55a5560a61e677e14fe3bea3ba57"
+              "sha256": "sha256:e8bb563bab5c7a450adc11f461c5c47509817c397334cca4bb5e8751fcf9b2cb"
             },
             {
               "source": "templates/skills/bridgeforge-codex/agents/openai.yaml",
@@ -57,12 +57,12 @@
             {
               "source": "templates/skills/bridgeforge-codex/references/project-hook-independence.md",
               "target": "references/project-hook-independence.md",
-              "sha256": "sha256:d21010e1fbb2b936280e27e6b68b2f1d417bc81246bfcb225794510e749a9218"
+              "sha256": "sha256:c962a10e4e74fd4cd9b7c8bdaabd7aeac4f017a1857bb45b6529702e409f8d55"
             },
             {
               "source": "templates/skills/bridgeforge-codex/references/technical-receipts.md",
               "target": "references/technical-receipts.md",
-              "sha256": "sha256:1a3ef23762f9fbf9b79895cf17360bb863adde3762357a15dad64e440ce61f24"
+              "sha256": "sha256:7e48f0b9aad52bffda808fbac36a816a7db3c79d0efa6ccd34a80e5c6103f03e"
             },
             {
               "source": "templates/skills/bridgeforge-codex/references/transaction.md",
@@ -182,7 +182,7 @@
             {
               "source": "templates/skills/develop/SKILL.md",
               "target": "SKILL.md",
-              "sha256": "sha256:b17e45a0d26f6242ca5701b539325c45454de4fd40baae86adc59ff3ef8bccc9"
+              "sha256": "sha256:05a2ece0e60bedcf6e685e8781deac1b74226c6988bf7e1021d024383f77b5f0"
             }
           ]
         },
@@ -232,7 +232,7 @@
             {
               "source": "templates/skills/git-sync/SKILL.md",
               "target": "SKILL.md",
-              "sha256": "sha256:d44535f3dba65ae323326d83d55197a777e94d68c39c29b0dba947284425d223"
+              "sha256": "sha256:530bb1d60b2d9428f83c373aaaa740377756f6b7d38de233123c415bc5d67e81"
             },
             {
               "source": "templates/skills/git-sync/references/first-use.md",
@@ -242,7 +242,7 @@
             {
               "source": "templates/skills/git-sync/references/schema4.md",
               "target": "references/schema4.md",
-              "sha256": "sha256:be5cb513c647f419375a19e77c59ebd6673d6eb70b99359b25eae0633aced7b5"
+              "sha256": "sha256:8cbff990a804057c0d57559588ef49ff04f889778cece82e072b89e83dd42f59"
             },
             {
               "source": "templates/skills/git-sync/references/runtime-context.md",

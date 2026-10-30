@@ -2931,6 +2931,60 @@ fn schema4_required_checks_combine_their_declared_object_scopes() {
     );
 }
 
+#[test]
+fn schema4_scoped_required_check_does_not_require_product_evidence() {
+    let r = fixture("independent", true);
+    let mut cfg: Value = serde_json::from_slice(&fs::read(r.0.join(CONFIG)).unwrap()).unwrap();
+    cfg["required_checks"] = json!(["unit-a"]);
+    cfg["check_scopes"] = json!({"unit-a":["a"]});
+    write(&r.0, CONFIG, &serde_json::to_vec(&cfg).unwrap());
+    change(&r.0, true);
+    let request = analyze(&r.0, "patch", Some("patch"));
+    let ready = preview(
+        &r.0,
+        "fix: scoped",
+        &Request::default(),
+        &SystemProcessRunner,
+    );
+    assert_eq!(ready.code, 0, "{}", ready.stderr);
+    let ready = ready.receipt.unwrap();
+    assert_eq!(ready["applicable_required_checks"], json!({"unit-a":["a"]}));
+    let proof = json!({"id":"unit-a","status":"passed","fingerprint":ready["validation_fingerprint"],"scope":["a"],"reason":"package-only release requirement"});
+    let bytes = serde_json::to_vec(&proof).unwrap();
+    write(&r.0, ".runtime/unit-a.json", &bytes);
+    let mut claim = proof;
+    claim["artifact"] = json!(".runtime/unit-a.json");
+    claim["sha256"] = json!(digest(&bytes));
+    let mut analysis = analysis_value(&r.0);
+    analysis["checks"] = json!([claim]);
+    save_analysis(&r.0, &analysis);
+    assert!(
+        build(&r.0, "fix: scoped", &request, &SystemProcessRunner)
+            .unwrap()
+            .is_some()
+    );
+
+    // The scoped requirement itself remains mandatory.
+    analysis["checks"] = json!([]);
+    save_analysis(&r.0, &analysis);
+    assert!(
+        build(&r.0, "fix: missing", &request, &SystemProcessRunner)
+            .unwrap_err()
+            .contains("required release evidence missing: unit-a")
+    );
+
+    // Unscoped requirements still include the product; no global weakening.
+    let cfg = load(&r.0).unwrap().unwrap();
+    let affected = BTreeSet::from(["a".to_string(), "product".to_string()]);
+    let mut unscoped = cfg.clone();
+    unscoped.check_scopes.clear();
+    assert_eq!(
+        analysis::required_check_scopes(&unscoped, &affected)["unit-a"],
+        affected
+    );
+    assert!(analysis::required_check_scopes(&cfg, &BTreeSet::from(["product".into()])).is_empty());
+}
+
 #[allow(dead_code)]
 #[path = "../support/artifact_paths.rs"]
 mod test_artifacts;

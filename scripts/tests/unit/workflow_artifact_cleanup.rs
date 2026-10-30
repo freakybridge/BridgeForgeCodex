@@ -250,6 +250,31 @@ fn cleanup_generated_products_are_exact_and_contract_drift_blocks_deletion() {
 }
 
 #[test]
+fn cleanup_preserves_registered_project_hook_program_and_receipt() {
+    let f = Fixture::new();
+    f.put(".codex/hooks.json", br#"{"hooks":{}}"#);
+    f.put(
+        ".codex/project-hooks.json",
+        br#"{"schema_version":1,"hooks":[{"id":"demo","events":[{"event":"Stop"}]}]}"#,
+    );
+    let binary = format!(
+        ".build/bridgeforge/bin/project_demo{}",
+        std::env::consts::EXE_SUFFIX
+    );
+    let receipt = ".build/bridgeforge/bin/build-receipt-project-demo.json";
+    f.put(&binary, b"private program");
+    f.put(receipt, b"private receipt");
+    f.put(".build/old-object", b"old");
+    let result = Plan::capture_with_build(&f.0, build_policy(&f.0).unwrap())
+        .unwrap()
+        .execute();
+    assert_eq!(result.status, "completed", "{:?}", result.failures);
+    assert_eq!(fs::read(f.0.join(binary)).unwrap(), b"private program");
+    assert_eq!(fs::read(f.0.join(receipt)).unwrap(), b"private receipt");
+    assert!(!f.0.join(".build/old-object").exists());
+}
+
+#[test]
 fn cleanup_output_type_mismatch_and_invalid_roles_delete_nothing() {
     let f = Fixture::new();
     f.put(".runtime/remove.txt", b"runtime");

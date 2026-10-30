@@ -4,7 +4,7 @@ use bridgeforge_memory::remote::{
 };
 use bridgeforge_memory::worker::mark_pending;
 use bridgeforge_workflow::project_sync::{
-    SyncMode, apply_plan, attach_generated_assets, build_plan, build_plan_with_inputs,
+    SyncMode, apply_plan, build_plan, build_plan_with_inputs,
 };
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -183,325 +183,130 @@ fn project_sync_plan_apply_and_fingerprint_gate_are_transactional() {
 }
 
 #[test]
-fn project_sync_real_init_builds_and_applies_generated_assets() {
-    let temp = TestDirectory::new("project-sync-generated-init");
-    let project = temp.0.join("project");
-    fs::create_dir_all(&project).unwrap();
-    let original_factory = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+fn project_settings_remain_project_owned_across_init_adopt_and_update() {
+    let temp = TestDirectory::new("settings-ownership");
+    let repository = Path::new(env!("CARGO_MANIFEST_DIR"))
         .ancestors()
         .nth(2)
-        .unwrap()
-        .to_path_buf();
+        .unwrap();
+    let factory = temp.0.join("factory");
     let mut contract: serde_json::Value = serde_json::from_slice(
-        &fs::read(original_factory.join("templates/managed-skeleton.json")).unwrap(),
+        &fs::read(repository.join("templates/managed-skeleton.json")).unwrap(),
     )
     .unwrap();
-    // Keep this legacy-library regression fixture explicit. The production CLI
-    // no longer uses its implicit Hook build path; the new prepared workflow is
-    // covered separately below. Preserve the original safety assertions here.
-    contract["assets"]
-        .as_array_mut()
-        .unwrap()
-        .retain(|a| a["id"] != "codex.project-hook-policy");
-    let factory = temp.0.join("legacy-product");
+    for key in ["assets", "retired_assets"] {
+        assert!(contract[key].as_array().unwrap().iter().all(|asset| {
+            asset["id"] != "codex.settings" && asset["target"] != ".codex/settings.json"
+        }));
+    }
+    // Exercise the real distributed file contract without compiling binaries.
+    contract["generated_assets"] = json!([]);
     for asset in contract["assets"].as_array().unwrap() {
         let source = asset["source"].as_str().unwrap();
         write(
             &factory.join(source),
-            &fs::read(original_factory.join(source)).unwrap(),
+            &fs::read(repository.join(source)).unwrap(),
         );
     }
-    write(
-        &factory.join("templates/managed-skeleton.json"),
-        &serde_json::to_vec_pretty(&contract).unwrap(),
-    );
     write(
         &factory.join("VERSION"),
-        &fs::read(original_factory.join("VERSION")).unwrap(),
+        &fs::read(repository.join("VERSION")).unwrap(),
     );
-    // A registered project-owned Rust program shares the verified locked workspace,
-    let mut initial = build_plan(&project, &factory, SyncMode::Init).unwrap();
-    attach_generated_assets(
-        &mut initial,
-        &factory,
-        &project,
-        &contract,
-        &SystemProcessRunner,
-    )
-    .unwrap();
-    let initial_fingerprint = initial.aggregate_fingerprint.clone();
-    apply_plan(initial, &initial_fingerprint, false).unwrap();
-    bridgeforge_skeleton::baseline::verify(&project, None, true).unwrap();
-    let initial_stamp = fs::read(project.join(".codex/.bridgeforge_codex_version")).unwrap();
-    // Project hook installation is a subsequent compatible update.
-    // but remains outside managed source ownership. Its regular branch reads stdin.
-    write(&project.join(".codex/hooks/project_demo/entrypoint.rs"),b"pub fn run(args:Vec<String>)->i32 { use std::io::Read; let mut input=String::new(); std::io::stdin().read_to_string(&mut input).unwrap(); println!(\"{}:{}\",args.join(\",\"),input); 0 }");
-    let hooks_path = project.join(".codex/hooks.json");
-    let mut hooks_config: serde_json::Value =
-        serde_json::from_slice(&fs::read(&hooks_path).unwrap()).unwrap();
-    hooks_config["bridgeforgeProjectHooks"] = json!({"schema_version":1,"hooks":[{"id":"demo","events":[{"event":"SessionStart","args":["check"]}]}]});
-    write(&hooks_path, &serde_json::to_vec(&hooks_config).unwrap());
-    let project_binary = project.join(format!(
-        ".build/bridgeforge/bin/project_demo{}",
-        std::env::consts::EXE_SUFFIX
-    ));
-    write(&project_binary, b"existing project program");
-    let mut plan = build_plan(&project, &factory, SyncMode::Update).unwrap();
-    assert!(
-        plan.risk
-            .iter()
-            .any(|action| action.id.starts_with("project-hook:generated:"))
+    let contract_path = factory.join("templates/managed-skeleton.json");
+    write(
+        &contract_path,
+        &serde_json::to_vec_pretty(&contract).unwrap(),
     );
-    assert!(apply_plan(plan.clone(), &plan.aggregate_fingerprint, false).is_err());
-    assert_eq!(
-        fs::read(&project_binary).unwrap(),
-        b"existing project program"
-    );
-    let confirmed_source_fingerprint = plan.aggregate_fingerprint.clone();
-    let mut repeated_plan = plan.clone();
-    let receipts = attach_generated_assets(
-        &mut plan,
-        &factory,
-        &project,
-        &contract,
-        &SystemProcessRunner,
-    )
-    .unwrap();
-    assert!(!receipts.is_empty());
-    attach_generated_assets(
-        &mut repeated_plan,
-        &factory,
-        &project,
-        &contract,
-        &SystemProcessRunner,
-    )
-    .unwrap();
-    assert_eq!(
-        repeated_plan.aggregate_fingerprint,
-        confirmed_source_fingerprint
-    );
-    // This fixture uses a closed, legacy project Hook and the real toolchain.
-    assert_eq!(repeated_plan.build_metrics.cargo_build_invocations, 0);
-    assert!(repeated_plan.build_metrics.cache_hits >= 1);
-    assert_eq!(plan.aggregate_fingerprint, confirmed_source_fingerprint);
-    let input_path = project.join(".codex/hooks/project_demo/entrypoint.rs");
-    let original_input = fs::read(&input_path).unwrap();
-    fs::write(&input_path, b"source drift after build").unwrap();
-    assert!(
-        apply_plan(plan.clone(), &plan.aggregate_fingerprint, true)
-            .unwrap_err()
-            .contains("input changed after plan")
-    );
-    assert_eq!(
-        fs::read(&project_binary).unwrap(),
-        b"existing project program"
-    );
-    assert_eq!(
-        fs::read(project.join(".codex/.bridgeforge_codex_version")).unwrap(),
-        initial_stamp
-    );
-    fs::write(input_path, original_input).unwrap();
-    let registry_path = project.join(".codex/project-hooks.json");
-    assert!(
-        !registry_path.exists(),
-        "plan/build must not migrate registration early"
-    );
-    fs::write(&registry_path, b"registry appeared after plan").unwrap();
-    assert!(
-        apply_plan(plan.clone(), &plan.aggregate_fingerprint, true)
-            .unwrap_err()
-            .contains("input changed after plan")
-    );
-    fs::remove_file(&registry_path).unwrap();
-    let expected = plan
-        .safe
-        .iter()
-        .filter(|item| item.id.starts_with("generated:"))
-        .map(|action| (action.target.clone(), action.after_sha256.clone()))
-        .collect::<Vec<_>>();
-    let fingerprint = plan.aggregate_fingerprint.clone();
-    apply_plan(plan, &fingerprint, true).unwrap();
-    let native: serde_json::Value =
-        serde_json::from_slice(&fs::read(&hooks_path).unwrap()).unwrap();
-    assert!(
-        native
-            .as_object()
-            .unwrap()
-            .keys()
-            .all(|key| matches!(key.as_str(), "description" | "hooks"))
-    );
-    let registry = fs::read(&registry_path).unwrap();
-    assert_eq!(
-        serde_json::from_slice::<serde_json::Value>(&registry).unwrap(),
-        hooks_config["bridgeforgeProjectHooks"]
-    );
-    // Index verification cannot silently use working-tree registry contents.
-    for args in [vec!["init"], vec!["add", "--force", "."]] {
-        let mut request = ProcessRequest::new("git", &project);
-        request.args = args.into_iter().map(Into::into).collect();
-        let output = SystemProcessRunner.run(&request).unwrap();
-        assert_eq!(
-            output.code,
-            0,
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
+    let original = b"{\r\n  \"effortLevel\":\"high\", \"permissions\":{}, \"custom\":42\r\n}\r\n";
+    for (name, mode, settings) in [
+        ("init", SyncMode::Init, None),
+        ("adopt", SyncMode::Adopt, Some(original.as_slice())),
+        (
+            "adopt-invalid",
+            SyncMode::Adopt,
+            Some(b"project-owned non-JSON".as_slice()),
+        ),
+    ] {
+        let project = temp.0.join(name);
+        fs::create_dir_all(&project).unwrap();
+        let path = project.join(".codex/settings.json");
+        if let Some(bytes) = settings {
+            write(&path, bytes);
+            write(&path.with_extension("json.bak"), b"previous backup");
+        }
+        for current_mode in [mode, SyncMode::Update] {
+            let plan = build_plan(&project, &factory, current_mode).unwrap();
+            if matches!(current_mode, SyncMode::Adopt) {
+                for target in [".codex/settings.json", ".codex/settings.json.bak"] {
+                    assert!(
+                        plan.preservation_manifest["entries"]
+                            .as_array()
+                            .unwrap()
+                            .iter()
+                            .any(|item| {
+                                item["target"] == target
+                                    && item["disposition"] == "required-preserve"
+                            })
+                    );
+                    let decisions = json!({"delete": [format!("P:project-file:{target}")]});
+                    let result =
+                        build_plan_with_inputs(&project, &factory, current_mode, Some(&decisions));
+                    assert!(
+                        result
+                            .unwrap_err()
+                            .contains("unknown project asset decision")
+                    );
+                }
+            }
+            assert!(
+                plan.safe
+                    .iter()
+                    .chain(&plan.risk)
+                    .all(|a| a.target != ".codex/settings.json")
+            );
+            let fingerprint = plan.aggregate_fingerprint.clone();
+            let receipt = apply_plan(plan, &fingerprint, true).unwrap();
+            assert_eq!(receipt.execution_status, "succeeded");
+            assert_eq!(fs::read(&path).ok().as_deref(), settings);
+            assert_eq!(
+                fs::read(path.with_extension("json.bak")).ok().as_deref(),
+                settings.map(|_| b"previous backup".as_slice())
+            );
+        }
     }
-    fs::write(&registry_path, b"invalid working-tree registry").unwrap();
-    bridgeforge_skeleton::baseline::verify_index(&project, &SystemProcessRunner).unwrap();
-    fs::write(&registry_path, &registry).unwrap();
-    let mut unstage = ProcessRequest::new("git", &project);
-    unstage.args = [
-        "rm",
-        "--cached",
-        "--force",
-        "--",
-        ".codex/project-hooks.json",
-    ]
-    .into_iter()
-    .map(Into::into)
-    .collect();
-    assert_eq!(SystemProcessRunner.run(&unstage).unwrap().code, 0);
-    assert!(
-        bridgeforge_skeleton::baseline::verify_index(&project, &SystemProcessRunner)
-            .unwrap_err()
-            .contains("no registry")
-    );
-    for (target, hash) in expected {
-        assert_eq!(
-            hash,
-            format!(
-                "sha256:{:x}",
-                Sha256::digest(fs::read(project.join(target)).unwrap())
-            )
+    // An old installation declared settings as managed. Dropping ownership must
+    // preserve both an unchanged old payload and a locally modified payload.
+    let old_payload = b"{\"permissions\":{\"defaultMode\":\"acceptEdits\"}}\n";
+    let mut legacy = contract.clone();
+    legacy["assets"].as_array_mut().unwrap().push(json!({
+        "id":"codex.settings", "source":"templates/settings.json",
+        "target":".codex/settings.json", "strategy":"whole",
+        "current_sha256": format!("sha256:{:x}", Sha256::digest(old_payload))
+    }));
+    write(&factory.join("templates/settings.json"), old_payload);
+    for (name, bytes) in [
+        ("old-default", old_payload.as_slice()),
+        ("old-custom", original.as_slice()),
+    ] {
+        let project = temp.0.join(name);
+        fs::create_dir_all(&project).unwrap();
+        write(&contract_path, &serde_json::to_vec_pretty(&legacy).unwrap());
+        let plan = build_plan(&project, &factory, SyncMode::Init).unwrap();
+        let fingerprint = plan.aggregate_fingerprint.clone();
+        apply_plan(plan, &fingerprint, true).unwrap();
+        let path = project.join(".codex/settings.json");
+        write(&path, bytes);
+        write(
+            &contract_path,
+            &serde_json::to_vec_pretty(&contract).unwrap(),
         );
+        let plan = build_plan(&project, &factory, SyncMode::Update).unwrap();
+        let fingerprint = plan.aggregate_fingerprint.clone();
+        let receipt = apply_plan(plan, &fingerprint, true).unwrap();
+        assert_eq!(receipt.execution_status, "succeeded");
+        assert_eq!(fs::read(&path).unwrap(), bytes);
+        assert!(!path.with_extension("json.bak").exists());
     }
-    bridgeforge_skeleton::baseline::verify(&project, None, true).unwrap();
-    let again = build_plan(&project, &factory, SyncMode::Update).unwrap();
-    assert_eq!(again.status, "current");
-    let mut project_hook = ProcessRequest::new(
-        project
-            .join(format!(
-                ".build/bridgeforge/bin/project_demo{}",
-                std::env::consts::EXE_SUFFIX
-            ))
-            .into_os_string(),
-        &project,
-    );
-    project_hook.args = vec!["check".into()];
-    project_hook.stdin = b"stdin-payload".to_vec();
-    let result = SystemProcessRunner.run(&project_hook).unwrap();
-    assert_eq!(result.code, 0);
-    assert!(String::from_utf8_lossy(&result.stdout).contains("check:stdin-payload"));
-    let source_path = project.join(".codex/hooks/project_demo/entrypoint.rs");
-    let source = fs::read(&source_path).unwrap();
-    fs::write(&source_path, b"changed").unwrap();
-    assert!(
-        bridgeforge_skeleton::baseline::verify(&project, None, true)
-            .unwrap_err()
-            .contains("project Rust hook")
-    );
-    fs::write(source_path, source).unwrap();
-    // The same downstream can opt into independent dependencies without any
-    // edit to the factory or the managed workspace manifest/lock.
-    let managed_manifest = fs::read(project.join(".codex/hooks/Cargo.toml")).unwrap();
-    let package = project.join(".codex/hooks/project_demo");
-    write(&package.join("Cargo.toml"), b"[package]\nname=\"independent-hook\"\nversion=\"0.1.0\"\nedition=\"2021\"\n[workspace]\n[dependencies]\nextra={path=\"extra\"}\n");
-    let project_lock = b"version = 4\n[[package]]\nname = \"independent-hook\"\nversion = \"0.1.0\"\ndependencies = [\"extra\"]\n[[package]]\nname = \"extra\"\nversion = \"0.1.0\"\n";
-    write(&package.join("Cargo.lock"), project_lock);
-    write(
-        &package.join("extra/Cargo.toml"),
-        b"[package]\nname=\"extra\"\nversion=\"0.1.0\"\nedition=\"2021\"\n",
-    );
-    write(
-        &package.join("extra/src/lib.rs"),
-        b"pub fn value()->i32{42}",
-    );
-    write(
-        &package.join("entrypoint.rs"),
-        b"pub fn run(_:Vec<String>)->i32{println!(\"{}\",extra::value());0}",
-    );
-    let mut independent = build_plan(&project, &factory, SyncMode::Update).unwrap();
-    attach_generated_assets(
-        &mut independent,
-        &factory,
-        &project,
-        &contract,
-        &SystemProcessRunner,
-    )
-    .unwrap();
-    let fingerprint = independent.aggregate_fingerprint.clone();
-    write(&package.join("Cargo.lock"), b"changed after build");
-    assert!(
-        apply_plan(independent.clone(), &fingerprint, false)
-            .unwrap_err()
-            .contains("input changed after plan")
-    );
-    write(&package.join("Cargo.lock"), project_lock);
-    apply_plan(independent, &fingerprint, false).unwrap();
-    assert_eq!(
-        fs::read(project.join(".codex/hooks/Cargo.toml")).unwrap(),
-        managed_manifest
-    );
-    assert_eq!(fs::read(package.join("Cargo.lock")).unwrap(), project_lock);
-    bridgeforge_skeleton::baseline::verify(&project, None, true).unwrap();
-    assert_eq!(
-        build_plan(&project, &factory, SyncMode::Update)
-            .unwrap()
-            .status,
-        "current"
-    );
-    let output = SystemProcessRunner.run(&project_hook).unwrap();
-    assert_eq!(output.code, 0);
-    assert_eq!(String::from_utf8(output.stdout).unwrap().trim(), "42");
-    git_at(&project, &["add", "--force", "."]);
-    write(&package.join("Cargo.lock"), b"not staged");
-    bridgeforge_skeleton::baseline::verify_index(&project, &SystemProcessRunner).unwrap();
-    write(&package.join("Cargo.lock"), project_lock);
-    git_at(
-        &project,
-        &[
-            "rm",
-            "--cached",
-            "--force",
-            "--",
-            ".codex/hooks/project_demo/Cargo.lock",
-        ],
-    );
-    assert!(
-        bridgeforge_skeleton::baseline::verify_index(&project, &SystemProcessRunner)
-            .unwrap_err()
-            .contains("Cargo.lock")
-    );
-    assert!(!project.join("scripts/tests").exists());
-    let mut request = ProcessRequest::new("cargo", &project);
-    request.args = [
-        "test",
-        "--locked",
-        "--all-features",
-        "--workspace",
-        "--manifest-path",
-        ".codex/hooks/Cargo.toml",
-    ]
-    .into_iter()
-    .map(Into::into)
-    .collect();
-    request.args.extend([
-        "--target-dir".into(),
-        crate::test_artifacts::build_root(env!("CARGO_MANIFEST_DIR"), "runtime-flows")
-            .join(temp.0.file_name().unwrap())
-            .into_os_string(),
-    ]);
-    request.timeout = std::time::Duration::from_secs(180);
-    request.env_remove = vec!["RUSTFLAGS".into(), "CARGO_ENCODED_RUSTFLAGS".into()];
-    let result = SystemProcessRunner.run(&request).unwrap();
-    assert!(!result.timed_out);
-    assert_eq!(
-        result.code,
-        0,
-        "ordinary downstream Cargo test must not require factory tests: {}",
-        String::from_utf8_lossy(&result.stderr)
-    );
 }
 
 #[test]
@@ -557,8 +362,21 @@ fn prepared_public_artifacts_are_shared_and_update_preserves_project_hooks() {
             std::env::consts::EXE_SUFFIX
         ));
         write(&private_binary, b"project-owned executable");
+        write(
+            &project.join(".codex/project-hooks.json"),
+            b"invalid private registry",
+        );
+        write(
+            &project.join(".codex/hooks/project_demo/Cargo.lock"),
+            b"invalid private lock",
+        );
         let mut update = build_plan(&project, factory, SyncMode::Update).unwrap();
-        assert_eq!(update.hook_migration["show"], true);
+        assert!(
+            serde_json::to_value(&update)
+                .unwrap()
+                .get("hook_migration")
+                .is_none()
+        );
         assert!(
             update
                 .safe
@@ -573,8 +391,32 @@ fn prepared_public_artifacts_are_shared_and_update_preserves_project_hooks() {
             fs::read(&private_binary).unwrap(),
             b"project-owned executable"
         );
+        assert_eq!(
+            fs::read(project.join(".codex/project-hooks.json")).unwrap(),
+            b"invalid private registry"
+        );
+        assert_eq!(
+            fs::read(project.join(".codex/hooks/project_demo/entrypoint.rs")).unwrap(),
+            b"not Rust; private project data"
+        );
+        let after: serde_json::Value = serde_json::from_slice(&fs::read(&native).unwrap()).unwrap();
+        assert_eq!(after, hooks);
+        bridgeforge_skeleton::baseline::verify(&project, None, true).unwrap();
+        git_at(&project, &["init"]);
+        git_at(&project, &["add", "--force", "."]);
+        bridgeforge_skeleton::baseline::verify_index(&project, &SystemProcessRunner).unwrap();
+        // Public binary corruption must still fail verification.
+        let public_binary = project.join(format!(
+            ".deps/bridgeforge/bin/bridgeforge-hook{}",
+            std::env::consts::EXE_SUFFIX
+        ));
+        let saved = fs::read(&public_binary).unwrap();
+        write(&public_binary, b"corrupt public binary");
+        assert!(bridgeforge_skeleton::baseline::verify(&project, None, true).is_err());
+        write(&public_binary, &saved);
         let mut again = build_plan(&project, factory, SyncMode::Update).unwrap();
-        assert_eq!(again.hook_migration["show"], false);
+        assert!(!project.join(".codex/project-hook-policy.json").exists());
+        assert!(!project.join(".codex/project-hook-migrations.json").exists());
         let fingerprint = again.aggregate_fingerprint.clone();
         attach_prepared_public(&mut again, &contract_bytes, &prepared_path).unwrap();
         let receipt = apply_plan(again, &fingerprint, false).unwrap();
@@ -623,180 +465,6 @@ fn prepared_public_artifacts_are_shared_and_update_preserves_project_hooks() {
             .unwrap()
             .len(),
         4
-    );
-}
-
-#[test]
-fn independent_project_hook_completion_requires_own_build_and_rejects_external_inputs() {
-    let temp = TestDirectory::new("independent-hook-completion");
-    let project = &temp.0;
-    let package = project.join(".codex/hooks/project_demo");
-    write(
-        &project.join(".codex/project-hook-policy.json"),
-        include_bytes!("../../../templates/project-hook-policy.json"),
-    );
-    write(&project.join(".codex/hooks.json"), br#"{"hooks":{"Stop":[{"hooks":[{"type":"command","bridgeforgeProjectHookId":"demo:0","command":".build/bridgeforge/bin/project_demo"}]}]}}"#);
-    write(
-        &package.join("Cargo.toml"),
-        b"[package]\nname=\"project_demo\"\nversion=\"0.1.0\"\nedition=\"2024\"\n[workspace]\n",
-    );
-    write(
-        &package.join("Cargo.lock"),
-        b"version = 4\n[[package]]\nname = \"project_demo\"\nversion = \"0.1.0\"\n",
-    );
-    write(
-        &package.join("src/main.rs"),
-        b"#![cfg_attr(windows, windows_subsystem = \"windows\")]\nfn main() {}\n",
-    );
-    let mut command = ProcessRequest::new("cargo", &package);
-    command.args = ["build", "--locked", "--release"].map(Into::into).to_vec();
-    let target = project.join(".build/bridgeforge/project-hooks/demo/target");
-    command
-        .args
-        .extend(["--target-dir".into(), target.clone().into_os_string()]);
-    let result = SystemProcessRunner.run(&command).unwrap();
-    assert_eq!(
-        result.code,
-        0,
-        "{}",
-        String::from_utf8_lossy(&result.stderr)
-    );
-    let binary = format!("project_demo{}", std::env::consts::EXE_SUFFIX);
-    write(
-        &project.join(".build/bridgeforge/bin").join(&binary),
-        &fs::read(target.join("release").join(&binary)).unwrap(),
-    );
-    let result = bridgeforge_workflow::project_hook_migration::verify_completed(
-        project,
-        true,
-        &SystemProcessRunner,
-    )
-    .unwrap();
-    assert_eq!(result["status"], "completed");
-    let state = fs::read(project.join(".codex/project-hook-migrations.json")).unwrap();
-    write(
-        &project.join(".codex/hooks/shared.txt"),
-        b"skeleton-owned dependency",
-    );
-    write(&package.join("src/main.rs"), b"#![cfg_attr(windows, windows_subsystem = \"windows\")]\nfn main() { let _ = include_str!(\"../../shared.txt\"); }\n");
-    let error = bridgeforge_workflow::project_hook_migration::verify_completed(
-        project,
-        true,
-        &SystemProcessRunner,
-    )
-    .unwrap_err();
-    assert!(error.contains("outside its independent package"), "{error}");
-    assert_eq!(
-        fs::read(project.join(".codex/project-hook-migrations.json")).unwrap(),
-        state
-    );
-}
-
-/// Explicitly opt in to reading ONLY the two named files of a real downstream.
-/// No vault mappings/data are copied and no project business mode is executed.
-#[test]
-#[ignore = "requires an explicitly authorized BRIDGEFORGE_ASSIST_FIXTURE_SOURCE"]
-fn assist_registry_migration_in_isolated_fixture() {
-    let source = PathBuf::from(
-        std::env::var_os("BRIDGEFORGE_ASSIST_FIXTURE_SOURCE").expect("explicit source required"),
-    );
-    let native_path = source.join(".codex/hooks.json");
-    let entry_path = source.join(".codex/hooks/project_vault/entrypoint.rs");
-    let original_native = fs::read(&native_path).unwrap();
-    let original_entry = fs::read(&entry_path).unwrap();
-    let original: serde_json::Value = serde_json::from_slice(&original_native).unwrap();
-    assert_eq!(
-        original["bridgeforgeProjectHooks"]["hooks"][0]["id"],
-        "vault"
-    );
-    let temp = TestDirectory::new("assist-registry-compatibility");
-    let project = temp.0.join("project");
-    fs::create_dir_all(&project).unwrap();
-    let factory = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .ancestors()
-        .nth(2)
-        .unwrap();
-    let contract: serde_json::Value =
-        serde_json::from_slice(&fs::read(factory.join("templates/managed-skeleton.json")).unwrap())
-            .unwrap();
-    let mut initial = build_plan(&project, factory, SyncMode::Init).unwrap();
-    attach_generated_assets(
-        &mut initial,
-        factory,
-        &project,
-        &contract,
-        &SystemProcessRunner,
-    )
-    .unwrap();
-    let fingerprint = initial.aggregate_fingerprint.clone();
-    apply_plan(initial, &fingerprint, false).unwrap();
-    write(&project.join(".codex/hooks.json"), &original_native);
-    write(
-        &project.join(".codex/hooks/project_vault/entrypoint.rs"),
-        &original_entry,
-    );
-    let mut plan = build_plan(&project, factory, SyncMode::Update).unwrap();
-    assert!(plan.gaps.is_empty(), "{:?}", plan.gaps);
-    assert!(
-        plan.risk
-            .iter()
-            .any(|action| action.target == ".codex/project-hooks.json")
-    );
-    let fingerprint = plan.aggregate_fingerprint.clone();
-    attach_generated_assets(
-        &mut plan,
-        factory,
-        &project,
-        &contract,
-        &SystemProcessRunner,
-    )
-    .unwrap();
-    assert_eq!(plan.aggregate_fingerprint, fingerprint);
-    apply_plan(plan, &fingerprint, true).unwrap();
-    let migrated: serde_json::Value =
-        serde_json::from_slice(&fs::read(project.join(".codex/hooks.json")).unwrap()).unwrap();
-    assert!(
-        migrated
-            .as_object()
-            .unwrap()
-            .keys()
-            .all(|key| matches!(key.as_str(), "description" | "hooks"))
-    );
-    assert_eq!(
-        migrated["hooks"], original["hooks"],
-        "Assist commands/events must stay identical"
-    );
-    let registry: serde_json::Value =
-        serde_json::from_slice(&fs::read(project.join(".codex/project-hooks.json")).unwrap())
-            .unwrap();
-    assert_eq!(registry, original["bridgeforgeProjectHooks"]);
-    assert_eq!(
-        fs::read(project.join(".codex/hooks/project_vault/entrypoint.rs")).unwrap(),
-        original_entry
-    );
-    bridgeforge_skeleton::baseline::verify(&project, None, true).unwrap();
-    assert_eq!(
-        build_plan(&project, factory, SyncMode::Update)
-            .unwrap()
-            .status,
-        "current"
-    );
-    assert!(!project.join("vault").exists());
-    assert!(!project.join("vault-mirror").exists());
-    assert!(!project.join("vault_node_map").exists());
-    assert_eq!(
-        fs::read(&native_path).unwrap(),
-        original_native,
-        "real downstream config is read-only"
-    );
-    assert_eq!(
-        fs::read(&entry_path).unwrap(),
-        original_entry,
-        "real business source is read-only"
-    );
-    println!(
-        "Assist fixture: native commands identical; registry moved; source sha256:{:x}; locked build/baseline passed; second plan current; no vault business execution",
-        Sha256::digest(&original_entry)
     );
 }
 

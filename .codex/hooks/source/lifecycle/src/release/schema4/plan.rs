@@ -642,7 +642,7 @@ pub fn preview(
         if capture.changes.iter().all(|c| c.role == "record")
             && analysis.as_ref().is_none_or(|a| a.targets.is_empty())
         {
-            let mut value = analysis::requirements(&cfg, &capture);
+            let mut value = analysis::requirements(&cfg, &capture, &ledger);
             value["product_constraints"] =
                 product_requirements(root, &cfg, &capture, &ledger, runner)?;
             value["status"] = json!("nothing-to-release");
@@ -650,7 +650,7 @@ pub fn preview(
             return Ok(value);
         }
         let Some(analysis) = analysis else {
-            let mut value = analysis::requirements(&cfg, &capture);
+            let mut value = analysis::requirements(&cfg, &capture, &ledger);
             value["product_constraints"] =
                 product_requirements(root, &cfg, &capture, &ledger, runner)?;
             return Ok(value);

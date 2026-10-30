@@ -596,20 +596,7 @@ pub fn run(args: &[String]) -> CommandOutcome {
     };
     match command {
         "self-test" if has(args, "--json") => self_test(),
-        "project-hook-migration" => {
-            let result = (|| {
-                let root = path_value(args,"--root")?.canonicalize().map_err(|e|e.to_string())?;
-                match args.get(1).map(String::as_str) {
-                    Some("status")=>bridgeforge_workflow::project_hook_migration::status(&root),
-                    Some("verify")=>{
-                        if has(args,"--check")||has(args,"--dry-run") {return Err("migration verification builds project code and records completion; use status for a read-only report".into());}
-                        bridgeforge_workflow::project_hook_migration::verify_completed(&root,has(args,"--confirmed-behavior"),&SystemProcessRunner)
-                    },
-                    _=>Err("expected project-hook-migration status or verify".into()),
-                }
-            })();
-            match result {Ok(v)=>CommandOutcome::with_receipt(v),Err(e)=>blocked("project-hook-migration",e)}
-        },
+        "project-hook-migration" => blocked("project-hook-migration", "retired: project hooks are maintained by the project; skeleton updates never build or migrate them"),
         "public-artifacts" => {
             if args.get(1).map(String::as_str) == Some("locate") {
                 return bridgeforge_workflow::public_artifacts::outcome((|| {
@@ -743,7 +730,7 @@ pub fn run(args: &[String]) -> CommandOutcome {
         }
         _ => CommandOutcome {
             code: EXIT_BLOCKED,
-            stderr: "usage: bridgeforge <self-test|doctor|check|archive-scan|audit-user-allow|project-sync|public-artifacts|project-hook-migration|develop|git-sync|memory-sync|manifest|build-assets|cleanup>\n".into(),
+            stderr: "usage: bridgeforge <self-test|doctor|check|archive-scan|audit-user-allow|project-sync|public-artifacts|develop|git-sync|memory-sync|manifest|build-assets|cleanup>\n".into(),
             ..CommandOutcome::default()
         },
     }

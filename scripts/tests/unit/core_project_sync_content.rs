@@ -7,6 +7,29 @@ use serde_json::json;
 use std::fs;
 
 #[test]
+fn hook_merge_preserves_project_handlers_and_replaces_only_managed_identities() {
+    let managed = json!({"type":"command","bridgeforgeCodexId":"bridgeforge-codex.project-hook.v1:stop","command":"new-public"});
+    let canonical = json!({"hooks":{"Stop":[{"hooks":[managed.clone()]}]}});
+    let private = json!({"matcher":"custom","timeout":77,"extra":true,"hooks":[
+        {"type":"command","command":"python .codex/hooks/encoding_check.py","bridgeforgeProjectHookId":"demo:0","custom":42}
+    ]});
+    let local = json!({"description":"project","customRoot":true,"bridgeforgeProjectHooks":{"opaque":true},"hooks":{"Stop":[
+        {"hooks":[{"type":"command","bridgeforgeCodexId":"bridgeforge-codex.project-hook.v1:stop","command":"old-public"}]}, private.clone()
+    ]}});
+    let source = serde_json::to_vec(&canonical).unwrap();
+    let merged = merge_project_hooks(&source, Some(&serde_json::to_vec(&local).unwrap())).unwrap();
+    let value: Value = serde_json::from_slice(&merged).unwrap();
+    assert_eq!(value["hooks"]["Stop"], json!([{"hooks":[managed]},private]));
+    for key in ["description", "customRoot", "bridgeforgeProjectHooks"] {
+        assert_eq!(value[key], local[key]);
+    }
+    assert_eq!(merge_project_hooks(&source, Some(&merged)).unwrap(), merged);
+    let mut ambiguous = local;
+    ambiguous["hooks"]["Stop"][0]["hooks"][0]["bridgeforgeCodexId"] = json!("unknown-owner");
+    assert!(merge_project_hooks(&source, Some(&serde_json::to_vec(&ambiguous).unwrap())).is_err());
+}
+
+#[test]
 fn markdown_upgrade_inserts_sections_and_preserves_project_content() {
     let source = b"# Docs\n\n## Start\n| Task | Read |\n|---|---|\n| arch | new |\n\n## Lifecycle\ncanonical\n\n## Index\n| File | Purpose |\n|---|---|\n| managed | new |\n\n";
     let current = b"# Custom\r\ndelivery_layout: milestone\r\n\r\n## Project\r\nkeep bytes\r\n\r\n## Index\r\n| Old | Header |\r\n|---|---|\r\n| custom | personal |\r\n| managed | old |\r\n\r\n";

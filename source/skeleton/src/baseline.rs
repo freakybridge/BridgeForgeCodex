@@ -967,9 +967,6 @@ pub fn verify_prospective_recorded(
     if contract["release_version"].as_str() != Some(version) {
         return Err("prospective version identity mismatch".into());
     }
-    if !crate::migration_enabled(&contract) {
-        return Err("recorded verification requires independent project hooks".into());
-    }
     let mut evidence = InstalledEvidence {
         files: BTreeMap::new(),
     };
@@ -1055,13 +1052,6 @@ fn verify_contract_assets(
             skipped.push(generated["id"].as_str().unwrap_or("").to_string())
         }
     }
-    if !crate::migration_enabled(contract) {
-        checked.extend(crate::project_hooks::verify(
-            root,
-            contract,
-            verify_generated_runtime,
-        )?);
-    }
     let fingerprint = sha(format!(
         "{}\n{}\n{}",
         version,
@@ -1094,60 +1084,6 @@ fn git_index_blob(root: &Path, path: &str, runner: &dyn ProcessRunner) -> Result
         ));
     }
     Ok(output.stdout)
-}
-
-fn project_hook_index_input(
-    root: &Path,
-    hook: &crate::project_hooks::Hook,
-    runner: &dyn ProcessRunner,
-) -> Result<crate::project_hooks::Input, String> {
-    let prefix = format!(".codex/hooks/project_{}/", hook.id);
-    let mut request = ProcessRequest::new("git", root);
-    request.args = vec![
-        "ls-files".into(),
-        "--stage".into(),
-        "-z".into(),
-        "--".into(),
-        prefix.clone().into(),
-    ];
-    request.timeout = std::time::Duration::from_secs(45);
-    let result = runner.run(&request).map_err(|e| e.to_string())?;
-    if result.timed_out || result.code != 0 {
-        return Err("cannot inspect staged project hook package".into());
-    }
-    let listing = std::str::from_utf8(&result.stdout).map_err(|e| e.to_string())?;
-    let source = git_index_blob(root, &hook.source(), runner)?;
-    std::str::from_utf8(&source).map_err(|_| "staged project Rust hook source must be UTF-8")?;
-    let manifest_path = format!("{prefix}Cargo.toml");
-    if !listing.split('\0').any(|record| {
-        record
-            .split_once('\t')
-            .is_some_and(|(_, path)| path == manifest_path)
-    }) {
-        return crate::project_hooks::Input::from_files(source, std::collections::BTreeMap::new());
-    }
-    let mut files = std::collections::BTreeMap::new();
-    for record in listing.split('\0').filter(|r| !r.is_empty()) {
-        let (metadata, path) = record.split_once('\t').ok_or("invalid staged hook file")?;
-        let fields = metadata.split_whitespace().collect::<Vec<_>>();
-        if fields.len() != 3 || !matches!(fields[0], "100644" | "100755") || fields[2] != "0" {
-            return Err("staged project hook package requires regular, merged files".into());
-        }
-        let relative = path
-            .strip_prefix(&prefix)
-            .ok_or("invalid staged hook prefix")?;
-        if relative.split('/').any(|p| matches!(p, "target" | ".git")) {
-            continue;
-        }
-        if relative
-            .split('/')
-            .any(crate::project_hooks::reserved_package_component)
-        {
-            return Err("reserved staged project hook path".into());
-        }
-        files.insert(relative.to_string(), git_index_blob(root, path, runner)?);
-    }
-    crate::project_hooks::Input::from_files(source, files)
 }
 
 pub fn verify_index(root: &Path, runner: &dyn ProcessRunner) -> Result<BaselineReport, String> {
@@ -1204,48 +1140,6 @@ pub fn verify_index(root: &Path, runner: &dyn ProcessRunner) -> Result<BaselineR
     if let Some(generated_assets) = contract["generated_assets"].as_array() {
         for generated in generated_assets {
             skipped.push(generated["id"].as_str().unwrap_or("").to_string());
-        }
-    }
-    if !crate::migration_enabled(&contract)
-        && contract["assets"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .any(|asset| asset["target"] == ".codex/hooks.json")
-    {
-        let document = parse_unique_json(
-            &git_index_blob(root, ".codex/hooks.json", runner)?,
-            "staged hooks.json",
-        )?;
-        let registry_path = crate::project_hooks::REGISTRY_PATH;
-        let mut request = ProcessRequest::new("git", root);
-        request.args = vec![
-            "ls-files".into(),
-            "--stage".into(),
-            "-z".into(),
-            "--".into(),
-            registry_path.into(),
-        ];
-        request.timeout = std::time::Duration::from_secs(45);
-        let output = runner
-            .run(&request)
-            .map_err(|e| format!("cannot inspect staged project hook registry: {e}"))?;
-        if output.timed_out || output.code != 0 {
-            return Err("cannot inspect staged project hook registry".into());
-        }
-        let registry = if output.stdout.is_empty() {
-            None
-        } else {
-            Some(git_index_blob(root, registry_path, runner)?)
-        };
-        let combined = crate::project_hooks::with_registry(&document, registry.as_deref())?;
-        if crate::project_hooks::render(&combined)? != document {
-            return Err("staged project Rust hook registrations drifted".into());
-        }
-        for hook in crate::project_hooks::hooks(&combined)? {
-            let input =
-                project_hook_index_input(root, &hook, runner)?.identity(&hook, &contract)?;
-            checked.push(format!("project-hook:{}:{input}", hook.id));
         }
     }
     Ok(BaselineReport {

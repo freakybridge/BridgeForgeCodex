@@ -56,8 +56,6 @@ pub struct SyncPlan {
     pub aggregate_fingerprint: String,
     #[serde(default)]
     pub public_installation_required: bool,
-    #[serde(default)]
-    pub hook_migration: Value,
     #[serde(skip)]
     project_root: PathBuf,
     #[serde(skip)]
@@ -66,8 +64,6 @@ pub struct SyncPlan {
     deletes: Vec<PathBuf>,
     #[serde(skip)]
     generated_source_fingerprints: BTreeMap<String, String>,
-    #[serde(skip)]
-    project_hook_inputs: Vec<(crate::project_hooks::Hook, crate::project_hooks::Input)>,
     #[serde(skip)]
     project_hook_reads: BTreeMap<String, Option<Vec<u8>>>,
     #[serde(skip)]
@@ -94,8 +90,6 @@ pub struct SyncReceipt {
     #[serde(default)]
     pub release_setup: Value,
     pub preserved_asset_ids: Vec<String>,
-    #[serde(default)]
-    pub hook_migration: Value,
 }
 
 fn sha_raw(payload: &[u8]) -> String {
@@ -106,12 +100,19 @@ const LEGACY_RECEIPT: &str = ".codex/bin/build-receipt.json";
 const ARTIFACT_LAYOUT_INPUT: &str = "artifact-layout:legacy-runtime";
 
 pub fn legacy_artifact_retirements(root: &Path) -> Result<BTreeMap<PathBuf, Vec<u8>>, String> {
-    let mut project = crate::project_hooks::legacy_artifacts(root)?;
+    let project_hooks = if root.join(".codex/bin").is_dir() {
+        crate::project_hooks::legacy_artifacts(root)?
+    } else {
+        BTreeMap::new()
+    };
+    let mut project = project_hooks.clone();
     if let Some((path, bytes)) = legacy_receipt(root)? {
         project.insert(path, bytes);
     }
     let mut files =
         bridgeforge_core::artifact_migration::legacy_runtime_with_owned(root, &project)?;
+    // Recognized private binaries remain project-owned, even in the old layout.
+    files.retain(|path, _| !project_hooks.contains_key(path));
     files.extend(bridgeforge_core::artifact_migration::legacy_build_outputs(
         root,
     )?);
@@ -138,26 +139,6 @@ pub fn legacy_artifact_relocations(root: &Path) -> Result<BTreeMap<PathBuf, Vec<
         if transaction_file_state(&target)?.is_some_and(|present| present != bytes) {
             return Err(format!(
                 "legacy build relocation conflicts with existing output: {}",
-                target.display()
-            ));
-        }
-        writes.insert(target, bytes);
-    }
-    for (old, bytes) in crate::project_hooks::legacy_artifacts(root)? {
-        let target = safe_join(
-            root,
-            &format!(
-                "{}/{}",
-                bridgeforge_core::artifact_paths::FACTORY_BIN,
-                old.file_name()
-                    .ok_or("project hook output name missing")?
-                    .to_string_lossy()
-            ),
-            "project hook relocation",
-        )?;
-        if transaction_file_state(&target)?.is_some_and(|present| present != bytes) {
-            return Err(format!(
-                "project hook relocation conflicts with existing output: {}",
                 target.display()
             ));
         }
@@ -588,47 +569,6 @@ fn resolved_mode(project_root: &Path, requested: SyncMode) -> Result<SyncMode, S
     }
 }
 
-fn generated_asset_current(project_root: &Path, item: &Value) -> Result<bool, String> {
-    let platform = if cfg!(windows) {
-        "windows-x86_64"
-    } else if cfg!(target_os = "linux") {
-        "linux-x86_64"
-    } else {
-        "macos-x86_64"
-    };
-    let binary = safe_join(
-        project_root,
-        item["binary_targets"][platform]
-            .as_str()
-            .ok_or("generated binary target is missing")?,
-        "generated binary target",
-    )?;
-    let receipt = safe_join(
-        project_root,
-        item["receipt_target"]
-            .as_str()
-            .ok_or("generated receipt target is missing")?,
-        "generated receipt target",
-    )?;
-    let Ok(binary_payload) = fs::read(binary) else {
-        return Ok(false);
-    };
-    let Ok(receipt_payload) = fs::read(receipt) else {
-        return Ok(false);
-    };
-    let Ok(document) = serde_json::from_slice::<Value>(&receipt_payload) else {
-        return Ok(false);
-    };
-    Ok(document["schema_version"].as_u64() == Some(2)
-        && document["generated_asset_id"] == item["id"]
-        && document["platform"].as_str() == Some(platform)
-        && document["binary_sha256"].as_str() == Some(sha_raw(&binary_payload).as_str())
-        && document["source_tree_sha256"] == item["source_tree_sha256"]
-        && document["lockfile_sha256"] == item["lockfile_sha256"]
-        && document["build_recipe_sha256"] == item["build_recipe_sha256"]
-        && document["self_test_sha256"] == item["self_test_sha256"])
-}
-
 fn current_platform() -> &'static str {
     if cfg!(windows) {
         "windows-x86_64"
@@ -944,6 +884,23 @@ fn destructive_inventory(
                     .iter()
                     .any(|(_, target)| target.starts_with(&(relative.clone() + "/")));
             if !covered && !ancestor && entry.file_type().is_file() {
+                // Relinquished configuration and retired migration state stay
+                // project-owned, without a rebuild deletion choice.
+                if matches!(
+                    folded.as_str(),
+                    ".codex/settings.json"
+                        | ".codex/settings.json.bak"
+                        | ".codex/project-hook-policy.json"
+                        | ".codex/project-hook-migrations.json"
+                ) {
+                    entries.push(json!({
+                        "id": format!("R:project-owned-config:{relative}"),
+                        "kind": "project-owned-config", "target": relative,
+                        "before_sha256": sha_git(&fs::read(entry.path()).map_err(|e| e.to_string())?),
+                        "disposition": "required-preserve"
+                    }));
+                    continue;
+                }
                 // Existing files are project decisions, never ownership proved by an old manifest.
                 let id = format!("P:project-file:{relative}");
                 candidate_ids.insert(id.clone());
@@ -1006,7 +963,6 @@ pub fn build_plan_with_inputs(
         .map_err(|error| format!("template root is unavailable: {error}"))?;
     let mode = resolved_mode(&project_root, requested_mode)?;
     let (contract, contract_bytes) = read_contract(&template_root)?;
-    let independent_hooks = crate::project_hook_migration::enabled(&contract);
     let version = contract["release_version"]
         .as_str()
         .ok_or("managed contract release_version is missing")?
@@ -1218,53 +1174,6 @@ pub fn build_plan_with_inputs(
         "compatibility_baseline": contract["compatibility_baseline"],
         "entries": preservation_entries,
     });
-    for item in contract["generated_assets"]
-        .as_array()
-        .ok_or("generated_assets is missing")?
-        .iter()
-        .filter(|_| !independent_hooks)
-    {
-        let id = item["id"].as_str().ok_or("generated asset id is missing")?;
-        if generated_asset_current(&project_root, item)? {
-            continue;
-        }
-        let platform = if cfg!(windows) {
-            "windows-x86_64"
-        } else if cfg!(target_os = "linux") {
-            "linux-x86_64"
-        } else {
-            "macos-x86_64"
-        };
-        let target = item["binary_targets"][platform]
-            .as_str()
-            .ok_or("generated binary target is missing")?;
-        generated_source_fingerprints.insert(
-            format!("generated:{id}"),
-            item["source_tree_sha256"]
-                .as_str()
-                .ok_or("generated source_tree_sha256 is missing")?
-                .to_string(),
-        );
-        safe.push(SyncAction {
-            id: format!("generated:{id}"),
-            target: target.into(),
-            operation: if project_root.join(target).is_file() {
-                "rebuild"
-            } else {
-                "build"
-            }
-            .into(),
-            risk: false,
-            before_sha256: fs::read(project_root.join(target))
-                .ok()
-                .as_deref()
-                .map(sha_raw),
-            after_sha256: item["source_tree_sha256"]
-                .as_str()
-                .ok_or("generated source_tree_sha256 is missing")?
-                .into(),
-        });
-    }
     target_reads.insert(
         contract["contract_target"].as_str().unwrap().into(),
         fs::read(&contract_target).ok(),
@@ -1338,19 +1247,6 @@ pub fn build_plan_with_inputs(
             });
             writes.insert(path, bytes);
         }
-        let hooks = project_root.join(".codex/hooks.json");
-        if let Some(payload) = writes.get(&hooks) {
-            let changed =
-                crate::project_hooks::migrate_legacy_registration(&project_root, payload)?;
-            for action in safe
-                .iter_mut()
-                .chain(risk.iter_mut())
-                .filter(|a| a.target == ".codex/hooks.json")
-            {
-                action.after_sha256 = sha_git(&changed);
-            }
-            writes.insert(hooks, changed);
-        }
         for (path, bytes) in old {
             let relative = path
                 .strip_prefix(&project_root)
@@ -1378,59 +1274,7 @@ pub fn build_plan_with_inputs(
         &mut gaps,
         &mut generated_source_fingerprints,
     )?;
-    let mut hook_migration = Value::Null;
-    let (project_hook_inputs, mut project_hook_reads) = if independent_hooks {
-        let policy_path = project_root.join(crate::project_hook_migration::POLICY);
-        let policy = writes
-            .get(&policy_path)
-            .cloned()
-            .or_else(|| fs::read(&policy_path).ok())
-            .ok_or("project Hook ownership policy is missing")?;
-        let inspection = crate::project_hook_migration::inspect(
-            &project_root,
-            &policy,
-            previous_version.as_deref(),
-        )?;
-        hook_migration = inspection.notice;
-        if inspection.blocked {
-            blockers
-                .push("project Hook compatibility migration is required before this update".into());
-        }
-        for (relative, before) in &inspection.reads {
-            generated_source_fingerprints.insert(
-                format!("project-migration:{relative}"),
-                crate::manifest::canonical_sha(&json!(before))?,
-            );
-        }
-        for (target, payload) in inspection.writes {
-            let relative = relative_posix(&project_root, &target)?;
-            safe.push(SyncAction {
-                id: format!("migration-status:{relative}"),
-                target: relative.clone(),
-                operation: "record".into(),
-                risk: false,
-                before_sha256: inspection
-                    .reads
-                    .get(&relative)
-                    .and_then(|v| v.as_deref())
-                    .map(sha_raw),
-                after_sha256: sha_raw(&payload),
-            });
-            writes.insert(target, payload);
-        }
-        (Vec::new(), inspection.reads)
-    } else {
-        plan_project_hooks(
-            &project_root,
-            &contract,
-            &mut writes,
-            &deletes,
-            &mut safe,
-            &mut risk,
-            &mut generated_source_fingerprints,
-        )?
-    };
-    project_hook_reads.extend(target_reads);
+    let mut project_hook_reads = target_reads;
     // A fresh Init may not have a committed VERSION baseline yet. Its first
     // release setup establishes that proof; existing projects must not skip it.
     let release_upgrade =
@@ -1477,10 +1321,9 @@ pub fn build_plan_with_inputs(
         schema: 1,
         status: if safe.is_empty()
             && risk.is_empty()
-            && !(independent_hooks
-                && contract["generated_assets"]
-                    .as_array()
-                    .is_some_and(|a| !a.is_empty()))
+            && !contract["generated_assets"]
+                .as_array()
+                .is_some_and(|a| !a.is_empty())
         {
             "current"
         } else {
@@ -1504,154 +1347,26 @@ pub fn build_plan_with_inputs(
         preservation_manifest,
         confirmation_required,
         aggregate_fingerprint: fingerprint,
-        public_installation_required: independent_hooks
-            && contract["generated_assets"]
-                .as_array()
-                .is_some_and(|a| !a.is_empty()),
-        hook_migration,
+        public_installation_required: contract["generated_assets"]
+            .as_array()
+            .is_some_and(|a| !a.is_empty()),
         project_root,
         writes,
         deletes,
         generated_source_fingerprints,
-        project_hook_inputs,
         project_hook_reads,
         public_actions: Vec::new(),
         release_upgrade,
     })
 }
 
-fn plan_project_hooks(
-    root: &Path,
-    contract: &Value,
-    writes: &mut BTreeMap<PathBuf, Vec<u8>>,
-    deletes: &[PathBuf],
-    safe: &mut Vec<SyncAction>,
-    risk: &mut Vec<SyncAction>,
-    fingerprints: &mut BTreeMap<String, String>,
-) -> Result<
-    (
-        Vec<(crate::project_hooks::Hook, crate::project_hooks::Input)>,
-        BTreeMap<String, Option<Vec<u8>>>,
-    ),
-    String,
-> {
-    let mut reads = BTreeMap::new();
-    let mut inputs = Vec::new();
-    let registry_target = crate::project_hooks::REGISTRY_PATH;
-    let registry_path = root.join(registry_target);
-    if deletes.contains(&registry_path) {
-        return Err("project Rust hook registry is scheduled for deletion".into());
-    }
-    let registry_original = crate::project_hooks::read(root, registry_target)?;
-    let registry_payload = writes
-        .get(&registry_path)
-        .cloned()
-        .or_else(|| registry_original.clone());
-    reads.insert(registry_target.into(), registry_original.clone());
-    let original = crate::project_hooks::read(root, ".codex/hooks.json")?;
-    let path = root.join(".codex/hooks.json");
-    let Some(payload) = writes.get(&path).cloned().or_else(|| original.clone()) else {
-        if registry_payload.is_some() {
-            return Err("project Rust hook registry requires hooks.json".into());
-        }
-        return Ok((inputs, reads));
-    };
-    let document = crate::json::parse_unique_json(&payload, "hooks.json")?;
-    let combined = crate::project_hooks::with_registry(&document, registry_payload.as_deref())?;
-    let registered = crate::project_hooks::render(&combined)?;
-    if let Some(registry) = crate::project_hooks::registry(&combined) {
-        fingerprints.insert(
-            "project-hook:registry-input".into(),
-            crate::manifest::canonical_sha(registry)?,
-        );
-        if registry_payload.is_none() {
-            let mut payload = serde_json::to_vec_pretty(registry).map_err(|e| e.to_string())?;
-            payload.push(b'\n');
-            risk.push(SyncAction {
-                id: "project-hook:registry".into(),
-                target: registry_target.into(),
-                operation: "create".into(),
-                risk: true,
-                before_sha256: None,
-                after_sha256: sha_git(&payload),
-            });
-            writes.insert(registry_path, payload);
-        }
-    }
-    reads.insert(".codex/hooks.json".into(), original.clone());
-    if registered != document {
-        let mut payload = serde_json::to_vec_pretty(&registered).map_err(|e| e.to_string())?;
-        payload.push(b'\n');
-        if let Some(action) = safe
-            .iter_mut()
-            .chain(risk.iter_mut())
-            .find(|action| action.target == ".codex/hooks.json")
-        {
-            action.after_sha256 = sha_git(&payload);
-        } else {
-            risk.push(SyncAction {
-                id: "project-hook:registration".into(),
-                target: ".codex/hooks.json".into(),
-                operation: "replace".into(),
-                risk: true,
-                before_sha256: original.as_deref().map(sha_git),
-                after_sha256: sha_git(&payload),
-            });
-        }
-        writes.insert(path, payload);
-    }
-    for hook in crate::project_hooks::hooks(&combined)? {
-        let source_path = root.join(hook.source());
-        if deletes.contains(&source_path) {
-            return Err("registered project Rust hook source is scheduled for deletion".into());
-        }
-        let original = crate::project_hooks::read(root, &hook.source())?;
-        let source = writes
-            .get(&source_path)
-            .cloned()
-            .or_else(|| original.clone())
-            .ok_or_else(|| format!("project Rust hook source is missing: {}", hook.source()))?;
-        reads.insert(hook.source(), original);
-        let source =
-            crate::project_hooks::capture_input(root, &hook, source, writes, deletes, &mut reads)?;
-        let fingerprint = source.identity(&hook, contract)?;
-        fingerprints.insert(
-            format!("project-hook:input:{}", hook.id),
-            fingerprint.clone(),
-        );
-        if crate::project_hooks::current(root, &hook, &fingerprint)? {
-            continue;
-        }
-        let owned = crate::project_hooks::owned(root, &hook)?;
-        for target in [hook.binary(), hook.receipt()] {
-            if deletes.contains(&root.join(&target)) {
-                return Err("project hook build target is scheduled for deletion".into());
-            }
-            let before = crate::project_hooks::read(root, &target)?;
-            let id = format!("project-hook:generated:{target}");
-            fingerprints.insert(id.clone(), fingerprint.clone());
-            let conflicting = before.is_some() && !owned;
-            let action = SyncAction {
-                id,
-                target,
-                operation: "build".into(),
-                risk: conflicting,
-                before_sha256: before.as_deref().map(sha_git),
-                after_sha256: fingerprint.clone(),
-            };
-            if conflicting {
-                risk.push(action);
-            } else {
-                safe.push(action);
-            }
-        }
-        inputs.push((hook, source));
-    }
-    Ok((inputs, reads))
-}
-
 fn verify_project_hook_reads(plan: &SyncPlan) -> Result<(), String> {
-    crate::project_hooks::verify_reads(&plan.project_root, &plan.project_hook_reads)
+    for (relative, expected) in &plan.project_hook_reads {
+        if crate::project_hooks::read(&plan.project_root, relative)? != *expected {
+            return Err(format!("project input changed after plan: {relative}"));
+        }
+    }
+    Ok(())
 }
 
 pub fn apply_plan(
@@ -2036,21 +1751,11 @@ fn apply_plan_internal(
             })?;
             removed_directories.push(directory.clone());
         }
-        let mut evidence = if crate::project_hook_migration::enabled(&prospective_contract) {
-            Some(crate::baseline::verify_prospective_recorded(
-                &plan.project_root,
-                &contract_path,
-                &plan.current_version,
-            )?)
-        } else {
-            crate::baseline::verify_prospective(
-                &plan.project_root,
-                &contract_path,
-                &plan.current_version,
-                true,
-            )?;
-            None
-        };
+        let mut evidence = Some(crate::baseline::verify_prospective_recorded(
+            &plan.project_root,
+            &contract_path,
+            &plan.current_version,
+        )?);
         if let Some(observer) = before_stamp {
             observer(&plan.project_root, &stamp_path)?;
         }
@@ -2165,7 +1870,6 @@ fn apply_plan_internal(
         stamp_written_last,
         project_readiness: "ready".into(),
         release_setup: crate::git_sync::release_setup_status(&plan.project_root),
-        hook_migration: plan.hook_migration,
         preserved_asset_ids: plan.preservation_manifest["entries"]
             .as_array()
             .into_iter()
@@ -2191,7 +1895,7 @@ fn human_plan(plan: &SyncPlan) -> Value {
     } else {
         ("可直接执行", "按当前计划执行骨架事务")
     };
-    let mut pending = if !plan.blockers.is_empty() {
+    let pending = if !plan.blockers.is_empty() {
         vec![format!("仍有 {} 项阻断需要处理", plan.blockers.len())]
     } else if !plan.gaps.is_empty() {
         vec![format!("仍有 {} 项决定需要确认", plan.gaps.len())]
@@ -2200,11 +1904,6 @@ fn human_plan(plan: &SyncPlan) -> Value {
     } else {
         Vec::new()
     };
-    if plan.hook_migration["show"] == true || plan.hook_migration["blocking"] == true {
-        if let Some(message) = plan.hook_migration["message"].as_str() {
-            pending.push(message.to_string());
-        }
-    }
     json!({
         "conclusion": conclusion,
         "pending": pending,
@@ -2267,15 +1966,10 @@ pub fn outcome_receipt_with_format(
 ) -> CommandOutcome {
     match result {
         Ok(receipt) => {
-            let notice = if receipt.hook_migration["show"] == true {
-                receipt.hook_migration["message"].as_str()
-            } else {
-                None
-            };
             let noop = receipt.applied.is_empty();
             let human = json!({
-                "conclusion": if noop {"无需处理"} else if notice.is_some() {"已完成但仍有待处理项"} else {"已完成"},
-                "pending": notice.into_iter().collect::<Vec<_>>(),
+                "conclusion": if noop {"无需处理"} else {"已完成"},
+                "pending": [],
                 "next_step": if noop {"本次骨架操作已结束，无需继续处理"}else{"需要保存到 GitHub 时运行 $git-sync"},
                 "current_version": receipt.current_version,
                 "release_setup": receipt.release_setup,
@@ -2350,41 +2044,12 @@ pub fn attach_generated_assets(
             .borrow_mut()
             .timings_ms
             .insert("managed_assets".into(), started.elapsed().as_millis());
-        let started = std::time::Instant::now();
         verify_project_hook_reads(plan)?;
-        let project_result = crate::project_hooks::build(
-            &crate::source_projection::source_root(template_root),
-            project_root,
-            contract,
-            &plan.project_hook_inputs,
-            runner,
-        );
-        observed
-            .metrics
-            .borrow_mut()
-            .timings_ms
-            .insert("project_hooks".into(), started.elapsed().as_millis());
-        let project_writes = project_result?;
-        verify_project_hook_reads(plan)?;
-        for (hook, _) in &plan.project_hook_inputs {
-            if let Some(payload) = project_writes.get(&project_root.join(hook.receipt())) {
-                receipts.push(serde_json::from_slice(payload).map_err(|e| e.to_string())?);
-            }
-        }
-        plan.writes.extend(project_writes);
-        observed
-            .metrics
-            .borrow_mut()
-            .timings_ms
-            .insert("project_hooks".into(), started.elapsed().as_millis());
         for action in plan
             .safe
             .iter_mut()
             .chain(plan.risk.iter_mut())
-            .filter(|action| {
-                action.id.starts_with("generated:")
-                    || action.id.starts_with("project-hook:generated:")
-            })
+            .filter(|action| action.id.starts_with("generated:"))
         {
             let target = safe_join(project_root, &action.target, "generated action target")?;
             let payload = plan.writes.get(&target).ok_or_else(|| {
@@ -2418,60 +2083,18 @@ pub fn build_generated_assets(
     crate::baseline::require_supported_project(project_root)?;
     let _lock = ProjectLock::acquire(project_root)?;
     let legacy = legacy_receipt(project_root)?;
-    let (mut writes, mut receipts) = generated_writes(
+    let (writes, receipts) = generated_writes(
         project_root,
         "target_source_root",
         project_root,
         contract,
         runner,
     )?;
-    let independent_hooks = crate::project_hook_migration::enabled(contract);
-    if !independent_hooks {
-        let mut project_writes = BTreeMap::new();
-        let mut safe = Vec::new();
-        let mut risk = Vec::new();
-        let (inputs, reads) = plan_project_hooks(
-            project_root,
-            contract,
-            &mut project_writes,
-            &[],
-            &mut safe,
-            &mut risk,
-            &mut BTreeMap::new(),
-        )?;
-        if !risk.is_empty() || !project_writes.is_empty() {
-            return Err(
-                "project Rust hook registration changes require project-sync plan/apply".into(),
-            );
-        }
-        let outputs = crate::project_hooks::build(
-            &project_root.join(".codex/hooks"),
-            project_root,
-            contract,
-            &inputs,
-            runner,
-        )?;
-        crate::project_hooks::verify_reads(project_root, &reads)?;
-        for (hook, _) in &inputs {
-            receipts.push(
-                serde_json::from_slice(
-                    outputs
-                        .get(&project_root.join(hook.receipt()))
-                        .ok_or("project receipt missing")?,
-                )
-                .map_err(|e| e.to_string())?,
-            );
-        }
-        writes.extend(outputs);
-    }
     let snapshots = writes
         .keys()
         .map(|path| transaction_file_state(path).map(|state| (path.clone(), state)))
         .collect::<Result<BTreeMap<_, _>, _>>()?;
     install_generated_transaction(project_root, &writes, &snapshots, &BTreeSet::new(), || {
-        if !independent_hooks {
-            crate::project_hooks::verify(project_root, contract, true)?;
-        }
         if let Some((path, before)) = &legacy {
             if fs::read(path).map_err(|error| error.to_string())? != *before {
                 return Err("legacy build receipt changed during build".into());

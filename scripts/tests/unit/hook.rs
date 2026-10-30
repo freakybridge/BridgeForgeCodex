@@ -76,26 +76,26 @@ fn skill_sync_accepts_utf8_bom_without_hiding_invalid_ledgers_or_drift() {
     assert!(session::skill_sync().stdout.contains("内容漂移"));
 }
 
-#[cfg(windows)]
 #[test]
-fn session_configuration_write_failure_preserves_original_and_reports_failure() {
-    use std::os::windows::fs::OpenOptionsExt;
+fn lifecycle_preserves_project_settings_bytes_and_existing_backup() {
     let fixture = Fixture::new();
     let path = fixture.root.join(".codex/settings.json");
-    let original = b"{\"effortLevel\":\"high\"}";
+    let original = b"{\r\n  \"effortLevel\": \"high\", \"custom\": 42\r\n}\r\n";
     fs::write(&path, original).unwrap();
-    let held = fs::OpenOptions::new()
-        .read(true)
-        .share_mode(1)
-        .open(&path)
-        .unwrap();
-    let result = session::enforce_no_effort();
-    assert_eq!(result.code, 1);
-    assert!(result.stdout.is_empty());
-    assert!(result.stderr.contains("enforce-no-effortlevel"));
+    for event in ["session-start", "stop", "post-compact"] {
+        assert_eq!(lifecycle(event, None), 0);
+        assert_eq!(fs::read(&path).unwrap(), original);
+        assert!(!path.with_extension("json.bak").exists());
+    }
+    let backup = path.with_extension("json.bak");
+    fs::write(&backup, b"existing backup").unwrap();
+    assert_eq!(lifecycle("session-start", None), 0);
     assert_eq!(fs::read(&path).unwrap(), original);
-    assert_eq!(fs::read(path.with_extension("json.bak")).unwrap(), original);
-    drop(held);
+    assert_eq!(fs::read(&backup).unwrap(), b"existing backup");
+    fs::remove_file(&path).unwrap();
+    assert_eq!(lifecycle("session-start", None), 0);
+    assert!(!path.exists());
+    assert_eq!(fs::read(&backup).unwrap(), b"existing backup");
 }
 
 struct Fixture {
@@ -627,7 +627,6 @@ fn lifecycle_write_failures_are_observable_without_success_output() {
         b"{\"effortLevel\":\"high\"}",
     )
     .unwrap();
-    fs::create_dir(fixture.root.join(".codex/settings.json.bak")).unwrap();
     assert_eq!(lifecycle("session-start", None), 1);
     assert_eq!(
         fs::read(fixture.root.join(".codex/settings.json")).unwrap(),

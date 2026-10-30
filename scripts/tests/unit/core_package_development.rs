@@ -786,6 +786,12 @@ fn package_declared_ignored_build_file_binds_presence_bytes_and_legacy_coverage(
         "nothing-to-close"
     );
     write(&r.0, ".runtime/global.txt", b"input-v1");
+    let blocked = preview(&r.0, "fix: build drift", &Request::default(), &runner);
+    assert!(
+        blocked.stderr.contains("changed components: [build]"),
+        "{}",
+        blocked.stderr
+    );
     let p = development::preview(&r.0, &Request::default(), &runner);
     assert!(
         p.receipt.unwrap()["pending_reasons"]["a"]
@@ -2206,14 +2212,22 @@ fn package_development_closes_once_and_release_only_writes_product() {
     let repeat = development::preview(&r.0, &Request::default(), &runner);
     assert_eq!(repeat.code, 0, "{}", repeat.stderr);
     assert_eq!(repeat.receipt.unwrap()["status"], "nothing-to-close");
+    let calls = runner.calls.lock().unwrap().len();
+    let ledger = fs::read(r.0.join(development::RECORD)).unwrap();
+    let ready = preview(&r.0, "fix: publish", &Request::default(), &runner);
+    assert_eq!(ready.code, 0, "{}", ready.stderr);
+    let ready = ready.receipt.unwrap();
+    assert_eq!(ready["development_validation"], "not-executed-by-release");
+    assert_eq!(ready["version_coverage"]["a"]["version"], "1.0.1");
+    assert_eq!(ready["applicable_required_checks"], json!({}));
     let q = release_request(&r.0, "patch");
-    let p = build(&r.0, "fix: publish", &q, &SystemProcessRunner)
-        .unwrap()
-        .unwrap();
+    let p = build(&r.0, "fix: publish", &q, &runner).unwrap().unwrap();
     assert_eq!(p.package_changes[0].version_before, "1.0.0");
     assert_eq!(p.package_changes[0].version_after, "1.0.1");
     assert!(!p.writes.contains_key(&r.0.join("pkg/Cargo.toml")));
     assert!(!p.writes.contains_key(&r.0.join("pkg/Cargo.lock")));
+    assert_eq!(runner.calls.lock().unwrap().len(), calls);
+    assert_eq!(fs::read(r.0.join(development::RECORD)).unwrap(), ledger);
 }
 #[test]
 fn package_development_blocks_release_until_validated_and_after_new_source() {
@@ -2231,15 +2245,19 @@ fn package_development_blocks_release_until_validated_and_after_new_source() {
         "{}",
         p.stderr
     );
+    assert!(p.stderr.contains("[record-missing]"), "{}", p.stderr);
     let runner = Checks::new();
     let q = request(&r.0, "patch", false, &runner);
     assert_eq!(close(&r.0, &q, &runner).code, 0);
     write(&r.0, "pkg/src/lib.rs", b"pub fn value()->u8{3}\n");
+    let calls = runner.calls.lock().unwrap().len();
+    let blocked = preview(&r.0, "fix: release", &Request::default(), &runner);
     assert!(
-        preview(&r.0, "fix: release", &Request::default(), &runner)
-            .stderr
-            .contains("development closure required")
+        blocked.stderr.contains("[content-changed]"),
+        "{}",
+        blocked.stderr
     );
+    assert_eq!(runner.calls.lock().unwrap().len(), calls);
 }
 #[test]
 fn package_development_accumulates_multiple_committed_closures() {
