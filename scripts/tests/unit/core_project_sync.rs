@@ -1432,6 +1432,73 @@ fn legacy_runtime_retirement_does_not_require_project_hook_registration() {
 }
 
 #[test]
+fn legacy_test_reports_are_preserved_during_public_relocation_conflicts_and_rollback() {
+    let (root, _) = transaction_fixture(true);
+    let directory = root.join(".runtime/test_receipts");
+    fs::create_dir_all(directory.join("payload_samples")).unwrap();
+    let record = directory.join("receipts.jsonl");
+    let sample = directory.join("payload_samples/2026-10-30T123456.json");
+    let report = directory.join("artifact-layout-20261023-r1.xml");
+    let diagnostics = directory.join("db_failure_forensics_20261019.json");
+    let record_bytes =
+        br#"{"cmd":"cargo test","kind":"test","ts":"2026-10-30","sha1":"012345abcdef"}"#;
+    let sample_bytes = br#"{"tool_name":"exec_command"}"#;
+    fs::write(&record, record_bytes).unwrap();
+    fs::write(&sample, sample_bytes).unwrap();
+    fs::write(&report, b"project XML report").unwrap();
+    fs::write(&diagnostics, b"opaque project diagnostics").unwrap();
+    let retired = legacy_artifact_retirements(&root).unwrap();
+    let writes = legacy_artifact_relocations(&root).unwrap();
+    assert_eq!(retired.len(), 2);
+    assert_eq!(writes.len(), 2);
+    assert!(!retired.contains_key(&report));
+    assert!(!retired.contains_key(&diagnostics));
+    let destination =
+        bridgeforge_core::artifact_migration::relocated_test_output(&root, &record).unwrap();
+    fs::create_dir_all(destination.parent().unwrap()).unwrap();
+    fs::write(&destination, b"existing destination data").unwrap();
+    assert!(
+        legacy_artifact_relocations(&root)
+            .unwrap_err()
+            .contains("conflict")
+    );
+    assert_eq!(
+        fs::read(&destination).unwrap(),
+        b"existing destination data"
+    );
+    fs::remove_file(&destination).unwrap();
+    let mut snapshots: BTreeMap<PathBuf, Option<Vec<u8>>> =
+        writes.keys().map(|p| (p.clone(), None)).collect();
+    snapshots.extend(retired.iter().map(|(p, b)| (p.clone(), Some(b.clone()))));
+    let result = install_generated_transaction_retiring(
+        &root,
+        &writes,
+        &snapshots,
+        &BTreeSet::new(),
+        &retired,
+        || {
+            assert_eq!(fs::read(&destination).unwrap(), record_bytes);
+            // The sample retires first; the external receipt edit then forces
+            // failure before process checks and must survive rollback.
+            fs::write(&record, b"external receipt edit").unwrap();
+            Ok(())
+        },
+    );
+    assert!(result.unwrap_err().contains("rolled back"));
+    assert_eq!(fs::read(&sample).unwrap(), sample_bytes);
+    assert_eq!(fs::read(&record).unwrap(), b"external receipt edit");
+    assert_eq!(fs::read(&report).unwrap(), b"project XML report");
+    assert_eq!(
+        fs::read(&diagnostics).unwrap(),
+        b"opaque project diagnostics"
+    );
+    for target in writes.keys() {
+        assert!(!target.exists());
+    }
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn legacy_ignore_retirement_rechecks_late_project_files_without_claiming_them() {
     let (root, _) = transaction_fixture(true);
     let ignore = root.join(".codex/bin/.gitignore");

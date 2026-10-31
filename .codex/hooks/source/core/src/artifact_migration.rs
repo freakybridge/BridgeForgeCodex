@@ -70,12 +70,18 @@ pub fn legacy_test_outputs(root: &Path) -> Result<BTreeMap<PathBuf, Vec<u8>>, St
         "legacy test receipts",
     )?;
     let mut files = BTreeMap::new();
-    if !directory.exists() {
-        return Ok(files);
+    match fs::symlink_metadata(&directory) {
+        Ok(metadata) if metadata.is_dir() => (),
+        Ok(_) => return Err("legacy test output root is not a directory; preserve it".into()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(files),
+        Err(error) => return Err(error.to_string()),
     }
     let sample_name = regex::Regex::new(r"^payload_samples/\d{4}-\d{2}-\d{2}T\d{6}\.json$")
         .map_err(|e| e.to_string())?;
-    for item in walkdir::WalkDir::new(&directory).follow_links(false) {
+    let mut entries = walkdir::WalkDir::new(&directory)
+        .follow_links(false)
+        .into_iter();
+    while let Some(item) = entries.next() {
         let item = item.map_err(|e| e.to_string())?;
         if crate::persistence::is_link_or_reparse(item.path()).map_err(|e| e.to_string())? {
             return Err("legacy test output contains a link".into());
@@ -87,9 +93,22 @@ pub fn legacy_test_outputs(root: &Path) -> Result<BTreeMap<PathBuf, Vec<u8>>, St
             .to_string_lossy()
             .replace('\\', "/");
         if item.file_type().is_dir() {
-            if !matches!(relative.as_str(), "" | "payload_samples") {
-                return Err("unknown legacy test output directory; preserve it".into());
+            if relative == "receipts.jsonl" || sample_name.is_match(&relative) {
+                return Err("legacy test receipt is not a regular file; preserve it".into());
             }
+            if !matches!(relative.as_str(), "" | "payload_samples") {
+                // Project report directories are opaque: do not inspect their
+                // contents or infer ownership from names inside them.
+                entries.skip_current_dir();
+            }
+            continue;
+        }
+        if !item.file_type().is_file() {
+            return Err("legacy test output is not a regular file; preserve it".into());
+        }
+        if relative != "receipts.jsonl" && !sample_name.is_match(&relative) {
+            // Only the legacy record and fixed event-sample names are managed.
+            // Other reports stay in place without parsing or reading their bytes.
             continue;
         }
         let bytes = crate::managed_paths::read_metadata(item.path(), 64 * 1024 * 1024)?
@@ -113,8 +132,6 @@ pub fn legacy_test_outputs(root: &Path) -> Result<BTreeMap<PathBuf, Vec<u8>>, St
             }
         } else if sample_name.is_match(&relative) {
             crate::json::parse_unique_json(&bytes, "legacy test payload sample")?;
-        } else {
-            return Err(format!("unknown legacy test output preserved: {relative}"));
         }
         files.insert(item.path().to_path_buf(), bytes);
     }

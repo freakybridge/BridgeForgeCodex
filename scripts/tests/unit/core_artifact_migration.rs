@@ -19,20 +19,142 @@ fn legacy_test_receipts_relocate_exact_known_files_and_preserve_unknowns() {
     );
     let unknown = root.join(".runtime/test_receipts/user-notes.txt");
     fs::write(&unknown, b"keep").unwrap();
-    assert!(
-        legacy_test_outputs(&root)
-            .unwrap_err()
-            .contains("unknown legacy test output")
-    );
+    assert_eq!(legacy_test_outputs(&root).unwrap(), found);
     assert_eq!(fs::read(&unknown).unwrap(), b"keep");
     assert_eq!(fs::read(&record).unwrap(), bytes);
-    fs::remove_file(unknown).unwrap();
     fs::write(&record, b"{\"unknown\":true}").unwrap();
     assert!(
         legacy_test_outputs(&root)
             .unwrap_err()
             .contains("unknown legacy test receipt")
     );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn legacy_test_receipts_preserve_project_reports_without_parsing_or_traversing_them() {
+    let root = runtime_fixture("project-reports");
+    let directory = root.join(".runtime/test_receipts");
+    fs::create_dir_all(directory.join("payload_samples")).unwrap();
+    fs::create_dir_all(directory.join("project_reports/payload_samples")).unwrap();
+    let reports = [
+        "artifact-layout-20261023-r1.xml",
+        "artifact-layout-20261023-startup-retry.xml",
+        "artifact-layout-20261023-startup-short.xml",
+        "db_failure_forensics_20261019.json",
+        "statistics_publication_20261019.json",
+        "statistics_reconnect_20261019.json",
+        "statistics_root_cause_20261019.json",
+        "payload_samples/project-notes.json",
+        "project_reports/receipts.jsonl",
+        "project_reports/payload_samples/2026-10-30T123456.json",
+    ];
+    for path in reports {
+        fs::write(directory.join(path), b"opaque project data; not JSON").unwrap();
+    }
+    let sample = directory.join("payload_samples/2026-10-30T123456.json");
+    fs::write(&sample, br#"{"tool_name":"exec_command"}"#).unwrap();
+    let record = directory.join("receipts.jsonl");
+    fs::write(
+        &record,
+        br#"{"cmd":"cargo test","kind":"test","ts":"2026-10-30","sha1":"012345abcdef"}"#,
+    )
+    .unwrap();
+    let before = legacy_test_outputs(&root).unwrap();
+    assert_eq!(before.len(), 2);
+    assert!(before.contains_key(&sample));
+    assert!(before.contains_key(&record));
+    fs::remove_file(sample).unwrap();
+    fs::remove_file(record).unwrap();
+    assert!(legacy_test_outputs(&root).unwrap().is_empty());
+    for path in reports {
+        assert_eq!(
+            fs::read(directory.join(path)).unwrap(),
+            b"opaque project data; not JSON"
+        );
+    }
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn legacy_test_receipts_reject_invalid_managed_samples_and_root_types() {
+    let root = runtime_fixture("test-output-guards");
+    let directory = root.join(".runtime/test_receipts");
+    fs::create_dir_all(directory.join("payload_samples")).unwrap();
+    let sample = directory.join("payload_samples/2026-10-30T123456.json");
+    fs::write(&sample, b"invalid managed JSON").unwrap();
+    assert!(legacy_test_outputs(&root).is_err());
+    assert_eq!(fs::read(&sample).unwrap(), b"invalid managed JSON");
+    fs::remove_file(&sample).unwrap();
+    fs::create_dir(&sample).unwrap();
+    assert!(
+        legacy_test_outputs(&root)
+            .unwrap_err()
+            .contains("not a regular file")
+    );
+    fs::remove_dir(&sample).unwrap();
+    fs::create_dir(directory.join("receipts.jsonl")).unwrap();
+    assert!(
+        legacy_test_outputs(&root)
+            .unwrap_err()
+            .contains("not a regular file")
+    );
+    fs::remove_dir(directory.join("receipts.jsonl")).unwrap();
+    fs::remove_dir(directory.join("payload_samples")).unwrap();
+    fs::remove_dir(&directory).unwrap();
+    fs::write(&directory, b"not a directory").unwrap();
+    assert!(
+        legacy_test_outputs(&root)
+            .unwrap_err()
+            .contains("not a directory")
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[cfg(windows)]
+#[test]
+fn legacy_test_receipts_reject_visible_junctions_and_keep_report_directories_opaque() {
+    use std::os::windows::process::CommandExt;
+    let root = runtime_fixture("test-output-junction");
+    let directory = root.join(".runtime/test_receipts");
+    let outside = root.join("external");
+    fs::create_dir_all(directory.join("project_reports")).unwrap();
+    fs::create_dir(&outside).unwrap();
+    fs::write(outside.join("keep.txt"), b"external data").unwrap();
+    let hidden = directory.join("project_reports/link");
+    let visible = directory.join("report-link");
+    for path in [&hidden, &visible] {
+        let output = std::process::Command::new("cmd.exe")
+            .creation_flags(0x08000000)
+            .args(["/c", "mklink", "/J"])
+            .arg(path.to_string_lossy().replace('/', "\\"))
+            .arg(outside.to_string_lossy().replace('/', "\\"))
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "junction {} -> {}: stdout={} stderr={}",
+            path.display(),
+            outside.display(),
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        if path == &hidden {
+            assert!(legacy_test_outputs(&root).unwrap().is_empty());
+        } else {
+            assert!(
+                legacy_test_outputs(&root)
+                    .unwrap_err()
+                    .contains("contains a link")
+            );
+        }
+    }
+    assert_eq!(
+        fs::read(outside.join("keep.txt")).unwrap(),
+        b"external data"
+    );
+    fs::remove_dir(visible).unwrap();
+    fs::remove_dir(hidden).unwrap();
     fs::remove_dir_all(root).unwrap();
 }
 

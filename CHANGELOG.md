@@ -15,6 +15,23 @@
 
 > **追溯说明**：v0.1.0 - v0.7.0 基于 git log 历史回溯标记，**git tag 仅从 v0.8.0 开始打**。早期未启用版本号管理是 setup_agent 自打脸问题（要求下游用但自己没用），v0.8.0 修补。
 
+## [13.0.2] - 2026-10-31
+
+### Fixed
+
+- [product][repo][meta] 修复旧测试目录中项目报告导致的骨架升级阻塞
+
+### Release analysis
+
+- Product: 修复已支持骨架升级对旧测试目录中项目报告的误阻断，仅迁移通过既有校验的公共记录与精确命名样本，其余普通文件和报告目录原地保留。保留可见链接、异常类型、公共记录损坏、目标冲突、源文件漂移和回滚保护；无接口或配置不兼容变化。core 已完成受管开发收口与必要验证，用户已验收并授权本次发布，真实下游只读预览通过且未执行升级。
+- `checks`: 0.2.1 -> 0.2.1 (Revalidate the unchanged consumer against the corrected core dependency closure; preserve its version when content is unchanged.)
+- `core`: 10.0.1 -> 10.0.2 (Keep project reports and opaque report directories in the legacy test-record directory; relocate only validated managed records and event samples, retaining visible-link, type and malformed-input guards.)
+- `factory`: 0.10.0 -> 0.10.0 (Revalidate the unchanged consumer against the corrected core dependency closure; preserve its version when content is unchanged.)
+- `lifecycle`: 0.8.1 -> 0.8.1 (Revalidate the unchanged consumer against the corrected core dependency closure; preserve its version when content is unchanged.)
+- `memory`: 0.1.0 -> 0.1.0 (Revalidate the unchanged consumer against the corrected core dependency closure; preserve its version when content is unchanged.)
+- `skeleton`: 0.5.1 -> 0.5.1 (Revalidate the unchanged consumer against the corrected core dependency closure; preserve its version when content is unchanged.)
+- `workflow`: 0.9.1 -> 0.9.1 (Revalidate the unchanged consumer against the corrected core dependency closure; preserve its version when content is unchanged.)
+
 ## [13.0.1] - 2026-10-31
 
 ### Fixed

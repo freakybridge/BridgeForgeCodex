@@ -62,6 +62,8 @@ before 包或迁移账本。
 
 core 的 build_inputs 负责输入快照及漂移验证，generated_assets 负责隔离构建、自测和收据，public_artifacts 负责用户级准备和只读交付。工厂自身构建及 Git 同步仍使用受管构建能力；普通下游 project-sync 不直接编译。初次 CLI 引导结果按相同身份进入缓存，并与公共 Hook 共用依赖输出。
 
+旧 `.runtime/test_receipts/` 只迁移经过原有内容校验的 `receipts.jsonl` 和固定时间戳命名的 `payload_samples` 事件样本。项目自有报告文件原地保留且不解析，其他普通报告目录作为项目数据保留、不遍历其内容；可见链接、异常文件类型及已识别骨架记录的校验失败仍阻断。迁移目标冲突、源记录漂移及失败回滚继续由公共事务处理，不因保留项目报告而放宽。
+
 project_sync 拥有只读项目计划、内部准备、固定公共产物挂接、项目锁、安装、版本戳与回滚，不重做公共版本选择。git_sync_plan 保留工厂构建职责。共享构建不反向调用项目同步。用户级事务成功后，项目失败不撤销共享安装。
 
 `source_root` 与 `target_source_root`、Cargo 参数/超时、输入验证、自测、清理错误和收据 schema 均保持原合同。开发证据见[R02 需求卡](../../1_delivery/shared-generated-build/requirements_2026-10-11_R02.md)。
@@ -186,3 +188,19 @@ Windows 上当前 CLI 的运行映像不能直接覆盖：新程序先写入同�
 子包通过受管流程收口为 core 10.0.0→10.0.1、workflow 0.9.0→0.9.1，其余五包保持版本，仅刷新必要依赖覆盖。工厂最终产物准备为 `prepared=3 / self_test_executed=true`；随后只读核验为 `current / reused=3 / built=0`，manifest 无漂移，factory-version healthy。未手工修改版本账本，也未把下游业务改动纳入 Forge 发布。
 
 本机原始证据位于 `.runtime/tests/stratus-upgrade/` 的 `develop-receipt.json`、`project-plan-final.json`、`project-update-receipt.json`、`preservation-verification.json` 和已安装工具自检收据；测试日志位于 `.runtime/tests/development/`，不加入 Git。用户级正式安装的入口刷新已完成于此前的 13.0.0 安装事务，本次验收不表示随后发布版本已重新安装到用户级或下游。
+
+## 用户验收：旧测试目录项目报告保留（2026-10-31）
+
+用户通过 `$summary accept` 验收本次 Forge 修复，并单独调用 `$git-sync release` 授权受管提交、推送和发布。本事项没有唯一对应的既有 TODO，不结算其他条目；本段记录验收与发布授权，实际发布结果以 CHANGELOG、Git 提交及受管收据为准。
+
+HoldemTrainer 的升级预览曾因 `.runtime/test_receipts/artifact-layout-20261023-r1.xml` 被判为未知旧测试产物而阻断。该目录混有项目 XML 报告、诊断 JSON 与公共测试记录；同步器原先遇到任一未知文件或目录即拒绝整次升级。修复后仅识别并校验既定 `receipts.jsonl` 和精确命名的事件样本，其他普通文件原地保留且不读取内容，项目报告目录作为不透明内容跳过。扫描可见链接、非普通文件、公共记录路径类型错误、损坏的已知记录仍阻断；目标冲突、源文件漂移及事务回滚保护不变。
+
+工程证据与验证边界：
+
+- 源码与传播：生产修改仅位于 `source/core/src/artifact_migration.rs`；公共 core dogfood 源码、原生锁及生成清单已由受管流程同步。core 10.0.1→10.0.2，其余六包版本不变，仅刷新必要依赖覆盖；验收时主程序仍为 13.0.1。
+- Fixture：最终受管 `develop --apply --packages core` 返回 `development-closed`，7 项检查、80 个用例通过；最终版本的旧工具退役测试另在 develop 外运行，1 项通过。覆盖项目报告与公共记录共存、不透明目录、可见 junction、记录损坏及类型错误、迁移目标冲突、并发源文件修改和失败回滚。junction 测试曾因 Windows 混合路径分隔符导致夹具创建失败，规范化测试命令参数后通过；未调整生产保护或忽略失败。
+- 独立复核：独立 Agent 对生产边界与共享事务测试静态复核，未发现阻断问题。最终工具受管准备为 `prepared=3 / self_test_executed=true`，随后只读核验为 `current / reused=3 / built=0`；manifest 无漂移、factory-version healthy，`git diff --check` 通过。
+- 真实下游：使用本次本地候选对 HoldemTrainer 执行只读升级预览，结果为 `planned`，gap 与 blocker 均为 0；仍有 47 项普通公共资产替换待确认。旧目录顶层 8 个记录文件前后摘要一致，骨架版本仍为 9.0.0，未执行 apply，不能据此宣称真实下游升级已通过。
+- Runtime：本地候选公共工具自检通过；用户级安装未刷新，HoldemTrainer 公共 Hook 自然生命周期、项目自有 Hook 与业务运行均未验证。
+
+本机原始证据位于 `.runtime/tests/legacy-test-report-preservation/` 的 `develop-receipt.json`、`holdem-readonly-plan.json`、`holdem-readonly-verification.json` 和报告初始摘要；测试日志位于 `.runtime/tests/development/`，不加入 Git。本次授权仅发布 Forge，不包含更新用户级安装或 HoldemTrainer 骨架。
