@@ -8,6 +8,8 @@ delivery_layout: flat
 
 ## 从这里开始
 
+- 实施中：[发布范围判定修复与四个下游骨架升级工作计划](1_delivery/package-version-lifecycle/requirements_2026-10-31_release-scope-and-four-projects.md#8-bridgeforge-实施与验证记录2026-10-31)（TODO-051、TODO-052；上游范围修复、最终候选 12 项检查、受管收口及最终工具核验通过，lifecycle 0.8.1→0.8.2，workflow/factory 只刷新依赖覆盖。尚未提交推送发布；StratusAgent、HoldemTrainer、causis_risk_suite、BridgeLibrary 等待包含修复的正式版本后逐一安装）。
+
 - 已验收：[旧测试目录项目报告保留](0_architecture/design/codex-project-sync.md#用户验收旧测试目录项目报告保留2026-10-31)（core 10.0.2；7 项检查 80 个用例及独立退役 1 项通过，独立复核与最终工具核验通过。HoldemTrainer 只读升级预览已解除原报告阻塞，8 个记录文件摘要不变，未执行下游升级；已授权 Forge release）。
 
 - 已验收：[旧工具目录保留与 StratusAgent 骨架升级](0_architecture/design/codex-project-sync.md#用户验收旧工具目录保留与-stratusagent-升级2026-10-31)（core 10.0.1、workflow 0.9.1；8 项检查 184 个用例及独立退役 1 项通过，真实 StratusAgent 9.0.0→13.0.0，151 项现有改动、15 个保护文件和项目专区原样保留；公共工具自检及独立复核通过，已授权 Forge release。项目自有 Hook 业务运行未验证）。

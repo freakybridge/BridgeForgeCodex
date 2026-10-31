@@ -11,6 +11,201 @@ mod lightweight_tests;
 #[path = "core_release_withdrawal.rs"]
 mod withdrawal_tests;
 
+fn shared_scope_fixture() -> Repo {
+    let r = fixture("unconfigured", true);
+    let mut cfg: Value = serde_json::from_slice(&fs::read(r.0.join(CONFIG)).unwrap()).unwrap();
+    for id in ["b", "c"] {
+        let manifest = format!("{id}/Cargo.toml");
+        write(
+            &r.0,
+            &manifest,
+            format!("[package]\nname='{id}'\nversion='1.0.0'\nedition='2021'\n[workspace]\n")
+                .as_bytes(),
+        );
+        write(&r.0, &format!("{id}/src/lib.rs"), b"pub fn value(){}\n");
+        write(
+            &r.0,
+            &format!("{id}/Cargo.lock"),
+            format!("version=4\n[[package]]\nname='{id}'\nversion='1.0.0'\n").as_bytes(),
+        );
+        cfg["adapters"]["rust"]["workspaces"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!(manifest));
+        cfg["packages"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"id":id,"name":id,"language":"rust","manifest":manifest}));
+        cfg["product_inputs"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!(format!("{id}/Cargo.lock")));
+    }
+    write(&r.0, "shared/value.rs", b"pub const VALUE:u8=1;\n");
+    cfg["shared_inputs"] = json!([
+        {"path":"shared/value.rs","packages":["a", "c"]},
+        {"path":"pkg/src/","packages":["c"]}
+    ]);
+    write(&r.0, CONFIG, &serde_json::to_vec(&cfg).unwrap());
+    git(&r.0, &["add", "."]);
+    git(&r.0, &["commit", "--amend", "--no-edit"]);
+    migrate(&r.0);
+    let mut cfg: Value = serde_json::from_slice(&fs::read(r.0.join(CONFIG)).unwrap()).unwrap();
+    cfg["development"] = json!({"a":policy(false),"b":policy(false),"c":policy(false)});
+    write(&r.0, CONFIG, &serde_json::to_vec(&cfg).unwrap());
+    r
+}
+
+#[test]
+fn shared_input_scope_excludes_unrelated_missing_records_in_develop_and_release() {
+    let r = shared_scope_fixture();
+    let mut value: Value = serde_json::from_slice(&fs::read(r.0.join(CONFIG)).unwrap()).unwrap();
+    value["shared_inputs"][0]["packages"] = json!(["a"]);
+    write(&r.0, CONFIG, &serde_json::to_vec(&value).unwrap());
+    let index = fs::read(r.0.join(".git/index")).unwrap();
+    let version = fs::read(r.0.join("VERSION")).unwrap();
+    let configuration = fs::read(r.0.join(CONFIG)).unwrap();
+    let runner = Checks::new();
+    let p = development::preview(&r.0, &Request::default(), &runner);
+    assert_eq!(p.code, 0, "{}", p.stderr);
+    assert_eq!(p.receipt.unwrap()["affected_packages"], json!(["a", "c"]));
+    let cfg = load(&r.0).unwrap().unwrap();
+    let mut captured = capture(&r.0, &cfg, &runner).unwrap();
+    let error = development::release_gate(&r.0, &cfg, &mut captured, &runner).unwrap_err();
+    assert!(
+        error.contains("a: missing version coverage record"),
+        "{error}"
+    );
+    assert!(
+        error.contains("c: missing version coverage record"),
+        "{error}"
+    );
+    assert!(
+        !error.contains("b: missing version coverage record"),
+        "{error}"
+    );
+    assert!(runner.calls.lock().unwrap().is_empty());
+    assert_eq!(fs::read(r.0.join(".git/index")).unwrap(), index);
+    assert_eq!(fs::read(r.0.join("VERSION")).unwrap(), version);
+    assert_eq!(fs::read(r.0.join(CONFIG)).unwrap(), configuration);
+    assert!(!r.0.join(development::RECORD).exists());
+}
+
+fn assert_shared_input_scope(root: &Path, value: &Value, expected: Value) {
+    write(root, CONFIG, &serde_json::to_vec(value).unwrap());
+    let runner = Checks::new();
+    let p = development::preview(root, &Request::default(), &runner);
+    assert_eq!(p.code, 0, "{}", p.stderr);
+    assert_eq!(p.receipt.unwrap()["affected_packages"], expected);
+    let cfg = load(root).unwrap().unwrap();
+    let mut captured = capture(root, &cfg, &runner).unwrap();
+    let result = development::release_gate(root, &cfg, &mut captured, &runner);
+    if expected.as_array().unwrap().is_empty() {
+        assert!(result.is_ok(), "{}", result.unwrap_err());
+    } else {
+        let error = result.unwrap_err();
+        assert!(
+            error.contains("release stopped without running checks"),
+            "{error}"
+        );
+    }
+    assert_eq!(json!(captured.release_packages), expected);
+    assert!(runner.calls.lock().unwrap().is_empty());
+    assert!(!root.join(development::RECORD).exists());
+}
+
+#[test]
+fn shared_input_scope_mapping_addition_includes_displaced_natural_owner() {
+    let r = shared_scope_fixture();
+    let mut value: Value = serde_json::from_slice(&fs::read(r.0.join(CONFIG)).unwrap()).unwrap();
+    value["shared_inputs"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"path":"b/src/","packages":["a"]}));
+    assert_shared_input_scope(&r.0, &value, json!(["a", "b"]));
+}
+
+#[test]
+fn shared_input_scope_mapping_removal_restores_natural_owner() {
+    let r = shared_scope_fixture();
+    let mut value: Value = serde_json::from_slice(&fs::read(r.0.join(CONFIG)).unwrap()).unwrap();
+    value["shared_inputs"].as_array_mut().unwrap().remove(1);
+    assert_shared_input_scope(&r.0, &value, json!(["a", "c"]));
+}
+
+#[test]
+fn shared_input_scope_owner_transfer_keeps_old_and_new_owners() {
+    let r = shared_scope_fixture();
+    let mut value: Value = serde_json::from_slice(&fs::read(r.0.join(CONFIG)).unwrap()).unwrap();
+    value["shared_inputs"][1]["packages"] = json!(["b"]);
+    assert_shared_input_scope(&r.0, &value, json!(["b", "c"]));
+}
+
+#[test]
+fn shared_input_scope_path_change_keeps_affected_owners() {
+    let r = shared_scope_fixture();
+    let mut value: Value = serde_json::from_slice(&fs::read(r.0.join(CONFIG)).unwrap()).unwrap();
+    value["shared_inputs"][0]["path"] = json!("shared/");
+    assert_shared_input_scope(&r.0, &value, json!(["a", "c"]));
+}
+
+#[test]
+fn shared_input_scope_reordering_is_not_a_package_change() {
+    let r = shared_scope_fixture();
+    let mut value: Value = serde_json::from_slice(&fs::read(r.0.join(CONFIG)).unwrap()).unwrap();
+    value["shared_inputs"][0]["packages"] = json!(["c", "a"]);
+    value["shared_inputs"].as_array_mut().unwrap().reverse();
+    assert_shared_input_scope(&r.0, &value, json!([]));
+}
+
+#[test]
+fn shared_input_scope_propagates_to_consumers() {
+    let r = shared_scope_fixture();
+    let mut value: Value = serde_json::from_slice(&fs::read(r.0.join(CONFIG)).unwrap()).unwrap();
+    value["shared_inputs"][0]["packages"] = json!(["a"]);
+    value["dependencies"] = json!([{"owner":"b","target":"c","kind":"runtime"}]);
+    assert_shared_input_scope(&r.0, &value, json!(["a", "b", "c"]));
+}
+
+#[test]
+fn shared_input_scope_preserves_explicit_global_build_coverage() {
+    let r = shared_scope_fixture();
+    let mut value: Value = serde_json::from_slice(&fs::read(r.0.join(CONFIG)).unwrap()).unwrap();
+    value["shared_inputs"][0]["packages"] = json!(["a"]);
+    value["build_inputs"] = json!([".runtime/global.txt"]);
+    write(&r.0, ".runtime/global.txt", b"global build input\n");
+    assert_shared_input_scope(&r.0, &value, json!(["a", "b", "c"]));
+}
+
+#[test]
+fn shared_input_scope_uses_formal_published_configuration() {
+    let r = shared_scope_fixture();
+    let runner = Checks::new();
+    let q = release_request(&r.0, "patch");
+    let plan = build(&r.0, "fix: publish fixture", &q, &runner)
+        .unwrap()
+        .unwrap();
+    apply_file_release_plan(&plan).unwrap();
+    git(&r.0, &["add", "."]);
+    git(&r.0, &["commit", "-m", "formal fixture release"]);
+    let mut value: Value = serde_json::from_slice(&fs::read(r.0.join(CONFIG)).unwrap()).unwrap();
+    value["shared_inputs"][0]["packages"] = json!(["a"]);
+    assert_shared_input_scope(&r.0, &value, json!(["a", "c"]));
+}
+
+#[test]
+fn shared_input_scope_keeps_unrelated_declared_release_artifact_in_scope() {
+    let r = shared_scope_fixture();
+    let mut value: Value = serde_json::from_slice(&fs::read(r.0.join(CONFIG)).unwrap()).unwrap();
+    value["shared_inputs"][0]["packages"] = json!(["a"]);
+    value["development"]["b"]["release_artifacts"] = json!([".runtime/b.bin"]);
+    value["development"]["b"]["checks"][0]["program"] = json!("cargo");
+    value["development"]["b"]["checks"][0]["artifacts"] = json!([".runtime/b.bin"]);
+    value["development"]["b"]["environment"] =
+        json!({"tools":["cargo","rustc"],"variables":[],"inputs":{}});
+    assert_shared_input_scope(&r.0, &value, json!(["a", "b", "c"]));
+}
+
 fn task_development_fixture(dependency: bool) -> Repo {
     let r = fixture("unconfigured", true);
     write(

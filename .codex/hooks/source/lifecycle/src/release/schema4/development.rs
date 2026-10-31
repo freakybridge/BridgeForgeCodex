@@ -1145,6 +1145,62 @@ fn package_roles(
     )
 }
 
+fn shared_configuration_affected(
+    cfg: &Config,
+    capture: &Capture,
+    old: &Value,
+    new: &Value,
+) -> Result<BTreeSet<String>, String> {
+    let mappings = |value: &Value| -> Result<BTreeMap<String, BTreeSet<String>>, String> {
+        let entries: Vec<polyglot::SharedInput> = match value.get("shared_inputs") {
+            Some(value) => serde_json::from_value(value.clone()).map_err(|e| e.to_string())?,
+            None => Vec::new(),
+        };
+        Ok(entries
+            .into_iter()
+            .map(|entry| (entry.path, entry.packages.into_iter().collect()))
+            .collect())
+    };
+    let old = mappings(old)?;
+    let new = mappings(new)?;
+    let paths = old.keys().chain(new.keys()).collect::<BTreeSet<_>>();
+    let mut affected = BTreeSet::new();
+    for path in paths
+        .into_iter()
+        .filter(|path| old.get(*path) != new.get(*path))
+    {
+        affected.extend(old.get(path).into_iter().flatten().cloned());
+        affected.extend(new.get(path).into_iter().flatten().cloned());
+        // Adding or removing an override can also take inputs away from, or
+        // return them to, a natural owner absent from both explicit owner lists.
+        // Use each revision's roles and the existing adapter ownership rule.
+        for snapshot in [&capture.baseline, &capture.current] {
+            let roles = snapshot.config.as_ref().unwrap_or(&cfg.native);
+            let candidates = std::iter::once(path.as_str())
+                .chain(capture.inventory.iter().map(String::as_str))
+                .chain(snapshot.inputs.keys().map(String::as_str))
+                .chain(snapshot.packages.values().flat_map(|package| {
+                    std::iter::once(package.manifest.as_str())
+                        .chain(package.source_roots.iter().map(String::as_str))
+                }));
+            for candidate in candidates.filter(|candidate| polyglot::owns(path, candidate)) {
+                if !roles
+                    .product_inputs
+                    .iter()
+                    .any(|p| polyglot::owns(p, candidate))
+                    && !roles
+                        .shared_inputs
+                        .iter()
+                        .any(|p| polyglot::owns(&p.path, candidate))
+                {
+                    affected.extend(polyglot::natural_owners(snapshot, candidate));
+                }
+            }
+        }
+    }
+    Ok(affected)
+}
+
 fn release_scope(
     root: &Path,
     cfg: &Config,
@@ -1190,6 +1246,9 @@ fn release_scope(
     } else {
         None
     };
+    if let (Some(old), Some(new)) = (&old_config, &new_config) {
+        scope.extend(shared_configuration_affected(cfg, capture, old, new)?);
+    }
     let dependencies = capture
         .current
         .packages
@@ -1213,7 +1272,6 @@ fn release_scope(
                                 "adapters",
                                 "build_inputs",
                                 "record_inputs",
-                                "shared_inputs",
                                 "product_manifests",
                                 "product_packages",
                             ]

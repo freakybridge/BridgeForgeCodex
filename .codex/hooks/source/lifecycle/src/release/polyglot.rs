@@ -534,7 +534,7 @@ pub(super) fn validate_current(
     Ok(())
 }
 
-fn natural_owners(snapshot: &Snapshot, path: &str) -> Vec<String> {
+pub(super) fn natural_owners(snapshot: &Snapshot, path: &str) -> Vec<String> {
     // An explicit external target cannot steal a file from its natural package.
     // Resolve natural roots with the existing longest-root rule, then union
     // exact target declarations and require shared_inputs for multiple owners.
